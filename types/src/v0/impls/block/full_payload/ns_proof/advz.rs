@@ -5,7 +5,7 @@ use hotshot_types::{
     traits::EncodeBytes,
     vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
 };
-use jf_vid::{
+use jf_advz::{
     payload_prover::{PayloadProver, Statement},
     VidScheme,
 };
@@ -166,17 +166,17 @@ impl ADVZNsProof {
 #[cfg(test)]
 mod tests {
     use futures::future;
-    use hotshot::{helpers::initialize_logging, traits::BlockPayload};
+    use hotshot::traits::BlockPayload;
     use hotshot_types::{
         data::VidCommitment,
         traits::EncodeBytes,
         vid::advz::{advz_scheme, ADVZScheme},
     };
-    use jf_vid::{VidDisperse, VidScheme};
+    use jf_advz::{VidDisperse, VidScheme};
 
     use crate::{v0::impls::block::test::ValidTest, v0_1::ADVZNsProof, Payload};
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn ns_proof() {
         let test_cases = vec![
             vec![
@@ -189,8 +189,6 @@ mod tests {
             vec![vec![1, 2, 3], vec![4, 5, 6]],
             vec![],
         ];
-
-        initialize_logging();
 
         let mut rng = jf_utils::test_rng();
         let mut tests = ValidTest::many_from_tx_lengths(test_cases, &mut rng);

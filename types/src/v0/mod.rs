@@ -14,16 +14,23 @@ pub mod config;
 mod header;
 mod impls;
 mod nsproof;
+pub mod sparse_mt;
 pub mod traits;
+mod txproof;
 mod utils;
 pub use header::Header;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::testing;
+#[allow(unused_imports)]
+pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
     get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
 pub use nsproof::*;
+pub use txproof::*;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -77,7 +84,6 @@ reexport_unchanged_types!(
     BlockMerkleTree,
     BuilderSignature,
     ChainId,
-    Delta,
     FeeAccount,
     FeeAccountProof,
     FeeAmount,
@@ -113,7 +119,6 @@ reexport_unchanged_types!(
     TxIter,
     TxPayload,
     TxPayloadRange,
-    TxProof,
     TxTableEntries,
     TxTableEntriesRange,
     Upgrade,
@@ -197,8 +202,11 @@ pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
 pub use self::impls::{NodeState, RewardDistributor, UpgradeMap, ValidatedState, ValidatorMap};
-pub use crate::v0_1::{
-    BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
-    NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+pub use crate::{
+    v0::impls::StakeTableHash,
+    v0_1::{
+        BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
+        NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+    },
+    v0_3::ChainConfig,
 };
-use crate::v0_3::ChainConfig;

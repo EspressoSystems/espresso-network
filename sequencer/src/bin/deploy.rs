@@ -1,7 +1,10 @@
 use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
 use alloy::{
-    primitives::{utils::format_ether, Address, U256},
+    primitives::{
+        utils::{format_ether, parse_ether},
+        Address, U256,
+    },
     providers::{Provider, WalletProvider},
 };
 use anyhow::Context as _;
@@ -10,8 +13,9 @@ use espresso_contract_deployer::{
     build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
+    proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
     provider::connect_ledger,
-    verify_node_js_files, Contract, Contracts, DeployedContracts,
+    Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -38,6 +42,7 @@ use vbs::version::StaticVersion;
 /// in the deployment process. The generated .env file will include all the addresses passed in as
 /// well as those newly deployed.
 #[derive(Clone, Debug, Parser)]
+
 struct Options {
     /// A JSON-RPC endpoint for the L1 to deploy to.
     #[clap(
@@ -131,6 +136,9 @@ struct Options {
     /// Option to upgrade to LightClient V2
     #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
+    /// Option to upgrade to LightClient V3
+    #[clap(long, default_value = "false")]
+    upgrade_light_client_v3: bool,
     /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
@@ -149,9 +157,20 @@ struct Options {
     /// Option to deploy safe exit timelock
     #[clap(long, default_value = "false")]
     deploy_safe_exit_timelock: bool,
+    /// Option to use timelock as the owner of the proxy
+    #[clap(long, default_value = "false")]
+    use_timelock_owner: bool,
     /// Option to transfer ownership from multisig
     #[clap(long, default_value = "false")]
-    propose_transfer_ownership_to_timelock_fee_contract: bool,
+    propose_transfer_ownership_to_timelock: bool,
+
+    /// Option to transfer ownership directly from EOA to a new owner
+    #[clap(long, default_value = "false")]
+    transfer_ownership_from_eoa: bool,
+
+    /// The new owner address (when using --transfer-ownership-from-eoa)
+    #[clap(long, env = "ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER")]
+    transfer_ownership_new_owner: Option<Address>,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -261,9 +280,68 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS")]
     safe_exit_timelock_proposers: Option<Vec<Address>>,
 
+    /// Option to perform a timelock operation on a target contract
+    /// Operations include: schedule, execute, cancel
+    #[clap(long, default_value = "false")]
+    perform_timelock_operation: bool,
+
+    /// The type of the timelock operation
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_TYPE",
+        requires = "perform_timelock_operation"
+    )]
+    timelock_operation_type: Option<TimelockOperationType>,
+
+    /// The target contract of the timelock operation
+    /// The timelock is the owner of this contract and can perform the timelock operation on it
+    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT")]
+    target_contract: Option<String>,
+
+    /// The value to send with the timelock operation
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_VALUE",
+        requires = "perform_timelock_operation",
+        default_value = "0",
+        value_parser = parse_ether,
+    )]
+    timelock_operation_value: Option<U256>,
+
+    /// The function signature for the target contract of the timelock operation
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE",
+        requires = "perform_timelock_operation"
+    )]
+    function_signature: Option<String>,
+
+    /// The function data of the function selector for the target contract of the timelock operation
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES",
+        requires = "perform_timelock_operation"
+    )]
+    function_values: Option<Vec<String>>,
+
+    /// The salt for the timelock operation
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_SALT",
+        requires = "perform_timelock_operation"
+    )]
+    timelock_operation_salt: Option<String>,
+
+    /// The delay for the timelock operation
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_DELAY",
+        requires = "perform_timelock_operation"
+    )]
+    timelock_operation_delay: Option<u64>,
     /// The address of the timelock controller
-    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
-    timelock_controller: Option<Address>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS")]
+    timelock_address: Option<Address>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -351,7 +429,7 @@ async fn main() -> anyhow::Result<()> {
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
     args_builder
-        .deployer(provider)
+        .deployer(provider.clone())
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
@@ -384,7 +462,7 @@ async fn main() -> anyhow::Result<()> {
             args_builder.permissioned_prover(prover);
         }
     }
-    if opt.upgrade_light_client_v2 {
+    if opt.upgrade_light_client_v2 || opt.upgrade_light_client_v3 {
         let (blocks_per_epoch, epoch_start_block) =
             if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
                 (10, 22)
@@ -420,44 +498,121 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     if opt.deploy_ops_timelock {
-        let ops_timelock_admin = opt
-            .ops_timelock_admin
-            .expect("Must provide --ops-timelock-admin when deploying ops timelock");
+        let ops_timelock_admin = opt.ops_timelock_admin.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --ops-timelock-admin or ESPRESSO_OPS_TIMELOCK_ADMIN env var when \
+                 deploying ops timelock"
+            )
+        })?;
         args_builder.ops_timelock_admin(ops_timelock_admin);
-        let ops_timelock_delay = opt
-            .ops_timelock_delay
-            .expect("Must provide --ops-timelock-delay when deploying ops timelock");
+        let ops_timelock_delay = opt.ops_timelock_delay.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --ops-timelock-delay or ESPRESSO_OPS_TIMELOCK_DELAY env var when \
+                 deploying ops timelock"
+            )
+        })?;
         args_builder.ops_timelock_delay(U256::from(ops_timelock_delay));
-        let ops_timelock_executors = opt
-            .ops_timelock_executors
-            .expect("Must provide --ops-timelock-executors when deploying ops timelock");
+        let ops_timelock_executors = opt.ops_timelock_executors.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --ops-timelock-executors or ESPRESSO_OPS_TIMELOCK_EXECUTORS env var \
+                 when deploying ops timelock"
+            )
+        })?;
         args_builder.ops_timelock_executors(ops_timelock_executors.into_iter().collect());
-        let ops_timelock_proposers = opt
-            .ops_timelock_proposers
-            .expect("Must provide --ops-timelock-proposers when deploying ops timelock");
+        let ops_timelock_proposers = opt.ops_timelock_proposers.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --ops-timelock-proposers or ESPRESSO_OPS_TIMELOCK_PROPOSERS env var \
+                 when deploying ops timelock"
+            )
+        })?;
         args_builder.ops_timelock_proposers(ops_timelock_proposers.into_iter().collect());
     }
 
     if opt.deploy_safe_exit_timelock {
-        let safe_exit_timelock_admin = opt
-            .safe_exit_timelock_admin
-            .expect("Must provide --safe-exit-timelock-admin when deploying token timelock");
+        let safe_exit_timelock_admin = opt.safe_exit_timelock_admin.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --safe-exit-timelock-admin or ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN env \
+                 var when deploying safe exit timelock"
+            )
+        })?;
         args_builder.safe_exit_timelock_admin(safe_exit_timelock_admin);
-        let safe_exit_timelock_delay = opt
-            .safe_exit_timelock_delay
-            .expect("Must provide --safe-exit-timelock-delay when deploying token timelock");
+        let safe_exit_timelock_delay = opt.safe_exit_timelock_delay.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --safe-exit-timelock-delay or ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY env \
+                 var when deploying safe exit timelock"
+            )
+        })?;
         args_builder.safe_exit_timelock_delay(U256::from(safe_exit_timelock_delay));
-        let safe_exit_timelock_executors = opt
-            .safe_exit_timelock_executors
-            .expect("Must provide --safe-exit-timelock-executors when deploying token timelock");
+        let safe_exit_timelock_executors = opt.safe_exit_timelock_executors.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --safe-exit-timelock-executors or \
+                 ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS env var when deploying safe exit timelock"
+            )
+        })?;
         args_builder
             .safe_exit_timelock_executors(safe_exit_timelock_executors.into_iter().collect());
-        let safe_exit_timelock_proposers = opt
-            .safe_exit_timelock_proposers
-            .expect("Must provide --safe-exit-timelock-proposers when deploying token timelock");
+        let safe_exit_timelock_proposers = opt.safe_exit_timelock_proposers.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --safe-exit-timelock-proposers or \
+                 ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS env var when deploying safe exit timelock"
+            )
+        })?;
         args_builder
             .safe_exit_timelock_proposers(safe_exit_timelock_proposers.into_iter().collect());
     }
+    if opt.use_timelock_owner {
+        args_builder.use_timelock_owner(true);
+    }
+
+    if opt.perform_timelock_operation {
+        let timelock_operation_type = opt.timelock_operation_type.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-operation-type or ESPRESSO_TIMELOCK_OPERATION_TYPE env \
+                 var when scheduling timelock operation"
+            )
+        })?;
+
+        args_builder.timelock_operation_type(timelock_operation_type);
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --target-contract or ESPRESSO_TARGET_CONTRACT env var when \
+                 scheduling timelock operation"
+            )
+        })?;
+        args_builder.target_contract(target_contract);
+        let function_signature = opt.function_signature.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --function-signature or \
+                 ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing timelock \
+                 operation"
+            )
+        })?;
+        args_builder.timelock_operation_function_signature(function_signature);
+        let function_values = opt.function_values.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --function-values or ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES \
+                 env var when performing timelock operation"
+            )
+        })?;
+        args_builder.timelock_operation_function_values(function_values);
+        let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env \
+                 var when scheduling timelock operation"
+            )
+        })?;
+        args_builder.timelock_operation_salt(timelock_operation_salt);
+        let timelock_operation_delay = opt.timelock_operation_delay.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY env \
+                 var when scheduling timelock operation"
+            )
+        })?;
+        args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
+        let timelock_operation_value = opt.timelock_operation_value.unwrap_or_default();
+        args_builder.timelock_operation_value(timelock_operation_value);
+    }
+
     if opt.deploy_esp_token {
         let token_recipient = opt
             .initial_token_grant_recipient
@@ -477,8 +632,55 @@ async fn main() -> anyhow::Result<()> {
         args_builder.token_recipient(token_recipient);
     }
 
+    // Add EOA ownership transfer parameters to builder
+    if opt.transfer_ownership_from_eoa {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --target-contract when using --transfer-ownership-from-eoa"
+            )
+        })?;
+        let new_owner = opt.transfer_ownership_new_owner.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --transfer-ownership-new-owner when using \
+                 --transfer-ownership-from-eoa"
+            )
+        })?;
+        args_builder.transfer_ownership_from_eoa(true);
+        args_builder.target_contract(target_contract);
+        args_builder.transfer_ownership_new_owner(new_owner);
+    }
+
+    // Add multisig to timelock transfer parameters to builder
+    if opt.propose_transfer_ownership_to_timelock {
+        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --target-contract when using \
+                 --propose-transfer-ownership-to-timelock"
+            )
+        })?;
+        let timelock_address = opt.timelock_address.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-address when using \
+                 --propose-transfer-ownership-to-timelock"
+            )
+        })?;
+        args_builder.target_contract(target_contract);
+        args_builder.timelock_address(timelock_address);
+    }
+
     // then deploy specified contracts
     let args = args_builder.build()?;
+
+    // Deploy timelocks first so they can be used as owners for other contracts
+    if opt.deploy_ops_timelock {
+        args.deploy(&mut contracts, Contract::OpsTimelock).await?;
+    }
+    if opt.deploy_safe_exit_timelock {
+        args.deploy(&mut contracts, Contract::SafeExitTimelock)
+            .await?;
+    }
+
+    // Then deploy other contracts
     if opt.deploy_fee {
         args.deploy(&mut contracts, Contract::FeeContractProxy)
             .await?;
@@ -496,6 +698,9 @@ async fn main() -> anyhow::Result<()> {
     if opt.upgrade_light_client_v2 {
         args.deploy(&mut contracts, Contract::LightClientV2).await?;
     }
+    if opt.upgrade_light_client_v3 {
+        args.deploy(&mut contracts, Contract::LightClientV3).await?;
+    }
     if opt.deploy_stake_table {
         args.deploy(&mut contracts, Contract::StakeTableProxy)
             .await?;
@@ -503,27 +708,22 @@ async fn main() -> anyhow::Result<()> {
     if opt.upgrade_stake_table_v2 {
         args.deploy(&mut contracts, Contract::StakeTableV2).await?;
     }
-    if opt.deploy_ops_timelock {
-        args.deploy(&mut contracts, Contract::OpsTimelock).await?;
-    }
-    if opt.deploy_safe_exit_timelock {
-        args.deploy(&mut contracts, Contract::SafeExitTimelock)
+
+    // then perform the timelock operation if any
+    if opt.perform_timelock_operation {
+        args.perform_timelock_operation_on_contract(&mut contracts)
             .await?;
     }
 
     // Execute ownership transfer proposal if requested
-    if opt.propose_transfer_ownership_to_timelock_fee_contract {
-        let timelock_controller = opt.timelock_controller.expect(
-            "Must provide --timelock-controller when transferring ownership from multisig to \
-             timelock",
-        );
+    if opt.propose_transfer_ownership_to_timelock {
+        args.propose_transfer_ownership_to_timelock(&mut contracts)
+            .await?;
+    }
 
-        args.propose_transfer_ownership_from_multisig_to_timelock(
-            &mut contracts,
-            timelock_controller,
-            Contract::FeeContractProxy,
-        )
-        .await?;
+    // Execute ownership transfer when the admin is an EOA
+    if opt.transfer_ownership_from_eoa {
+        args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
     // finally print out or persist deployed addresses

@@ -5,6 +5,10 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
+[[bin]]
+name = "diff-test"
+path = "src/main.rs"
+
 [dependencies]
 alloy = { workspace = true }
 ark-bn254 = { workspace = true }
@@ -23,6 +27,5 @@ jf-signature = { workspace = true }
 jf-utils = { workspace = true }
 sha3 = { version = "0.10.8", default-features = false }
 
-[[bin]]
-name = "diff-test"
-path = "src/main.rs"
+[lints]
+workspace = true

@@ -6,7 +6,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alloy = { workspace = true }
+alloy = { workspace = true, features = ["signer-ledger"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 derive_builder = "0.20.2"
@@ -21,6 +21,11 @@ tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1.37"
 vbs = { workspace = true }
-
+ 
 [dev-dependencies]
+rand = { workspace = true }
 sequencer-utils = { version = "0.1.0", path = "../../../utils" }
+test-log = { workspace = true }
+
+[lints]
+workspace = true

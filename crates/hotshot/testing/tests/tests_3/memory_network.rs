@@ -11,16 +11,13 @@ use hotshot::{
     traits::{
         election::static_committee::StaticCommittee,
         implementations::{MasterMap, MemoryNetwork},
-        NodeImplementation,
     },
     types::SignatureKey,
 };
 use hotshot_example_types::{
-    
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     node_types::TestVersions,
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
@@ -32,7 +29,6 @@ use hotshot_types::{
     },
 };
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::{instrument, trace};
 
@@ -63,14 +59,6 @@ impl NodeType for Test {
     type Membership = StaticCommittee<Test>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
-pub struct TestImpl {}
-
-impl NodeImplementation<Test> for TestImpl {
-    type Network = MemoryNetwork<<Test as NodeType>::SignatureKey>;
-    type Storage = TestStorage<Test>;
 }
 
 /// fake Eq
@@ -120,10 +108,9 @@ fn gen_messages(num_messages: u64, seed: u64, pk: BLSPubKey) -> Vec<Message<Test
 
 // Spawning a single MemoryNetwork should produce no errors
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_spawn_single() {
-    hotshot::helpers::initialize_logging();
     let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let _pub_key = pubkey();
@@ -131,10 +118,9 @@ async fn memory_network_spawn_single() {
 
 // // Spawning a two MemoryNetworks and connecting them should produce no errors
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_spawn_double() {
-    hotshot::helpers::initialize_logging();
     let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let _pub_key_1 = pubkey();
@@ -143,10 +129,9 @@ async fn memory_network_spawn_double() {
 
 // Check to make sure direct queue works
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_direct_queue() {
-    hotshot::helpers::initialize_logging();
     // Create some dummy messages
 
     // Make and connect the networking instances
@@ -175,7 +160,8 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -196,7 +182,8 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
@@ -232,7 +219,8 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -257,7 +245,8 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let deserialized_message = upgrade_lock.deserialize(&recv_message).await.unwrap();
+        let (deserialized_message, _version) =
+            upgrade_lock.deserialize(&recv_message).await.unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
@@ -265,12 +254,10 @@ async fn memory_network_broadcast_queue() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 #[allow(deprecated)]
 async fn memory_network_test_in_flight_message_count() {
-    hotshot::helpers::initialize_logging();
-
     let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let pub_key_1 = pubkey();

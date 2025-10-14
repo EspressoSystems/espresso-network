@@ -10,6 +10,9 @@ ignore = [
     # rustls is busted, dependency of unmaintained tide
     "RUSTSEC-2024-0336",
     # Some AES functions may panic when overflow checking is enabled.
-    # TODO: easy fix once ethers-rs dependency is removed in favor of alloy.
+    # To upgrade async-tungstenite we need a new release of tide-websockets, which seems unlikely
+    # https://github.com/http-rs/tide-websockets
     "RUSTSEC-2025-0009",
+    # Still here because of `ark-relations` crate.
+    "RUSTSEC-2025-0055",
 ]

@@ -88,7 +88,11 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_header]
-PATH = ["header/:height", "header/hash/:hash",  "header/payload-hash/:payload-hash"]
+PATH = [
+    "header/:height",
+    "header/hash/:hash",
+    "header/payload-hash/:payload-hash",
+]
 ":height" = "Integer"
 ":hash" = "TaggedBase64"
 ":payload-hash" = "TaggedBase64"
@@ -169,7 +173,11 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_payload]
-PATH = ["payload/:height", "payload/hash/:hash", "payload/block-hash/:block-hash"]
+PATH = [
+    "payload/:height",
+    "payload/hash/:hash",
+    "payload/block-hash/:block-hash",
+]
 ":height" = "Integer"
 ":hash" = "TaggedBase64"
 ":block-hash" = "TaggedBase64"
@@ -201,7 +209,11 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_vid_common]
-PATH = ["vid/common/:height", "vid/common/hash/:hash", "vid/common/payload-hash/:payload-hash"]
+PATH = [
+    "vid/common/:height",
+    "vid/common/hash/:hash",
+    "vid/common/payload-hash/:payload-hash",
+]
 ":height" = "Integer"
 ":hash" = "TaggedBase64"
 ":payload-hash" = "TaggedBase64"
@@ -227,7 +239,7 @@ Opens a WebSockets connection and sends a stream of the same data type returned 
 """
 
 [route.get_transaction]
-PATH = ["transaction/:height/:index", "transaction/hash/:hash"]
+PATH = ["transaction/:height/:index/noproof", "transaction/hash/:hash/noproof"]
 ":height" = "Integer"
 ":index" = "Integer"
 ":hash" = "TaggedBase64"
@@ -242,6 +254,35 @@ HotShot consensus does not validate the transactions it sequences, and in partic
 prohibit duplicate transactions. While each transaction has a unique position in the log (indicated
 by its height and index) there may be multiple transactions at different positions with the same
 hash. In such cases, this endpoint will return the _earliest_ transaction with the requested hash.
+
+The response includes the hash of the block containing this transaction.
+
+Returns
+```
+{
+    "transaction": application-specific transaction type,
+    "index": integer,
+    "hash": TaggedBase64,
+    "block_hash": TaggedBase64,
+    "block_height": integer,
+}
+```
+"""
+
+[route.get_transaction_proof]
+PATH = [
+    "transaction/:height/:index",
+    "transaction/hash/:hash",
+    "transaction/:height/:index/proof",
+    "transaction/hash/:hash/proof"
+]
+":height" = "Integer"
+":index" = "Integer"
+":hash" = "TaggedBase64"
+DOC = """
+
+Get a transaction with its inclusion proof. This is similar to the transaction endpoints. 
+In some cases this endpoint can be significantly slower. 
 
 The response includes the hash of the block containing this transaction as well as an application-
 defined inclusion proof relative to the block hash. Applications may use `proof` to prove that the
@@ -264,7 +305,10 @@ Returns
 """
 
 [route.stream_transactions]
-PATH = ["stream/transactions/:height/namespace/:namespace", "stream/transactions/:height"]
+PATH = [
+    "stream/transactions/:height/namespace/:namespace",
+    "stream/transactions/:height",
+]
 METHOD = "SOCKET"
 ":namespace" = "Integer"
 ":height" = "Integer"
@@ -339,9 +383,21 @@ Returns
 PATH = ["state-cert/:epoch"]
 ":epoch" = "Integer"
 DOC = """
-Get the light client state update certificate for the given epoch.
+Get the light client state update certificate (V1) for the given epoch.
 
 The light client state update certificate consists of the list of Schnorr signatures of the light
 client state at the end of the epoch. This is used to update light client state in the contract so
 that it have the new stake table information for the next epoch.
+"""
+
+[route.get_state_cert_v2]
+PATH = ["state-cert-v2/:epoch"]
+":epoch" = "Integer"
+DOC = """
+Get the light client state update certificate (V2) for the given epoch.
+
+The light client state update certificate consists of the list of Schnorr signatures of the light
+client state at the end of the epoch. This is used to update light client state in the contract so
+that it have the new stake table information for the next epoch. This also contains the auth_root field, 
+which is calculated based on the Keccak-256 hash of the reward Merkle tree roots.
 """

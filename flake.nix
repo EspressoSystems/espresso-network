@@ -13,7 +13,6 @@
   };
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.nixpkgs-legacy-foundry.url = "github:NixOS/nixpkgs/9abb87b552b7f55ac8916b6fc9e5cb486656a2f3";
 
   inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
 
@@ -33,7 +32,6 @@
   outputs =
     { self
     , nixpkgs
-    , nixpkgs-legacy-foundry
     , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
@@ -47,9 +45,18 @@
       # node=error: disable noisy anvil output
       RUST_LOG = "info,libp2p=off,isahc=error,surf=error,node=error";
       RUST_BACKTRACE = 1;
-      # Use a distinct target dir for builds from within nix shells.
-      CARGO_TARGET_DIR = "target/nix";
-      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE CARGO_TARGET_DIR; };
+      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
+
+      rustShellHook = ''
+        # on mac os `bin/pwd -P` returns the canonical path on case insensitive file-systems
+        my_pwd=$(/bin/pwd -P 2> /dev/null || pwd)
+
+        # Use a distinct target dir for builds from within nix shells.
+        export CARGO_TARGET_DIR="$my_pwd/target/nix"
+
+        # Add rust binaries to PATH
+        export PATH="$CARGO_TARGET_DIR/debug:$PATH"
+      '';
 
       solhintPkg = { buildNpmPackage, fetchFromGitHub }:
         buildNpmPackage rec {
@@ -74,15 +81,7 @@
             solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
         })
 
-        # The mold linker is around 50% faster on Linux than the default linker.
-        # This overlays a mkShell that is configured to use mold on Linux.
-        (final: prev: prev.lib.optionalAttrs prev.stdenv.isLinux {
-          mkShell = prev.mkShell.override {
-            stdenv = prev.stdenvAdapters.useMoldLinker prev.clangStdenv;
-          };
-        })
-
-        (final: prev: rec {
+        (final: prev: {
           golangci-lint = prev.golangci-lint.overrideAttrs (old: rec {
             version = "1.64.8";
             src = prev.fetchFromGitHub {
@@ -96,6 +95,10 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
+      myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        # The mold linker is around 50% faster on Linux than the default linker.
+        stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
+      });
       crossShell = { config }:
         let
           localSystem = system;
@@ -110,7 +113,7 @@
         in
         import ./cross-shell.nix
           {
-            inherit pkgs;
+            inherit pkgs rustShellHook;
             envVars = rustEnvVars;
           };
     in
@@ -195,7 +198,7 @@
           });
           solc = pkgs.solc-bin."0.8.28";
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -243,45 +246,22 @@
             golangci-lint
             # provides abigen
             go-ethereum
-          ] ++ lib.optionals stdenv.isDarwin
-            [ darwin.apple_sdk.frameworks.SystemConfiguration ]
-          ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
+          ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ;
-          shellHook = ''
+          shellHook = rustShellHook + ''
             # Add the local scripts to the PATH
-            export PATH="$PWD/scripts:$PATH"
+            export PATH="$my_pwd/scripts:$PATH"
 
             # Add node binaries to PATH for development
-            export PATH="$PWD/node_modules/.bin:$PATH"
+            export PATH="$my_pwd/node_modules/.bin:$PATH"
 
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
-
-            # Add rust binaries to PATH for native demo
-            export PATH="$PWD/$CARGO_TARGET_DIR/debug:$PATH"
-
-            # Needed to compile with the sqlite-unbundled feature
-            export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib";
           '' + self.checks.${system}.pre-commit-check.shellHook;
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-      # A shell with foundry v0.3.0 which can still build ethers-rs bindings.
-      # Can be removed when we are no longer using the ethers-rs bindings.
-      devShells.legacyFoundry =
-        let
-          overlays = [
-            solc-bin.overlays.default
-          ];
-          pkgs = import nixpkgs-legacy-foundry { inherit system overlays; };
-        in
-        mkShell {
-          packages = with pkgs; [
-            solc
-            foundry
-          ];
-        };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =
@@ -292,7 +272,7 @@
             extensions = [ "rustfmt" "clippy" "llvm-tools-preview" "rust-src" ];
           };
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -301,12 +281,13 @@
             protobuf # to compile libp2p-autonat
             toolchain
           ];
+          shellHook = rustShellHook;
         });
       devShells.coverage =
         let
           toolchain = pkgs.rust-bin.nightly.latest.minimal;
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -317,7 +298,7 @@
             grcov
           ];
           CARGO_INCREMENTAL = "0";
-          shellHook = ''
+          shellHook = rustShellHook + ''
             RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
           '';
           RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
@@ -329,7 +310,7 @@
             extensions = [ "rustfmt" "clippy" "llvm-tools-preview" "rust-src" ];
           };
         in
-        mkShell (rustEnvVars // {
+        myShell (rustEnvVars // {
           buildInputs = [
             # Rust dependencies
             pkg-config
@@ -338,6 +319,26 @@
             protobuf # to compile libp2p-autonat
             stableToolchain
           ];
+          shellHook = rustShellHook;
         });
+
+      # A separate dev-shell due to large size of dependencies (incl. ghc)
+      devShells.echidna =
+        let
+          solc = pkgs.solc-bin."0.8.28";
+        in
+        myShell {
+          buildInputs = [
+            # Foundry tools
+            foundry-bin
+            solc
+
+            # Security analysis tools
+            slither-analyzer
+            echidna
+            python3.pkgs.crytic-compile
+          ];
+          FOUNDRY_SOLC = "${solc}/bin/solc";
+        };
     });
 }

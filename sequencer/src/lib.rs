@@ -312,8 +312,9 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
+    let loaded_network_config_from_persistence = persistence.load_config().await?;
     let (mut network_config, wait_for_orchestrator) = match (
-        persistence.load_config().await?,
+        loaded_network_config_from_persistence,
         network_params.config_peers,
     ) {
         (Some(config), _) => {
@@ -388,6 +389,11 @@ where
     network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
+
+    if let Some(da_committees) = &genesis.da_committees {
+        tracing::warn!("setting da_committees from genesis");
+        network_config.config.da_committees = da_committees.clone();
+    }
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
@@ -486,8 +492,9 @@ where
         },
     };
 
+    let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
-        chain_config: genesis.chain_config.into(),
+        chain_config: genesis_chain_config.into(),
         ..Default::default()
     };
     for (address, amount) in genesis.accounts {
@@ -530,13 +537,14 @@ where
         genesis.chain_config,
     );
     fetcher.spawn_update_loop().await;
-    let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
+    let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
+        epoch_height,
     );
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
 
@@ -550,6 +558,7 @@ where
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
+        genesis_chain_config,
         l1_client,
         genesis_header: genesis.header,
         genesis_state,
@@ -561,6 +570,7 @@ where
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
+        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
     };
 
     // Initialize the Libp2p network
@@ -644,13 +654,13 @@ pub mod testing {
     use alloy::{
         network::EthereumWallet,
         node_bindings::{Anvil, AnvilInstance},
-        primitives::U256,
+        primitives::{Address, U256},
         providers::{
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
             layers::AnvilProvider,
-            ProviderBuilder, RootProvider,
+            Provider, ProviderBuilder, RootProvider,
         },
         signers::{
             k256::ecdsa::SigningKey,
@@ -681,7 +691,7 @@ pub mod testing {
         },
         types::EventType::Decide,
     };
-    use hotshot_builder_core_refactored::service::{
+    use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
     use hotshot_testing::block_builder::{
@@ -911,7 +921,7 @@ pub mod testing {
 
                     let deployer = ProviderBuilder::new()
                         .wallet(EthereumWallet::from(self.signer.clone()))
-                        .on_http(self.l1_url.clone());
+                        .connect_http(self.l1_url.clone());
 
                     let mut contracts = Contracts::new();
                     let args = DeployerArgsBuilder::default()
@@ -921,6 +931,7 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
+                        .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
                         .multisig_pauser(self.signer.address())
                         .token_name("Espresso".to_string())
                         .token_symbol("ESP".to_string())
@@ -1024,6 +1035,7 @@ pub mod testing {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
+                da_committees: Default::default(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
                 next_view_timeout: Duration::from_secs(5).as_millis() as u64,
                 num_bootstrap: 1usize,
@@ -1124,6 +1136,7 @@ pub mod testing {
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
         }
+
         pub fn anvil(&self) -> Option<&AnvilFillProvider> {
             self.anvil_provider.as_ref()
         }
@@ -1138,6 +1151,20 @@ pub mod testing {
 
         pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
+        }
+
+        pub fn validator_providers(&self) -> Vec<(Address, impl Provider + Clone)> {
+            self.staking_priv_keys()
+                .into_iter()
+                .map(|(signer, ..)| {
+                    (
+                        signer.address(),
+                        ProviderBuilder::new()
+                            .wallet(EthereumWallet::from(signer))
+                            .connect_http(self.l1_url.clone()),
+                    )
+                })
+                .collect()
         }
 
         pub async fn init_nodes<V: Versions>(
@@ -1255,12 +1282,13 @@ pub mod testing {
             );
             fetcher.spawn_update_loop().await;
 
-            let block_reward = fetcher.fetch_block_reward().await.ok().unwrap_or_default();
+            let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
+                config.epoch_height,
             );
             membership.reload_stake(50).await;
 
@@ -1280,12 +1308,13 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
-                Version { major: 0, minor: 1 },
+                V::Base::VERSION,
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
-            .with_upgrades(upgrades);
+            .with_upgrades(upgrades)
+            .with_epoch_start_block(config.epoch_start_block);
 
             tracing::info!(
                 i,
@@ -1375,15 +1404,13 @@ mod test {
         event::LeafInfo,
         traits::block_contents::{BlockHeader, BlockPayload},
     };
-    use sequencer_utils::test_utils::setup_test;
     use testing::{wait_for_decide_on_handle, TestConfigBuilder};
 
     use self::testing::run_test_builder;
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {
-        setup_test();
         // Assign `config` so it isn't dropped early.
         let anvil = Anvil::new().spawn();
         let url = anvil.endpoint_url();
@@ -1420,10 +1447,8 @@ mod test {
         wait_for_decide_on_handle(&mut events, &txn).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_invariants() {
-        setup_test();
-
         let success_height = 30;
         // Assign `config` so it isn't dropped early.
         let anvil = Anvil::new().spawn();

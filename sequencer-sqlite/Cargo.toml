@@ -9,11 +9,10 @@ edition = "2021"
 fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]
 drb-and-header = ["sequencer/drb-and-header"]
-default = ["embedded-db", "fee", "pos", "drb-and-header"]
-sqlite-unbundled = ["sequencer/sqlite-unbundled"]
-embedded-db = ["sequencer/embedded-db"]
+default = ["fee", "pos", "drb-and-header"]
 
 [dependencies]
-sequencer = { path = "../sequencer" }
-tokio = { workspace = true }
 anyhow = { workspace = true }
+# disable default features to allow including versions on demand
+sequencer = { path = "../sequencer", default-features = false, features = ["embedded-db"] }
+tokio = { workspace = true }

@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt,
     io::{self, Read},
     iter::{self, once},
     time::Duration,
@@ -24,12 +25,12 @@ use espresso_contract_deployer::{
     DeployedContracts, HttpProviderWithWallet,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions,
-    ValidatedState,
+    parse_duration, v0_3::ChainConfig, DrbAndHeaderUpgradeVersion, EpochVersion, L1ClientOptions,
+    SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
+use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
     utils::epoch_from_block_number,
@@ -39,7 +40,9 @@ use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         options,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
+        test_helpers::{
+            AnyTestNetwork, TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST,
+        },
     },
     persistence,
     state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
@@ -50,7 +53,7 @@ use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
 use tempfile::NamedTempFile;
-use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
+use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -69,6 +72,23 @@ enum L1Deployment {
     /// dump has to have been done on the same version of dev-node with the same
     /// configuration
     Skip,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum DevNodeVersion {
+    #[value(name = "0.3")]
+    V0_3,
+    #[value(name = "0.4")]
+    V0_4,
+}
+
+impl fmt::Display for DevNodeVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DevNodeVersion::V0_3 => write!(f, "0.3"),
+            DevNodeVersion::V0_4 => write!(f, "0.4"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -217,6 +237,10 @@ struct Args {
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
+    /// protocol version to run (V3 or V4)
+    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.3")]
+    version: DevNodeVersion,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -264,6 +288,7 @@ async fn main() -> anyhow::Result<()> {
         initial_token_supply,
         token_name,
         token_symbol,
+        version,
     } = cli_params;
 
     logging.init();
@@ -361,7 +386,7 @@ async fn main() -> anyhow::Result<()> {
         let wallet = EthereumWallet::from(signer.clone());
         let provider = ProviderBuilder::new()
             .wallet(wallet.clone())
-            .on_http(url.clone());
+            .connect_http(url.clone());
         let admin = provider.default_signer_address();
         let chain_id = provider.get_chain_id().await?;
 
@@ -490,7 +515,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // deploy permissionless stake table
-            let exit_escrow_period = U256::from(300); // 300 sec
+            let exit_escrow_period = U256::from(250); // 250 sec
             let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
                 &provider,
                 contracts,
@@ -628,7 +653,9 @@ async fn main() -> anyhow::Result<()> {
     })
     .submit(Default::default())
     .config(Default::default())
-    .query_sql(Default::default(), sql);
+    .explorer(Default::default())
+    .query_sql(Default::default(), sql)
+    .hotshot_events(Default::default());
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
@@ -637,11 +664,22 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     // Start the nodes
-    let network = TestNetwork::new(
-        config,
-        SequencerVersions::<EpochVersion, EpochVersion>::new(),
-    )
-    .await;
+    let network = match version {
+        DevNodeVersion::V0_3 => AnyTestNetwork::V0_3(
+            TestNetwork::new(
+                config,
+                SequencerVersions::<EpochVersion, EpochVersion>::new(),
+            )
+            .await,
+        ),
+        DevNodeVersion::V0_4 => AnyTestNetwork::V0_4(
+            TestNetwork::new(
+                config,
+                SequencerVersions::<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>::new(),
+            )
+            .await,
+        ),
+    };
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
@@ -665,11 +703,7 @@ async fn main() -> anyhow::Result<()> {
         // manually fill up the relay server state
         let state = StateRelayServerState::new(
             Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
-        )
-        .with_blocks_per_epoch(blocks_per_epoch)
-        .with_epoch_start_block(epoch_start_block)
-        .with_thresholds(thresholds)
-        .with_known_nodes(known_nodes);
+        );
 
         let _ = run_relay_server_with_state(
             format!("http://localhost:{relay_server_port}")
@@ -690,7 +724,7 @@ async fn main() -> anyhow::Result<()> {
     let l1_prover_port = prover_ports.remove(0);
 
     let dev_info = DevInfo {
-        builder_url: network.cfg.hotshot_config().builder_urls[0].clone(),
+        builder_url: network.hotshot_config().builder_urls[0].clone(),
         sequencer_api_port,
         l1_prover_port,
         l1_url,
@@ -739,6 +773,7 @@ pub struct ApiState {
     /// L1 chain id
     pub l1_chain_id: u64,
 }
+
 impl Default for ApiState {
     fn default() -> Self {
         Self {
@@ -755,7 +790,7 @@ impl ApiState {
     pub fn light_client_instance(
         &self,
         chain_id: Option<u64>,
-    ) -> Result<LightClientV2MockInstance<(), HttpProviderWithWallet>, ServerError> {
+    ) -> Result<LightClientV2MockInstance<HttpProviderWithWallet>, ServerError> {
         // if chain id is not provided, primary L1 light client is used
         let id = chain_id.unwrap_or(self.l1_chain_id);
 
@@ -774,7 +809,7 @@ impl ApiState {
 
         let provider = ProviderBuilder::new()
             .wallet(self.wallet.clone())
-            .on_http(provider_url.clone());
+            .connect_http(provider_url.clone());
         let contract = LightClientV2Mock::new(*proxy_addr, provider);
         Ok(contract)
     }
@@ -932,14 +967,14 @@ mod tests {
     use espresso_types::{BlockMerkleTree, Header, NamespaceProofQueryData, SeqTypes, Transaction};
     use futures::{StreamExt, TryStreamExt};
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
-    use hotshot_query_service::availability::{
-        BlockQueryData, TransactionQueryData, VidCommonQueryData,
+    use hotshot_query_service::{
+        availability::{BlockQueryData, TransactionQueryData, VidCommonQueryData},
+        explorer::TransactionDetailResponse,
     };
-    use jf_merkle_tree::MerkleTreeScheme;
+    use jf_merkle_tree_compat::MerkleTreeScheme;
     use portpicker::pick_unused_port;
     use rand::Rng;
     use sequencer::SequencerApiVersion;
-    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::time::sleep;
@@ -964,10 +999,11 @@ mod tests {
     // and open a PR.
     // - APIs update
     // - Types (like `Header`) update
-    #[tokio::test(flavor = "multi_thread")]
-    async fn slow_dev_node_test() {
-        setup_test();
-
+    #[rstest::rstest]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn slow_dev_node_test(
+        #[values(DevNodeVersion::V0_3, DevNodeVersion::V0_4)] version: DevNodeVersion,
+    ) {
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
@@ -995,6 +1031,7 @@ mod tests {
             )
             .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
             .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
+            .env("ESPRESSO_DEV_NODE_VERSION", version.to_string())
             .spawn()
             .unwrap();
 
@@ -1034,7 +1071,7 @@ mod tests {
 
         let mut tx_result = api_client
             .get::<TransactionQueryData<SeqTypes>>(&format!(
-                "availability/transaction/hash/{tx_hash}",
+                "availability/transaction/hash/{tx_hash}/noproof",
             ))
             .send()
             .await;
@@ -1044,7 +1081,26 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}"
+                    "availability/transaction/hash/{tx_hash}/noproof"
+                ))
+                .send()
+                .await;
+        }
+
+        let mut tx_result_from_explorer = api_client
+            .get::<TransactionDetailResponse<SeqTypes>>(&format!(
+                "explorer/transaction/hash/{tx_hash}",
+            ))
+            .send()
+            .await;
+
+        while tx_result_from_explorer.is_err() {
+            sleep(Duration::from_secs(1)).await;
+            tracing::warn!("waiting for tx");
+
+            tx_result_from_explorer = api_client
+                .get::<TransactionDetailResponse<SeqTypes>>(&format!(
+                    "explorer/transaction/hash/{tx_hash}"
                 ))
                 .send()
                 .await;
@@ -1064,7 +1120,7 @@ mod tests {
 
         let mut tx_result = api_client
             .get::<TransactionQueryData<SeqTypes>>(&format!(
-                "availability/transaction/hash/{tx_hash}",
+                "availability/transaction/hash/{tx_hash}/noproof",
             ))
             .send()
             .await;
@@ -1074,7 +1130,7 @@ mod tests {
 
             tx_result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}"
+                    "availability/transaction/hash/{tx_hash}/noproof"
                 ))
                 .send()
                 .await;
@@ -1103,7 +1159,7 @@ mod tests {
 
             let mut result = api_client
                 .get::<TransactionQueryData<SeqTypes>>(&format!(
-                    "availability/transaction/hash/{tx_hash}",
+                    "availability/transaction/hash/{tx_hash}/noproof",
                 ))
                 .send()
                 .await;
@@ -1112,7 +1168,7 @@ mod tests {
 
                 result = api_client
                     .get::<TransactionQueryData<SeqTypes>>(&format!(
-                        "availability/transaction/hash/{tx_hash}"
+                        "availability/transaction/hash/{tx_hash}/noproof"
                     ))
                     .send()
                     .await;
@@ -1187,7 +1243,7 @@ mod tests {
                 .unwrap();
             let provider = ProviderBuilder::new()
                 .wallet(EthereumWallet::from(signer))
-                .on_http(l1_url.clone());
+                .connect_http(l1_url.clone());
 
             let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
@@ -1217,7 +1273,6 @@ mod tests {
                 .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
-                .map(|ret| ret._0)
                 .unwrap_or(false)
             {
                 tracing::info!("waiting for setting hotshot down");
@@ -1236,7 +1291,6 @@ mod tests {
                 .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
-                .map(|ret| ret._0)
                 .unwrap_or(true)
             {
                 tracing::info!("waiting for setting hotshot up");
@@ -1266,10 +1320,8 @@ mod tests {
         (providers, urls)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn slow_dev_node_multiple_lc_providers_test() {
-        setup_test();
-
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
@@ -1352,7 +1404,7 @@ mod tests {
                 .unwrap();
             let provider = ProviderBuilder::new()
                 .wallet(EthereumWallet::from(signer))
-                .on_http(l1_url.clone());
+                .connect_http(l1_url.clone());
 
             let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
@@ -1383,7 +1435,7 @@ mod tests {
                     .unwrap();
                 let provider = ProviderBuilder::new()
                     .wallet(EthereumWallet::from(signer))
-                    .on_http(provider_url.clone());
+                    .connect_http(provider_url.clone());
 
                 let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
@@ -1413,7 +1465,6 @@ mod tests {
                     .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
-                    .map(|ret| ret._0)
                     .unwrap_or(false)
                 {
                     tracing::info!("waiting for setting hotshot down");
@@ -1432,7 +1483,6 @@ mod tests {
                     .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
-                    .map(|ret| ret._0)
                     .unwrap_or(true)
                 {
                     tracing::info!("waiting for setting hotshot up");

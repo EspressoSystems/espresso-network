@@ -9,6 +9,7 @@ use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 
 use alloy::primitives::U256;
 use async_lock::RwLock;
+use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
@@ -17,10 +18,20 @@ use crate::{
     traits::signature_key::StakeTableEntryType, PeerConfig,
 };
 
+pub struct NoStakeTableHash;
+
+impl Committable for NoStakeTableHash {
+    fn commit(&self) -> Commitment<Self> {
+        Commitment::from_raw([0u8; 32])
+    }
+}
+
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
+
+    type StakeTableHash: Committable;
     /// Create a committee
     fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
@@ -156,11 +167,8 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Gets the DRB result for the given epoch
     fn get_epoch_drb(
         _membership: Arc<RwLock<Self>>,
-        _block_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send {
-        async move { anyhow::bail!("Not implemented") }
-    }
+    ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send;
 
     /// Handles notifications that a new epoch root has been created.
     fn add_epoch_root(
@@ -179,10 +187,16 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
     /// when this is called. The value of initial_drb_result should be used for DRB
     /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}
+    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
 
     /// Get first epoch if epochs are enabled, `None` otherwise
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        None
+    }
+
+    /// Returns the commitment of the stake table for the given epoch,
+    /// Errors if the stake table is not available for the given epoch
+    fn stake_table_hash(&self, _epoch: TYPES::Epoch) -> Option<Commitment<Self::StakeTableHash>> {
         None
     }
 }

@@ -39,18 +39,46 @@ type Version = common_types.Version
 type VidCommon = common_types.VidCommon
 
 type TransactionQueryData = common_types.TransactionQueryData
+type ExplorerTransactionQueryData = common_types.ExplorerTransactionQueryData
 type VidCommonQueryData = common_types.VidCommonQueryData
 
 type U256 = common_types.U256
 type U256Decimal = common_types.U256Decimal
 
+// Consensus types
+type ConsensusMessage = common_types.ConsensusMessage
+type Event = common_types.Event
+type ViewFinished = common_types.ViewFinished
+type Decide = common_types.Decide
+type LeafChain = common_types.LeafChain
+type Leaf = common_types.Leaf
+type QuorumProposalWrapper = common_types.QuorumProposalWrapper
+type QuorumProposalDataWrapper = common_types.QuorumProposalDataWrapper
+type QuorumProposalData = common_types.QuorumProposalData
+type QuorumProposal = common_types.QuorumProposal
+type BlockHeader = common_types.BlockHeader
+type Fields = common_types.Fields
+type ChainConfigWrapper = common_types.ChainConfigWrapper
+type ChainConfig = common_types.ChainConfig
+type L1Finalized = common_types.L1Finalized
+type DaProposalWrapper = common_types.DaProposalWrapper
+type DaProposalDataWrapper = common_types.DaProposalDataWrapper
+type DAProposalData = common_types.DAProposalData
+type Metadata = common_types.Metadata
+type BlockPayload = common_types.BlockPayload
+type BuilderCommitment = common_types.BuilderCommitment
+
 var NewU256 = common_types.NewU256
+
+var NewBlockPayload = common_types.NewBlockPayload
+var UnmarshalConsensusMessage = common_types.UnmarshalConsensusMessage
 
 type HeaderInterface interface {
 	Commit() common_types.Commitment
 	Version() common_types.Version
 	GetBlockHeight() uint64
 	GetL1Head() uint64
+	GetL1Finalized() *common_types.L1BlockInfo
 	GetTimestamp() uint64
 	GetPayloadCommitment() *common_types.TaggedBase64
 	GetBuilderCommitment() *common_types.TaggedBase64

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use espresso_types::{EpochVersion, FeeVersion, UpgradeMode};
+use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, UpgradeMode};
 use futures::{future::join_all, StreamExt};
 use sequencer::Genesis;
 use vbs::version::StaticVersionType;
@@ -11,15 +11,19 @@ use crate::{
     smoke::assert_native_demo_works,
 };
 
-async fn assert_pos_upgrade_happens(genesis: &Genesis) -> Result<()> {
+async fn assert_upgrade_happens<Base, Target>(genesis: &Genesis) -> Result<()>
+where
+    Base: StaticVersionType,
+    Target: StaticVersionType,
+{
     dotenvy::dotenv()?;
 
     // The requirements passed to `TestConfig` are ignored here.
     let testing = TestConfig::new(Default::default()).await.unwrap();
     println!("Testing upgrade {testing:?}");
 
-    let base_version = FeeVersion::version();
-    let upgrade_version = EpochVersion::version();
+    let base_version = Base::version();
+    let upgrade_version = Target::version();
 
     println!("Waiting on readiness");
     let _ = testing.readiness().await?;
@@ -73,20 +77,22 @@ async fn assert_pos_upgrade_happens(genesis: &Genesis) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_pos_upgrade() -> Result<()> {
-    let genesis_path = "data/genesis/demo-pos.toml";
+async fn run_upgrade_test<Base, Target>(genesis_path: &str) -> Result<()>
+where
+    Base: StaticVersionType,
+    Target: StaticVersionType,
+{
     let genesis = load_genesis_file(genesis_path)?;
     let _demo = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE".to_string(),
+            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
             genesis_path.to_string(),
         )]),
     )?;
 
     assert_native_demo_works(Default::default()).await?;
-    assert_pos_upgrade_happens(&genesis).await?;
+    assert_upgrade_happens::<Base, Target>(&genesis).await?;
 
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
     // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
@@ -94,13 +100,34 @@ async fn test_native_demo_pos_upgrade() -> Result<()> {
     let expected_block_height = epoch_length * 3 + 10;
 
     // verify native demo continues to work after upgrade
-    let pos_progress_requirements = TestRequirements {
+    let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
         global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
         ..Default::default()
     };
-    assert_native_demo_works(pos_progress_requirements).await?;
+    assert_native_demo_works(progress_requirements).await?;
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_pos_upgrade() -> Result<()> {
+    run_upgrade_test::<FeeVersion, EpochVersion>("data/genesis/demo-pos.toml").await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_drb_header_upgrade() -> Result<()> {
+    run_upgrade_test::<EpochVersion, DrbAndHeaderUpgradeVersion>(
+        "data/genesis/demo-drb-header-upgrade.toml",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_fee_to_drb_header_upgrade() -> Result<()> {
+    run_upgrade_test::<FeeVersion, DrbAndHeaderUpgradeVersion>(
+        "data/genesis/demo-fee-to-drb-header-upgrade.toml",
+    )
+    .await
 }

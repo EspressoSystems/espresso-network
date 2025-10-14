@@ -986,7 +986,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             // This ensures the next iteration starts from the next unseen leaf
             offset += limit as i64;
 
-            query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(leaf_rows, |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
                     .push_bind(row.2)
@@ -1016,7 +1016,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
 
-            query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(vid_rows, |mut b, row| {
                 b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1378,10 +1378,10 @@ mod test {
         },
         vid::advz::advz_scheme,
     };
-    use jf_merkle_tree::{
+    use jf_advz::VidScheme;
+    use jf_merkle_tree_compat::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
-    use jf_vid::VidScheme;
     use tokio::time::sleep;
     use vbs::version::StaticVersionType;
 
@@ -1390,16 +1390,11 @@ mod test {
         availability::LeafQueryData,
         data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
-        testing::{
-            mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
-            setup_test,
-        },
+        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_migrations() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let cfg = db.config();
 
@@ -1482,10 +1477,8 @@ mod test {
             .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_target_period_pruning() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let cfg = db.config();
 
@@ -1573,10 +1566,8 @@ mod test {
         )
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_pruning() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let config = db.config();
 
@@ -1665,10 +1656,8 @@ mod test {
         assert!(count == 0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_minimum_retention_pruning() {
-        setup_test();
-
         let db = TmpDb::init().await;
 
         let mut storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -1742,10 +1731,8 @@ mod test {
         assert_eq!(header_rows, 0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pruned_height_storage() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let cfg = db.config();
 
@@ -1775,10 +1762,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_types_migration() {
-        setup_test();
-
         let num_rows = 500;
         let db = TmpDb::init().await;
 
@@ -1923,5 +1908,29 @@ mod test {
 
         assert_eq!(leaf_count as u64, num_rows, "not all leaves migrated");
         assert_eq!(vid_count as u64, num_rows, "not all vid migrated");
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transaction_upsert_retries() {
+        let db = TmpDb::init().await;
+        let config = db.config();
+
+        let storage = SqlStorage::connect(config).await.unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+
+        // Try to upsert into a table that does not exist.
+        // This will fail, so our `upsert` function will enter the retry loop.
+        // Since the table does not exist, all retries will eventually
+        // fail and we expect an error to be returned.
+        //
+        // Previously, this case would cause  a panic because we were calling
+        // methods on `QueryBuilder` after `.build()` without first
+        // calling `.reset()`and according to the sqlx docs, that always panics.
+        // Now, since we are properly calling `.reset()` inside `upsert()` for
+        // the query builder, the function returns an error instead of panicking.
+        tx.upsert("does_not_exist", ["test"], ["test"], [(1_i64,)])
+            .await
+            .unwrap_err();
     }
 }

@@ -151,6 +151,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 self.first_epoch = Some((*view, *epoch));
             },
             HotShotEvent::ViewChange(new_view_number, epoch_number) => {
+                // Request the randomized stake table for the subsequent epoch,
+                // to trigger catchup and the DRB calculation if it happens to be missing.
+                let _ = self
+                    .membership_coordinator
+                    .membership_for_epoch(epoch_number.map(|e| e + 1))
+                    .await;
+
                 if let Err(e) =
                     handle_view_change(*new_view_number, *epoch_number, &sender, self).await
                 {
@@ -185,15 +192,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                         .stake_table()
                         .await
                 );
-                tracing::info!(
-                    "Stake table for epoch {}:\n\n{:?}",
-                    next_epoch + 1,
-                    self.membership_coordinator
-                        .stake_table_for_epoch(Some(next_epoch + 1))
-                        .await?
-                        .stake_table()
-                        .await
-                );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
                 if !high_qc
@@ -218,11 +216,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     return Ok(());
                 }
 
+                let next_epoch = high_qc.data.epoch().map(|x| x + 1);
+
                 let mut consensus_writer = self.consensus.write().await;
                 let high_qc_updated = consensus_writer.update_high_qc(high_qc.clone()).is_ok();
                 let next_high_qc_updated = consensus_writer
                     .update_next_epoch_high_qc(next_epoch_high_qc.clone())
                     .is_ok();
+                if let Some(next_epoch) = next_epoch {
+                    consensus_writer.update_validator_participation_epoch(next_epoch);
+                }
                 drop(consensus_writer);
 
                 self.storage
@@ -233,6 +236,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     .update_next_epoch_high_qc2(next_epoch_high_qc.clone())
                     .await
                     .map_err(|_| warn!("Failed to update next epoch high QC"))?;
+                self.storage
+                    .update_eqc(high_qc.clone(), next_epoch_high_qc.clone())
+                    .await
+                    .map_err(|_| warn!("Failed to store eQC"))?;
 
                 tracing::debug!(
                     "Received Extended QC for view {} and epoch {:?}.",

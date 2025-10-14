@@ -59,7 +59,6 @@ use itertools::Itertools;
 use options::Modules;
 use portpicker::pick_unused_port;
 use run::init_with_storage;
-use sequencer_utils::test_utils::setup_test;
 use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
@@ -83,15 +82,8 @@ use crate::{
 };
 type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
-    setup_test();
-
-    let mut network = TestNetwork::<MockSequencerVersions>::new(
-        network.0,
-        network.1,
-        cdn,
-        "../data/genesis/restart-test.toml",
-    )
-    .await;
+    let mut network = TestNetwork::new(network.0, network.1, cdn,         "../data/genesis/restart-test.toml",
+ ).await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -101,7 +93,7 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
     network.shut_down().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_after_upgrade_before_first_epoch() {
     setup_test();
 
@@ -123,116 +115,112 @@ async fn slow_test_restart_after_upgrade_before_first_epoch() {
     network.shut_down().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_da_with_cdn() {
     test_restart_helper((2, 3), (1, 0), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_regular_with_cdn() {
     test_restart_helper((2, 3), (0, 1), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_with_cdn() {
     test_restart_helper((4, 6), (1, 2), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_minus_1_with_cdn() {
     test_restart_helper((4, 6), (1, 1), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_plus_1_with_cdn() {
     test_restart_helper((4, 6), (1, 3), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_with_cdn() {
     test_restart_helper((4, 6), (1, 5), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_minus_1_with_cdn() {
     test_restart_helper((4, 6), (1, 4), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_plus_1_with_cdn() {
     test_restart_helper((4, 6), (2, 5), true).await;
 }
 
 #[ignore]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_with_cdn() {
     test_restart_helper((2, 8), (2, 8), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_da_with_cdn() {
     test_restart_helper((2, 8), (2, 0), true).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_da_without_cdn() {
     test_restart_helper((2, 3), (1, 0), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_regular_without_cdn() {
     test_restart_helper((2, 3), (0, 1), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_without_cdn() {
     test_restart_helper((4, 6), (1, 2), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_minus_1_without_cdn() {
     test_restart_helper((4, 6), (1, 1), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_plus_1_without_cdn() {
     test_restart_helper((4, 6), (1, 3), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_without_cdn() {
     test_restart_helper((4, 6), (1, 5), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_minus_1_without_cdn() {
     test_restart_helper((4, 6), (1, 4), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_plus_1_without_cdn() {
     test_restart_helper((4, 6), (2, 5), false).await;
 }
 
 #[ignore]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_without_cdn() {
     test_restart_helper((2, 8), (2, 8), false).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_da_without_cdn() {
     test_restart_helper((2, 8), (2, 0), false).await;
 }
 
 #[ignore]
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_staggered() {
-    setup_test();
-
-    let mut network =
-        TestNetwork::<MockSequencerVersions>::new(4, 6, false, "../data/genesis/restart-test.toml")
-            .await;
+    let mut network = TestNetwork::new(4, 6, false,  "../data/genesis/restart-test.toml").await;
 
     // Check that the builder works at the beginning.
     network.check_builder().await;
@@ -374,7 +362,7 @@ impl<S: TestableSequencerDataSource, V: Versions> TestNode<S, V> {
         }
     }
 
-    fn stop(&mut self) -> BoxFuture<()> {
+    fn stop(&mut self) -> BoxFuture<'_, ()> {
         async {
             if let Some(mut context) = self.context.take() {
                 tracing::info!(node_id = context.node_id(), "stopping node");
@@ -384,7 +372,7 @@ impl<S: TestableSequencerDataSource, V: Versions> TestNode<S, V> {
         .boxed()
     }
 
-    fn start(&mut self) -> BoxFuture<()>
+    fn start(&mut self) -> BoxFuture<'_, ()>
     where
         S::Storage: Send,
     {
@@ -429,7 +417,7 @@ impl<S: TestableSequencerDataSource, V: Versions> TestNode<S, V> {
         .boxed()
     }
 
-    async fn event_stream(&self) -> Option<BoxStream<Event<SeqTypes>>> {
+    async fn event_stream(&self) -> Option<BoxStream<'_, Event<SeqTypes>>> {
         if let Some(ctx) = &self.context {
             Some(ctx.event_stream().await.boxed())
         } else {
@@ -444,7 +432,7 @@ impl<S: TestableSequencerDataSource, V: Versions> TestNode<S, V> {
         Some(context.node_id())
     }
 
-    fn check_progress_with_timeout(&self) -> BoxFuture<anyhow::Result<()>> {
+    fn check_progress_with_timeout(&self) -> BoxFuture<'_, anyhow::Result<()>> {
         async {
             let Some(context) = &self.context else {
                 tracing::info!("skipping progress check on stopped node");
@@ -810,17 +798,6 @@ impl<V: Versions> TestNetwork<V> {
 
         let stake_table_address = network.deploy(&genesis).await.unwrap();
 
-        let drb_header_upgrade = genesis.upgrades.get_mut(&DrbAndHeaderUpgradeVersion::VERSION).unwrap();
-
-        // Add contract address to `ChainConfig`.
-        let chain_config = ChainConfig {
-            base_fee: 1.into(),
-            stake_table_contract: Some(stake_table_address),
-            ..Default::default()
-        };
-        drb_header_upgrade.upgrade_type.set_chain_config(chain_config);
-        genesis.to_file(&genesis_file_path).unwrap();
-
         let finalized = l1_client
             .get_block(alloy::eips::BlockId::finalized())
             .full()
@@ -868,7 +845,7 @@ impl<V: Versions> TestNetwork<V> {
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(signer.clone()))
-            .on_http(l1_url.clone());
+            .connect_http(l1_url.clone());
 
         let blocks_per_epoch = genesis.epoch_height;
         let epoch_start_block = genesis.epoch_start_block;

@@ -1,0 +1,47 @@
+[package]
+name = "hotshot-builder-refactored"
+version = { workspace = true }
+edition = { workspace = true }
+license = "MIT"
+
+[dependencies]
+
+anyhow = { workspace = true }
+async-broadcast = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+atomic = "0.6"
+bincode = { workspace = true }
+bytemuck = { version = "1.19", features = ["derive"] }
+coarsetime = "0.1.34"
+committable = { workspace = true }
+derive_more = { workspace = true, features = ["deref", "deref_mut", "debug"] }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-builder-api = { workspace = true }
+hotshot-builder-shared = { workspace = true }
+hotshot-types = { workspace = true }
+jf-advz = { workspace = true }
+lru = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+tagged-base64 = { workspace = true }
+tide-disco = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+vbs = { workspace = true }
+
+[dev-dependencies]
+hotshot-example-types = { workspace = true }
+hotshot-macros = { workspace = true }
+hotshot-task-impls = { workspace = true }
+hotshot-testing = { workspace = true }
+num_cpus = { workspace = true }
+portpicker = { workspace = true }
+test-log = { workspace = true }
+tracing-test = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true

@@ -4,12 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Debug,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
@@ -58,22 +53,14 @@ pub enum ViewSyncPhase {
     Finalize,
 }
 
-/// Type alias for a map from View Number to Relay to Vote Task
-type RelayMap<TYPES, VOTE, CERT, V> = HashMap<
-    (
-        <TYPES as NodeType>::View,
-        Option<<TYPES as NodeType>::Epoch>,
-    ),
-    BTreeMap<u64, VoteCollectionTaskState<TYPES, VOTE, CERT, V>>,
->;
+type TaskMap<TYPES, VAL> =
+    BTreeMap<Option<<TYPES as NodeType>::Epoch>, BTreeMap<<TYPES as NodeType>::View, VAL>>;
 
-type ReplicaTaskMap<TYPES, V> = HashMap<
-    (
-        <TYPES as NodeType>::View,
-        Option<<TYPES as NodeType>::Epoch>,
-    ),
-    ViewSyncReplicaTaskState<TYPES, V>,
->;
+/// Type alias for a map from View Number to Relay to Vote Task
+type RelayMap<TYPES, VOTE, CERT, V> =
+    TaskMap<TYPES, BTreeMap<u64, VoteCollectionTaskState<TYPES, VOTE, CERT, V>>>;
+
+type ReplicaTaskMap<TYPES, V> = TaskMap<TYPES, ViewSyncReplicaTaskState<TYPES, V>>;
 
 /// Main view sync task state
 pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
@@ -129,6 +116,11 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Keeps track of the highest finalized view and epoch, used for garbage collection
+    pub highest_finalized_epoch_view: (Option<TYPES::Epoch>, TYPES::View),
+
+    pub epoch_height: u64,
 }
 
 #[async_trait]
@@ -221,16 +213,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
         epoch: Option<TYPES::Epoch>,
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     ) {
-        // This certificate is old, we can throw it away
-        // If next view = cert round, then that means we should already have a task running for it
-        if self.cur_view > view {
-            tracing::debug!("Already in a higher view than the view sync message");
-            return;
-        }
-
         let mut task_map = self.replica_task_map.write().await;
 
-        if let Some(replica_task) = task_map.get_mut(&(view, epoch)) {
+        if let Some(replica_task) = task_map.get_mut(&epoch).and_then(|x| x.get_mut(&view)) {
             // Forward event then return
             tracing::debug!("Forwarding message");
             let result = replica_task
@@ -239,7 +224,25 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
             if result == Some(HotShotTaskCompleted) {
                 // The protocol has finished
-                task_map.remove(&(view, epoch));
+                if epoch >= self.highest_finalized_epoch_view.0
+                    && view > self.highest_finalized_epoch_view.1
+                {
+                    self.highest_finalized_epoch_view = (epoch, view);
+                } else if view > self.highest_finalized_epoch_view.1 {
+                    tracing::error!(
+                        "We finalized a higher view but the epoch is lower. This should never \
+                         happen. Current highest finalized epoch view: {:?}, new highest \
+                         finalized epoch view: {:?}",
+                        self.highest_finalized_epoch_view,
+                        (epoch, view)
+                    );
+                }
+                task_map.get_mut(&epoch).and_then(|x| x.remove(&view));
+                task_map.retain(|_, x| !x.is_empty());
+                drop(task_map);
+
+                // Garbage collect old tasks
+                self.garbage_collect_tasks().await;
                 return;
             }
 
@@ -273,7 +276,10 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             return;
         }
 
-        task_map.insert((view, epoch), replica_state);
+        task_map
+            .entry(epoch)
+            .or_default()
+            .insert(view, replica_state);
     }
 
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "View Sync Main Task", level = "error")]
@@ -335,7 +341,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
                 let relay_map = map
-                    .entry((vote_view, vote.date().epoch))
+                    .entry(vote.date().epoch)
+                    .or_insert(BTreeMap::new())
+                    .entry(vote_view)
                     .or_insert(BTreeMap::new());
                 if let Some(relay_task) = relay_map.get_mut(&relay) {
                     tracing::debug!("Forwarding message");
@@ -346,7 +354,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                         .await?
                         .is_some()
                     {
-                        map.remove(&(vote_view, vote.date().epoch));
+                        map.get_mut(&vote.date().epoch)
+                            .and_then(|x| x.remove(&vote_view));
+                        map.retain(|_, x| !x.is_empty());
                     }
 
                     return Ok(());
@@ -385,7 +395,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
                 let relay_map = map
-                    .entry((vote_view, vote.date().epoch))
+                    .entry(vote.date().epoch)
+                    .or_insert(BTreeMap::new())
+                    .entry(vote_view)
                     .or_insert(BTreeMap::new());
                 if let Some(relay_task) = relay_map.get_mut(&relay) {
                     tracing::debug!("Forwarding message");
@@ -396,7 +408,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                         .await?
                         .is_some()
                     {
-                        map.remove(&(vote_view, vote.date().epoch));
+                        map.get_mut(&vote.date().epoch)
+                            .and_then(|x| x.remove(&vote_view));
+                        map.retain(|_, x| !x.is_empty());
                     }
 
                     return Ok(());
@@ -435,7 +449,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
                 let relay_map = map
-                    .entry((vote_view, vote.date().epoch))
+                    .entry(vote.date().epoch)
+                    .or_insert(BTreeMap::new())
+                    .entry(vote_view)
                     .or_insert(BTreeMap::new());
                 if let Some(relay_task) = relay_map.get_mut(&relay) {
                     tracing::debug!("Forwarding message");
@@ -446,7 +462,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                         .await?
                         .is_some()
                     {
-                        map.remove(&(vote_view, vote.date().epoch));
+                        map.get_mut(&vote.date().epoch)
+                            .and_then(|x| x.remove(&vote_view));
+                        map.retain(|_, x| !x.is_empty());
                     }
 
                     return Ok(());
@@ -496,31 +514,29 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     self.cur_view = new_view;
                     self.next_view = self.cur_view;
                     self.num_timeouts_tracked = 0;
-
-                    // Garbage collect old tasks
-                    // We could put this into a separate async task, but that would require making several fields on ViewSyncTaskState thread-safe and harm readability.  In the common case this will have zero tasks to clean up.
-                    // run GC
-                    for i in *self.last_garbage_collected_view..*self.cur_view {
-                        self.replica_task_map
-                            .write()
-                            .await
-                            .remove_entry(&(TYPES::View::new(i), epoch));
-                        self.pre_commit_relay_map
-                            .write()
-                            .await
-                            .remove_entry(&(TYPES::View::new(i), epoch));
-                        self.commit_relay_map
-                            .write()
-                            .await
-                            .remove_entry(&(TYPES::View::new(i), epoch));
-                        self.finalize_relay_map
-                            .write()
-                            .await
-                            .remove_entry(&(TYPES::View::new(i), epoch));
-                    }
-
-                    self.last_garbage_collected_view = self.cur_view - 1;
                 }
+
+                self.garbage_collect_tasks().await;
+            },
+            HotShotEvent::LeavesDecided(leaves) => {
+                let finalized_epoch = self.highest_finalized_epoch_view.0.max(
+                    leaves
+                        .iter()
+                        .map(|leaf| leaf.epoch(self.epoch_height))
+                        .max()
+                        .unwrap_or(None),
+                );
+                let finalized_view = self.highest_finalized_epoch_view.1.max(
+                    leaves
+                        .iter()
+                        .map(|leaf| leaf.view_number())
+                        .max()
+                        .unwrap_or(TYPES::View::new(0)),
+                );
+
+                self.highest_finalized_epoch_view = (finalized_epoch, finalized_view);
+
+                self.garbage_collect_tasks().await;
             },
             &HotShotEvent::Timeout(view_number, ..) => {
                 // This is an old timeout and we can ignore it
@@ -530,19 +546,6 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 );
 
                 self.num_timeouts_tracked += 1;
-                let leader = self
-                    .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(view_number)
-                    .await?;
-                tracing::warn!(
-                    %leader,
-                    leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
-                    view_number = *view_number,
-                    num_timeouts_tracked = self.num_timeouts_tracked,
-                    "view timed out",
-                );
 
                 if self.num_timeouts_tracked >= 3 {
                     tracing::error!("Too many consecutive timeouts!  This shouldn't happen");
@@ -569,6 +572,19 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     )
                     .await;
                 }
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?
+                    .leader(view_number)
+                    .await?;
+                tracing::warn!(
+                    %leader,
+                    leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
+                    view_number = *view_number,
+                    num_timeouts_tracked = self.num_timeouts_tracked,
+                    "view timed out",
+                );
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {
                 self.first_epoch = Some((*view, *epoch));
@@ -577,6 +593,54 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             _ => {},
         }
         Ok(())
+    }
+
+    /// Garbage collect tasks for epochs older than the highest finalized epoch
+    /// or older than the previous epoch, whichever is greater.
+    /// Garbage collect views older than the highest finalized view including the highest finalized view.
+    async fn garbage_collect_tasks(&self) {
+        let previous_epoch = self
+            .cur_epoch
+            .map(|e| e.saturating_sub(1))
+            .map(TYPES::Epoch::new);
+        let gc_epoch = self.highest_finalized_epoch_view.0.max(previous_epoch);
+        Self::garbage_collect_tasks_helper(
+            &self.replica_task_map,
+            &gc_epoch,
+            &self.highest_finalized_epoch_view.1,
+        )
+        .await;
+        Self::garbage_collect_tasks_helper(
+            &self.pre_commit_relay_map,
+            &gc_epoch,
+            &self.highest_finalized_epoch_view.1,
+        )
+        .await;
+        Self::garbage_collect_tasks_helper(
+            &self.commit_relay_map,
+            &gc_epoch,
+            &self.highest_finalized_epoch_view.1,
+        )
+        .await;
+        Self::garbage_collect_tasks_helper(
+            &self.finalize_relay_map,
+            &gc_epoch,
+            &self.highest_finalized_epoch_view.1,
+        )
+        .await;
+    }
+
+    async fn garbage_collect_tasks_helper<VAL>(
+        map: &RwLock<TaskMap<TYPES, VAL>>,
+        gc_epoch: &Option<TYPES::Epoch>,
+        gc_view: &TYPES::View,
+    ) {
+        let mut task_map = map.write().await;
+        task_map.retain(|e, _| e >= gc_epoch);
+        if let Some(view_map) = task_map.get_mut(gc_epoch) {
+            view_map.retain(|v, _| v > gc_view)
+        };
+        task_map.retain(|_, view_map| !view_map.is_empty());
     }
 }
 

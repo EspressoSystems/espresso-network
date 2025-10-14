@@ -12,6 +12,7 @@ default = []
 slow-tests = []
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -19,7 +20,7 @@ committable = { workspace = true }
 hotshot = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
-jf-vid = { workspace = true }
+jf-advz = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -30,4 +31,6 @@ time = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
-workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[lints]
+workspace = true

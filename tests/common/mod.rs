@@ -1,7 +1,6 @@
 use std::{
     fmt,
-    fs::File,
-    io::{stderr, stdout},
+    io::{stderr, stdout, Write},
     path::{Path, PathBuf},
     process::{Child, Command},
     str::FromStr,
@@ -133,7 +132,7 @@ impl TestConfig {
         let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER_L1_PORT")?)?;
         let sequencer_api_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?)?;
         let sequencer_clients = [
-            dotenvy::var("ESPRESSO_SEQUENCER_API_PORT")?,
+            dotenvy::var("ESPRESSO_SEQUENCER0_API_PORT")?,
             dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?,
         ]
         .iter()
@@ -180,7 +179,7 @@ impl TestConfig {
 
     /// Get the latest block where we see a light client update
     pub async fn latest_light_client_update(&self) -> u64 {
-        let provider = ProviderBuilder::new().on_http(self.l1_endpoint.clone());
+        let provider = ProviderBuilder::new().connect_http(self.l1_endpoint.clone());
         let filter = Filter::new()
             .from_block(BlockNumberOrTag::Earliest)
             .address(self.light_client_address);
@@ -352,8 +351,27 @@ impl NativeDemo {
         });
 
         println!("Writing native demo logs to file: {log_path}");
-        let outputs = File::create(log_path).context("unable to create log file")?;
-        cmd.stdout(outputs);
+
+        let is_ci = std::env::var("CI").unwrap_or_default() == "true";
+
+        // Open file in append mode if CI, otherwise truncate
+        let mut log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(is_ci)
+            .truncate(!is_ci)
+            .write(true)
+            .open(&log_path)
+            .context("unable to open log file")?;
+        writeln!(log_file, "==== process-compose logs =====")?;
+        log_file.flush()?;
+
+        // Redirect both stdout and stderr to the same file
+        cmd.stdout(
+            log_file
+                .try_clone()
+                .context("unable to clone log file for stdout")?,
+        );
+        cmd.stderr(log_file);
 
         println!("Spawning: {cmd:?}");
         let mut child = cmd.spawn().context("failed to spawn command")?;

@@ -5,18 +5,26 @@ edition = { workspace = true }
 authors = { workspace = true }
 license = "MIT"
 
+[features]
+default = ["parallel", "keccak256"]
+parallel = ["ark-ff/parallel", "jf-utils/parallel", "p3-maybe-rayon/parallel"]
+print-trace = ["ark-std/print-trace"]
+sha256 = []
+keccak256 = []
+
 [dependencies]
-anyhow = "1.0"
+anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ff = { workspace = true, features = [ "asm" ] }
 ark-poly = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
+base64-bytes = { workspace = true }
 displaydoc = "0.2"
-jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.1.1" }
-jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.2.2" }
-jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.1.0", features = ["bn254"] }
-jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
+jf-crhf = { workspace = true }
+jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.0" }
+jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.2.0", features = ["bn254"] }
+jf-utils = { workspace = true }
 p3-maybe-rayon = "0.2"
 serde = { workspace = true }
 sha2 = { workspace = true }
@@ -24,9 +32,9 @@ sha3 = { version = "0.10" }
 tagged-base64 = { workspace = true }
 
 [dev-dependencies]
-ark-bls12-381 = { version = "0.4.0" }
+ark-bls12-381 = { workspace = true }
 criterion = "0.5"
-rand = "0.8.5"
+rand = { workspace = true }
 
 [[bench]]
 name = "dispersal"
@@ -40,9 +48,5 @@ harness = false
 name = "recovery"
 harness = false
 
-[features]
-default = ["parallel", "keccak256"]
-parallel = ["ark-ff/parallel", "jf-utils/parallel", "p3-maybe-rayon/parallel"]
-print-trace = ["ark-std/print-trace"]
-sha256 = []
-keccak256 = []
+[lints]
+workspace = true

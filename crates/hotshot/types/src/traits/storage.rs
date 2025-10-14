@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
@@ -26,7 +26,7 @@ use crate::{
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
     },
 };
@@ -114,13 +114,13 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Update the light client state update certificate in storage.
     async fn update_state_cert(
         &self,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
     ) -> Result<()>;
 
     async fn update_high_qc2_and_state_cert(
         &self,
         high_qc: QuorumCertificate2<TYPES>,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
     ) -> Result<()> {
         self.update_high_qc2(high_qc).await?;
         self.update_state_cert(state_cert).await
@@ -129,9 +129,14 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     async fn update_next_epoch_high_qc2(
         &self,
         _next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
-    ) -> Result<()> {
-        Ok(())
-    }
+    ) -> Result<()>;
+
+    /// Update the current eQC in storage.
+    async fn update_eqc(
+        &self,
+        _high_qc: QuorumCertificate2<TYPES>,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
+    ) -> Result<()>;
 
     /// Upgrade the current decided upgrade certificate in storage.
     async fn update_decided_upgrade_certificate(
@@ -139,7 +144,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
     ) -> Result<()>;
     /// Migrate leaves from `Leaf` to `Leaf2`, and proposals from `QuorumProposal` to `QuorumProposal2`
-    async fn migrate_consensus(&self) -> Result<()> {
+    async fn migrate_storage(&self) -> Result<()> {
         Ok(())
     }
     /// Add a drb result
@@ -150,6 +155,16 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,
     ) -> Result<()>;
+    async fn load_drb_result(&self, epoch: TYPES::Epoch) -> Result<DrbResult> {
+        match self.load_drb_input(*epoch).await {
+            Ok(drb_input) => {
+                ensure!(drb_input.iteration == drb_input.difficulty_level);
+
+                Ok(drb_input.value)
+            },
+            Err(e) => Err(e),
+        }
+    }
     async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()>;
     async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput>;
 }

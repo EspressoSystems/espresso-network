@@ -79,7 +79,6 @@ mod tests {
     };
     use indexmap::IndexMap;
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
     use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
     use tide_disco::error::ServerError;
@@ -112,7 +111,7 @@ mod tests {
     #[rstest::rstest]
     #[case(PhantomData::<crate::persistence::sql::Persistence>)]
     #[case(PhantomData::<crate::persistence::fs::Persistence>)]
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
     #[derive(Clone, Debug, Default)]
@@ -146,8 +145,6 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_voted_view<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -189,8 +186,6 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_restart_view<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -253,7 +248,6 @@ mod tests {
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_store_drb_input<P: TestablePersistence>(_p: PhantomData<P>) {
         use hotshot_types::drb::DrbInput;
-        setup_test();
 
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
@@ -302,7 +296,6 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_epoch_info<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -415,8 +408,6 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_append_and_decide<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -796,8 +787,6 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_upgrade_certificate<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -845,8 +834,6 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_next_epoch_quorum_certificate<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -918,8 +905,6 @@ mod tests {
                 bail!("mock error injection");
             }
         }
-
-        setup_test();
 
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
@@ -1128,8 +1113,6 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_pruning<P: TestablePersistence>(_p: PhantomData<P>) {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
 
         let mut options = P::options(&tmp);
@@ -1289,8 +1272,7 @@ mod tests {
             None,
             block,
         )
-        .await
-        .sort_events()?;
+        .await?;
         assert_eq!(
             contract_events, events,
             "Events from contract and persistence do not match"
@@ -1313,8 +1295,6 @@ mod tests {
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        setup_test();
-
         let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
@@ -1444,8 +1424,6 @@ mod tests {
         use espresso_types::v0_3::ChainConfig;
         use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 
-        setup_test();
-
         let blocks_per_epoch = 10;
 
         let network_config = TestConfigBuilder::<1>::default()
@@ -1471,7 +1449,7 @@ mod tests {
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))
-            .on_http(network_config.l1_url().clone());
+            .connect_http(network_config.l1_url().clone());
 
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
@@ -1481,6 +1459,7 @@ mod tests {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
+            .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
             .multisig_pauser(network_config.signer().address())
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
@@ -1566,6 +1545,7 @@ mod tests {
         for _i in 0..10 {
             // Wait for more than update interval to assert that persistence was updated
             // L1 update interval is 7s in this test
+
             tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
             let block = anvil_provider
@@ -1587,8 +1567,7 @@ mod tests {
 
             let contract_events =
                 Fetcher::fetch_events_from_contract(l1_client.clone(), st_addr, None, l1_block)
-                    .await
-                    .sort_events()?;
+                    .await?;
             assert_eq!(persisted_events, contract_events);
 
             prev_l1_block = l1_block;
@@ -1602,8 +1581,6 @@ mod tests {
     pub async fn test_membership_persistence<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        setup_test();
-
         let tmp = P::tmp_storage().await;
         let mut opt = P::options(&tmp);
 
@@ -1612,40 +1589,141 @@ mod tests {
         let validator = Validator::mock();
         let mut st = IndexMap::new();
         st.insert(validator.account, validator);
+
         storage
-            .store_stake(EpochNumber::new(10), st.clone())
+            .store_stake(EpochNumber::new(10), st.clone(), None, None)
             .await?;
 
-        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        let (table, ..) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
         assert_eq!(st, table);
 
         let val2 = Validator::mock();
         let mut st2 = IndexMap::new();
         st2.insert(val2.account, val2);
         storage
-            .store_stake(EpochNumber::new(11), st2.clone())
+            .store_stake(EpochNumber::new(11), st2.clone(), None, None)
             .await?;
 
         let tables = storage.load_latest_stake(4).await?.unwrap();
         let mut iter = tables.iter();
-        assert_eq!(Some(&(EpochNumber::new(11), st2.clone())), iter.next());
-        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(
+            Some(&(EpochNumber::new(11), (st2.clone(), None), None)),
+            iter.next()
+        );
+        assert_eq!(Some(&(EpochNumber::new(10), (st, None), None)), iter.next());
         assert_eq!(None, iter.next());
 
         for i in 0..=20 {
             storage
-                .store_stake(EpochNumber::new(i), st2.clone())
+                .store_stake(EpochNumber::new(i), st2.clone(), None, None)
                 .await?;
         }
 
         let tables = storage.load_latest_stake(5).await?.unwrap();
         let mut iter = tables.iter();
-        assert_eq!(Some(&(EpochNumber::new(20), st2.clone())), iter.next());
-        assert_eq!(Some(&(EpochNumber::new(19), st2.clone())), iter.next());
-        assert_eq!(Some(&(EpochNumber::new(18), st2.clone())), iter.next());
-        assert_eq!(Some(&(EpochNumber::new(17), st2.clone())), iter.next());
-        assert_eq!(Some(&(EpochNumber::new(16), st2)), iter.next());
+        assert_eq!(
+            Some(&(EpochNumber::new(20), (st2.clone(), None), None)),
+            iter.next()
+        );
+        assert_eq!(
+            Some(&(EpochNumber::new(19), (st2.clone(), None), None)),
+            iter.next()
+        );
+        assert_eq!(
+            Some(&(EpochNumber::new(18), (st2.clone(), None), None)),
+            iter.next()
+        );
+        assert_eq!(
+            Some(&(EpochNumber::new(17), (st2.clone(), None), None)),
+            iter.next()
+        );
+        assert_eq!(
+            Some(&(EpochNumber::new(16), (st2, None), None)),
+            iter.next()
+        );
         assert_eq!(None, iter.next());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_store_and_load_all_validators<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let mut vmap1 = IndexMap::new();
+        for _i in 0..25 {
+            let v = Validator::mock();
+            vmap1.insert(v.account, v);
+        }
+        storage
+            .store_all_validators(EpochNumber::new(10), vmap1.clone())
+            .await?;
+
+        let mut expected_all: Vec<_> = vmap1.clone().into_values().collect();
+        expected_all.sort_by_key(|v| v.account);
+
+        // Load all
+        let loaded_all = storage
+            .load_all_validators(EpochNumber::new(10), 0, 100)
+            .await?;
+        // SQLite returns a different ordered list even though there is an `ORDER BY address ASC` clause
+        assert_eq!(expected_all, loaded_all);
+
+        // Load first 10
+        let loaded_first_10 = storage
+            .load_all_validators(EpochNumber::new(10), 0, 10)
+            .await?;
+
+        assert_eq!(expected_all[..10], loaded_first_10);
+
+        // Load next 10
+        let loaded_next_10 = storage
+            .load_all_validators(EpochNumber::new(10), 10, 10)
+            .await?;
+
+        assert_eq!(expected_all[10..20], loaded_next_10);
+
+        // Load remaining 5
+        let loaded_last_5 = storage
+            .load_all_validators(EpochNumber::new(10), 20, 10)
+            .await?;
+
+        assert_eq!(expected_all[20..], loaded_last_5);
+
+        // offset beyond size should return empty
+        let loaded_empty = storage
+            .load_all_validators(EpochNumber::new(10), 100, 10)
+            .await?;
+        assert!(loaded_empty.is_empty());
+
+        // epoch 11
+        let validator2 = Validator::mock();
+        let mut vmap2 = IndexMap::new();
+        vmap2.insert(validator2.account, validator2.clone());
+
+        storage
+            .store_all_validators(EpochNumber::new(11), vmap2.clone())
+            .await?;
+
+        let mut expected_epoch11: Vec<_> = vmap2.clone().into_values().collect();
+        expected_epoch11.sort_by_key(|v| v.account);
+
+        let loaded2 = storage
+            .load_all_validators(EpochNumber::new(11), 0, 100)
+            .await?;
+
+        assert_eq!(expected_epoch11, loaded2);
+
+        // Epoch 10 still there
+        let loaded1_again = storage
+            .load_all_validators(EpochNumber::new(10), 0, 100)
+            .await?;
+
+        assert_eq!(expected_all, loaded1_again);
 
         Ok(())
     }

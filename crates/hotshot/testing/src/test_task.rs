@@ -213,7 +213,7 @@ pub async fn add_network_message_test_task<
             // Deserialize the message
             let deserialized_message: Message<TYPES> =
                 match upgrade_lock.deserialize(&message).await {
-                    Ok(message) => message,
+                    Ok((message, _)) => message,
                     Err(e) => {
                         tracing::error!("Failed to deserialize message: {e:?}");
                         continue;

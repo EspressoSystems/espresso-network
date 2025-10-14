@@ -436,12 +436,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     );
                     return Ok(());
                 }
-                let epoch_transition_indicator =
-                    if self.consensus.read().await.is_high_qc_ge_root_block() {
-                        EpochTransitionIndicator::InTransition
-                    } else {
+                let consensus_reader = self.consensus.read().await;
+                let epoch_transition_indicator = if consensus_reader.is_high_qc_ge_root_block() {
+                    if self.upgrade_lock.upgraded_drb_and_header(view_number).await
+                        && consensus_reader.is_high_qc_last_block()
+                    {
                         EpochTransitionIndicator::NotInTransition
-                    };
+                    } else {
+                        EpochTransitionIndicator::InTransition
+                    }
+                } else {
+                    EpochTransitionIndicator::NotInTransition
+                };
+                drop(consensus_reader);
+
                 let data: DaProposal2<TYPES> = DaProposal2 {
                     encoded_transactions: Arc::clone(encoded_transactions),
                     metadata: metadata.clone(),
@@ -473,12 +481,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     metadata: metadata.clone(),
                 });
                 // Save the payload early because we might need it to calculate VID for the next epoch nodes.
-                if let Err(e) = self
+                let update_result = self
                     .consensus
                     .write()
                     .await
-                    .update_saved_payloads(view_number, payload_with_metadata)
-                {
+                    .update_saved_payloads(view_number, payload_with_metadata);
+                if let Err(e) = update_result {
                     tracing::trace!("{e:?}");
                 }
             },

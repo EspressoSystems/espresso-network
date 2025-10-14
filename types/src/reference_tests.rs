@@ -23,28 +23,31 @@
 
 use std::{fmt::Debug, path::Path, str::FromStr};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryData,
-        TransactionQueryData, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryDataV1,
+        StateCertQueryDataV2, TransactionQueryData, TransactionWithProofQueryData,
+        VidCommonQueryData,
     },
     testing::mocks::MockVersions,
     VidCommon,
 };
 use hotshot_types::{
     data::vid_commitment,
-    simple_certificate::LightClientStateUpdateCertificate,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+    },
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
     vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
-use jf_merkle_tree::MerkleTreeScheme;
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
-use sequencer_utils::{commitment_to_u256, test_utils::setup_test};
+use sequencer_utils::commitment_to_u256;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tagged_base64::TaggedBase64;
@@ -55,9 +58,15 @@ use vbs::{
 
 use crate::{
     v0_1::{self, ADVZNsProof},
-    v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, Transaction,
-    ValidatedState,
+    v0_2,
+    v0_3::{EventKey, RewardAmount, StakeTableEvent},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
+    validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
+    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
+    SeqTypes, StakeTableHash, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -204,6 +213,17 @@ fn reference_fee_info() -> FeeInfo {
     )
 }
 
+fn reference_stake_table_hash() -> StakeTableHash {
+    let events_json = std::fs::read_to_string("../data/v3/decaf_stake_table_events.json").unwrap();
+    let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
+
+    // Reconstruct stake table from events
+    validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+        .unwrap()
+        .stake_table_hash
+        .unwrap()
+}
+
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
 
 async fn reference_header(version: Version) -> Header {
@@ -216,6 +236,8 @@ async fn reference_header(version: Version) -> Header {
     let builder_commitment = payload.builder_commitment(&ns_table);
     let builder_signature =
         FeeAccount::sign_fee(&builder_key, fee_info.amount().as_u64().unwrap(), &ns_table).unwrap();
+
+    let staket_table_hash = reference_stake_table_hash();
 
     let state = ValidatedState::default();
 
@@ -231,17 +253,20 @@ async fn reference_header(version: Version) -> Header {
         ns_table,
         state.fee_merkle_tree.commitment(),
         state.block_merkle_tree.commitment(),
-        state.reward_merkle_tree.commitment(),
+        state.reward_merkle_tree_v1.commitment(),
+        state.reward_merkle_tree_v2.commitment(),
         vec![fee_info],
         vec![builder_signature],
+        None,
         version,
+        Some(staket_table_hash),
     )
 }
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
-const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~4AAMH8KXLniBkroEACIPb_QSXs0c4IWU1st6KDEq2sfT";
+const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -259,8 +284,6 @@ fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Deb
     name: &str,
     reference: &T,
 ) {
-    setup_test();
-
     // Load the expected serialization from the repo.
     let data_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("../data")
@@ -364,8 +387,6 @@ fn reference_test<T: Committable + Serialize + DeserializeOwned + Eq + Debug>(
     reference: T,
     commitment: &str,
 ) {
-    setup_test();
-
     reference_test_without_committable(version, name, &reference);
 
     // Print information about the commitment that might be useful in generating tests for other
@@ -393,12 +414,12 @@ Actual: {actual}
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_payload() {
     reference_test_without_committable("v1", "payload", &reference_payload().await);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_table() {
     reference_test(
         "v1",
@@ -408,7 +429,7 @@ async fn test_reference_ns_table() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_l1_block() {
     reference_test(
         "v1",
@@ -418,7 +439,7 @@ fn test_reference_l1_block() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_v1_chain_config() {
     reference_test(
         "v1",
@@ -428,7 +449,7 @@ fn test_reference_v1_chain_config() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_v2_chain_config() {
     reference_test(
         "v2",
@@ -438,7 +459,7 @@ fn test_reference_v2_chain_config() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_v3_chain_config() {
     reference_test(
         "v3",
@@ -448,7 +469,7 @@ fn test_reference_v3_chain_config() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_fee_info() {
     reference_test(
         "v1",
@@ -458,7 +479,7 @@ fn test_reference_fee_info() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v1() {
     reference_test(
         "v1",
@@ -468,7 +489,7 @@ async fn test_reference_header_v1() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v2() {
     reference_test(
         "v2",
@@ -478,7 +499,7 @@ async fn test_reference_header_v2() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v3() {
     reference_test(
         "v3",
@@ -488,7 +509,7 @@ async fn test_reference_header_v3() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_header_v4() {
     reference_test(
         "v4",
@@ -498,7 +519,7 @@ async fn test_reference_header_v4() {
     );
 }
 
-#[test]
+#[test_log::test]
 fn test_reference_transaction() {
     reference_test(
         "v1",
@@ -509,25 +530,25 @@ fn test_reference_transaction() {
 }
 
 // "legacy" refers to the proof type used before it was an enum.
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_proof_legacy() {
     reference_test_without_committable("v1", "ns_proof_legacy", &reference_ns_proof_legacy().await);
 }
 
 // "V0" does not refer to the version scheme used in this crate but to the NSProof::VO variant.
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_proof_enum_advz() {
     reference_test_without_committable("v3", "ns_proof_V0", &reference_ns_proof_enum_advz().await);
 }
 
 // "V1" does not refer to the version scheme used in this crate but to the NSProof::V1 variant.
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_proof_enum_avidm() {
     reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
 }
 
 // Legacy leaf query data
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_legacy_v1() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
@@ -537,7 +558,7 @@ async fn test_leaf_query_data_legacy_v1() {
     reference_test_without_committable("v1", "leaf_query_data_legacy", &leaf);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_legacy_v2() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
@@ -548,7 +569,7 @@ async fn test_leaf_query_data_legacy_v2() {
 }
 
 // new leaf2 query data
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_v3() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
@@ -557,13 +578,13 @@ async fn test_leaf_query_data_v3() {
     reference_test_without_committable("v3", "leaf_query_data", &leaf);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_block_query_data() {
     let block = reference_block().await;
     reference_test_without_committable("v1", "block_query_data", &block);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_payload_query_data() {
     let block = reference_block().await;
     let payload = PayloadQueryData::from(block);
@@ -571,7 +592,7 @@ async fn test_payload_query_data() {
 }
 
 // v0 is the `VidCommon`` v0 variant
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v0_query_data() {
     let header = reference_header(Version { major: 0, minor: 1 }).await;
     let payload = reference_payload().await;
@@ -585,7 +606,7 @@ async fn test_vid_common_v0_query_data() {
 }
 
 // v1 is the `VidCommon`` v1 variant
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v1_query_data() {
     let header = reference_header(Version { major: 0, minor: 1 }).await;
     let avid_m_param = init_avidm_param(10).unwrap();
@@ -595,23 +616,86 @@ async fn test_vid_common_v1_query_data() {
 }
 
 // Transaction query data
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_transaction_query_data() {
     let block = reference_block().await;
 
     let transactions = block
         .enumerate()
         .enumerate()
-        .map(|(i, (index, _))| TransactionQueryData::new(&block, index, i as u64).unwrap())
+        .map(|(i, (index, _))| {
+            let avid_m_param = init_avidm_param(10).unwrap();
+            let vid = VidCommonQueryData::<SeqTypes>::new(
+                block.header().clone(),
+                VidCommon::V1(avid_m_param),
+            );
+
+            let tx = block.transaction(&index).unwrap();
+            let tx = TransactionQueryData::new(tx, &block, &index, i as u64).unwrap();
+            let proof = block.transaction_proof(&vid, &index).unwrap();
+            TransactionWithProofQueryData::new(tx, proof)
+        })
         .collect::<Vec<_>>();
 
     reference_test_without_committable("v1", "transaction_query_data", &transactions);
 }
 
 // State certificate
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_state_cert_query_data_v3() {
-    let light_client_cert = LightClientStateUpdateCertificate::<SeqTypes>::genesis();
-    let state_cert = StateCertQueryData(light_client_cert);
+    let light_client_cert = LightClientStateUpdateCertificateV1::<SeqTypes>::genesis();
+    let state_cert = StateCertQueryDataV1(light_client_cert);
     reference_test_without_committable("v3", "state_cert", &state_cert);
+}
+
+// State certificate
+#[tokio::test(flavor = "multi_thread")]
+async fn test_state_cert_query_data_v4() {
+    let light_client_cert = LightClientStateUpdateCertificateV2::<SeqTypes>::genesis();
+    let state_cert = StateCertQueryDataV2(light_client_cert);
+    reference_test_without_committable("v4", "state_cert", &state_cert);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reward_proof_endpoint_serialization() {
+    let mut settings = insta::Settings::clone_current();
+
+    let data_dir =
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../data/insta_snapshots");
+
+    settings.set_snapshot_path(data_dir);
+
+    let mut reward_merkle_tree_v2 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+    let address = Address::from_slice(&[1; 20]);
+    let balance: U256 = 123_u64.try_into().unwrap();
+    let reward_amount = RewardAmount(balance);
+    reward_merkle_tree_v2
+        .update(RewardAccountV2::from(address), reward_amount)
+        .unwrap();
+
+    // Add some more entries to avoid having all zero siblings in the proof
+    for i in 0..100u64 {
+        let address = Address::from(U160::from(i + 1));
+        let balance: U256 = U256::from((i + 1) * 100);
+        let reward_amount = RewardAmount(balance);
+        reward_merkle_tree_v2
+            .update(RewardAccountV2::from(address), reward_amount)
+            .unwrap();
+    }
+
+    let (proof, _) = RewardAccountProofV2::prove(&reward_merkle_tree_v2, address).unwrap();
+
+    let reward_proof = RewardAccountQueryDataV2 { balance, proof };
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
+    });
+
+    let reward_claim_input = reward_proof
+        .to_reward_claim_input(Default::default())
+        .unwrap();
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);
+    });
 }

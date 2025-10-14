@@ -25,6 +25,23 @@ type QueryService interface {
 	FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, error)
 	// Get the VidCommon for the given block height.
 	FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (types.VidCommon, error)
+	// Get the transaction by its hash from the explorer.
+	FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error)
+	// Stream transactions starting from the given height.
+	StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error)
+	// Stream transactions starting from the given height, filtered by namespace.
+	StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error)
+}
+
+// Interface representing a pollable stream of JSON-encoded objects
+type Stream[S any] interface {
+	// Get the next item from the stream. Equivalent to
+	// calling NextRaw(ctx) and decoding the result.
+	Next(ctx context.Context) (*S, error)
+	// Get next item from the stream as raw JSON objects.
+	NextRaw(ctx context.Context) (json.RawMessage, error)
+	// Close the underlying connection, if applicable
+	Close() error
 }
 
 // Response to `FetchTransactionsInBlock`

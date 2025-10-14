@@ -21,7 +21,7 @@ use async_lock::RwLock;
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use hotshot_utils::anytrace::*;
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tagged_base64::TaggedBase64;
@@ -36,9 +36,10 @@ use crate::{
     impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
-        ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
+        TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate,
+        ViewSyncFinalizeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
@@ -797,7 +798,96 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 
     /// The light client state update certificate for the next epoch.
     /// This is required for the epoch root.
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
+}
+
+/// Legacy version of `QuorumProposal2` corresponding to consensus protocol version V3.
+///
+/// `QuorumProposal2` state_cert field was updated to use new
+/// `LightClientStateUpdateCertificateV2`.  
+/// This legacy version uses the older `LightClientStateUpdateCertificateV1`
+/// format for backward compatibility.
+///
+/// It is used only for deserializing previously stored quorum proposals.
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct QuorumProposal2Legacy<TYPES: NodeType> {
+    /// The block header to append
+    pub block_header: TYPES::BlockHeader,
+
+    /// view number for the proposal
+    pub view_number: TYPES::View,
+
+    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
+    pub epoch: Option<TYPES::Epoch>,
+
+    /// certificate that the proposal is chaining from
+    pub justify_qc: QuorumCertificate2<TYPES>,
+
+    /// certificate that the proposal is chaining from formed by the next epoch nodes
+    pub next_epoch_justify_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+
+    /// Possible upgrade certificate, which the leader may optionally attach.
+    pub upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+
+    /// Possible timeout or view sync certificate. If the `justify_qc` is not for a proposal in the immediately preceding view, then either a timeout or view sync certificate must be attached.
+    pub view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
+
+    /// The DRB result for the next epoch.
+    ///
+    /// This is required only for the last block of the epoch. Nodes will verify that it's
+    /// consistent with the result from their computations.
+    #[serde(with = "serde_bytes")]
+    pub next_drb_result: Option<DrbResult>,
+
+    /// The light client state update certificate for the next epoch.
+    /// This is required for the epoch root.
+    /// Uses the legacy V1 certificate format.
+    pub state_cert: Option<LightClientStateUpdateCertificateV1<TYPES>>,
+}
+
+impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposal2<TYPES> {
+    fn from(quorum_proposal2: QuorumProposal2Legacy<TYPES>) -> Self {
+        Self {
+            block_header: quorum_proposal2.block_header,
+            view_number: quorum_proposal2.view_number,
+            epoch: quorum_proposal2.epoch,
+            justify_qc: quorum_proposal2.justify_qc,
+            next_epoch_justify_qc: quorum_proposal2.next_epoch_justify_qc,
+            upgrade_certificate: quorum_proposal2.upgrade_certificate,
+            view_change_evidence: quorum_proposal2.view_change_evidence,
+            next_drb_result: quorum_proposal2.next_drb_result,
+            state_cert: quorum_proposal2.state_cert.map(Into::into),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal2Legacy<TYPES> {
+    fn from(quorum_proposal2: QuorumProposal2<TYPES>) -> Self {
+        Self {
+            block_header: quorum_proposal2.block_header,
+            view_number: quorum_proposal2.view_number,
+            epoch: quorum_proposal2.epoch,
+            justify_qc: quorum_proposal2.justify_qc,
+            next_epoch_justify_qc: quorum_proposal2.next_epoch_justify_qc,
+            upgrade_certificate: quorum_proposal2.upgrade_certificate,
+            view_change_evidence: quorum_proposal2.view_change_evidence,
+            next_drb_result: quorum_proposal2.next_drb_result,
+            state_cert: quorum_proposal2.state_cert.map(Into::into),
+        }
+    }
+}
+
+/// Wrapper type for a legacy quorum proposal.
+///
+/// This is used to encapsulate a [`QuorumProposal2Legacy`] when working with
+/// data from older consensus protocol versions (e.g., V3).  
+/// Primarily used for deserialization of legacy proposals
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct QuorumProposalWrapperLegacy<TYPES: NodeType> {
+    /// The wrapped proposal
+    pub proposal: QuorumProposal2Legacy<TYPES>,
 }
 
 /// Wrapper around a proposal to append a block
@@ -806,6 +896,14 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 pub struct QuorumProposalWrapper<TYPES: NodeType> {
     /// The wrapped proposal
     pub proposal: QuorumProposal2<TYPES>,
+}
+
+impl<TYPES: NodeType> From<QuorumProposalWrapperLegacy<TYPES>> for QuorumProposalWrapper<TYPES> {
+    fn from(v3: QuorumProposalWrapperLegacy<TYPES>) -> Self {
+        Self {
+            proposal: v3.proposal.into(),
+        }
+    }
 }
 
 impl<TYPES: NodeType> QuorumProposal2<TYPES> {
@@ -880,13 +978,21 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     }
 
     /// Helper function to get the proposal's light client state update certificate
-    pub fn state_cert(&self) -> &Option<LightClientStateUpdateCertificate<TYPES>> {
+    pub fn state_cert(&self) -> &Option<LightClientStateUpdateCertificateV2<TYPES>> {
         &self.proposal.state_cert
     }
 }
 
 impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposalWrapper<TYPES> {
     fn from(quorum_proposal: QuorumProposal<TYPES>) -> Self {
+        Self {
+            proposal: quorum_proposal.into(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposalWrapper<TYPES> {
+    fn from(quorum_proposal: QuorumProposal2Legacy<TYPES>) -> Self {
         Self {
             proposal: quorum_proposal.into(),
         }
@@ -902,6 +1008,12 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposalWrapper<TYP
 }
 
 impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal<TYPES> {
+    fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
+        quorum_proposal_wrapper.proposal.into()
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2Legacy<TYPES> {
     fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
         quorum_proposal_wrapper.proposal.into()
     }
@@ -988,7 +1100,19 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2Legacy<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.view_number
+    }
+}
+
 impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapper<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.proposal.view_number
+    }
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapperLegacy<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.proposal.view_number
     }
@@ -1000,7 +1124,11 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for UpgradeProposal<TYPES> {
     }
 }
 
-impl_has_epoch!(QuorumProposal2<TYPES>, DaProposal2<TYPES>);
+impl_has_epoch!(
+    QuorumProposal2<TYPES>,
+    DaProposal2<TYPES>,
+    QuorumProposal2Legacy<TYPES>
+);
 
 impl_has_none_epoch!(
     QuorumProposal<TYPES>,
@@ -1010,6 +1138,14 @@ impl_has_none_epoch!(
 );
 
 impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapper<TYPES> {
+    /// Return an underlying proposal's epoch
+    #[allow(clippy::panic)]
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.proposal.epoch()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapperLegacy<TYPES> {
     /// Return an underlying proposal's epoch
     #[allow(clippy::panic)]
     fn epoch(&self) -> Option<TYPES::Epoch> {
@@ -1841,7 +1977,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
 pub mod null_block {
     #![allow(missing_docs)]
 
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
     use vbs::version::StaticVersionType;
 
     use crate::{

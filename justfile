@@ -45,14 +45,17 @@ build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}
     cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
 
-demo-native-pos *args: (build "test" "--features fee,pos")
-    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
+demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-pos-base *args: (build "test" "--features pos")
-    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
+demo-native-pos-base *args: (build "test" "--no-default-features --features pos")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-drb-header-upgrade *args: (build "test" "--features pos,drb-and-header")
-    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+demo-native-drb-header-upgrade *args: (build "test" "--no-default-features --features pos,drb-and-header")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features --features fee,drb-and-header")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -86,11 +89,11 @@ test *args:
     just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
-test-slow:
+test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile slow
-    just nextest --profile slow
+    just nextest --features embedded-db --profile slow {{args}}
+    just nextest --profile slow {{args}}
 
 test-all:
     @echo 'features: "embedded-db"'
@@ -147,17 +150,21 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$"
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$|RewardClaim$|^RewardClaimPrototypeMock$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --use "0.8.28" --alloy --alloy-version "0.13.0" --contracts ./contracts/src/ \
+    forge bind --skip test --skip script --use "0.8.28"  --contracts ./contracts/src/ \
       --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
-      --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
+      --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
+      --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
+
+    # HACK: add serde support for fixed byte arrays in the generated bindings
+    sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
 
     just export-contract-abis
     just gen-go-bindings
@@ -166,7 +173,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 
@@ -231,3 +238,15 @@ test-go:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
     cd sdks/go && go test -v ./...
+
+contracts-test-echidna *args:
+    nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
+
+contracts-test-forge *args='-vv':
+    forge test --no-match-test "testFuzz_|invariant_" {{args}}
+
+contracts-test-fuzz *args='-vv':
+    forge test --match-test testFuzz {{args}}
+
+contracts-test-invariant *args='-vv':
+    forge test --match-test invariant_ {{args}}

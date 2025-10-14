@@ -1,19 +1,21 @@
-use std::{
-    path::PathBuf,
-    process::{Command, Output, Stdio},
-};
-
 use alloy::primitives::{
     utils::{format_ether, parse_ether},
     Address, U256,
 };
 use anyhow::Result;
+use common::{base_cmd, Signer, TestSystemExt};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use predicates::str;
 use rand::{rngs::StdRng, SeedableRng as _};
-use sequencer_utils::test_utils::setup_test;
-use staking_cli::{demo::DelegationConfig, deploy, deploy::Signer, Config};
+use staking_cli::{
+    demo::DelegationConfig,
+    deploy::{self},
+    Config,
+};
 
 use crate::deploy::TestSystem;
+
+mod common;
 
 #[rstest_reuse::template]
 #[rstest::rstest]
@@ -24,87 +26,14 @@ async fn stake_table_versions(#[case] _version: StakeTableContractVersion) {}
 
 const TEST_MNEMONIC: &str = "wool upset allow cheap purity craft hat cute below useful reject door";
 
-trait AssertSuccess {
-    fn assert_success(&self) -> &Self;
-}
-
-impl AssertSuccess for Output {
-    fn assert_success(&self) -> &Self {
-        if !self.status.success() {
-            let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
-            let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-            panic!("Command failed:\nstderr: {stderr}\nstdout: {stdout}");
-        }
-        self
-    }
-}
-
-trait AssertFailure {
-    fn assert_failure(&self) -> &Self;
-}
-
-impl AssertFailure for Output {
-    fn assert_failure(&self) -> &Self {
-        if self.status.success() {
-            let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
-            let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-            panic!("Command succeeded but should have failed:\nstderr: {stderr}\nstdout: {stdout}");
-        }
-        self
-    }
-}
-
-trait Utf8 {
-    fn utf8(&self) -> String;
-}
-
-impl Utf8 for Output {
-    fn utf8(&self) -> String {
-        String::from_utf8(self.stdout.clone()).expect("stdout is utf8")
-    }
-}
-
-trait Utf8Err {
-    fn utf8_err(&self) -> String;
-}
-
-impl Utf8Err for Output {
-    fn utf8_err(&self) -> String {
-        String::from_utf8(self.stderr.clone()).expect("stderr is utf8")
-    }
-}
-
-/// Creates a new command to run the staking-cli binary.
-///
-/// Will use `NEXTEST_BIN_EXE_staking-cli` if available, otherwise falls back to
-/// `CARGO_BIN_EXE_staking-cli` which is set by cargo at compile time for integration tests.
-fn base_cmd() -> Command {
-    // From nextest docs:
-    //
-    // To obtain the path to a crate's executables, Cargo provides the [CARGO_BIN_EXE_<name>]
-    // option to integration tests at build time. To handle target directory remapping, use the
-    // value of NEXTEST_BIN_EXE_<name> at runtime. To retain compatibility with cargo test, you
-    // can fall back to the value of CARGO_BIN_EXE_<name> at build time.
-    let path: PathBuf = std::env::var("NEXTEST_BIN_EXE_staking-cli")
-        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_staking-cli").to_string())
-        .into();
-    tracing::debug!("staking-cli path: {}", path.display());
-    if !path.exists() {
-        panic!("staking-cli binary not found at {}", path.display());
-    };
-    Command::new(path)
-}
-
-#[test]
+#[test_log::test]
 fn test_cli_version() -> Result<()> {
-    setup_test();
-    base_cmd().arg("version").output()?.assert_success();
+    base_cmd().arg("version").assert().success();
     Ok(())
 }
 
-#[test]
+#[test_log::test]
 fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
-    setup_test();
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
 
@@ -116,8 +45,8 @@ fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
         .arg("init")
         .args(["--mnemonic", TEST_MNEMONIC])
         .args(["--account-index", "123"])
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     assert!(config_path.exists());
 
@@ -131,15 +60,15 @@ fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
         .arg(&config_path)
         .arg("purge")
         .arg("--force")
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     assert!(!config_path.exists());
 
     Ok(())
 }
 
-#[test]
+#[test_log::test]
 fn test_cli_create_file_ledger() -> anyhow::Result<()> {
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
@@ -152,8 +81,8 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
         .arg("init")
         .arg("--ledger")
         .args(["--account-index", "42"])
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     assert!(config_path.exists());
 
@@ -165,65 +94,54 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
 }
 
 // TODO: ideally we would test that the decoding works for all the commands
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_contract_revert(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
 
-    let output = cmd
-        .arg("transfer")
+    cmd.arg("transfer")
         .arg("--to")
         .arg("0x1111111111111111111111111111111111111111")
         .arg("--amount")
         .arg(U256::MAX.to_string())
-        .output()?
-        .assert_failure()
-        .utf8_err();
-    assert!(output.contains("ERC20InsufficientBalance"));
+        .assert()
+        .failure()
+        .stderr(str::contains("ERC20InsufficientBalance"));
     Ok(())
 }
 
-#[rstest::rstest]
+#[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn test_cli_register_validator(
     #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
     version: StakeTableContractVersion,
     #[values(Signer::Mnemonic, Signer::BrokeMnemonic)] signer: Signer,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, signer);
-    let result = cmd
-        .arg("register-validator")
-        .arg("--consensus-private-key")
-        .arg(
-            system
-                .bls_key_pair
-                .sign_key_ref()
-                .to_tagged_base64()?
-                .to_string(),
-        )
-        .arg("--state-private-key")
-        .arg(
-            system
-                .state_key_pair
-                .sign_key()
-                .to_tagged_base64()?
-                .to_string(),
-        )
-        .arg("--commission")
-        .arg("12.34")
-        .output()?;
+    let mut cmd = system.cmd(signer);
     match signer {
         Signer::Mnemonic => {
-            result.assert_success();
+            cmd.arg("register-validator")
+                .arg("--consensus-private-key")
+                .arg(system.bls_private_key_str()?)
+                .arg("--state-private-key")
+                .arg(system.state_private_key_str()?)
+                .arg("--commission")
+                .arg("12.34")
+                .assert()
+                .success();
         },
         Signer::BrokeMnemonic => {
-            result.assert_failure();
-            assert!(result.utf8().contains("zero Ethereum balance"));
+            cmd.arg("register-validator")
+                .arg("--consensus-private-key")
+                .arg(system.bls_private_key_str()?)
+                .arg("--state-private-key")
+                .arg(system.state_private_key_str()?)
+                .arg("--commission")
+                .arg("12.34")
+                .assert()
+                .failure()
+                .stdout(str::contains("zero Ethereum balance"));
         },
         Signer::Ledger => unreachable!(),
     };
@@ -231,7 +149,7 @@ async fn test_cli_register_validator(
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
@@ -239,71 +157,130 @@ async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersi
     let mut rng = StdRng::from_seed([43u8; 32]);
     let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("update-consensus-keys")
         .arg("--consensus-private-key")
         .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
         .arg("--state-private-key")
         .arg(new_state.sign_key().to_tagged_base64()?.to_string())
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(tokio::test)]
+async fn test_cli_update_commission() -> Result<()> {
+    // Only test on V2 since V1 doesn't support commission updates
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    system.register_validator().await?;
+
+    let new_commission = "8.5".try_into()?;
+    assert_ne!(system.fetch_commission().await?, new_commission);
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg("8.5")
+        .assert()
+        .success();
+    assert_eq!(system.fetch_commission().await?, new_commission);
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_increase_commission_too_soon() -> Result<()> {
+    // Only test on V2 since V1 doesn't support commission updates
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    system.register_validator().await?;
+
+    let old_commission = system.fetch_commission().await?;
+    let basis_point = 1u64.try_into()?;
+    let first_update = old_commission + basis_point;
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg(first_update.to_string())
+        .assert()
+        .success();
+    assert_eq!(system.fetch_commission().await?, first_update);
+
+    let interval = system.get_min_commission_increase_interval().await?;
+    // Warp to just before the end of the delay
+    system.anvil_increase_time(interval - U256::from(5)).await?;
+
+    let second_update = first_update + basis_point;
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg(second_update.to_string())
+        .assert()
+        .failure()
+        .stdout(str::contains("TooSoon"));
+    assert_eq!(system.fetch_commission().await?, first_update);
+
+    system.anvil_increase_time(U256::from(5)).await?;
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-commission")
+        .arg("--new-commission")
+        .arg(second_update.to_string())
+        .assert()
+        .success();
+    assert_eq!(system.fetch_commission().await?, second_update);
+
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
         .arg("123")
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_deregister_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    cmd.arg("deregister-validator").output()?.assert_success();
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("deregister-validator").assert().success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
     let amount = "123";
     system.delegate(parse_ether(amount)?).await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("undelegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
         .arg(amount)
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let amount = U256::from(123);
     system.register_validator().await?;
@@ -311,19 +288,17 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
     system.undelegate(amount).await?;
     system.warp_to_unlock_time().await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("claim-withdrawal")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let amount = U256::from(123);
     system.register_validator().await?;
@@ -331,47 +306,42 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
     system.deregister_validator().await?;
     system.warp_to_unlock_time().await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("claim-validator-exit")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_for_demo_default_num_validators(
     #[case] version: StakeTableContractVersion,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    cmd.arg("stake-for-demo").output()?.assert_success();
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("stake-for-demo").assert().success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_for_demo_three_validators(
     #[case] version: StakeTableContractVersion,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("stake-for-demo")
         .arg("--num-validators")
         .arg("3")
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
     Ok(())
 }
 
-#[rstest::rstest]
+#[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn stake_for_demo_delegation_config_helper(
     #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
@@ -383,219 +353,184 @@ async fn stake_for_demo_delegation_config_helper(
     )]
     config: DelegationConfig,
 ) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("stake-for-demo")
         .arg("--delegation-config")
         .arg(config.to_string())
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_approve(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let amount = "123";
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("approve")
         .arg("--amount")
         .arg(amount)
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     assert!(system.allowance(system.deployer_address).await? == parse_ether(amount)?);
 
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
     // Check balance of account owner
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    let s = cmd.arg("token-balance").output()?.assert_success().utf8();
-    println!("token-balance output: {s}");
-    let parts: Vec<&str> = s.split_whitespace().collect();
-    let balance = parts[8].split(".").next().unwrap().parse::<U256>()?;
-
-    assert!(s.contains(&system.deployer_address.to_string()));
-    assert_eq!(balance, U256::from(3590000000u64));
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("token-balance")
+        .assert()
+        .success()
+        .stdout(str::contains(system.deployer_address.to_string()))
+        .stdout(str::contains("3590000000.0"));
 
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    let s = cmd
-        .arg("token-balance")
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("token-balance")
         .arg("--address")
         .arg(addr)
-        .output()?
-        .assert_success()
-        .utf8();
-
-    assert!(s.contains(addr));
-    assert!(s.contains(" 0.0"));
+        .assert()
+        .success()
+        .stdout(str::contains(addr))
+        .stdout(str::contains(" 0.0"));
 
     Ok(())
 }
 
 // This test can be remove when the deprecated argument is removed
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_deprecated_token_address_cli_arg() -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy().await?;
 
-    let mut cmd = base_cmd();
+    let mut cmd = system.cmd(Signer::Mnemonic);
     // Add the deprecated --token_address argument
     cmd.arg("--token-address").arg(system.token.to_string());
-    system.args(&mut cmd, Signer::Mnemonic);
-    cmd.arg("token-balance").output()?.assert_success();
+    cmd.arg("token-balance").assert().success();
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_allowance(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
 
     // Check allowance of account owner
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    let out = cmd.arg("token-allowance").output()?.assert_success().utf8();
-
-    assert!(out.contains(&system.deployer_address.to_string()));
-    assert!(out.contains(&format_ether(system.approval_amount)));
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("token-allowance")
+        .assert()
+        .success()
+        .stdout(str::contains(system.deployer_address.to_string()))
+        .stdout(str::contains(format_ether(system.approval_amount)));
 
     // Check allowance of other address
     let addr = "0x1111111111111111111111111111111111111111".to_string();
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    let out = cmd
-        .arg("token-allowance")
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("token-allowance")
         .arg("--owner")
         .arg(&addr)
-        .output()?
-        .assert_success()
-        .utf8();
-
-    assert!(out.contains(&addr));
-    assert!(out.contains(" 0.0"));
+        .assert()
+        .success()
+        .stdout(str::contains(&addr))
+        .stdout(str::contains(" 0.0"));
 
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
     let amount = parse_ether("0.123")?;
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("transfer")
         .arg("--to")
         .arg(addr.to_string())
         .arg("--amount")
         .arg(format_ether(amount))
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     assert_eq!(system.balance(addr).await?, amount);
 
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
     let amount = parse_ether("0.123")?;
     system.delegate(amount).await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    let out = cmd.arg("stake-table").output()?.assert_success().utf8();
-
-    // Print output to fix test more easily.
-    println!("{out}");
-    out.contains("Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=0.123000000000000000 ESP");
-    out.contains(
-        " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
-    );
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("stake-table")
+        .assert()
+        .success()
+        .stdout(str::contains("BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=0.123000000000000000 ESP"))
+        .stdout(str::contains(" - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP"));
 
     Ok(())
 }
 
-#[rstest_reuse::apply(stake_table_versions)]
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion) -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
     let amount = parse_ether("0.123")?;
     system.delegate(amount).await?;
 
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
-    let out = cmd
-        .arg("stake-table")
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("stake-table")
         .arg("--compact")
-        .output()?
-        .assert_success()
-        .utf8();
-
-    // Print output to fix test more easily.
-    println!("{out}");
-    out.contains(
-        "Validator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: \
-         BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 ESP",
-    );
-    out.contains(
-        " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
-    );
+        .assert()
+        .success()
+        .stdout(str::contains(
+            "BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 \
+             ESP",
+        ))
+        .stdout(str::contains(
+            " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 \
+             ESP",
+        ));
 
     Ok(())
 }
 
 async fn address_from_cli(system: &TestSystem) -> Result<Address> {
     println!("Unlock the ledger");
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Ledger);
-    // spawn the command first to show stderr output with errors/instructions
-    let child = cmd.arg("account").stdout(Stdio::piped()).spawn()?;
+    let stdout = system
+        .cmd(Signer::Ledger)
+        .arg("account")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
 
-    // wait for command to exit
-    let output = child.wait_with_output()?.assert_success().utf8();
-
-    // dump output for debugging purposes
-    println!("staking-cli account output: {output}");
-
-    Ok(output
+    Ok(String::from_utf8(stdout)?
         .lines()
         .rev()
         .find(|line| !line.trim().is_empty())
-        .unwrap()
+        .expect("non-empty line")
         .parse()?)
 }
 
 /// This test requires a ledger device to be connected and unlocked.
 /// cargo test -p staking-cli -- --ignored --nocapture transfer_ledger
 #[ignore]
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_cli_transfer_ledger() -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy().await?;
     let address = address_from_cli(&system).await?;
 
@@ -604,28 +539,26 @@ async fn test_cli_transfer_ledger() -> Result<()> {
     system.transfer(address, amount).await?;
 
     // Assume the ledger is unlocked and the Ethereum app remains open
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Mnemonic);
+    let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("transfer")
         .arg("--to")
         .arg(address.to_string())
         .arg("--amount")
         .arg(format_ether(amount))
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     // Make a token transfer with the ledger
     println!("Sign the transaction in the ledger");
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Ledger);
+    let mut cmd = system.cmd(Signer::Ledger);
     cmd.arg("transfer")
         .arg("--to")
         .arg(addr.to_string())
         .arg("--amount")
         .arg(format_ether(amount))
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     assert_eq!(system.balance(addr).await?, amount);
 
@@ -635,9 +568,8 @@ async fn test_cli_transfer_ledger() -> Result<()> {
 /// This test requires a ledger device to be connected and unlocked.
 /// cargo test -p staking-cli -- --ignored --nocapture delegate_ledger
 #[ignore]
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_cli_delegate_ledger() -> Result<()> {
-    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
     let address = address_from_cli(&system).await?;
@@ -648,24 +580,22 @@ async fn test_cli_delegate_ledger() -> Result<()> {
 
     // Assume the ledger is unlocked and the Ethereum app remains open
     println!("Sign the transaction in the ledger");
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Ledger);
+    let mut cmd = system.cmd(Signer::Ledger);
     cmd.arg("approve")
         .arg("--amount")
         .arg(format_ether(amount))
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     println!("Sign the transaction in the ledger (again)");
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Ledger);
+    let mut cmd = system.cmd(Signer::Ledger);
     cmd.arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
         .arg(format_ether(amount))
-        .output()?
-        .assert_success();
+        .assert()
+        .success();
 
     Ok(())
 }

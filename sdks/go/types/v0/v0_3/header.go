@@ -37,6 +37,9 @@ func (h *Header) GetPayloadCommitment() *common_types.TaggedBase64 {
 func (h *Header) GetL1Head() uint64 {
 	return h.L1Head
 }
+func (h *Header) GetL1Finalized() *common_types.L1BlockInfo {
+	return h.L1Finalized
+}
 func (h *Header) GetTimestamp() uint64 {
 	return h.Timestamp
 }

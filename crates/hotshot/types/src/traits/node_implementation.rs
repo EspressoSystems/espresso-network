@@ -27,7 +27,10 @@ use super::{
     network::{
         AsyncGenerator, ConnectedNetwork, NetworkReliability, TestableNetworkingImplementation,
     },
-    signature_key::{BuilderSignatureKey, StateSignatureKey},
+    signature_key::{
+        BuilderSignatureKey, LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
+        StateSignatureKey,
+    },
     states::TestableState,
     storage::Storage,
     ValidatedState,
@@ -235,7 +238,10 @@ pub trait NodeType:
     type BuilderSignatureKey: BuilderSignatureKey;
 
     /// The type replica uses to sign the light client state
-    type StateSignatureKey: StateSignatureKey;
+    type StateSignatureKey: StateSignatureKey
+        + LCV1StateSignatureKey
+        + LCV2StateSignatureKey
+        + LCV3StateSignatureKey;
 }
 
 /// Version information for HotShot

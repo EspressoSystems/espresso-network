@@ -21,7 +21,7 @@ use ark_serialize::CanonicalDeserialize;
 use async_trait::async_trait;
 use futures::stream::TryStreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{MerkleNode, MerkleProof},
     DigestAlgorithm, MerkleCommitment, ToTraversalPath,
 };
@@ -492,7 +492,7 @@ fn build_get_path_query<'q>(
 #[cfg(test)]
 mod test {
     use futures::stream::StreamExt;
-    use jf_merkle_tree::{
+    use jf_merkle_tree_compat::{
         universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
         UniversalMerkleTreeScheme,
     };
@@ -505,17 +505,13 @@ mod test {
             VersionedDataSource,
         },
         merklized_state::UpdateStateData,
-        testing::{
-            mocks::{MockMerkleTree, MockTypes},
-            setup_test,
-        },
+        testing::mocks::{MockMerkleTree, MockTypes},
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_storage() {
         // In this test we insert some entries into the tree and update the database
         // Each entry's merkle path is compared with the path from the tree
-        setup_test();
 
         let db = TmpDb::init().await;
         let storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -674,14 +670,13 @@ mod test {
         assert_eq!(path_with_bh_1, proof_bh_1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_non_membership_proof() {
         // This test updates the Merkle tree with a new entry and inserts the corresponding Merkle nodes into the database with created = 1.
         // A Merkle node is then deleted from the tree.
         // The database is then updated to reflect the deletion of the entry with a created (block height) of 2
         // As the leaf node becomes a non-member, we do a universal lookup to obtain its non-membership proof path.
         // It is expected that the path retrieved from the tree matches the path obtained from the database.
-        setup_test();
 
         let db = TmpDb::init().await;
         let storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -812,10 +807,8 @@ mod test {
         assert_eq!(proof_bh_1, proof_before_remove, "merkle paths dont match");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_non_membership_proof_unseen_entry() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let storage = SqlStorage::connect(db.config()).await.unwrap();
 
@@ -861,7 +854,10 @@ mod test {
                 .await
                 .unwrap();
             assert_eq!(proof.elem(), None);
-            assert!(test_tree.non_membership_verify(100, proof).unwrap());
+
+            assert!(
+                MockMerkleTree::non_membership_verify(test_tree.commitment(), 100, proof).unwrap()
+            );
 
             // insert an additional node into the tree.
             test_tree.update(i, i).unwrap();
@@ -880,10 +876,9 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_storage_with_commit() {
         // This test insert a merkle path into the database and queries the path using the merkle commitment
-        setup_test();
 
         let db = TmpDb::init().await;
         let storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -944,7 +939,7 @@ mod test {
 
         assert_eq!(merkle_proof, proof.clone(), "merkle paths mismatch");
     }
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_missing_state() {
         // This test checks that header commitment matches the root hash.
         // For this, the header merkle root commitment field is not updated, which should result in an error
@@ -952,7 +947,6 @@ mod test {
         // An index and its corresponding merkle nodes with created (bh) = 1 are inserted.
         // The entry of the index is updated, and the updated nodes are inserted with created (bh) = 2.
         // A node which is in the traversal path with bh = 2 is deleted, so the get_path should return an error as an older version of one of the nodes is used.
-        setup_test();
 
         let db = TmpDb::init().await;
         let storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -1120,10 +1114,8 @@ mod test {
         assert!(merkle_path.is_err());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_snapshot() {
-        setup_test();
-
         let db = TmpDb::init().await;
         let storage = SqlStorage::connect(db.config()).await.unwrap();
 
@@ -1144,7 +1136,7 @@ mod test {
             for _ in 0..50 {
                 // We flip a coin to decide whether to insert or delete, unless the tree is empty,
                 // in which case we can only insert.
-                if !expected.values().any(|v| v.is_some()) || rng.next_u32() % 2 == 0 {
+                if !expected.values().any(|v| v.is_some()) || rng.next_u32().is_multiple_of(2) {
                     // Insert.
                     let key = rng.next_u32() as usize;
                     let val = rng.next_u32() as usize;
@@ -1247,11 +1239,14 @@ mod test {
                 assert_eq!(val.as_ref(), proof.elem());
                 // Check path is valid for test_tree
                 if val.is_some() {
-                    MockMerkleTree::verify(tree.commitment().digest(), key, proof)
+                    MockMerkleTree::verify(tree.commitment(), key, proof)
                         .unwrap()
                         .unwrap();
                 } else {
-                    assert!(tree.non_membership_verify(key, proof).unwrap());
+                    assert!(
+                        MockMerkleTree::non_membership_verify(tree.commitment(), key, proof)
+                            .unwrap()
+                    );
                 }
             }
 
@@ -1273,7 +1268,10 @@ mod test {
             );
             assert_eq!(proof.elem(), None);
             // Check path is valid for test_tree
-            assert!(tree.non_membership_verify(RESERVED_KEY, proof).unwrap());
+            assert!(
+                MockMerkleTree::non_membership_verify(tree.commitment(), RESERVED_KEY, proof)
+                    .unwrap()
+            );
         }
 
         // Create a randomized Merkle tree.
@@ -1295,14 +1293,13 @@ mod test {
         validate(&storage, &test_tree, &expected, 1).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_missing_leaf() {
         // Check that if a leaf is missing but its ancestors are present/key is in the tree, we
         // catch it rather than interpreting the entry as an empty node by default. Note that this
         // scenario should be impossible in normal usage, since we never store or delete partial
         // paths. But we should never return an invalid proof even in extreme cases like database
         // corruption.
-        setup_test();
 
         for tree_size in 1..=3 {
             let db = TmpDb::init().await;

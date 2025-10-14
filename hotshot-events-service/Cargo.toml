@@ -28,4 +28,7 @@ vbs = { workspace = true }
 [dev-dependencies]
 hotshot-example-types = { workspace = true }
 portpicker = "0.1.1"
-surf-disco = "0.9"
+surf-disco = { workspace = true }
+
+[lints]
+workspace = true

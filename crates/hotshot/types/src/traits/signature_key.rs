@@ -26,7 +26,7 @@ use super::EncodeBytes;
 use crate::{
     bundle::Bundle,
     data::VidCommitment,
-    light_client::{LightClientState, StakeTableState, ToFieldsLightClientCompat},
+    light_client::{CircuitField, LightClientState, StakeTableState, ToFieldsLightClientCompat},
     traits::node_implementation::NodeType,
     utils::BuilderCommitment,
 };
@@ -436,6 +436,28 @@ pub trait StateSignatureKey:
     /// Type of error that can occur when signing data
     type SignError: std::error::Error + Send + Sync;
 
+    /// Generate a new key pair
+    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey);
+}
+
+/// Light client V1 signature key functions. The replicas only sign the light client state.
+pub trait LCV1StateSignatureKey: StateSignatureKey {
+    /// Sign the state for legacy light client
+    fn sign_state(
+        private_key: &Self::StatePrivateKey,
+        light_client_state: &LightClientState,
+    ) -> Result<Self::StateSignature, Self::SignError>;
+
+    /// Verify the state signature for legacy light client
+    fn verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        light_client_state: &LightClientState,
+    ) -> bool;
+}
+
+/// Light client V2 signature key functions. The replicas sign the light client state and stake table state for the next update.
+pub trait LCV2StateSignatureKey: StateSignatureKey {
     /// Sign the light client state
     fn sign_state(
         private_key: &Self::StatePrivateKey,
@@ -450,20 +472,21 @@ pub trait StateSignatureKey:
         light_client_state: &LightClientState,
         next_stake_table_state: &StakeTableState,
     ) -> bool;
+}
 
-    /// Sign the state for legacy light client
-    fn legacy_sign_state(
+/// Light client V3 signature key functions. The replicas sign a keccak256 hash of ABI encodings of the light client state,
+/// next stake table state, and the auth root.
+pub trait LCV3StateSignatureKey: StateSignatureKey {
+    /// Sign the light client state
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root.
+    fn sign_state(
         private_key: &Self::StatePrivateKey,
-        light_client_state: &LightClientState,
+        msg: CircuitField,
     ) -> Result<Self::StateSignature, Self::SignError>;
 
-    /// Verify the state signature for legacy light client
-    fn legacy_verify_state_sig(
-        &self,
-        signature: &Self::StateSignature,
-        light_client_state: &LightClientState,
-    ) -> bool;
-
-    /// Generate a new key pair
-    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey);
+    /// Verify the light client state signature
+    /// The input `msg` should be the keccak256 hash of ABI encodings of the light client state,
+    /// next stake table state, and the auth root.
+    fn verify_state_sig(&self, signature: &Self::StateSignature, msg: CircuitField) -> bool;
 }

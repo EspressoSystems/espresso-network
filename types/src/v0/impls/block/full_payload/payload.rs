@@ -2,14 +2,14 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Committable;
-use hotshot_query_service::availability::QueryablePayload;
+use hotshot_query_service::availability::{QueryablePayload, VidCommonQueryData};
 use hotshot_types::{
     data::ViewNumber,
     traits::{BlockPayload, EncodeBytes},
     utils::BuilderCommitment,
     vid::advz::{ADVZCommon, ADVZScheme},
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
 
@@ -41,8 +41,7 @@ impl Payload {
         &self.ns_table
     }
 
-    /// Like [`QueryablePayload::transaction_with_proof`] except without the
-    /// proof.
+    /// Read a transaction from this payload.
     pub fn transaction(&self, index: &Index) -> Option<Transaction> {
         let ns = &index.ns_index;
         let ns_id = self.ns_table.read_ns_id(ns)?;
@@ -229,27 +228,18 @@ impl QueryablePayload<SeqTypes> for Payload {
         Iter::new(self)
     }
 
-    fn transaction_with_proof(
-        &self,
-        _meta: &Self::Metadata,
-        index: &Index,
-    ) -> Option<(Self::Transaction, Self::InclusionProof)> {
-        // TODO HACK! THE RETURNED PROOF MIGHT FAIL VERIFICATION.
-        // https://github.com/EspressoSystems/hotshot-query-service/issues/639
-        //
-        // Need a `ADVZCommon` to proceed. Need to modify `QueryablePayload`
-        // trait to add a `ADVZCommon` arg. In the meantime tests fail if I leave
-        // it `todo!()`, so this hack allows tests to pass.
-        let common = hotshot_types::vid::advz::advz_scheme(10)
-            .disperse(&self.raw_payload)
-            .unwrap()
-            .common;
-
-        TxProof::new(index, self, &common)
-    }
-
     fn transaction(&self, _meta: &Self::Metadata, index: &Index) -> Option<Self::Transaction> {
         self.transaction(index)
+    }
+
+    fn transaction_proof(
+        &self,
+        _meta: &Self::Metadata,
+        vid: &VidCommonQueryData<SeqTypes>,
+        index: &Index,
+    ) -> Option<Self::InclusionProof> {
+        let proof = TxProof::new(index, self, vid.common())?.1;
+        Some(proof)
     }
 }
 

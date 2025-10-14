@@ -222,7 +222,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install node deps
-        run: yarn
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 3
+          max_attempts: 10
+          retry_wait_seconds: 60
+          retry_on: error
+          command: yarn
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -256,7 +262,13 @@ jobs:
           submodules: recursive
 
       - name: Install node deps
-        run: yarn
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 3
+          max_attempts: 10
+          retry_wait_seconds: 60
+          retry_on: error
+          command: yarn
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -290,6 +302,10 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Build espresso-dev-node
+        run: |
+          nix develop --accept-flake-config -c cargo build --bin espresso-dev-node --features testing,embedded-db
+
       - name: Build verification module
         run: |
           nix develop --accept-flake-config -c just build-go-crypto-helper
@@ -306,10 +322,38 @@ jobs:
           - test-name: test_native_demo_base
           - test-name: test_native_demo_pos_base
           - test-name: test_native_demo_pos_upgrade
+          - test-name: test_native_demo_drb_header_upgrade
+          - test-name: test_native_demo_fee_to_drb_header_upgrade
 
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
+
+      # The demo l1 (geth) sometimes shuts down due to perceived low disk space.
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Make more disk space available on public runner
+        run: |
+          # rmz seems to be faster at deleting files than rm
+          cargo binstall -y --version 2.2.0 rmz
+          sudo mv /home/runner/.cargo/bin/rmz /usr/local/bin/rmz
+
+          echo "Available storage before:"
+          sudo df -h
+          echo
+          sudo rmz -f /usr/share/dotnet
+          sudo rmz -f /usr/share/swift
+          sudo rmz -f /usr/share/gradle-*
+          sudo rmz -f /usr/share/az_*
+          sudo rmz -f /usr/local/lib/android
+          sudo rmz -f /opt/ghc
+          sudo rmz -f /opt/az
+          sudo rmz -f /opt/pipx
+          sudo rmz -f /opt/google
+          sudo rmz -f /opt/microsoft
+          echo "Available storage after:"
+          sudo df -h
+          echo
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
@@ -331,12 +375,11 @@ jobs:
           mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
-      # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
-        run: nix profile install nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae#process-compose
+        run: nix profile install nixpkgs#process-compose
 
       - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
+        uses: catchpoint/workflow-telemetry-action@master
         with:
           comment_on_pr: false
 
@@ -352,6 +395,12 @@ jobs:
         if: always()
         run: |
           tail -n 1000 ${{ env.NATIVE_DEMO_LOGS }}
+
+      # for debugging: geth may shut down if it detects low disk space
+      - name: Show available disk space
+        if: always()
+        run: |
+          df -h
 
       - name: Upload process compose logs
         if: always()
@@ -380,9 +429,8 @@ jobs:
           mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
-      # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
-        run: nix profile install nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae#process-compose
+        run: nix profile install nixpkgs#process-compose
 
       - name: Collect Workflow Telemetry
         uses: catchpoint/workflow-telemetry-action@v2

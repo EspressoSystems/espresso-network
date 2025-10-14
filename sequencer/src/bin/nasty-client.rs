@@ -45,8 +45,8 @@ use hotshot_types::traits::{
     block_contents::BlockHeader,
     metrics::{Counter, Gauge, Histogram, Metrics as _},
 };
-use jf_merkle_tree::{
-    ForgetableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme,
+use jf_merkle_tree_compat::{
+    ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use rand::{seq::SliceRandom, RngCore};
 use sequencer::SequencerApiVersion;
@@ -992,13 +992,9 @@ impl ResourceManager<Header> {
 
         // Check that the proof proves inclusion of `index_header` at position `index` relative to
         // `block_header`.
-        BlockMerkleTree::verify(
-            block_header.block_merkle_tree_root().digest(),
-            index,
-            &proof,
-        )
-        .context("malformed merkle proof")?
-        .or_else(|_| bail!("invalid merkle proof"))?;
+        BlockMerkleTree::verify(block_header.block_merkle_tree_root(), index, &proof)
+            .context("malformed merkle proof")?
+            .or_else(|_| bail!("invalid merkle proof"))?;
         ensure!(
             proof.elem() == Some(&index_header.commit()),
             "merkle proof is for wrong element: {:?} != {:?}",
@@ -1075,17 +1071,13 @@ impl ResourceManager<Header> {
 
         // Check that the proof is valid relative to `builder_header`.
         if proof.elem().is_some() {
-            FeeMerkleTree::verify(
-                block_header.fee_merkle_tree_root().digest(),
-                builder_address,
-                &proof,
-            )
-            .context("malformed membership proof")?
-            .or_else(|_| bail!("invalid membership proof"))?;
+            FeeMerkleTree::verify(block_header.fee_merkle_tree_root(), builder_address, &proof)
+                .context("malformed membership proof")?
+                .or_else(|_| bail!("invalid membership proof"))?;
         } else {
+            let tree = FeeMerkleTree::from_commitment(block_header.fee_merkle_tree_root());
             ensure!(
-                FeeMerkleTree::from_commitment(block_header.fee_merkle_tree_root())
-                    .non_membership_verify(builder_address, &proof)
+                FeeMerkleTree::non_membership_verify(tree.commitment(), builder_address, &proof)
                     .context("malformed non-membership proof")?,
                 "invalid non-membership proof"
             );

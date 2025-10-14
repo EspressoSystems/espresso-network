@@ -37,13 +37,11 @@ use hotshot_types::{
 use vbs::version::Version;
 const TIMEOUT: Duration = Duration::from_millis(65);
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 /// Tests that we correctly update our internal quorum vote state when reaching a decided upgrade
 /// certificate.
 async fn test_upgrade_task_with_vote() {
     use hotshot_testing::helpers::build_system_handle;
-
-    hotshot::helpers::initialize_logging();
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
@@ -145,6 +143,7 @@ async fn test_upgrade_task_with_vote() {
         ),
         Expectations::from_outputs_and_task_states(
             all_predicates![
+                leaves_decided(),
                 exact(DaCertificateValidated(dacs[3].clone())),
                 exact(VidShareValidated(vids[3].0[0].clone())),
                 exact(ViewChange(ViewNumber::new(5), None)),
@@ -154,6 +153,7 @@ async fn test_upgrade_task_with_vote() {
         ),
         Expectations::from_outputs_and_task_states(
             all_predicates![
+                leaves_decided(),
                 exact(DaCertificateValidated(dacs[4].clone())),
                 exact(VidShareValidated(vids[4].0[0].clone())),
                 exact(ViewChange(ViewNumber::new(6), None)),
@@ -161,7 +161,10 @@ async fn test_upgrade_task_with_vote() {
             ],
             vec![no_decided_upgrade_certificate()],
         ),
-        Expectations::from_outputs_and_task_states(vec![], vec![decided_upgrade_certificate()]),
+        Expectations::from_outputs_and_task_states(
+            vec![leaves_decided()],
+            vec![decided_upgrade_certificate()],
+        ),
     ];
 
     let vote_state =

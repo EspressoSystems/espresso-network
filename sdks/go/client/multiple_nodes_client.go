@@ -70,6 +70,17 @@ func (c *MultipleNodesClient) FetchTransactionByHash(ctx context.Context, hash *
 	return res, nil
 }
 
+func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error) {
+	if hash == nil {
+		return types.ExplorerTransactionQueryData{}, fmt.Errorf("hash is nil")
+	}
+	var res types.ExplorerTransactionQueryData
+	if err := c.getWithMajority(ctx, &res, "explorer/transaction/hash/%s", hash.String()); err != nil {
+		return types.ExplorerTransactionQueryData{}, err
+	}
+	return res, nil
+}
+
 func (c *MultipleNodesClient) FetchHeadersByRange(ctx context.Context, from uint64, until uint64) ([]types.HeaderImpl, error) {
 	var res []types.HeaderImpl
 	if err := c.getWithMajority(ctx, &res, "availability/header/%d/%d", from, until); err != nil {
@@ -85,7 +96,11 @@ func (c *MultipleNodesClient) getWithMajority(ctx context.Context, out any, form
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(body, out)
+	err = json.Unmarshal(body, out)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	return nil
 }
 
 func (c *MultipleNodesClient) FetchTransactionsInBlock(ctx context.Context, blockHeight uint64, namespace uint64) (TransactionsInBlock, error) {
@@ -131,6 +146,9 @@ func (c *MultipleNodesClient) FetchVidCommonByHeight(ctx context.Context, blockH
 }
 
 func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, error) {
+	// Consider a failed submission as permanent if it failed for all nodes with permanent reasons.
+	var permanent = true
+
 	// Check if one node is successfully able to submit the transaction
 	var errs []error
 	for _, node := range c.nodes {
@@ -139,9 +157,129 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 			return hash, nil
 		} else {
 			errs = append(errs, err)
+			if !errors.Is(err, ErrPermanent) {
+				permanent = false
+			}
 		}
 	}
-	return nil, fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs)
+	if permanent {
+		return nil, fmt.Errorf("%w: encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", ErrPermanent, errs)
+	}
+	return nil, fmt.Errorf("%w: encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", ErrEphemeral, errs)
+}
+
+// A wrapper over multiple `Stream`s that are supposed to return the same
+// sequence of objects that verifies the items using majority rule.
+// An underlying stream that deviates from majority or responds with an error
+// is disabled for the rest of the MultiplexedStream's existence. If majority
+// of the underlying streams is disabled, calling Next on the MultiplexedStream
+// will always return an error.
+type MultiplexedStream[T any] struct {
+	nStreams       int
+	workingStreams []Stream[T]
+}
+
+func (ms *MultiplexedStream[T]) NextRaw(ctx context.Context) (json.RawMessage, error) {
+	newWorkingStreams := []Stream[T]{}
+
+	majority := (ms.nStreams / 2) + 1
+
+	values := make(map[string]int)
+	var returnValue json.RawMessage = nil
+
+	for _, stream := range ms.workingStreams {
+		rawValue, err := stream.NextRaw(ctx)
+		if err != nil {
+			continue
+		}
+
+		hash, err := hashNormalizedJSON(rawValue)
+		if err != nil {
+			continue
+		}
+
+		if _, ok := values[hash]; !ok {
+			values[hash] = 0
+		}
+
+		values[hash]++
+		if values[hash] >= majority {
+			returnValue = rawValue
+		}
+
+		newWorkingStreams = append(newWorkingStreams, stream)
+	}
+
+	ms.workingStreams = newWorkingStreams
+
+	if returnValue == nil {
+		return nil, fmt.Errorf("%w: no majority", ErrPermanent)
+	} else {
+		return returnValue, nil
+	}
+}
+
+func (ms *MultiplexedStream[T]) Next(ctx context.Context) (*T, error) {
+	next, err := ms.NextRaw(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var value T
+	err = json.Unmarshal(next, &value)
+	if err != nil {
+		return nil, err
+	}
+
+	return &value, nil
+}
+
+func (ms *MultiplexedStream[T]) Close() error {
+	var returnErr error
+	for _, stream := range ms.workingStreams {
+		err := stream.Close()
+		if err != nil {
+			returnErr = err
+		}
+	}
+
+	return returnErr
+}
+
+func (c *MultipleNodesClient) StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error) {
+
+	workingStreams := []Stream[types.TransactionQueryData]{}
+	for _, node := range c.nodes {
+		stream, err := node.StreamTransactions(ctx, height)
+		if err != nil {
+			return nil, err
+		}
+
+		workingStreams = append(workingStreams, stream)
+	}
+
+	return &MultiplexedStream[types.TransactionQueryData]{
+		nStreams:       len(c.nodes),
+		workingStreams: workingStreams,
+	}, nil
+}
+
+func (c *MultipleNodesClient) StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error) {
+
+	workingStreams := []Stream[types.TransactionQueryData]{}
+	for _, node := range c.nodes {
+		stream, err := node.StreamTransactionsInNamespace(ctx, height, namespace)
+		if err != nil {
+			return nil, err
+		}
+
+		workingStreams = append(workingStreams, stream)
+	}
+
+	return &MultiplexedStream[types.TransactionQueryData]{
+		nStreams:       len(c.nodes),
+		workingStreams: workingStreams,
+	}, nil
 }
 
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -156,15 +294,17 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 
 	for _, node := range nodes {
 		go func(node *T) {
-			value, err := fetchFunc(node)
+			value, txnErr := fetchFunc(node)
 			select {
-			case results <- result{value, err}:
+			case results <- result{value, txnErr}:
 			case <-ctx.Done():
 			}
 		}(node)
 	}
 
 	var errs []error
+	// Consider a failed fetch as permanent if it failed for all nodes with permanent reasons.
+	var permanent = true
 	var valueCount sync.Map
 	majorityCount := (len(nodes) / 2) + 1
 	responseCount := 0
@@ -181,6 +321,9 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				if err != nil {
 					fmt.Printf("error: failed to normalize json value: %v, error: %v", res.value, err)
 					errs = append(errs, err)
+					if !errors.Is(res.err, ErrPermanent) {
+						permanent = false
+					}
 				} else {
 					count, _ := valueCount.LoadOrStore(hash, 0)
 					if countInt, ok := count.(int); ok {
@@ -194,14 +337,23 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				}
 			} else {
 				errs = append(errs, res.err)
+				if !errors.Is(res.err, ErrPermanent) {
+					permanent = false
+				}
 			}
 
 			responseCount++
 			if responseCount == len(nodes) {
-				return json.RawMessage{}, fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
+				if permanent {
+					return json.RawMessage{}, fmt.Errorf("%w: no majority consensus reached with potential errors. Errors: %v\n", ErrPermanent, errs)
+				}
+				return json.RawMessage{}, fmt.Errorf("%w: no majority consensus reached with potential errors. Errors: %v\n", ErrEphemeral, errs)
 			}
 		case <-ctx.Done():
-			return json.RawMessage{}, ctx.Err()
+			if ctx.Err() != nil {
+				return json.RawMessage{}, fmt.Errorf("%w: %v", ErrEphemeral, ctx.Err())
+			}
+			return json.RawMessage{}, nil
 		}
 	}
 }

@@ -10,8 +10,8 @@ use async_broadcast::Sender;
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
-    simple_certificate::EpochRootQuorumCertificate,
-    simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
+    simple_certificate::EpochRootQuorumCertificateV2,
+    simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
@@ -120,7 +120,7 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
     I: NodeImplementation<TYPES>,
     V: Versions,
 >(
-    vote: &EpochRootQuorumVote<TYPES>,
+    vote: &EpochRootQuorumVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
@@ -312,7 +312,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             );
             broadcast_event(
                 Arc::new(HotShotEvent::EpochRootQcSend(
-                    EpochRootQuorumCertificate {
+                    EpochRootQuorumCertificateV2 {
                         qc: high_qc,
                         state_cert,
                     },
@@ -547,9 +547,19 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     let consensus_reader = task_state.consensus.read().await;
     consensus_reader.metrics.number_of_timeouts.add(1);
-    if leader? == task_state.public_key {
+    if leader.as_ref().is_ok_and(|l| *l == task_state.public_key) {
         consensus_reader.metrics.number_of_timeouts_as_leader.add(1);
     }
+    drop(consensus_reader);
+    task_state
+        .consensus
+        .write()
+        .await
+        .update_validator_participation(
+            leader?,
+            task_state.cur_epoch.ok_or(debug!("No epoch"))?,
+            false,
+        );
 
     Ok(())
 }

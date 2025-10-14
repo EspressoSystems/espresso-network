@@ -43,11 +43,8 @@ use vbs::{
 async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     use std::sync::Arc;
 
-    use alloy::primitives::U256;
     use async_lock::RwLock;
-    use espresso_types::{
-        v0_1::RewardAmount, v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction,
-    };
+    use espresso_types::{v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
     use hotshot_example_types::{node_types::TestVersions, storage_types::TestStorage};
     use hotshot_types::{
         data::vid_disperse::{ADVZDisperse, ADVZDisperseShare},
@@ -67,15 +64,17 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
     let committee = vec![PeerConfig::default()]; /* one committee member, necessary to generate a VID share */
     let storage = TestStorage::default();
+    let epoch_height = 10;
 
     let membership = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             committee.clone(),
             committee,
-            RewardAmount(U256::ZERO),
+            None,
             Fetcher::mock(),
+            epoch_height,
         ))),
-        10,
+        epoch_height,
         &storage,
     );
     let upgrade_data = UpgradeProposalData {
@@ -86,17 +85,17 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
         old_version_last_view: ViewNumber::genesis(),
         new_version_first_view: ViewNumber::genesis(),
     };
-    let leaf = Leaf::genesis::<TestVersions>(
-        &ValidatedState::default(),
-        &NodeState::mock().with_current_version(Ver::VERSION),
-    )
-    .await;
+
+    let node_state = NodeState::mock()
+        .with_current_version(Ver::VERSION)
+        .with_genesis_version(Ver::VERSION);
+    let leaf = Leaf::genesis::<TestVersions>(&ValidatedState::default(), &node_state).await;
     let block_header = leaf.block_header().clone();
     let transaction = Transaction::new(1_u32.into(), vec![1, 2, 3]);
     let (payload, metadata) = Payload::from_transactions(
         [transaction.clone()],
         &ValidatedState::default(),
-        &NodeState::mock(),
+        &node_state,
     )
     .await
     .unwrap();
@@ -126,7 +125,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                 view_number: ViewNumber::genesis(),
                 justify_qc: QuorumCertificate::genesis::<TestVersions>(
                     &ValidatedState::default(),
-                    &NodeState::mock(),
+                    &node_state,
                 )
                 .await,
                 upgrade_certificate: Some(UpgradeCertificate::new(

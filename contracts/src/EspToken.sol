@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-// TODO MA: should we really use solmate, or just stick with openzeppelin?
 import { ERC20Upgradeable } from
     "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { OwnableUpgradeable } from
@@ -11,7 +10,6 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-// TODO: Timelock
 contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
     event Upgrade(address implementation);

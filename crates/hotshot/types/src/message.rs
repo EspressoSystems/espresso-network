@@ -20,28 +20,32 @@ use committable::Committable;
 use hotshot_utils::anytrace::*;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::{
-    version::{StaticVersionType, Version},
+    version::{StaticVersion, StaticVersionType, Version},
     BinarySerializer, Serializer,
 };
+
+/// The version we should expect for external messages
+pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, UpgradeProposal,
+        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal,
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate, DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
-        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
-        ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
+        DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate, ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate,
+        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote, DaVote2, EpochRootQuorumVote, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote,
-        TimeoutVote2, UpgradeVote, ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote,
-        ViewSyncFinalizeVote2, ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+        DaVote, DaVote2, EpochRootQuorumVote, EpochRootQuorumVote2, HasEpoch, QuorumVote,
+        QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote, ViewSyncCommitVote,
+        ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2, ViewSyncPreCommitVote,
+        ViewSyncPreCommitVote2,
     },
     traits::{
         election::Membership,
@@ -230,7 +234,7 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     ProposalResponse(Proposal<TYPES, QuorumProposal<TYPES>>),
 
     /// Message with a quorum proposal.
-    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+    Proposal2Legacy(Proposal<TYPES, QuorumProposal2Legacy<TYPES>>),
 
     /// Message with a quorum vote.
     Vote2(QuorumVote2<TYPES>),
@@ -239,7 +243,7 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     EpochRootQuorumVote(EpochRootQuorumVote<TYPES>),
 
     /// A replica has responded with a valid proposal.
-    ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+    ProposalResponse2Legacy(Proposal<TYPES, QuorumProposal2Legacy<TYPES>>),
 
     /// Message for the next leader containing our highest QC
     HighQc(
@@ -253,8 +257,8 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
         NextEpochQuorumCertificate2<TYPES>,
     ),
 
-    /// Message for the next leader containing the epoch root QC
-    EpochRootQc(EpochRootQuorumCertificate<TYPES>),
+    /// Message for the next leader containing the epoch root QC from older consensus version.
+    EpochRootQcV1(EpochRootQuorumCertificateV1<TYPES>),
 
     /// Message with a view sync pre-commit vote
     ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
@@ -276,6 +280,18 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// Message with a Timeout vote
     TimeoutVote2(TimeoutVote2<TYPES>),
+
+    /// Message for the next leader containing the epoch root QC
+    EpochRootQc(EpochRootQuorumCertificateV2<TYPES>),
+
+    /// Message with a quorum proposal.
+    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// A replica has responded with a valid proposal.
+    ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// Message with an epoch root quorum vote.
+    EpochRootQuorumVote2(EpochRootQuorumVote2<TYPES>),
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -334,6 +350,11 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.view_number()
                     },
+                    GeneralConsensusMessage::Proposal2Legacy(p) => {
+                        // view of leader in the leaf when proposal
+                        // this should match replica upon receipt
+                        p.data.view_number()
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
@@ -341,6 +362,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::ProposalRequested(req, _) => req.view_number,
                     GeneralConsensusMessage::ProposalResponse(proposal) => {
+                        proposal.data.view_number()
+                    },
+                    GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
                         proposal.data.view_number()
                     },
                     GeneralConsensusMessage::ProposalResponse2(proposal) => {
@@ -385,7 +409,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.view_number(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.view_number(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.view_number(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.view_number(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -421,6 +447,11 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.epoch()
                     },
+                    GeneralConsensusMessage::Proposal2Legacy(p) => {
+                        // view of leader in the leaf when proposal
+                        // this should match replica upon receipt
+                        p.data.epoch()
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
@@ -428,6 +459,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::ProposalRequested(..) => None,
                     GeneralConsensusMessage::ProposalResponse(proposal) => proposal.data.epoch(),
+                    GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
+                        proposal.data.epoch()
+                    },
                     GeneralConsensusMessage::ProposalResponse2(proposal) => proposal.data.epoch(),
                     GeneralConsensusMessage::Vote(vote_message) => vote_message.epoch(),
                     GeneralConsensusMessage::Vote2(vote_message) => vote_message.epoch(),
@@ -458,7 +492,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.epoch(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.epoch(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.epoch(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.epoch(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -668,6 +704,16 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         self.version_infallible(view).await >= V::Epochs::VERSION
     }
 
+    /// Return whether `QuorumProposal2Legacy` is the correct message type for the given view
+    pub async fn proposal2_legacy_version(&self, view: TYPES::View) -> bool {
+        self.epochs_enabled(view).await && !self.upgraded_drb_and_header(view).await
+    }
+
+    /// Return whether `QuorumProposal2` is the correct message type for the given view
+    pub async fn proposal2_version(&self, view: TYPES::View) -> bool {
+        self.epochs_enabled(view).await && self.upgraded_drb_and_header(view).await
+    }
+
     /// Return whether epochs are enabled in the given view
     pub async fn upgraded_drb_and_header(&self, view: TYPES::View) -> bool {
         self.version_infallible(view).await >= V::DrbAndHeaderUpgrade::VERSION
@@ -704,33 +750,58 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     }
 
     /// Deserialize a message with a version number, using `message.view_number()` to determine the message's version. This function will fail on improperly versioned messages.
+    /// Returns both the deserialized message and the version of the message
     ///
     /// # Errors
     ///
     /// Errors if deserialization fails.
-    pub async fn deserialize<M: HasViewNumber<TYPES> + for<'a> Deserialize<'a>>(
+    pub async fn deserialize<M: Debug + HasViewNumber<TYPES> + for<'a> Deserialize<'a>>(
         &self,
         message: &[u8],
-    ) -> Result<M> {
-        let actual_version = Version::deserialize(message)
+    ) -> Result<(M, Version)> {
+        // Get the actual version from the message itself
+        let (actual_version, rest) = Version::deserialize(message)
             .wrap()
-            .context(info!("Failed to read message version!"))?
-            .0;
+            .context(info!("Failed to read message version!"))?;
 
+        // Deserialize the message using the stated version
         let deserialized_message: M = match actual_version {
+            // Special case: external messages (version 0.0)
+            v if v == EXTERNAL_MESSAGE_VERSION => {
+                Serializer::<StaticVersion<0, 0>>::deserialize(message)
+            },
             v if v == V::Base::VERSION => Serializer::<V::Base>::deserialize(message),
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
             v => {
-                bail!("Cannot deserialize message with stated version {v}");
+                let attempted_deserialization: M = match bincode::deserialize(rest) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        bail!("Cannot deserialize message with state version: {v}. Error: {e}");
+                    },
+                };
+
+                bail!(warn!(
+                    "Received a message with state version {v} which is invalid for its view: {:?}",
+                    attempted_deserialization
+                ));
             },
         }
         .wrap()
         .context(info!("Failed to deserialize message!"))?;
 
+        // If the message is version 0.0, just return the deserialized message and the version.
+        // We don't care about it matching the expected version for the view number.
+        if actual_version == EXTERNAL_MESSAGE_VERSION {
+            return Ok((deserialized_message, actual_version));
+        }
+
+        // Get the view number associated with the message
         let view = deserialized_message.view_number();
 
+        // Get the expected version for the message based on the view number
         let expected_version = self.version(view).await?;
 
+        // Check that the actual version matches the expected version
         if actual_version != expected_version {
             return Err(error!(format!(
                 "Message has invalid version number for its view. Expected: {expected_version}, \
@@ -738,6 +809,6 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             )));
         };
 
-        Ok(deserialized_message)
+        Ok((deserialized_message, actual_version))
     }
 }

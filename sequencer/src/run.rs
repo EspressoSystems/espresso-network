@@ -215,7 +215,7 @@ where
 
     let persistence = storage_opt.create().await?;
     persistence
-        .migrate_consensus()
+        .migrate_storage()
         .await
         .context("failed to migrate consensus data")?;
 
@@ -299,7 +299,6 @@ mod test {
     use espresso_types::{MockSequencerVersions, PubKey};
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
     use surf_disco::{error::ClientError, Client, Url};
     use tempfile::TempDir;
     use tokio::spawn;
@@ -313,10 +312,8 @@ mod test {
         SequencerApiVersion,
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_startup_before_orchestrator() {
-        setup_test();
-
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
 
@@ -339,6 +336,7 @@ mod test {
             epoch_start_block: None,
             stake_table_capacity: None,
             genesis_version: Version { major: 0, minor: 1 },
+            da_committees: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

@@ -256,12 +256,9 @@ mod test {
 
     use crate::run_standalone_service;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[ignore]
     async fn test_full_setup_example() {
-        use hotshot::helpers::initialize_logging;
-        initialize_logging();
-
         let base_url: Url = "https://query.main.net.espresso.network/v0/"
             .parse()
             .unwrap();

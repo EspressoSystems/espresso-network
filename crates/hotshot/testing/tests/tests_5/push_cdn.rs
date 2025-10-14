@@ -17,10 +17,9 @@ use tracing::instrument;
 
 /// Push CDN network test
 
-#[tokio::test(flavor = "multi_thread")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn push_cdn_network() {
-    hotshot::helpers::initialize_logging();
 
     let mut metadata: TestDescription<TestTypes, PushCdnImpl, TestVersions> = TestDescription {
         timing_data: TimingData {

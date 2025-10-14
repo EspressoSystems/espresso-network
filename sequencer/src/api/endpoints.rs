@@ -9,7 +9,9 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
+    v0_1::ADVZNsProof,
+    v0_3::RewardAccountV1,
+    v0_4::{RewardAccountV2, RewardClaimError},
     FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
 // re-exported here to avoid breaking changes in consumers
@@ -37,11 +39,11 @@ use hotshot_types::{
     },
     vid::avidm::AvidMShare,
 };
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
-use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
+use tide_disco::{method::ReadState, Api, Error as _, RequestParams, StatusCode};
 use tracing::warn;
 use vbs::version::{StaticVersion, StaticVersionType};
 use vid::avid_m::namespaced::NsAvidMScheme;
@@ -53,7 +55,9 @@ use super::{
     },
     StorageState,
 };
-use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence};
+use crate::{
+    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
+};
 
 pub(super) fn fee<State, Ver>(
     api_ver: semver::Version,
@@ -92,28 +96,33 @@ where
     Ok(api)
 }
 
-pub(super) fn reward<State, Ver>(
+pub enum RewardMerkleTreeVersion {
+    V1,
+    V2,
+}
+
+pub(super) fn reward<State, Ver, MT, const ARITY: usize>(
     api_ver: semver::Version,
+    merkle_tree_version: RewardMerkleTreeVersion,
 ) -> Result<Api<State, merklized_state::Error, Ver>>
 where
     State: 'static + Send + Sync + ReadState,
     Ver: 'static + StaticVersionType,
+    MT: MerklizedState<SeqTypes, ARITY>,
+    for<'a> <MT::Commit as TryFrom<&'a TaggedBase64>>::Error: std::fmt::Display,
+    <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
-        + MerklizedStateDataSource<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
+        + RewardAccountProofDataSource
+        + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {
     let mut options = merklized_state::Options::default();
     let extension = toml::from_str(include_str!("../../api/reward.toml"))?;
     options.extensions.push(extension);
 
-    let mut api = merklized_state::define_api::<
-        State,
-        SeqTypes,
-        RewardMerkleTree,
-        Ver,
-        { RewardMerkleTree::ARITY },
-    >(&options, api_ver)?;
+    let mut api =
+        merklized_state::define_api::<State, SeqTypes, MT, Ver, ARITY>(&options, api_ver)?;
 
     api.get("get_latest_reward_balance", move |req, state| {
         async move {
@@ -143,10 +152,135 @@ where
                     status: StatusCode::BAD_REQUEST,
                 })?;
             let path = state.get_path(snapshot, key).await?;
+
+            let last_height = state.get_last_state_height().await?;
+
+            if height > last_height {
+                return Err(merklized_state::Error::Custom {
+                    message: format!(
+                        "requested height {height} is greater than last known height {last_height}"
+                    ),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
             Ok(path.elem().copied())
         }
         .boxed()
     })?;
+
+    match merkle_tree_version {
+        RewardMerkleTreeVersion::V1 => {
+            api.get("get_reward_account_proof", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+
+                    state
+                        .load_v1_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v1 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })
+                }
+                .boxed()
+            })?;
+        },
+        RewardMerkleTreeVersion::V2 => {
+            api.get("get_reward_account_proof", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+
+                    state
+                        .load_v2_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v2 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })
+                }
+                .boxed()
+            })?;
+
+            api.get("get_reward_claim_input", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+
+                    let proof = state
+                        .load_v2_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v2 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })?;
+
+                    // TODO: (MA) this will eventually be the other (non reward MT root) auth root
+                    // inputs, for the foreseeable future they will be all zero. And it's as of yet
+                    // unclear. It seems reasonable to delay the required refactoring work until
+                    // we are closer to needing it.
+                    let claim_input = match proof.to_reward_claim_input(Default::default()) {
+                        Ok(input) => input,
+                        Err(RewardClaimError::ZeroRewardError) => {
+                            return Err(merklized_state::Error::Custom {
+                                message: format!(
+                                    "zero reward balance for {address} at height {height}"
+                                ),
+                                status: StatusCode::NOT_FOUND,
+                            })
+                        },
+                        Err(RewardClaimError::ProofConversionError(err)) => {
+                            let message = format!(
+                                "failed to create solidity proof for {address} at height \
+                                 {height}: {err}",
+                            );
+                            tracing::warn!("{message}");
+                            // Normally we would not want to return the internal error via the
+                            // API response but this is an error that should never occur. No
+                            // secret data involved so it seems fine to return it.
+                            return Err(merklized_state::Error::Custom {
+                                message,
+                                status: StatusCode::INTERNAL_SERVER_ERROR,
+                            });
+                        },
+                    };
+
+                    Ok(claim_input)
+                }
+                .boxed()
+            })?;
+        },
+    }
+
     Ok(api)
 }
 
@@ -587,10 +721,63 @@ where
         }
         .boxed()
     })?
-    .at("get_block_reward", |_, state| {
+    .at("get_all_validators", |req, state| {
         async move {
+            let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
+            let offset = req.integer_param::<_, u64>("offset")?;
+
+            let limit = req.integer_param::<_, u64>("limit")?;
+            if limit > 1000 {
+                return Err(hotshot_query_service::node::Error::Custom {
+                    message: "Limit cannot be greater than 1000".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
             state
-                .read(|state| state.get_block_reward().boxed())
+                .read(|state| {
+                    state
+                        .get_all_validators(EpochNumber::new(epoch), offset, limit)
+                        .boxed()
+                })
+                .await
+                .map_err(|err| hotshot_query_service::node::Error::Custom {
+                    message: format!("failed to get all validators : err: {err}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })
+        }
+        .boxed()
+    })?
+    .at("current_proposal_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.current_proposal_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("previous_proposal_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.previous_proposal_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("get_block_reward", |req, state| {
+        async move {
+            let epoch = req
+                .opt_integer_param::<_, u64>("epoch_number")?
+                .map(EpochNumber::new);
+
+            state
+                .read(|state| state.get_block_reward(epoch).boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
                     message: format!("failed to get block reward. err={err:#}"),
@@ -677,44 +864,54 @@ where
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
     api.with_version(api_ver);
 
-    api.get("account", |req, state| {
-        async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
-            let account = req
-                .string_param("address")
-                .map_err(Error::from_request_error)?;
-            let account = account.parse().map_err(|err| {
-                Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    format!("malformed account {account}: {err}"),
-                )
-            })?;
+    let parse_height_view = |req: &RequestParams| -> Result<(u64, ViewNumber), Error> {
+        let height = req
+            .integer_param("height")
+            .map_err(Error::from_request_error)?;
+        let view = req
+            .integer_param("view")
+            .map_err(Error::from_request_error)?;
+        Ok((height, ViewNumber::new(view)))
+    };
 
+    let parse_fee_account = |req: &RequestParams| -> Result<FeeAccount, Error> {
+        let raw = req
+            .string_param("address")
+            .map_err(Error::from_request_error)?;
+        raw.parse().map_err(|err| {
+            Error::catch_all(
+                StatusCode::BAD_REQUEST,
+                format!("malformed fee account {raw}: {err}"),
+            )
+        })
+    };
+
+    let parse_reward_account = |req: &RequestParams| -> Result<RewardAccountV2, Error> {
+        let raw = req
+            .string_param("address")
+            .map_err(Error::from_request_error)?;
+        raw.parse().map_err(|err| {
+            Error::catch_all(
+                StatusCode::BAD_REQUEST,
+                format!("malformed reward account {raw}: {err}"),
+            )
+        })
+    };
+
+    api.get("account", move |req, state| {
+        async move {
+            let (height, view) = parse_height_view(&req)?;
+            let account = parse_fee_account(&req)?;
             state
-                .get_account(
-                    &state.node_state().await,
-                    height,
-                    ViewNumber::new(view),
-                    account,
-                )
+                .get_account(&state.node_state().await, height, view, account)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
         .boxed()
     })?
-    .at("accounts", |req, state| {
+    .at("accounts", move |req, state| {
         async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
+            let (height, view) = parse_height_view(&req)?;
             let accounts = req
                 .body_auto::<Vec<FeeAccount>, ApiVer>(ApiVer::instance())
                 .map_err(Error::from_request_error)?;
@@ -723,10 +920,44 @@ where
                 .read(|state| {
                     async move {
                         state
-                            .get_accounts(
+                            .get_accounts(&state.node_state().await, height, view, &accounts)
+                            .await
+                            .map_err(|err| {
+                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
+                            })
+                    }
+                    .boxed()
+                })
+                .await
+        }
+        .boxed()
+    })?
+    .get("reward_account", move |req, state| {
+        async move {
+            let (height, view) = parse_height_view(&req)?;
+            let account = parse_reward_account(&req)?;
+            state
+                .get_reward_account_v1(&state.node_state().await, height, view, account.into())
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .at("reward_accounts", move |req, state| {
+        async move {
+            let (height, view) = parse_height_view(&req)?;
+            let accounts = req
+                .body_auto::<Vec<RewardAccountV1>, ApiVer>(ApiVer::instance())
+                .map_err(Error::from_request_error)?;
+
+            state
+                .read(|state| {
+                    async move {
+                        state
+                            .get_reward_accounts_v1(
                                 &state.node_state().await,
                                 height,
-                                ViewNumber::new(view),
+                                view,
                                 &accounts,
                             )
                             .await
@@ -740,56 +971,33 @@ where
         }
         .boxed()
     })?
-    .get("reward_account", |req, state| {
+    .get("reward_account_v2", move |req, state| {
         async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
-            let account = req
-                .string_param("address")
-                .map_err(Error::from_request_error)?;
-            let account = account.parse().map_err(|err| {
-                Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    format!("malformed account {account}: {err}"),
-                )
-            })?;
+            let (height, view) = parse_height_view(&req)?;
+            let account = parse_reward_account(&req)?;
 
             state
-                .get_reward_account(
-                    &state.node_state().await,
-                    height,
-                    ViewNumber::new(view),
-                    account,
-                )
+                .get_reward_account_v2(&state.node_state().await, height, view, account)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
         .boxed()
     })?
-    .at("reward_accounts", |req, state| {
+    .at("reward_accounts_v2", move |req, state| {
         async move {
-            let height = req
-                .integer_param("height")
-                .map_err(Error::from_request_error)?;
-            let view = req
-                .integer_param("view")
-                .map_err(Error::from_request_error)?;
+            let (height, view) = parse_height_view(&req)?;
             let accounts = req
-                .body_auto::<Vec<RewardAccount>, ApiVer>(ApiVer::instance())
+                .body_auto::<Vec<RewardAccountV2>, ApiVer>(ApiVer::instance())
                 .map_err(Error::from_request_error)?;
 
             state
                 .read(|state| {
                     async move {
                         state
-                            .get_reward_accounts(
+                            .get_reward_accounts_v2(
                                 &state.node_state().await,
                                 height,
-                                ViewNumber::new(view),
+                                view,
                                 &accounts,
                             )
                             .await
