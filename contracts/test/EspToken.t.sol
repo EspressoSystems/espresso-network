@@ -63,6 +63,21 @@ contract EspTokenUpgradabilityTest is Test {
         assertEq(majorVersion, 2);
         assertEq(minorVersion, 0);
         assertEq(patchVersion, 0);
+        vm.stopPrank();
+
+        vm.startPrank(tokenGrantRecipient);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, tokenGrantRecipient
+            )
+        );
+        EspTokenV2 tokenV2Proxy = EspTokenV2(address(token));
+        tokenV2Proxy.initializeV2(tokenGrantRecipient);
+        vm.stopPrank();
+
+        vm.startPrank(admin);
+        tokenV2Proxy.initializeV2(admin);
+        vm.stopPrank();
     }
 
     function test_SafeExitTimelock() public {
