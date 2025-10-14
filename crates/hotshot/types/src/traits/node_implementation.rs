@@ -260,4 +260,6 @@ pub trait Versions: Clone + Copy + Debug + Send + Sync + 'static {
 
     /// The version at which to use the upgraded DRB difficulty
     type DrbAndHeaderUpgrade: StaticVersionType;
+
+    fn new() -> Self;
 }

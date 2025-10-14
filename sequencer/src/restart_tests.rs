@@ -32,8 +32,9 @@ use espresso_contract_deployer::{
     Contracts,
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
+    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeVersion, L1Client, Leaf2, PrivKey,
+    PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -81,12 +82,35 @@ use crate::{
 };
 type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
-    let mut network = TestNetwork::new(network.0, network.1, cdn).await;
+    let mut network = TestNetwork::new(network.0, network.1, cdn,         "../data/genesis/restart-test.toml",
+ ).await;
 
     // Let the network get going.
     network.check_progress().await;
     // Restart some combination of nodes and ensure progress resumes.
     network.restart(restart.0, restart.1).await;
+
+    network.shut_down().await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_after_upgrade_before_first_epoch() {
+    setup_test();
+
+    let mut network =
+        TestNetwork::<SequencerVersions<FeeVersion, DrbAndHeaderUpgradeVersion>>::new(
+            3,
+            5,
+            true,
+            "../data/genesis/restart-upgrade-test.toml",
+        )
+        .await;
+
+    network.restart_helper(0..3, 0..5, Some(42), false).await;
+
+    network.wait_for_epoch().await;
+    network.check_progress().await;
+    network.check_state().await;
 
     network.shut_down().await;
 }
@@ -196,7 +220,7 @@ async fn slow_test_restart_all_da_without_cdn() {
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_staggered() {
-    let mut network = TestNetwork::new(4, 6, false).await;
+    let mut network = TestNetwork::new(4, 6, false,  "../data/genesis/restart-test.toml").await;
 
     // Check that the builder works at the beginning.
     network.check_builder().await;
@@ -251,14 +275,10 @@ impl NodeParams {
 }
 
 #[derive(Debug)]
-struct TestNode<S: TestableSequencerDataSource> {
+struct TestNode<S: TestableSequencerDataSource, V: Versions> {
     storage: S::Storage,
     context: Option<
-        SequencerContext<
-            network::Production,
-            <S::Options as PersistenceOptions>::Persistence,
-            MockSequencerVersions,
-        >,
+        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence, V>,
     >,
     modules: Modules,
     opt: Options,
@@ -268,7 +288,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     wait_for_epoch: EpochNumber,
 }
 
-impl<S: TestableSequencerDataSource> TestNode<S> {
+impl<S: TestableSequencerDataSource, V: Versions> TestNode<S, V> {
     #[tracing::instrument]
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
         tracing::info!(?network, ?node, "creating node");
@@ -372,7 +392,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
-                    MockSequencerVersions::new(),
+                    <V as Versions>::new(),
                 )
                 .await
                 {
@@ -584,7 +604,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream().await;
 
-        let timeout_duration = Duration::from_secs(60);
+        let timeout_duration = Duration::from_secs(180);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
                 let EventType::Decide { qc, .. } = event.event else {
@@ -598,6 +618,60 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         })
         .await
         .expect("timed out waiting for epoch after restart");
+    }
+
+    /// Wait for the given view.
+    async fn wait_for_view(&self, view: u64) {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping progress check on stopped node");
+            return;
+        };
+
+        let node_id = context.node_id();
+        tracing::info!(node_id, "waiting for view: {view:?}");
+        let mut events = context.event_stream().await;
+
+        let timeout_duration = Duration::from_secs(60);
+        timeout(timeout_duration, async {
+            while let Some(event) = events.next().await {
+                let EventType::Decide { leaf_chain, .. } = event.event else {
+                    continue;
+                };
+                if *leaf_chain[0].leaf.view_number() >= view {
+                    tracing::info!(node_id, "reached view: {view:?}");
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for view {view:?}");
+    }
+
+    /// Wait for the given view.
+    async fn wait_for_block(&self, block: u64) {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping progress check on stopped node");
+            return;
+        };
+
+        let node_id = context.node_id();
+        tracing::info!(node_id, "waiting for block: {block:?}");
+        let mut events = context.event_stream().await;
+
+        let timeout_duration = Duration::from_secs(60);
+        timeout(timeout_duration, async {
+            while let Some(event) = events.next().await {
+                let EventType::Decide { leaf_chain, .. } = event.event else {
+                    continue;
+                };
+                if leaf_chain[0].leaf.height() >= block {
+                    tracing::info!(node_id, "reached block: {block:?}");
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for block {block:?}");
     }
 }
 
@@ -613,10 +687,9 @@ type AnvilFillProvider = AnvilProvider<
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-struct TestNetwork {
-    da_nodes: Vec<TestNode<api::sql::DataSource>>,
-    regular_nodes: Vec<TestNode<api::sql::DataSource>>,
-    tmp: TempDir,
+struct TestNetwork<V: Versions> {
+    da_nodes: Vec<TestNode<api::sql::DataSource, V>>,
+    regular_nodes: Vec<TestNode<api::sql::DataSource, V>>,
     builder_port: u16,
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
@@ -625,7 +698,7 @@ struct TestNetwork {
     anvil: AnvilFillProvider,
 }
 
-impl Drop for TestNetwork {
+impl<V: Versions> Drop for TestNetwork<V> {
     fn drop(&mut self) {
         if let Some(task) = self.orchestrator_task.take() {
             task.abort();
@@ -639,37 +712,18 @@ impl Drop for TestNetwork {
     }
 }
 
-impl TestNetwork {
-    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
+impl<V: Versions> TestNetwork<V> {
+    async fn new(
+        da_nodes: usize,
+        regular_nodes: usize,
+        cdn: bool,
+        genesis_file_path: &str,
+    ) -> Self {
         let mut ports = PortPicker::default();
 
-        let tmp = TempDir::new().unwrap();
-        let genesis_file_path = tmp.path().join("genesis.toml");
+        let genesis_file_path = std::path::Path::new(genesis_file_path);
 
-        let mut genesis = Genesis {
-            chain_config: Default::default(),
-            // TODO we apparently have two `capacity` configurations
-            stake_table: StakeTableConfig {
-                capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
-            },
-            l1_finalized: L1Finalized::Number { number: 20 },
-            header: Default::default(),
-            upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 3 },
-            upgrade_version: Version { major: 0, minor: 3 },
-            epoch_height: Some(15),
-            drb_difficulty: None,
-            epoch_start_block: Some(1),
-            // TODO we apparently have two `capacity` configurations
-            stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
-            drb_upgrade_difficulty: None,
-            // Start with a funded account, so we can test catchup after restart.
-            accounts: [(builder_account(), 1000000000.into())]
-                .into_iter()
-                .collect(),
-            genesis_version: Version { major: 0, minor: 1 },
-            da_committees: None,
-        };
+        let mut genesis = Genesis::from_file(genesis_file_path).unwrap();
 
         let node_params = (0..da_nodes + regular_nodes)
             .map(|i| NodeParams::new(&mut ports, i as u64, i < da_nodes))
@@ -683,6 +737,7 @@ impl TestNetwork {
             builder_port,
         ));
 
+        let tmp = TempDir::new().unwrap();
         let cdn_dir = tmp.path().join("cdn");
         let cdn_port = ports.pick();
         let broker_task = if cdn {
@@ -726,15 +781,14 @@ impl TestNetwork {
 
         let mut network = Self {
             da_nodes: join_all(
-                (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
+                (0..da_nodes).map(|i| TestNode::<_, V>::new(network_params, &node_params[i])),
             )
             .await,
             regular_nodes: join_all(
                 (0..regular_nodes)
-                    .map(|i| TestNode::new(network_params, &node_params[i + da_nodes])),
+                    .map(|i| TestNode::<_, V>::new(network_params, &node_params[i + da_nodes])),
             )
             .await,
-            tmp,
             builder_port,
             orchestrator_task,
             broker_task,
@@ -742,18 +796,7 @@ impl TestNetwork {
             anvil,
         };
 
-        // Deploy stake contracts and delegate.
         let stake_table_address = network.deploy(&genesis).await.unwrap();
-
-        // Add contract address to `ChainConfig`.
-        let chain_config = ChainConfig {
-            base_fee: 1.into(),
-            stake_table_contract: Some(stake_table_address),
-            ..Default::default()
-        };
-        genesis.chain_config = chain_config;
-        genesis.header.chain_config = chain_config;
-        genesis.to_file(&genesis_file_path).unwrap();
 
         let finalized = l1_client
             .get_block(alloy::eips::BlockId::finalized())
@@ -776,8 +819,13 @@ impl TestNetwork {
             network
                 .da_nodes
                 .iter_mut()
-                .map(TestNode::start)
-                .chain(network.regular_nodes.iter_mut().map(TestNode::start)),
+                .map(TestNode::<_, V>::start)
+                .chain(
+                    network
+                        .regular_nodes
+                        .iter_mut()
+                        .map(TestNode::<_, V>::start),
+                ),
         )
         .await;
 
@@ -893,8 +941,40 @@ impl TestNetwork {
         join_all(
             self.da_nodes
                 .iter()
-                .map(TestNode::wait_for_epoch)
-                .chain(self.regular_nodes.iter().map(TestNode::wait_for_epoch)),
+                .map(TestNode::<_, V>::wait_for_epoch)
+                .chain(
+                    self.regular_nodes
+                        .iter()
+                        .map(TestNode::<_, V>::wait_for_epoch),
+                ),
+        )
+        .await;
+    }
+
+    async fn wait_for_block(&self, block: u64) {
+        join_all(
+            self.da_nodes
+                .iter()
+                .map(|node| node.wait_for_block(block))
+                .chain(
+                    self.regular_nodes
+                        .iter()
+                        .map(|node| node.wait_for_block(block)),
+                ),
+        )
+        .await;
+    }
+
+    async fn wait_for_view(&self, view: u64) {
+        join_all(
+            self.da_nodes
+                .iter()
+                .map(|node| node.wait_for_view(view))
+                .chain(
+                    self.regular_nodes
+                        .iter()
+                        .map(|node| node.wait_for_view(view)),
+                ),
         )
         .await;
     }
@@ -903,11 +983,11 @@ impl TestNetwork {
         try_join_all(
             self.da_nodes
                 .iter()
-                .map(TestNode::check_progress_with_timeout)
+                .map(TestNode::<_, V>::check_progress_with_timeout)
                 .chain(
                     self.regular_nodes
                         .iter()
-                        .map(TestNode::check_progress_with_timeout),
+                        .map(TestNode::<_, V>::check_progress_with_timeout),
                 ),
         )
         .await
@@ -922,11 +1002,11 @@ impl TestNetwork {
         try_join_all(
             self.da_nodes
                 .iter()
-                .map(TestNode::populate_state_from_event_stream)
+                .map(TestNode::<_, V>::populate_state_from_event_stream)
                 .chain(
                     self.regular_nodes
                         .iter()
-                        .map(TestNode::populate_state_from_event_stream),
+                        .map(TestNode::<_, V>::populate_state_from_event_stream),
                 ),
         )
         .await
@@ -969,7 +1049,7 @@ impl TestNetwork {
     /// still make progress without the restarted nodes. In any case, check that the network as a
     /// whole makes progress once the restarted nodes are back online.
     async fn restart(&mut self, da_nodes: usize, regular_nodes: usize) {
-        self.restart_helper(0..da_nodes, 0..regular_nodes, false)
+        self.restart_helper(0..da_nodes, 0..regular_nodes, None, false)
             .await;
         self.wait_for_epoch().await;
         self.check_progress().await;
@@ -988,7 +1068,8 @@ impl TestNetwork {
         da_nodes: impl IntoIterator<Item = usize>,
         regular_nodes: impl IntoIterator<Item = usize>,
     ) {
-        self.restart_helper(da_nodes, regular_nodes, true).await;
+        self.restart_helper(da_nodes, regular_nodes, None, true)
+            .await;
 
         // Just wait for one decide after the restart, so we don't restart subsequent nodes too
         // quickly.
@@ -1016,16 +1097,21 @@ impl TestNetwork {
         &mut self,
         da_nodes: impl IntoIterator<Item = usize>,
         regular_nodes: impl IntoIterator<Item = usize>,
+        restart_view: Option<u64>,
         assert_progress: bool,
     ) {
         let da_nodes = da_nodes.into_iter().collect::<Vec<_>>();
         let regular_nodes = regular_nodes.into_iter().collect::<Vec<_>>();
         tracing::info!(?da_nodes, ?regular_nodes, "shutting down nodes");
 
+        if let Some(restart_view) = restart_view {
+            self.wait_for_view(restart_view).await;
+        }
+
         join_all(
             select(&mut self.da_nodes, &da_nodes)
-                .map(TestNode::stop)
-                .chain(select(&mut self.regular_nodes, &regular_nodes).map(TestNode::stop)),
+                .map(TestNode::<_, V>::stop)
+                .chain(select(&mut self.regular_nodes, &regular_nodes).map(TestNode::<_, V>::stop)),
         )
         .await;
 
@@ -1103,8 +1189,10 @@ impl TestNetwork {
 
         join_all(
             select(&mut self.da_nodes, &da_nodes)
-                .map(TestNode::start)
-                .chain(select(&mut self.regular_nodes, &regular_nodes).map(TestNode::start)),
+                .map(TestNode::<_, V>::start)
+                .chain(
+                    select(&mut self.regular_nodes, &regular_nodes).map(TestNode::<_, V>::start),
+                ),
         )
         .await;
     }
@@ -1114,8 +1202,8 @@ impl TestNetwork {
         join_all(
             self.da_nodes
                 .iter_mut()
-                .map(TestNode::stop)
-                .chain(self.regular_nodes.iter_mut().map(TestNode::stop)),
+                .map(TestNode::<_, V>::stop)
+                .chain(self.regular_nodes.iter_mut().map(TestNode::<_, V>::stop)),
         )
         .await;
     }

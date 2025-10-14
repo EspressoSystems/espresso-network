@@ -407,6 +407,8 @@ where
                 .map(split_off_peer_id)
                 .collect::<Result<Vec<_>, _>>()
                 .with_context(|| "Failed to parse peer ID from bootstrap node")?;
+
+            tracing::warn!("libp2p setup completed");
         } else {
             // If not, don't try launching with them. Eventually we may want to
             // provide a default configuration here instead.
@@ -436,6 +438,8 @@ where
         CdnMetricsValue::new(metrics),
     )
     .with_context(|| format!("Failed to create CDN network {node_index}"))?;
+
+    tracing::warn!("cdn setup completed");
 
     // Configure gossipsub based on the command line options
     let gossip_config = GossipConfig {
@@ -475,6 +479,9 @@ where
     genesis.validate_fee_contract(&l1_client).await?;
 
     l1_client.spawn_tasks().await;
+
+    tracing::warn!("l1 client setup completed");
+
     let l1_genesis = match genesis.l1_finalized {
         L1Finalized::Block(b) => b,
         L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
@@ -607,6 +614,8 @@ where
         ))
     };
 
+    tracing::warn!("starting sequencer context");
+
     let mut ctx = SequencerContext::init(
         network_config,
         validator_config,
@@ -628,6 +637,7 @@ where
         ctx = ctx.wait_for_orchestrator(orchestrator_client);
     }
     Ok(ctx)
+
 }
 
 pub fn empty_builder_commitment() -> BuilderCommitment {

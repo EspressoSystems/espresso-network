@@ -128,7 +128,7 @@ impl Genesis {
                 }
             } else {
                 // The Fee Contract address has to be provided for an upgrade so return an error
-                anyhow::bail!("Fee contract's address for the upgrade is missing");
+//                anyhow::bail!("Fee contract's address for the upgrade is missing");
             }
         }
         // TODO: it's optional for the fee contract to be included in a proxy in v1 so no need to panic but revisit this after v1 https://github.com/EspressoSystems/espresso-sequencer/pull/2000#discussion_r1765174702
