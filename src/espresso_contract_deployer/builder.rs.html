@@ -193,9 +193,9 @@
 <a href=#193 id=193 data-nosnippet>193</a>                    // - It's a simple ERC20 token with minimal upgrade complexity
 <a href=#194 id=194 data-nosnippet>194</a>                    // - No emergency updates are expected for token functionality
 <a href=#195 id=195 data-nosnippet>195</a>                    // - SafeExitTimelock provides sufficient security for token operations
-<a href=#196 id=196 data-nosnippet>196</a>                    </span><span class="macro">tracing::info!</span>(<span class="string">"Transferring ownership to SafeExitTimelock"</span>);
-<a href=#197 id=197 data-nosnippet>197</a>                    <span class="comment">// deployer is the timelock owner
-<a href=#198 id=198 data-nosnippet>198</a>                    </span><span class="kw">if </span>use_timelock_owner {
+<a href=#196 id=196 data-nosnippet>196</a>                    // deployer is the timelock owner
+<a href=#197 id=197 data-nosnippet>197</a>                    </span><span class="kw">if </span>use_timelock_owner {
+<a href=#198 id=198 data-nosnippet>198</a>                        <span class="macro">tracing::info!</span>(<span class="string">"Transferring ownership to SafeExitTimelock"</span>);
 <a href=#199 id=199 data-nosnippet>199</a>                        <span class="kw">let </span>timelock_addr = contracts
 <a href=#200 id=200 data-nosnippet>200</a>                            .address(Contract::SafeExitTimelock)
 <a href=#201 id=201 data-nosnippet>201</a>                            .expect(<span class="string">"fail to get SafeExitTimelock address"</span>);
@@ -223,9 +223,9 @@
 <a href=#223 id=223 data-nosnippet>223</a>                        .expect(<span class="string">"fail to get EspTokenProxy address"</span>);
 <a href=#224 id=224 data-nosnippet>224</a>
 <a href=#225 id=225 data-nosnippet>225</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(use_timelock_owner) = <span class="self">self</span>.use_timelock_owner {
-<a href=#226 id=226 data-nosnippet>226</a>                        <span class="macro">tracing::info!</span>(<span class="string">"Transferring ownership to SafeExitTimelock"</span>);
-<a href=#227 id=227 data-nosnippet>227</a>                        <span class="comment">// deployer is the timelock owner
-<a href=#228 id=228 data-nosnippet>228</a>                        </span><span class="kw">if </span>use_timelock_owner {
+<a href=#226 id=226 data-nosnippet>226</a>                        <span class="comment">// deployer is the timelock owner
+<a href=#227 id=227 data-nosnippet>227</a>                        </span><span class="kw">if </span>use_timelock_owner {
+<a href=#228 id=228 data-nosnippet>228</a>                            <span class="macro">tracing::info!</span>(<span class="string">"Transferring ownership to SafeExitTimelock"</span>);
 <a href=#229 id=229 data-nosnippet>229</a>                            <span class="kw">let </span>timelock_addr = contracts
 <a href=#230 id=230 data-nosnippet>230</a>                                .address(Contract::SafeExitTimelock)
 <a href=#231 id=231 data-nosnippet>231</a>                                .expect(<span class="string">"fail to get SafeExitTimelock address"</span>);
@@ -495,283 +495,316 @@
 <a href=#495 id=495 data-nosnippet>495</a>                )
 <a href=#496 id=496 data-nosnippet>496</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#497 id=497 data-nosnippet>497</a>            },
-<a href=#498 id=498 data-nosnippet>498</a>            <span class="kw">_ </span>=&gt; {
-<a href=#499 id=499 data-nosnippet>499</a>                <span class="macro">panic!</span>(<span class="string">"Deploying {target} not supported."</span>);
-<a href=#500 id=500 data-nosnippet>500</a>            },
-<a href=#501 id=501 data-nosnippet>501</a>        }
-<a href=#502 id=502 data-nosnippet>502</a>        <span class="prelude-val">Ok</span>(())
-<a href=#503 id=503 data-nosnippet>503</a>    }
-<a href=#504 id=504 data-nosnippet>504</a>
-<a href=#505 id=505 data-nosnippet>505</a>    <span class="doccomment">/// Deploy all contracts up to and including stake table v1
-<a href=#506 id=506 data-nosnippet>506</a>    </span><span class="kw">pub async fn </span>deploy_to_stake_table_v1(<span class="kw-2">&amp;</span><span class="self">self</span>, contracts: <span class="kw-2">&amp;mut </span>Contracts) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#507 id=507 data-nosnippet>507</a>        <span class="comment">// Deploy timelocks first so they can be used as owners for other contracts
-<a href=#508 id=508 data-nosnippet>508</a>        </span><span class="self">self</span>.deploy(contracts, Contract::OpsTimelock).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#509 id=509 data-nosnippet>509</a>        <span class="self">self</span>.deploy(contracts, Contract::SafeExitTimelock).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#510 id=510 data-nosnippet>510</a>
-<a href=#511 id=511 data-nosnippet>511</a>        <span class="comment">// Then deploy other contracts
-<a href=#512 id=512 data-nosnippet>512</a>        </span><span class="self">self</span>.deploy(contracts, Contract::FeeContractProxy).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#513 id=513 data-nosnippet>513</a>        <span class="self">self</span>.deploy(contracts, Contract::EspTokenProxy).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#514 id=514 data-nosnippet>514</a>        <span class="self">self</span>.deploy(contracts, Contract::LightClientProxy).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#515 id=515 data-nosnippet>515</a>        <span class="self">self</span>.deploy(contracts, Contract::LightClientV2).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#516 id=516 data-nosnippet>516</a>        <span class="self">self</span>.deploy(contracts, Contract::StakeTableProxy).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#517 id=517 data-nosnippet>517</a>        <span class="prelude-val">Ok</span>(())
-<a href=#518 id=518 data-nosnippet>518</a>    }
-<a href=#519 id=519 data-nosnippet>519</a>
-<a href=#520 id=520 data-nosnippet>520</a>    <span class="doccomment">/// Deploy all contracts
-<a href=#521 id=521 data-nosnippet>521</a>    </span><span class="kw">pub async fn </span>deploy_all(<span class="kw-2">&amp;</span><span class="self">self</span>, contracts: <span class="kw-2">&amp;mut </span>Contracts) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#522 id=522 data-nosnippet>522</a>        <span class="self">self</span>.deploy_to_stake_table_v1(contracts).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#523 id=523 data-nosnippet>523</a>        <span class="self">self</span>.deploy(contracts, Contract::StakeTableV2).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#524 id=524 data-nosnippet>524</a>        <span class="prelude-val">Ok</span>(())
-<a href=#525 id=525 data-nosnippet>525</a>    }
-<a href=#526 id=526 data-nosnippet>526</a>
-<a href=#527 id=527 data-nosnippet>527</a>    <span class="comment">// Perform a timelock operation
-<a href=#528 id=528 data-nosnippet>528</a>    </span><span class="doccomment">///
-<a href=#529 id=529 data-nosnippet>529</a>    /// Parameters:
-<a href=#530 id=530 data-nosnippet>530</a>    /// - `contracts`: ref to deployed contracts
-<a href=#531 id=531 data-nosnippet>531</a>    ///
-<a href=#532 id=532 data-nosnippet>532</a>    </span><span class="kw">pub async fn </span>perform_timelock_operation_on_contract(
-<a href=#533 id=533 data-nosnippet>533</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#534 id=534 data-nosnippet>534</a>        contracts: <span class="kw-2">&amp;mut </span>Contracts,
-<a href=#535 id=535 data-nosnippet>535</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#536 id=536 data-nosnippet>536</a>        <span class="kw">let </span>timelock_operation_type = <span class="self">self
-<a href=#537 id=537 data-nosnippet>537</a>            </span>.timelock_operation_type
-<a href=#538 id=538 data-nosnippet>538</a>            .context(<span class="string">"Timelock operation type not found"</span>)<span class="question-mark">?</span>;
-<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">let </span>target_contract = <span class="self">self
-<a href=#540 id=540 data-nosnippet>540</a>            </span>.target_contract
-<a href=#541 id=541 data-nosnippet>541</a>            .clone()
-<a href=#542 id=542 data-nosnippet>542</a>            .context(<span class="string">"Timelock target not found"</span>)<span class="question-mark">?</span>;
-<a href=#543 id=543 data-nosnippet>543</a>        <span class="kw">let </span>value = <span class="self">self
-<a href=#544 id=544 data-nosnippet>544</a>            </span>.timelock_operation_value
-<a href=#545 id=545 data-nosnippet>545</a>            .context(<span class="string">"Timelock operation value not found"</span>)<span class="question-mark">?</span>;
-<a href=#546 id=546 data-nosnippet>546</a>        <span class="kw">let </span>function_signature = <span class="self">self
-<a href=#547 id=547 data-nosnippet>547</a>            </span>.timelock_operation_function_signature
-<a href=#548 id=548 data-nosnippet>548</a>            .as_ref()
-<a href=#549 id=549 data-nosnippet>549</a>            .context(<span class="string">"Timelock operation function signature not found"</span>)<span class="question-mark">?</span>;
-<a href=#550 id=550 data-nosnippet>550</a>        <span class="kw">let </span>function_values = <span class="self">self
-<a href=#551 id=551 data-nosnippet>551</a>            </span>.timelock_operation_function_values
-<a href=#552 id=552 data-nosnippet>552</a>            .clone()
-<a href=#553 id=553 data-nosnippet>553</a>            .context(<span class="string">"Timelock operation function values not found"</span>)<span class="question-mark">?</span>;
-<a href=#554 id=554 data-nosnippet>554</a>        <span class="kw">let </span>salt = <span class="self">self
-<a href=#555 id=555 data-nosnippet>555</a>            </span>.timelock_operation_salt
-<a href=#556 id=556 data-nosnippet>556</a>            .clone()
-<a href=#557 id=557 data-nosnippet>557</a>            .context(<span class="string">"Timelock operation salt not found"</span>)<span class="question-mark">?</span>;
-<a href=#558 id=558 data-nosnippet>558</a>        <span class="kw">let </span>delay = <span class="self">self
-<a href=#559 id=559 data-nosnippet>559</a>            </span>.timelock_operation_delay
-<a href=#560 id=560 data-nosnippet>560</a>            .context(<span class="string">"Timelock operation delay not found"</span>)<span class="question-mark">?</span>;
-<a href=#561 id=561 data-nosnippet>561</a>
-<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span>(target_addr, contract_type) = <span class="kw">match </span>target_contract.as_str() {
-<a href=#563 id=563 data-nosnippet>563</a>            <span class="string">"FeeContract" </span>=&gt; (
-<a href=#564 id=564 data-nosnippet>564</a>                contracts
-<a href=#565 id=565 data-nosnippet>565</a>                    .address(Contract::FeeContractProxy)
-<a href=#566 id=566 data-nosnippet>566</a>                    .context(<span class="string">"FeeContractProxy address not found"</span>)<span class="question-mark">?</span>,
-<a href=#567 id=567 data-nosnippet>567</a>                Contract::FeeContractProxy,
-<a href=#568 id=568 data-nosnippet>568</a>            ),
-<a href=#569 id=569 data-nosnippet>569</a>            <span class="string">"EspToken" </span>=&gt; (
-<a href=#570 id=570 data-nosnippet>570</a>                contracts
-<a href=#571 id=571 data-nosnippet>571</a>                    .address(Contract::EspTokenProxy)
-<a href=#572 id=572 data-nosnippet>572</a>                    .context(<span class="string">"EspTokenProxy address not found"</span>)<span class="question-mark">?</span>,
-<a href=#573 id=573 data-nosnippet>573</a>                Contract::EspTokenProxy,
-<a href=#574 id=574 data-nosnippet>574</a>            ),
-<a href=#575 id=575 data-nosnippet>575</a>            <span class="string">"LightClient" </span>=&gt; (
-<a href=#576 id=576 data-nosnippet>576</a>                contracts
-<a href=#577 id=577 data-nosnippet>577</a>                    .address(Contract::LightClientProxy)
-<a href=#578 id=578 data-nosnippet>578</a>                    .context(<span class="string">"LightClientProxy address not found"</span>)<span class="question-mark">?</span>,
-<a href=#579 id=579 data-nosnippet>579</a>                Contract::LightClientProxy,
-<a href=#580 id=580 data-nosnippet>580</a>            ),
-<a href=#581 id=581 data-nosnippet>581</a>            <span class="string">"StakeTable" </span>=&gt; (
-<a href=#582 id=582 data-nosnippet>582</a>                contracts
-<a href=#583 id=583 data-nosnippet>583</a>                    .address(Contract::StakeTableProxy)
-<a href=#584 id=584 data-nosnippet>584</a>                    .context(<span class="string">"StakeTableProxy address not found"</span>)<span class="question-mark">?</span>,
-<a href=#585 id=585 data-nosnippet>585</a>                Contract::StakeTableProxy,
-<a href=#586 id=586 data-nosnippet>586</a>            ),
-<a href=#587 id=587 data-nosnippet>587</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"Invalid target contract: {}"</span>, target_contract),
-<a href=#588 id=588 data-nosnippet>588</a>        };
-<a href=#589 id=589 data-nosnippet>589</a>
-<a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">let </span>function_calldata = encode_function_call(function_signature, function_values.clone())
-<a href=#591 id=591 data-nosnippet>591</a>            .context(<span class="string">"Failed to encode function data"</span>)<span class="question-mark">?</span>;
-<a href=#592 id=592 data-nosnippet>592</a>
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="comment">// Parse salt from string to B256
-<a href=#594 id=594 data-nosnippet>594</a>        </span><span class="kw">let </span>salt_bytes = <span class="kw">if </span>salt == <span class="string">"0x" </span>|| salt.is_empty() {
-<a href=#595 id=595 data-nosnippet>595</a>            B256::ZERO <span class="comment">// Use zero salt if empty
-<a href=#596 id=596 data-nosnippet>596</a>        </span>} <span class="kw">else if let </span><span class="prelude-val">Some</span>(stripped) = salt.strip_prefix(<span class="string">"0x"</span>) {
-<a href=#597 id=597 data-nosnippet>597</a>            B256::from_hex(stripped).context(<span class="string">"Invalid salt hex format"</span>)<span class="question-mark">?
-<a href=#598 id=598 data-nosnippet>598</a>        </span>} <span class="kw">else </span>{
-<a href=#599 id=599 data-nosnippet>599</a>            B256::from_hex(<span class="kw-2">&amp;</span>salt).context(<span class="string">"Invalid salt hex format"</span>)<span class="question-mark">?
-<a href=#600 id=600 data-nosnippet>600</a>        </span>};
-<a href=#601 id=601 data-nosnippet>601</a>
-<a href=#602 id=602 data-nosnippet>602</a>        <span class="kw">let </span>timelock_operation_data = TimelockOperationData {
-<a href=#603 id=603 data-nosnippet>603</a>            target: target_addr,
-<a href=#604 id=604 data-nosnippet>604</a>            value,
-<a href=#605 id=605 data-nosnippet>605</a>            data: function_calldata,
-<a href=#606 id=606 data-nosnippet>606</a>            predecessor: B256::ZERO, <span class="comment">// Default to no predecessor
-<a href=#607 id=607 data-nosnippet>607</a>            </span>salt: salt_bytes,
-<a href=#608 id=608 data-nosnippet>608</a>            delay,
-<a href=#609 id=609 data-nosnippet>609</a>        };
-<a href=#610 id=610 data-nosnippet>610</a>
-<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">match </span>timelock_operation_type {
-<a href=#612 id=612 data-nosnippet>612</a>            TimelockOperationType::Schedule =&gt; {
-<a href=#613 id=613 data-nosnippet>613</a>                <span class="kw">let </span>operation_id = schedule_timelock_operation(
-<a href=#614 id=614 data-nosnippet>614</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
-<a href=#615 id=615 data-nosnippet>615</a>                    contract_type,
-<a href=#616 id=616 data-nosnippet>616</a>                    timelock_operation_data,
-<a href=#617 id=617 data-nosnippet>617</a>                )
-<a href=#618 id=618 data-nosnippet>618</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#619 id=619 data-nosnippet>619</a>                <span class="macro">tracing::info!</span>(<span class="string">"Timelock operation scheduled with ID: {}"</span>, operation_id);
-<a href=#620 id=620 data-nosnippet>620</a>            },
-<a href=#621 id=621 data-nosnippet>621</a>            TimelockOperationType::Execute =&gt; {
-<a href=#622 id=622 data-nosnippet>622</a>                <span class="kw">let </span>tx_id = execute_timelock_operation(
-<a href=#623 id=623 data-nosnippet>623</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
-<a href=#624 id=624 data-nosnippet>624</a>                    contract_type,
-<a href=#625 id=625 data-nosnippet>625</a>                    timelock_operation_data,
-<a href=#626 id=626 data-nosnippet>626</a>                )
-<a href=#627 id=627 data-nosnippet>627</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#628 id=628 data-nosnippet>628</a>                <span class="macro">tracing::info!</span>(<span class="string">"Timelock operation executed with ID: {}"</span>, tx_id);
-<a href=#629 id=629 data-nosnippet>629</a>            },
-<a href=#630 id=630 data-nosnippet>630</a>            TimelockOperationType::Cancel =&gt; {
-<a href=#631 id=631 data-nosnippet>631</a>                <span class="kw">let </span>tx_id = cancel_timelock_operation(
-<a href=#632 id=632 data-nosnippet>632</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
-<a href=#633 id=633 data-nosnippet>633</a>                    contract_type,
-<a href=#634 id=634 data-nosnippet>634</a>                    timelock_operation_data,
-<a href=#635 id=635 data-nosnippet>635</a>                )
-<a href=#636 id=636 data-nosnippet>636</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#637 id=637 data-nosnippet>637</a>                <span class="macro">tracing::info!</span>(<span class="string">"Timelock operation cancelled with ID: {}"</span>, tx_id);
-<a href=#638 id=638 data-nosnippet>638</a>            },
-<a href=#639 id=639 data-nosnippet>639</a>        }
-<a href=#640 id=640 data-nosnippet>640</a>        <span class="prelude-val">Ok</span>(())
-<a href=#641 id=641 data-nosnippet>641</a>    }
-<a href=#642 id=642 data-nosnippet>642</a>
-<a href=#643 id=643 data-nosnippet>643</a>    <span class="doccomment">/// Propose ownership transfer from multisig to timelock
-<a href=#644 id=644 data-nosnippet>644</a>    </span><span class="kw">pub async fn </span>propose_transfer_ownership_to_timelock(
-<a href=#645 id=645 data-nosnippet>645</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#646 id=646 data-nosnippet>646</a>        contracts: <span class="kw-2">&amp;mut </span>Contracts,
-<a href=#647 id=647 data-nosnippet>647</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">let </span>multisig = <span class="self">self</span>.multisig.expect(
-<a href=#649 id=649 data-nosnippet>649</a>            <span class="string">"Multisig address must be set when proposing ownership transfer. Use \
-<a href=#650 id=650 data-nosnippet>650</a>             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS"</span>,
-<a href=#651 id=651 data-nosnippet>651</a>        );
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">let </span>target_contract = <span class="self">self</span>.target_contract.clone().ok_or_else(|| {
-<a href=#653 id=653 data-nosnippet>653</a>            <span class="macro">anyhow::anyhow!</span>(
-<a href=#654 id=654 data-nosnippet>654</a>                <span class="string">"Must provide target_contract when using \
-<a href=#655 id=655 data-nosnippet>655</a>                 --propose-transfer-ownership-to-timelock. Use --target-contract or \
-<a href=#656 id=656 data-nosnippet>656</a>                 ESPRESSO_TARGET_CONTRACT"
-<a href=#657 id=657 data-nosnippet>657</a>            </span>)
-<a href=#658 id=658 data-nosnippet>658</a>        })<span class="question-mark">?</span>;
-<a href=#659 id=659 data-nosnippet>659</a>
-<a href=#660 id=660 data-nosnippet>660</a>        <span class="kw">let </span>timelock_address = <span class="self">self</span>.timelock_address.ok_or_else(|| {
-<a href=#661 id=661 data-nosnippet>661</a>            <span class="macro">anyhow::anyhow!</span>(
-<a href=#662 id=662 data-nosnippet>662</a>                <span class="string">"Timelock address must be set when proposing ownership transfer. Use \
-<a href=#663 id=663 data-nosnippet>663</a>                 --timelock-address or ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS"
-<a href=#664 id=664 data-nosnippet>664</a>            </span>)
-<a href=#665 id=665 data-nosnippet>665</a>        })<span class="question-mark">?</span>;
-<a href=#666 id=666 data-nosnippet>666</a>
-<a href=#667 id=667 data-nosnippet>667</a>        <span class="comment">// Parse the contract type from string
-<a href=#668 id=668 data-nosnippet>668</a>        </span><span class="kw">let </span>contract_type = <span class="kw">match </span>target_contract.to_lowercase().as_str() {
-<a href=#669 id=669 data-nosnippet>669</a>            <span class="string">"lightclient" </span>| <span class="string">"lightclientproxy" </span>=&gt; Contract::LightClientProxy,
-<a href=#670 id=670 data-nosnippet>670</a>            <span class="string">"feecontract" </span>| <span class="string">"feecontractproxy" </span>=&gt; Contract::FeeContractProxy,
-<a href=#671 id=671 data-nosnippet>671</a>            <span class="string">"esptoken" </span>| <span class="string">"esptokenproxy" </span>=&gt; Contract::EspTokenProxy,
-<a href=#672 id=672 data-nosnippet>672</a>            <span class="string">"staketable" </span>| <span class="string">"staketableproxy" </span>=&gt; Contract::StakeTableProxy,
-<a href=#673 id=673 data-nosnippet>673</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(
-<a href=#674 id=674 data-nosnippet>674</a>                <span class="string">"Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-<a href=#675 id=675 data-nosnippet>675</a>                 staketable"</span>,
-<a href=#676 id=676 data-nosnippet>676</a>                target_contract
-<a href=#677 id=677 data-nosnippet>677</a>            ),
-<a href=#678 id=678 data-nosnippet>678</a>        };
-<a href=#679 id=679 data-nosnippet>679</a>
-<a href=#680 id=680 data-nosnippet>680</a>        <span class="macro">tracing::info!</span>(
-<a href=#681 id=681 data-nosnippet>681</a>            <span class="string">"Proposing transfer of ownership from multisig to timelock for {}"</span>,
-<a href=#682 id=682 data-nosnippet>682</a>            target_contract
-<a href=#683 id=683 data-nosnippet>683</a>        );
-<a href=#684 id=684 data-nosnippet>684</a>
-<a href=#685 id=685 data-nosnippet>685</a>        <span class="kw">let </span>contract = contract_type;
-<a href=#686 id=686 data-nosnippet>686</a>        <span class="kw">let </span>rpc_url = <span class="self">self</span>.rpc_url.clone();
-<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw">let </span>dry_run = <span class="self">self</span>.dry_run;
-<a href=#688 id=688 data-nosnippet>688</a>        <span class="kw">let </span>use_hardware_wallet = <span class="bool-val">false</span>;
-<a href=#689 id=689 data-nosnippet>689</a>        <span class="kw">let </span>result = transfer_ownership_from_multisig_to_timelock(
-<a href=#690 id=690 data-nosnippet>690</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
-<a href=#691 id=691 data-nosnippet>691</a>            contracts,
-<a href=#692 id=692 data-nosnippet>692</a>            contract,
-<a href=#693 id=693 data-nosnippet>693</a>            TransferOwnershipParams {
-<a href=#694 id=694 data-nosnippet>694</a>                new_owner: timelock_address,
-<a href=#695 id=695 data-nosnippet>695</a>                rpc_url,
-<a href=#696 id=696 data-nosnippet>696</a>                safe_addr: multisig,
-<a href=#697 id=697 data-nosnippet>697</a>                use_hardware_wallet,
-<a href=#698 id=698 data-nosnippet>698</a>                dry_run,
-<a href=#699 id=699 data-nosnippet>699</a>            },
-<a href=#700 id=700 data-nosnippet>700</a>        )
-<a href=#701 id=701 data-nosnippet>701</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#702 id=702 data-nosnippet>702</a>        <span class="kw">if </span>!result.status.success() {
-<a href=#703 id=703 data-nosnippet>703</a>            <span class="kw">let </span>stderr = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stderr);
-<a href=#704 id=704 data-nosnippet>704</a>            <span class="kw">let </span>stdout = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stdout);
-<a href=#705 id=705 data-nosnippet>705</a>            <span class="macro">anyhow::bail!</span>(
-<a href=#706 id=706 data-nosnippet>706</a>                <span class="string">"Failed to propose ownership transfer for {}: {}\nStdout: {}\nStderr: {}"</span>,
-<a href=#707 id=707 data-nosnippet>707</a>                contract,
-<a href=#708 id=708 data-nosnippet>708</a>                result.status,
-<a href=#709 id=709 data-nosnippet>709</a>                stdout,
-<a href=#710 id=710 data-nosnippet>710</a>                stderr
-<a href=#711 id=711 data-nosnippet>711</a>            );
-<a href=#712 id=712 data-nosnippet>712</a>        }
-<a href=#713 id=713 data-nosnippet>713</a>        <span class="macro">tracing::info!</span>(<span class="string">"Successfully proposed ownership transfer for {}"</span>, contract);
-<a href=#714 id=714 data-nosnippet>714</a>        <span class="prelude-val">Ok</span>(())
-<a href=#715 id=715 data-nosnippet>715</a>    }
-<a href=#716 id=716 data-nosnippet>716</a>
-<a href=#717 id=717 data-nosnippet>717</a>    <span class="doccomment">/// Transfer ownership from EOA to new owner
-<a href=#718 id=718 data-nosnippet>718</a>    </span><span class="kw">pub async fn </span>transfer_ownership_from_eoa(<span class="kw-2">&amp;</span><span class="self">self</span>, contracts: <span class="kw-2">&amp;mut </span>Contracts) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#719 id=719 data-nosnippet>719</a>        <span class="kw">let </span>transfer_ownership_from_eoa = <span class="self">self
-<a href=#720 id=720 data-nosnippet>720</a>            </span>.transfer_ownership_from_eoa
-<a href=#721 id=721 data-nosnippet>721</a>            .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"transfer_ownership_from_eoa flag not set"</span>))<span class="question-mark">?</span>;
-<a href=#722 id=722 data-nosnippet>722</a>
-<a href=#723 id=723 data-nosnippet>723</a>        <span class="kw">if </span>!transfer_ownership_from_eoa {
-<a href=#724 id=724 data-nosnippet>724</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#725 id=725 data-nosnippet>725</a>        }
-<a href=#726 id=726 data-nosnippet>726</a>
-<a href=#727 id=727 data-nosnippet>727</a>        <span class="kw">let </span>target_contract = <span class="self">self</span>.target_contract.clone().ok_or_else(|| {
-<a href=#728 id=728 data-nosnippet>728</a>            <span class="macro">anyhow::anyhow!</span>(<span class="string">"Must provide target_contract when using transfer_ownership_from_eoa"</span>)
-<a href=#729 id=729 data-nosnippet>729</a>        })<span class="question-mark">?</span>;
-<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span>new_owner = <span class="self">self</span>.transfer_ownership_new_owner.ok_or_else(|| {
-<a href=#731 id=731 data-nosnippet>731</a>            <span class="macro">anyhow::anyhow!</span>(
-<a href=#732 id=732 data-nosnippet>732</a>                <span class="string">"Must provide transfer_ownership_new_owner when using transfer_ownership_from_eoa"
-<a href=#733 id=733 data-nosnippet>733</a>            </span>)
-<a href=#734 id=734 data-nosnippet>734</a>        })<span class="question-mark">?</span>;
-<a href=#735 id=735 data-nosnippet>735</a>
-<a href=#736 id=736 data-nosnippet>736</a>        <span class="comment">// Parse the contract type from string
-<a href=#737 id=737 data-nosnippet>737</a>        </span><span class="kw">let </span>contract_type = <span class="kw">match </span>target_contract.to_lowercase().as_str() {
-<a href=#738 id=738 data-nosnippet>738</a>            <span class="string">"lightclient" </span>| <span class="string">"lightclientproxy" </span>=&gt; Contract::LightClientProxy,
-<a href=#739 id=739 data-nosnippet>739</a>            <span class="string">"feecontract" </span>| <span class="string">"feecontractproxy" </span>=&gt; Contract::FeeContractProxy,
-<a href=#740 id=740 data-nosnippet>740</a>            <span class="string">"esptoken" </span>| <span class="string">"esptokenproxy" </span>=&gt; Contract::EspTokenProxy,
-<a href=#741 id=741 data-nosnippet>741</a>            <span class="string">"staketable" </span>| <span class="string">"staketableproxy" </span>=&gt; Contract::StakeTableProxy,
-<a href=#742 id=742 data-nosnippet>742</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(
-<a href=#743 id=743 data-nosnippet>743</a>                <span class="string">"Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-<a href=#744 id=744 data-nosnippet>744</a>                 staketable"</span>,
-<a href=#745 id=745 data-nosnippet>745</a>                target_contract
-<a href=#746 id=746 data-nosnippet>746</a>            ),
-<a href=#747 id=747 data-nosnippet>747</a>        };
-<a href=#748 id=748 data-nosnippet>748</a>
-<a href=#749 id=749 data-nosnippet>749</a>        <span class="comment">// Get the contract address from the contracts map
-<a href=#750 id=750 data-nosnippet>750</a>        </span><span class="kw">let </span>contract_address = contracts.address(contract_type).ok_or_else(|| {
-<a href=#751 id=751 data-nosnippet>751</a>            <span class="macro">anyhow::anyhow!</span>(
-<a href=#752 id=752 data-nosnippet>752</a>                <span class="string">"Contract {} not found in deployed contracts"</span>,
-<a href=#753 id=753 data-nosnippet>753</a>                target_contract
-<a href=#754 id=754 data-nosnippet>754</a>            )
-<a href=#755 id=755 data-nosnippet>755</a>        })<span class="question-mark">?</span>;
-<a href=#756 id=756 data-nosnippet>756</a>
-<a href=#757 id=757 data-nosnippet>757</a>        <span class="macro">tracing::info!</span>(
-<a href=#758 id=758 data-nosnippet>758</a>            <span class="string">"Transferring ownership of {} from EOA to {}"</span>,
-<a href=#759 id=759 data-nosnippet>759</a>            target_contract,
-<a href=#760 id=760 data-nosnippet>760</a>            new_owner
-<a href=#761 id=761 data-nosnippet>761</a>        );
-<a href=#762 id=762 data-nosnippet>762</a>
-<a href=#763 id=763 data-nosnippet>763</a>        <span class="comment">// Use the existing transfer_ownership function from lib.rs
-<a href=#764 id=764 data-nosnippet>764</a>        </span><span class="kw">let </span>receipt =
-<a href=#765 id=765 data-nosnippet>765</a>            <span class="kw">crate</span>::transfer_ownership(<span class="kw-2">&amp;</span><span class="self">self</span>.deployer, contract_type, contract_address, new_owner)
-<a href=#766 id=766 data-nosnippet>766</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#767 id=767 data-nosnippet>767</a>
-<a href=#768 id=768 data-nosnippet>768</a>        <span class="macro">tracing::info!</span>(
-<a href=#769 id=769 data-nosnippet>769</a>            <span class="string">"Successfully transferred ownership of {} to {}. Transaction: {}"</span>,
-<a href=#770 id=770 data-nosnippet>770</a>            target_contract,
-<a href=#771 id=771 data-nosnippet>771</a>            new_owner,
-<a href=#772 id=772 data-nosnippet>772</a>            receipt.transaction_hash
-<a href=#773 id=773 data-nosnippet>773</a>        );
-<a href=#774 id=774 data-nosnippet>774</a>
-<a href=#775 id=775 data-nosnippet>775</a>        <span class="prelude-val">Ok</span>(())
-<a href=#776 id=776 data-nosnippet>776</a>    }
-<a href=#777 id=777 data-nosnippet>777</a>}</code></pre></div></section></main></body></html>
+<a href=#498 id=498 data-nosnippet>498</a>            Contract::RewardClaimProxy =&gt; {
+<a href=#499 id=499 data-nosnippet>499</a>                <span class="kw">let </span>token_addr = contracts
+<a href=#500 id=500 data-nosnippet>500</a>                    .address(Contract::EspTokenProxy)
+<a href=#501 id=501 data-nosnippet>501</a>                    .context(<span class="string">"no ESP token proxy address"</span>)<span class="question-mark">?</span>;
+<a href=#502 id=502 data-nosnippet>502</a>                <span class="kw">let </span>lc_addr = contracts
+<a href=#503 id=503 data-nosnippet>503</a>                    .address(Contract::LightClientProxy)
+<a href=#504 id=504 data-nosnippet>504</a>                    .context(<span class="string">"no LightClient proxy address"</span>)<span class="question-mark">?</span>;
+<a href=#505 id=505 data-nosnippet>505</a>                <span class="kw">let </span>addr = <span class="kw">crate</span>::deploy_reward_claim_proxy(
+<a href=#506 id=506 data-nosnippet>506</a>                    provider, contracts, token_addr, lc_addr, admin,
+<a href=#507 id=507 data-nosnippet>507</a>                )
+<a href=#508 id=508 data-nosnippet>508</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#509 id=509 data-nosnippet>509</a>
+<a href=#510 id=510 data-nosnippet>510</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(use_timelock_owner) = <span class="self">self</span>.use_timelock_owner {
+<a href=#511 id=511 data-nosnippet>511</a>                    <span class="comment">// RewardClaim uses SafeExitTimelock because:
+<a href=#512 id=512 data-nosnippet>512</a>                    // - It is not expected to require urgent upgrades.
+<a href=#513 id=513 data-nosnippet>513</a>                    // - In emergency situations it can be paused.
+<a href=#514 id=514 data-nosnippet>514</a>                    // - It can mint ESP tokens, users should have enough time
+<a href=#515 id=515 data-nosnippet>515</a>                    //   to react if they do not agree with an upgrade.
+<a href=#516 id=516 data-nosnippet>516</a>                    </span><span class="macro">tracing::info!</span>(<span class="string">"Transferring ownership to SafeExitTimelock"</span>);
+<a href=#517 id=517 data-nosnippet>517</a>                    <span class="kw">if </span>use_timelock_owner {
+<a href=#518 id=518 data-nosnippet>518</a>                        <span class="kw">let </span>timelock_addr = contracts
+<a href=#519 id=519 data-nosnippet>519</a>                            .address(Contract::SafeExitTimelock)
+<a href=#520 id=520 data-nosnippet>520</a>                            .expect(<span class="string">"fail to get SafeExitTimelock address"</span>);
+<a href=#521 id=521 data-nosnippet>521</a>                        <span class="kw">crate</span>::transfer_ownership(provider, target, addr, timelock_addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#522 id=522 data-nosnippet>522</a>                    }
+<a href=#523 id=523 data-nosnippet>523</a>                } <span class="kw">else if let </span><span class="prelude-val">Some</span>(multisig) = <span class="self">self</span>.multisig {
+<a href=#524 id=524 data-nosnippet>524</a>                    <span class="macro">tracing::info!</span>(<span class="string">"Transferring ownership to multisig: {:?}"</span>, multisig);
+<a href=#525 id=525 data-nosnippet>525</a>                    <span class="kw">crate</span>::transfer_ownership(provider, target, addr, multisig).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#526 id=526 data-nosnippet>526</a>                }
+<a href=#527 id=527 data-nosnippet>527</a>            },
+<a href=#528 id=528 data-nosnippet>528</a>            <span class="kw">_ </span>=&gt; {
+<a href=#529 id=529 data-nosnippet>529</a>                <span class="macro">panic!</span>(<span class="string">"Deploying {target} not supported."</span>);
+<a href=#530 id=530 data-nosnippet>530</a>            },
+<a href=#531 id=531 data-nosnippet>531</a>        }
+<a href=#532 id=532 data-nosnippet>532</a>        <span class="prelude-val">Ok</span>(())
+<a href=#533 id=533 data-nosnippet>533</a>    }
+<a href=#534 id=534 data-nosnippet>534</a>
+<a href=#535 id=535 data-nosnippet>535</a>    <span class="doccomment">/// Deploy all contracts up to and including stake table v1
+<a href=#536 id=536 data-nosnippet>536</a>    </span><span class="kw">pub async fn </span>deploy_to_stake_table_v1(<span class="kw-2">&amp;</span><span class="self">self</span>, contracts: <span class="kw-2">&amp;mut </span>Contracts) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="comment">// Deploy timelocks first so they can be used as owners for other contracts
+<a href=#538 id=538 data-nosnippet>538</a>        </span><span class="self">self</span>.deploy(contracts, Contract::OpsTimelock).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#539 id=539 data-nosnippet>539</a>        <span class="self">self</span>.deploy(contracts, Contract::SafeExitTimelock).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#540 id=540 data-nosnippet>540</a>
+<a href=#541 id=541 data-nosnippet>541</a>        <span class="comment">// Then deploy other contracts
+<a href=#542 id=542 data-nosnippet>542</a>        </span><span class="self">self</span>.deploy(contracts, Contract::FeeContractProxy).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#543 id=543 data-nosnippet>543</a>        <span class="self">self</span>.deploy(contracts, Contract::EspTokenProxy).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#544 id=544 data-nosnippet>544</a>        <span class="self">self</span>.deploy(contracts, Contract::LightClientProxy).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#545 id=545 data-nosnippet>545</a>        <span class="self">self</span>.deploy(contracts, Contract::LightClientV2).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#546 id=546 data-nosnippet>546</a>        <span class="self">self</span>.deploy(contracts, Contract::StakeTableProxy).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#547 id=547 data-nosnippet>547</a>        <span class="prelude-val">Ok</span>(())
+<a href=#548 id=548 data-nosnippet>548</a>    }
+<a href=#549 id=549 data-nosnippet>549</a>
+<a href=#550 id=550 data-nosnippet>550</a>    <span class="doccomment">/// Deploy all contracts
+<a href=#551 id=551 data-nosnippet>551</a>    </span><span class="kw">pub async fn </span>deploy_all(<span class="kw-2">&amp;</span><span class="self">self</span>, contracts: <span class="kw-2">&amp;mut </span>Contracts) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#552 id=552 data-nosnippet>552</a>        <span class="self">self</span>.deploy_to_stake_table_v1(contracts).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#553 id=553 data-nosnippet>553</a>        <span class="self">self</span>.deploy(contracts, Contract::StakeTableV2).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#554 id=554 data-nosnippet>554</a>        <span class="self">self</span>.deploy(contracts, Contract::LightClientV3).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#555 id=555 data-nosnippet>555</a>        <span class="self">self</span>.deploy(contracts, Contract::RewardClaimProxy).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#556 id=556 data-nosnippet>556</a>        <span class="self">self</span>.deploy(contracts, Contract::EspTokenV2).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#557 id=557 data-nosnippet>557</a>        <span class="prelude-val">Ok</span>(())
+<a href=#558 id=558 data-nosnippet>558</a>    }
+<a href=#559 id=559 data-nosnippet>559</a>
+<a href=#560 id=560 data-nosnippet>560</a>    <span class="comment">// Perform a timelock operation
+<a href=#561 id=561 data-nosnippet>561</a>    </span><span class="doccomment">///
+<a href=#562 id=562 data-nosnippet>562</a>    /// Parameters:
+<a href=#563 id=563 data-nosnippet>563</a>    /// - `contracts`: ref to deployed contracts
+<a href=#564 id=564 data-nosnippet>564</a>    ///
+<a href=#565 id=565 data-nosnippet>565</a>    </span><span class="kw">pub async fn </span>perform_timelock_operation_on_contract(
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#567 id=567 data-nosnippet>567</a>        contracts: <span class="kw-2">&amp;mut </span>Contracts,
+<a href=#568 id=568 data-nosnippet>568</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#569 id=569 data-nosnippet>569</a>        <span class="kw">let </span>timelock_operation_type = <span class="self">self
+<a href=#570 id=570 data-nosnippet>570</a>            </span>.timelock_operation_type
+<a href=#571 id=571 data-nosnippet>571</a>            .context(<span class="string">"Timelock operation type not found"</span>)<span class="question-mark">?</span>;
+<a href=#572 id=572 data-nosnippet>572</a>        <span class="kw">let </span>target_contract = <span class="self">self
+<a href=#573 id=573 data-nosnippet>573</a>            </span>.target_contract
+<a href=#574 id=574 data-nosnippet>574</a>            .clone()
+<a href=#575 id=575 data-nosnippet>575</a>            .context(<span class="string">"Timelock target not found"</span>)<span class="question-mark">?</span>;
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>value = <span class="self">self
+<a href=#577 id=577 data-nosnippet>577</a>            </span>.timelock_operation_value
+<a href=#578 id=578 data-nosnippet>578</a>            .context(<span class="string">"Timelock operation value not found"</span>)<span class="question-mark">?</span>;
+<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">let </span>function_signature = <span class="self">self
+<a href=#580 id=580 data-nosnippet>580</a>            </span>.timelock_operation_function_signature
+<a href=#581 id=581 data-nosnippet>581</a>            .as_ref()
+<a href=#582 id=582 data-nosnippet>582</a>            .context(<span class="string">"Timelock operation function signature not found"</span>)<span class="question-mark">?</span>;
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">let </span>function_values = <span class="self">self
+<a href=#584 id=584 data-nosnippet>584</a>            </span>.timelock_operation_function_values
+<a href=#585 id=585 data-nosnippet>585</a>            .clone()
+<a href=#586 id=586 data-nosnippet>586</a>            .context(<span class="string">"Timelock operation function values not found"</span>)<span class="question-mark">?</span>;
+<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">let </span>salt = <span class="self">self
+<a href=#588 id=588 data-nosnippet>588</a>            </span>.timelock_operation_salt
+<a href=#589 id=589 data-nosnippet>589</a>            .clone()
+<a href=#590 id=590 data-nosnippet>590</a>            .context(<span class="string">"Timelock operation salt not found"</span>)<span class="question-mark">?</span>;
+<a href=#591 id=591 data-nosnippet>591</a>        <span class="kw">let </span>delay = <span class="self">self
+<a href=#592 id=592 data-nosnippet>592</a>            </span>.timelock_operation_delay
+<a href=#593 id=593 data-nosnippet>593</a>            .context(<span class="string">"Timelock operation delay not found"</span>)<span class="question-mark">?</span>;
+<a href=#594 id=594 data-nosnippet>594</a>
+<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">let </span>(target_addr, contract_type) = <span class="kw">match </span>target_contract.as_str() {
+<a href=#596 id=596 data-nosnippet>596</a>            <span class="string">"FeeContract" </span>=&gt; (
+<a href=#597 id=597 data-nosnippet>597</a>                contracts
+<a href=#598 id=598 data-nosnippet>598</a>                    .address(Contract::FeeContractProxy)
+<a href=#599 id=599 data-nosnippet>599</a>                    .context(<span class="string">"FeeContractProxy address not found"</span>)<span class="question-mark">?</span>,
+<a href=#600 id=600 data-nosnippet>600</a>                Contract::FeeContractProxy,
+<a href=#601 id=601 data-nosnippet>601</a>            ),
+<a href=#602 id=602 data-nosnippet>602</a>            <span class="string">"EspToken" </span>=&gt; (
+<a href=#603 id=603 data-nosnippet>603</a>                contracts
+<a href=#604 id=604 data-nosnippet>604</a>                    .address(Contract::EspTokenProxy)
+<a href=#605 id=605 data-nosnippet>605</a>                    .context(<span class="string">"EspTokenProxy address not found"</span>)<span class="question-mark">?</span>,
+<a href=#606 id=606 data-nosnippet>606</a>                Contract::EspTokenProxy,
+<a href=#607 id=607 data-nosnippet>607</a>            ),
+<a href=#608 id=608 data-nosnippet>608</a>            <span class="string">"LightClient" </span>=&gt; (
+<a href=#609 id=609 data-nosnippet>609</a>                contracts
+<a href=#610 id=610 data-nosnippet>610</a>                    .address(Contract::LightClientProxy)
+<a href=#611 id=611 data-nosnippet>611</a>                    .context(<span class="string">"LightClientProxy address not found"</span>)<span class="question-mark">?</span>,
+<a href=#612 id=612 data-nosnippet>612</a>                Contract::LightClientProxy,
+<a href=#613 id=613 data-nosnippet>613</a>            ),
+<a href=#614 id=614 data-nosnippet>614</a>            <span class="string">"StakeTable" </span>=&gt; (
+<a href=#615 id=615 data-nosnippet>615</a>                contracts
+<a href=#616 id=616 data-nosnippet>616</a>                    .address(Contract::StakeTableProxy)
+<a href=#617 id=617 data-nosnippet>617</a>                    .context(<span class="string">"StakeTableProxy address not found"</span>)<span class="question-mark">?</span>,
+<a href=#618 id=618 data-nosnippet>618</a>                Contract::StakeTableProxy,
+<a href=#619 id=619 data-nosnippet>619</a>            ),
+<a href=#620 id=620 data-nosnippet>620</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"Invalid target contract: {}"</span>, target_contract),
+<a href=#621 id=621 data-nosnippet>621</a>        };
+<a href=#622 id=622 data-nosnippet>622</a>
+<a href=#623 id=623 data-nosnippet>623</a>        <span class="kw">let </span>function_calldata = encode_function_call(function_signature, function_values.clone())
+<a href=#624 id=624 data-nosnippet>624</a>            .context(<span class="string">"Failed to encode function data"</span>)<span class="question-mark">?</span>;
+<a href=#625 id=625 data-nosnippet>625</a>
+<a href=#626 id=626 data-nosnippet>626</a>        <span class="comment">// Parse salt from string to B256
+<a href=#627 id=627 data-nosnippet>627</a>        </span><span class="kw">let </span>salt_bytes = <span class="kw">if </span>salt == <span class="string">"0x" </span>|| salt.is_empty() {
+<a href=#628 id=628 data-nosnippet>628</a>            B256::ZERO <span class="comment">// Use zero salt if empty
+<a href=#629 id=629 data-nosnippet>629</a>        </span>} <span class="kw">else if let </span><span class="prelude-val">Some</span>(stripped) = salt.strip_prefix(<span class="string">"0x"</span>) {
+<a href=#630 id=630 data-nosnippet>630</a>            B256::from_hex(stripped).context(<span class="string">"Invalid salt hex format"</span>)<span class="question-mark">?
+<a href=#631 id=631 data-nosnippet>631</a>        </span>} <span class="kw">else </span>{
+<a href=#632 id=632 data-nosnippet>632</a>            B256::from_hex(<span class="kw-2">&amp;</span>salt).context(<span class="string">"Invalid salt hex format"</span>)<span class="question-mark">?
+<a href=#633 id=633 data-nosnippet>633</a>        </span>};
+<a href=#634 id=634 data-nosnippet>634</a>
+<a href=#635 id=635 data-nosnippet>635</a>        <span class="kw">let </span>timelock_operation_data = TimelockOperationData {
+<a href=#636 id=636 data-nosnippet>636</a>            target: target_addr,
+<a href=#637 id=637 data-nosnippet>637</a>            value,
+<a href=#638 id=638 data-nosnippet>638</a>            data: function_calldata,
+<a href=#639 id=639 data-nosnippet>639</a>            predecessor: B256::ZERO, <span class="comment">// Default to no predecessor
+<a href=#640 id=640 data-nosnippet>640</a>            </span>salt: salt_bytes,
+<a href=#641 id=641 data-nosnippet>641</a>            delay,
+<a href=#642 id=642 data-nosnippet>642</a>        };
+<a href=#643 id=643 data-nosnippet>643</a>
+<a href=#644 id=644 data-nosnippet>644</a>        <span class="kw">match </span>timelock_operation_type {
+<a href=#645 id=645 data-nosnippet>645</a>            TimelockOperationType::Schedule =&gt; {
+<a href=#646 id=646 data-nosnippet>646</a>                <span class="kw">let </span>operation_id = schedule_timelock_operation(
+<a href=#647 id=647 data-nosnippet>647</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
+<a href=#648 id=648 data-nosnippet>648</a>                    contract_type,
+<a href=#649 id=649 data-nosnippet>649</a>                    timelock_operation_data,
+<a href=#650 id=650 data-nosnippet>650</a>                )
+<a href=#651 id=651 data-nosnippet>651</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="macro">tracing::info!</span>(<span class="string">"Timelock operation scheduled with ID: {}"</span>, operation_id);
+<a href=#653 id=653 data-nosnippet>653</a>            },
+<a href=#654 id=654 data-nosnippet>654</a>            TimelockOperationType::Execute =&gt; {
+<a href=#655 id=655 data-nosnippet>655</a>                <span class="kw">let </span>tx_id = execute_timelock_operation(
+<a href=#656 id=656 data-nosnippet>656</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
+<a href=#657 id=657 data-nosnippet>657</a>                    contract_type,
+<a href=#658 id=658 data-nosnippet>658</a>                    timelock_operation_data,
+<a href=#659 id=659 data-nosnippet>659</a>                )
+<a href=#660 id=660 data-nosnippet>660</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#661 id=661 data-nosnippet>661</a>                <span class="macro">tracing::info!</span>(<span class="string">"Timelock operation executed with ID: {}"</span>, tx_id);
+<a href=#662 id=662 data-nosnippet>662</a>            },
+<a href=#663 id=663 data-nosnippet>663</a>            TimelockOperationType::Cancel =&gt; {
+<a href=#664 id=664 data-nosnippet>664</a>                <span class="kw">let </span>tx_id = cancel_timelock_operation(
+<a href=#665 id=665 data-nosnippet>665</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
+<a href=#666 id=666 data-nosnippet>666</a>                    contract_type,
+<a href=#667 id=667 data-nosnippet>667</a>                    timelock_operation_data,
+<a href=#668 id=668 data-nosnippet>668</a>                )
+<a href=#669 id=669 data-nosnippet>669</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#670 id=670 data-nosnippet>670</a>                <span class="macro">tracing::info!</span>(<span class="string">"Timelock operation cancelled with ID: {}"</span>, tx_id);
+<a href=#671 id=671 data-nosnippet>671</a>            },
+<a href=#672 id=672 data-nosnippet>672</a>        }
+<a href=#673 id=673 data-nosnippet>673</a>        <span class="prelude-val">Ok</span>(())
+<a href=#674 id=674 data-nosnippet>674</a>    }
+<a href=#675 id=675 data-nosnippet>675</a>
+<a href=#676 id=676 data-nosnippet>676</a>    <span class="doccomment">/// Propose ownership transfer from multisig to timelock
+<a href=#677 id=677 data-nosnippet>677</a>    </span><span class="kw">pub async fn </span>propose_transfer_ownership_to_timelock(
+<a href=#678 id=678 data-nosnippet>678</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#679 id=679 data-nosnippet>679</a>        contracts: <span class="kw-2">&amp;mut </span>Contracts,
+<a href=#680 id=680 data-nosnippet>680</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#681 id=681 data-nosnippet>681</a>        <span class="kw">let </span>multisig = <span class="self">self</span>.multisig.expect(
+<a href=#682 id=682 data-nosnippet>682</a>            <span class="string">"Multisig address must be set when proposing ownership transfer. Use \
+<a href=#683 id=683 data-nosnippet>683</a>             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS"</span>,
+<a href=#684 id=684 data-nosnippet>684</a>        );
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="kw">let </span>target_contract = <span class="self">self</span>.target_contract.clone().ok_or_else(|| {
+<a href=#686 id=686 data-nosnippet>686</a>            <span class="macro">anyhow::anyhow!</span>(
+<a href=#687 id=687 data-nosnippet>687</a>                <span class="string">"Must provide target_contract when using \
+<a href=#688 id=688 data-nosnippet>688</a>                 --propose-transfer-ownership-to-timelock. Use --target-contract or \
+<a href=#689 id=689 data-nosnippet>689</a>                 ESPRESSO_TARGET_CONTRACT"
+<a href=#690 id=690 data-nosnippet>690</a>            </span>)
+<a href=#691 id=691 data-nosnippet>691</a>        })<span class="question-mark">?</span>;
+<a href=#692 id=692 data-nosnippet>692</a>
+<a href=#693 id=693 data-nosnippet>693</a>        <span class="kw">let </span>timelock_address = <span class="self">self</span>.timelock_address.ok_or_else(|| {
+<a href=#694 id=694 data-nosnippet>694</a>            <span class="macro">anyhow::anyhow!</span>(
+<a href=#695 id=695 data-nosnippet>695</a>                <span class="string">"Timelock address must be set when proposing ownership transfer. Use \
+<a href=#696 id=696 data-nosnippet>696</a>                 --timelock-address or ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS"
+<a href=#697 id=697 data-nosnippet>697</a>            </span>)
+<a href=#698 id=698 data-nosnippet>698</a>        })<span class="question-mark">?</span>;
+<a href=#699 id=699 data-nosnippet>699</a>
+<a href=#700 id=700 data-nosnippet>700</a>        <span class="comment">// Parse the contract type from string
+<a href=#701 id=701 data-nosnippet>701</a>        </span><span class="kw">let </span>contract_type = <span class="kw">match </span>target_contract.to_lowercase().as_str() {
+<a href=#702 id=702 data-nosnippet>702</a>            <span class="string">"lightclient" </span>| <span class="string">"lightclientproxy" </span>=&gt; Contract::LightClientProxy,
+<a href=#703 id=703 data-nosnippet>703</a>            <span class="string">"feecontract" </span>| <span class="string">"feecontractproxy" </span>=&gt; Contract::FeeContractProxy,
+<a href=#704 id=704 data-nosnippet>704</a>            <span class="string">"esptoken" </span>| <span class="string">"esptokenproxy" </span>=&gt; Contract::EspTokenProxy,
+<a href=#705 id=705 data-nosnippet>705</a>            <span class="string">"staketable" </span>| <span class="string">"staketableproxy" </span>=&gt; Contract::StakeTableProxy,
+<a href=#706 id=706 data-nosnippet>706</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(
+<a href=#707 id=707 data-nosnippet>707</a>                <span class="string">"Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
+<a href=#708 id=708 data-nosnippet>708</a>                 staketable"</span>,
+<a href=#709 id=709 data-nosnippet>709</a>                target_contract
+<a href=#710 id=710 data-nosnippet>710</a>            ),
+<a href=#711 id=711 data-nosnippet>711</a>        };
+<a href=#712 id=712 data-nosnippet>712</a>
+<a href=#713 id=713 data-nosnippet>713</a>        <span class="macro">tracing::info!</span>(
+<a href=#714 id=714 data-nosnippet>714</a>            <span class="string">"Proposing transfer of ownership from multisig to timelock for {}"</span>,
+<a href=#715 id=715 data-nosnippet>715</a>            target_contract
+<a href=#716 id=716 data-nosnippet>716</a>        );
+<a href=#717 id=717 data-nosnippet>717</a>
+<a href=#718 id=718 data-nosnippet>718</a>        <span class="kw">let </span>contract = contract_type;
+<a href=#719 id=719 data-nosnippet>719</a>        <span class="kw">let </span>rpc_url = <span class="self">self</span>.rpc_url.clone();
+<a href=#720 id=720 data-nosnippet>720</a>        <span class="kw">let </span>dry_run = <span class="self">self</span>.dry_run;
+<a href=#721 id=721 data-nosnippet>721</a>        <span class="kw">let </span>use_hardware_wallet = <span class="bool-val">false</span>;
+<a href=#722 id=722 data-nosnippet>722</a>        <span class="kw">let </span>result = transfer_ownership_from_multisig_to_timelock(
+<a href=#723 id=723 data-nosnippet>723</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.deployer,
+<a href=#724 id=724 data-nosnippet>724</a>            contracts,
+<a href=#725 id=725 data-nosnippet>725</a>            contract,
+<a href=#726 id=726 data-nosnippet>726</a>            TransferOwnershipParams {
+<a href=#727 id=727 data-nosnippet>727</a>                new_owner: timelock_address,
+<a href=#728 id=728 data-nosnippet>728</a>                rpc_url,
+<a href=#729 id=729 data-nosnippet>729</a>                safe_addr: multisig,
+<a href=#730 id=730 data-nosnippet>730</a>                use_hardware_wallet,
+<a href=#731 id=731 data-nosnippet>731</a>                dry_run,
+<a href=#732 id=732 data-nosnippet>732</a>            },
+<a href=#733 id=733 data-nosnippet>733</a>        )
+<a href=#734 id=734 data-nosnippet>734</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#735 id=735 data-nosnippet>735</a>        <span class="kw">if </span>!result.status.success() {
+<a href=#736 id=736 data-nosnippet>736</a>            <span class="kw">let </span>stderr = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stderr);
+<a href=#737 id=737 data-nosnippet>737</a>            <span class="kw">let </span>stdout = String::from_utf8_lossy(<span class="kw-2">&amp;</span>result.stdout);
+<a href=#738 id=738 data-nosnippet>738</a>            <span class="macro">anyhow::bail!</span>(
+<a href=#739 id=739 data-nosnippet>739</a>                <span class="string">"Failed to propose ownership transfer for {}: {}\nStdout: {}\nStderr: {}"</span>,
+<a href=#740 id=740 data-nosnippet>740</a>                contract,
+<a href=#741 id=741 data-nosnippet>741</a>                result.status,
+<a href=#742 id=742 data-nosnippet>742</a>                stdout,
+<a href=#743 id=743 data-nosnippet>743</a>                stderr
+<a href=#744 id=744 data-nosnippet>744</a>            );
+<a href=#745 id=745 data-nosnippet>745</a>        }
+<a href=#746 id=746 data-nosnippet>746</a>        <span class="macro">tracing::info!</span>(<span class="string">"Successfully proposed ownership transfer for {}"</span>, contract);
+<a href=#747 id=747 data-nosnippet>747</a>        <span class="prelude-val">Ok</span>(())
+<a href=#748 id=748 data-nosnippet>748</a>    }
+<a href=#749 id=749 data-nosnippet>749</a>
+<a href=#750 id=750 data-nosnippet>750</a>    <span class="doccomment">/// Transfer ownership from EOA to new owner
+<a href=#751 id=751 data-nosnippet>751</a>    </span><span class="kw">pub async fn </span>transfer_ownership_from_eoa(<span class="kw-2">&amp;</span><span class="self">self</span>, contracts: <span class="kw-2">&amp;mut </span>Contracts) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#752 id=752 data-nosnippet>752</a>        <span class="kw">let </span>transfer_ownership_from_eoa = <span class="self">self
+<a href=#753 id=753 data-nosnippet>753</a>            </span>.transfer_ownership_from_eoa
+<a href=#754 id=754 data-nosnippet>754</a>            .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"transfer_ownership_from_eoa flag not set"</span>))<span class="question-mark">?</span>;
+<a href=#755 id=755 data-nosnippet>755</a>
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw">if </span>!transfer_ownership_from_eoa {
+<a href=#757 id=757 data-nosnippet>757</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#758 id=758 data-nosnippet>758</a>        }
+<a href=#759 id=759 data-nosnippet>759</a>
+<a href=#760 id=760 data-nosnippet>760</a>        <span class="kw">let </span>target_contract = <span class="self">self</span>.target_contract.clone().ok_or_else(|| {
+<a href=#761 id=761 data-nosnippet>761</a>            <span class="macro">anyhow::anyhow!</span>(<span class="string">"Must provide target_contract when using transfer_ownership_from_eoa"</span>)
+<a href=#762 id=762 data-nosnippet>762</a>        })<span class="question-mark">?</span>;
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="kw">let </span>new_owner = <span class="self">self</span>.transfer_ownership_new_owner.ok_or_else(|| {
+<a href=#764 id=764 data-nosnippet>764</a>            <span class="macro">anyhow::anyhow!</span>(
+<a href=#765 id=765 data-nosnippet>765</a>                <span class="string">"Must provide transfer_ownership_new_owner when using transfer_ownership_from_eoa"
+<a href=#766 id=766 data-nosnippet>766</a>            </span>)
+<a href=#767 id=767 data-nosnippet>767</a>        })<span class="question-mark">?</span>;
+<a href=#768 id=768 data-nosnippet>768</a>
+<a href=#769 id=769 data-nosnippet>769</a>        <span class="comment">// Parse the contract type from string
+<a href=#770 id=770 data-nosnippet>770</a>        </span><span class="kw">let </span>contract_type = <span class="kw">match </span>target_contract.to_lowercase().as_str() {
+<a href=#771 id=771 data-nosnippet>771</a>            <span class="string">"lightclient" </span>| <span class="string">"lightclientproxy" </span>=&gt; Contract::LightClientProxy,
+<a href=#772 id=772 data-nosnippet>772</a>            <span class="string">"feecontract" </span>| <span class="string">"feecontractproxy" </span>=&gt; Contract::FeeContractProxy,
+<a href=#773 id=773 data-nosnippet>773</a>            <span class="string">"esptoken" </span>| <span class="string">"esptokenproxy" </span>=&gt; Contract::EspTokenProxy,
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="string">"staketable" </span>| <span class="string">"staketableproxy" </span>=&gt; Contract::StakeTableProxy,
+<a href=#775 id=775 data-nosnippet>775</a>            <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(
+<a href=#776 id=776 data-nosnippet>776</a>                <span class="string">"Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
+<a href=#777 id=777 data-nosnippet>777</a>                 staketable"</span>,
+<a href=#778 id=778 data-nosnippet>778</a>                target_contract
+<a href=#779 id=779 data-nosnippet>779</a>            ),
+<a href=#780 id=780 data-nosnippet>780</a>        };
+<a href=#781 id=781 data-nosnippet>781</a>
+<a href=#782 id=782 data-nosnippet>782</a>        <span class="comment">// Get the contract address from the contracts map
+<a href=#783 id=783 data-nosnippet>783</a>        </span><span class="kw">let </span>contract_address = contracts.address(contract_type).ok_or_else(|| {
+<a href=#784 id=784 data-nosnippet>784</a>            <span class="macro">anyhow::anyhow!</span>(
+<a href=#785 id=785 data-nosnippet>785</a>                <span class="string">"Contract {} not found in deployed contracts"</span>,
+<a href=#786 id=786 data-nosnippet>786</a>                target_contract
+<a href=#787 id=787 data-nosnippet>787</a>            )
+<a href=#788 id=788 data-nosnippet>788</a>        })<span class="question-mark">?</span>;
+<a href=#789 id=789 data-nosnippet>789</a>
+<a href=#790 id=790 data-nosnippet>790</a>        <span class="macro">tracing::info!</span>(
+<a href=#791 id=791 data-nosnippet>791</a>            <span class="string">"Transferring ownership of {} from EOA to {}"</span>,
+<a href=#792 id=792 data-nosnippet>792</a>            target_contract,
+<a href=#793 id=793 data-nosnippet>793</a>            new_owner
+<a href=#794 id=794 data-nosnippet>794</a>        );
+<a href=#795 id=795 data-nosnippet>795</a>
+<a href=#796 id=796 data-nosnippet>796</a>        <span class="comment">// Use the existing transfer_ownership function from lib.rs
+<a href=#797 id=797 data-nosnippet>797</a>        </span><span class="kw">let </span>receipt =
+<a href=#798 id=798 data-nosnippet>798</a>            <span class="kw">crate</span>::transfer_ownership(<span class="kw-2">&amp;</span><span class="self">self</span>.deployer, contract_type, contract_address, new_owner)
+<a href=#799 id=799 data-nosnippet>799</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#800 id=800 data-nosnippet>800</a>
+<a href=#801 id=801 data-nosnippet>801</a>        <span class="macro">tracing::info!</span>(
+<a href=#802 id=802 data-nosnippet>802</a>            <span class="string">"Successfully transferred ownership of {} to {}. Transaction: {}"</span>,
+<a href=#803 id=803 data-nosnippet>803</a>            target_contract,
+<a href=#804 id=804 data-nosnippet>804</a>            new_owner,
+<a href=#805 id=805 data-nosnippet>805</a>            receipt.transaction_hash
+<a href=#806 id=806 data-nosnippet>806</a>        );
+<a href=#807 id=807 data-nosnippet>807</a>
+<a href=#808 id=808 data-nosnippet>808</a>        <span class="prelude-val">Ok</span>(())
+<a href=#809 id=809 data-nosnippet>809</a>    }
+<a href=#810 id=810 data-nosnippet>810</a>}</code></pre></div></section></main></body></html>

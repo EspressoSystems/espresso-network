@@ -92,7 +92,7 @@
 <a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">let </span>deployer_address = provider.default_signer_address();
 <a href=#93 id=93 data-nosnippet>93</a>        <span class="comment">// I don't know how to get the signer out of the provider, by default anvil uses the dev
 <a href=#94 id=94 data-nosnippet>94</a>        // mnemonic and the default signer is the first account.
-<a href=#95 id=95 data-nosnippet>95</a>        </span><span class="kw">let </span>signer = build_signer(DEV_MNEMONIC.to_string(), <span class="number">0</span>);
+<a href=#95 id=95 data-nosnippet>95</a>        </span><span class="kw">let </span>signer = build_signer(DEV_MNEMONIC, <span class="number">0</span>);
 <a href=#96 id=96 data-nosnippet>96</a>        <span class="macro">assert_eq!</span>(
 <a href=#97 id=97 data-nosnippet>97</a>            signer.address(),
 <a href=#98 id=98 data-nosnippet>98</a>            deployer_address,

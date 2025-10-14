@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["RewardClaimPrototypeMockCalls"],"fn":["deploy","deploy_builder","new"],"static":["BYTECODE","DEPLOYED_BYTECODE"],"struct":["RewardClaimPrototypeMockInstance","verifyRewardClaimAuthDataCall","verifyRewardClaimAuthDataReturn","verifyRewardClaimCall","verifyRewardClaimReturn"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["RewardAuthData","RewardAuthDataEncoded","RewardAuthRootInputs","RewardClaimInput","RewardProofSiblings"]};
+window.SIDEBAR_ITEMS = {"constant":["OTHER_AUTH_ROOT_INPUTS_LEN","REWARD_MERKLE_TREE_V2_HEIGHT"],"struct":["RewardAuthData","RewardAuthDataEncoded","RewardAuthRootInputs","RewardClaimInput","RewardProofSiblings"],"type":["RewardAuthDataRaw"]};
