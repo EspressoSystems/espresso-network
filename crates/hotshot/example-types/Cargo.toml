@@ -20,6 +20,7 @@ committable = { workspace = true }
 hotshot = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
+hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
@@ -31,6 +32,9 @@ time = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+tracing = { workspace = true }
+bincode = { workspace = true }
+async-broadcast = { workspace = true }
 
 [lints]
 workspace = true

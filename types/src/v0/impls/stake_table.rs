@@ -1,5 +1,5 @@
 use std::{
-    cmp::{max, min},
+    cmp::min,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
     ops::Bound,
@@ -40,7 +40,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -1903,13 +1903,19 @@ pub struct LeaderLookupError;
 // #[async_trait]
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
+    type Storage = ();
     type StakeTableHash = StakeTableState;
+
     // DO NOT USE. Dummy constructor to comply w/ trait.
-    fn new(
+    fn new<I: NodeImplementation<SeqTypes>>(
         // TODO remove `new` from trait and remove this fn as well.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         _committee_members: Vec<PeerConfig<SeqTypes>>,
         _da_members: Vec<PeerConfig<SeqTypes>>,
+        _storage: Self::Storage,
+        _network: Arc<<I as NodeImplementation<SeqTypes>>::Network>,
+        _public_key: <SeqTypes as NodeType>::SignatureKey,
+        _epoch_height: u64,
     ) -> Self {
         panic!("This function has been replaced with new_stake()");
     }
@@ -2051,58 +2057,6 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Get the total number of DA nodes in the committee
     fn da_total_nodes(&self, epoch: Option<Epoch>) -> usize {
         self.da_stake_table(epoch).len()
-    }
-
-    /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-        if total_stake < U256::MAX / two {
-            ((total_stake * two) / three) + one
-        } else {
-            ((total_stake / three) * two) + two
-        }
-    }
-
-    /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_da_stake(epoch);
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-
-        if total_stake < U256::MAX / two {
-            ((total_stake * two) / three) + one
-        } else {
-            ((total_stake / three) * two) + two
-        }
-    }
-
-    /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        let one = U256::ONE;
-        let three = U256::from(3);
-
-        (total_stake / three) + one
-    }
-
-    /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        let nine = U256::from(9);
-        let ten = U256::from(10);
-
-        let normal_threshold = self.success_threshold(epoch);
-        let higher_threshold = if total_stake < U256::MAX / nine {
-            (total_stake * nine) / ten
-        } else {
-            (total_stake / ten) * nine
-        };
-
-        max(higher_threshold, normal_threshold)
     }
 
     /// Adds the epoch committee and block reward for a given epoch,
