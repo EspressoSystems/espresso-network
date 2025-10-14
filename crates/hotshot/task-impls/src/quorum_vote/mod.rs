@@ -31,6 +31,7 @@ use hotshot_types::{
     },
     utils::{is_epoch_root, is_epoch_transition, is_last_block, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
+    VersionedDaCommittee,
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
@@ -483,6 +484,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Stake table capacity for light client use
     pub stake_table_capacity: usize,
+
+    /// DA committees from HotShotConfig, to apply when an upgrade is decided
+    pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -744,11 +748,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // Check that the signature is valid
                 ensure!(
                     sender.validate(&share.signature, payload_commitment.as_ref()),
-                    "VID share signature is invalid, sender: {}, signature: {:?}, \
-                     payload_commitment: {:?}",
-                    sender,
-                    share.signature,
-                    payload_commitment
+                    error!(
+                        "VID share signature is invalid, sender: {}, signature: {:?}, \
+                         payload_commitment: {:?}",
+                        sender, share.signature, payload_commitment
+                    )
                 );
 
                 let vid_epoch = share.data.epoch();
