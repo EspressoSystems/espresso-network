@@ -643,13 +643,14 @@ where
                     secondary_network_delay,
                 ),
                 storage: Rc::new(move |node_id| {
-                    let mut storage = TestStorage::<TYPES>::default();
-                    // update storage impl to use settings delay option
-                    storage.delay_config = metadata
-                        .async_delay_config
-                        .get(&node_id)
-                        .cloned()
-                        .unwrap_or_default();
+                    let storage = TestStorage::<TYPES> {
+                        delay_config: metadata
+                            .async_delay_config
+                            .get(&node_id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    };
                     storage
                 }),
                 hotshot_config,

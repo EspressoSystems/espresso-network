@@ -2009,6 +2009,7 @@ mod api_tests {
             .append_decided_leaves(
                 ViewNumber::new(1),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &FailConsumer,
             )
             .await
@@ -2026,6 +2027,7 @@ mod api_tests {
             .append_decided_leaves(
                 ViewNumber::new(4),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &consumer,
             )
             .await
@@ -2120,6 +2122,7 @@ mod api_tests {
             .append_decided_leaves(
                 leaf.view_number(),
                 [(&leaf_info(leaf.clone()), qc.clone())],
+                None,
                 &consumer,
             )
             .await
@@ -2152,6 +2155,7 @@ mod api_tests {
             .append_decided_leaves(
                 leaf.view_number(),
                 [(&leaf_info(leaf.clone()), qc)],
+                None,
                 &consumer,
             )
             .await
@@ -3251,21 +3255,21 @@ mod test {
             let view_number = event.view_number;
             views.insert(view_number.u64());
 
-            if let hotshot::types::EventType::Decide { qc, .. } = event.event {
-                assert!(qc.data.epoch.is_some(), "epochs are live");
-                assert!(qc.data.block_number.is_some());
+            if let hotshot::types::EventType::Decide { committing_qc, .. } = event.event {
+                assert!(committing_qc.data.epoch.is_some(), "epochs are live");
+                assert!(committing_qc.data.block_number.is_some());
 
-                let epoch = qc.data.epoch.unwrap().u64();
+                let epoch = committing_qc.data.epoch.unwrap().u64();
                 epochs.insert(epoch);
 
                 tracing::debug!(
                     "Got decide: epoch: {:?}, block: {:?} ",
                     epoch,
-                    qc.data.block_number
+                    committing_qc.data.block_number
                 );
 
                 let expected_epoch =
-                    epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
+                    epoch_from_block_number(committing_qc.data.block_number.unwrap(), epoch_height);
                 tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
 
                 assert_eq!(expected_epoch, epoch);
