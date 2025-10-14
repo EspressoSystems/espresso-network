@@ -19,7 +19,11 @@ docker=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --account-index)
-            if [[ -z "$2" || ! "$2" =~ ^[0-9]+$ ]]; then
+            if [[ -z "$2" ]]; then
+                echo "Error: --account-index requires a numeric argument."
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
                 echo "Error: --account-index requires a numeric argument."
                 exit 1
             fi
@@ -42,19 +46,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 
-if $docker; then
+if [ "$docker" = true ]; then
     echo "Using docker to run deploy"
-    cmd="docker run --rm -e RUST_LOG=info --network=host -v /dev/bus/usb:/dev/bus/usb --privileged \
+    cmd=(docker run --rm -e RUST_LOG=info --network=host -v /dev/bus/usb:/dev/bus/usb --privileged \
         -it ghcr.io/espressosystems/espresso-sequencer/deploy:main \
-        deploy --rpc-url http://host.docker.internal:8545"
+        deploy --rpc-url http://host.docker.internal:8545)
 else
     echo "Using native deploy binary"
     cargo build --bin deploy
-    cmd="deploy"
+    cmd=(deploy)
 fi
 
 # start anvil in the background, if there's nothing on port 8545
-if ! cast chain-id >/dev/null 2>&1; then
+if ! command -v cast >/dev/null 2>&1 || ! cast chain-id >/dev/null 2>&1; then
     echo "Starting anvil on port 8545"
     anvil --host 0.0.0.0 &
 else
@@ -63,7 +67,7 @@ fi
 
 echo
 echo "Checking account, you may have to unlock the ledger device"
-account="$($cmd --ledger --account-index "$account_index" account | tail -n1 | tr -d '\r')"
+account="$("${cmd[@]}" --ledger --account-index "$account_index" account | tail -n1 | tr -d '\r')"
 echo "Account: $account"
 
 cast send "$account" --value 10ether --mnemonic "$test_mnemonic"
@@ -71,6 +75,6 @@ cast send "$account" --value 10ether --mnemonic "$test_mnemonic"
 echo
 echo "Deploying contracts, watch your ledger to confirm signatures"
 
-$cmd --ledger --account-index "$account_index" --deploy-esp-token --multisig-address 0xffffffffffffffffffffffffffffffffffffffff
+"${cmd[@]}" --ledger --account-index "$account_index" --deploy-esp-token --multisig-address 0xffffffffffffffffffffffffffffffffffffffff
 
 echo "Successfully deployed with ledger!"
