@@ -2,9 +2,8 @@ use hotshot_query_service::{availability::TransactionInclusionProof, VidCommon};
 use hotshot_types::data::VidCommitment;
 use serde::{Deserialize, Serialize};
 
-use crate::SeqTypes;
-
 use super::{v0_1::ADVZTxProof, v0_3::AvidMTxProof, Index, NsTable, Payload, Transaction};
+use crate::SeqTypes;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxProof {
