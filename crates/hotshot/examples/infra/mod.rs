@@ -455,8 +455,8 @@ pub trait RunDa<
                         },
                         EventType::Decide {
                             leaf_chain,
-                            qc: _,
                             block_size,
+                            ..
                         } => {
                             let current_timestamp = Utc::now().timestamp();
                             // this might be a obob

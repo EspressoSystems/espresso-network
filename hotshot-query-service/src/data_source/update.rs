@@ -79,9 +79,14 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn update(&self, event: &Event<Types>) -> Result<(), u64> {
-        if let EventType::Decide { leaf_chain, qc, .. } = &event.event {
+        if let EventType::Decide {
+            leaf_chain,
+            committing_qc,
+            ..
+        } = &event.event
+        {
             // `qc` justifies the first (most recent) leaf...
-            let qcs = once((**qc).clone())
+            let qcs = once((**committing_qc).clone())
                 // ...and each leaf in the chain justifies the subsequent leaf (its parent) through
                 // `leaf.justify_qc`.
                 .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc()))
@@ -108,7 +113,7 @@ where
                         tracing::error!(
                             height,
                             ?leaf2,
-                            ?qc,
+                            ?committing_qc,
                             "inconsistent leaf; cannot append leaf information: {err:#}"
                         );
                         return Err(leaf2.block_header().block_number());
