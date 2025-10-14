@@ -2928,10 +2928,7 @@ mod testing {
 
             #[cfg(feature = "embedded-db")]
             {
-                SqliteOptions {
-                    path: db.path(),
-                }
-                .into()
+                SqliteOptions { path: db.path() }.into()
             }
         }
     }
