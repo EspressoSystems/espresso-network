@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["direct_message_fn","direct_message_impl","network_functions"],"struct":["Leaf2Fetcher","NetworkFunctions"],"type":["DirectMessageFn","RecvMessageFn"]};

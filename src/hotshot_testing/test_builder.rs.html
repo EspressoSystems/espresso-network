@@ -643,21 +643,22 @@
 <a href=#643 id=643 data-nosnippet>643</a>                    secondary_network_delay,
 <a href=#644 id=644 data-nosnippet>644</a>                ),
 <a href=#645 id=645 data-nosnippet>645</a>                storage: Rc::new(<span class="kw">move </span>|node_id| {
-<a href=#646 id=646 data-nosnippet>646</a>                    <span class="kw">let </span><span class="kw-2">mut </span>storage = TestStorage::&lt;TYPES&gt;::default();
-<a href=#647 id=647 data-nosnippet>647</a>                    <span class="comment">// update storage impl to use settings delay option
-<a href=#648 id=648 data-nosnippet>648</a>                    </span>storage.delay_config = metadata
-<a href=#649 id=649 data-nosnippet>649</a>                        .async_delay_config
-<a href=#650 id=650 data-nosnippet>650</a>                        .get(<span class="kw-2">&amp;</span>node_id)
-<a href=#651 id=651 data-nosnippet>651</a>                        .cloned()
-<a href=#652 id=652 data-nosnippet>652</a>                        .unwrap_or_default();
-<a href=#653 id=653 data-nosnippet>653</a>                    storage
-<a href=#654 id=654 data-nosnippet>654</a>                }),
-<a href=#655 id=655 data-nosnippet>655</a>                hotshot_config,
-<a href=#656 id=656 data-nosnippet>656</a>                validator_config,
-<a href=#657 id=657 data-nosnippet>657</a>            },
-<a href=#658 id=658 data-nosnippet>658</a>            metadata: <span class="self">self</span>,
-<a href=#659 id=659 data-nosnippet>659</a>            additional_test_tasks,
-<a href=#660 id=660 data-nosnippet>660</a>        }
-<a href=#661 id=661 data-nosnippet>661</a>        .map_hotshot_config(mod_hotshot_config)
-<a href=#662 id=662 data-nosnippet>662</a>    }
-<a href=#663 id=663 data-nosnippet>663</a>}</code></pre></div></section></main></body></html>
+<a href=#646 id=646 data-nosnippet>646</a>                    <span class="kw">let </span>storage = TestStorage::&lt;TYPES&gt; {
+<a href=#647 id=647 data-nosnippet>647</a>                        delay_config: metadata
+<a href=#648 id=648 data-nosnippet>648</a>                            .async_delay_config
+<a href=#649 id=649 data-nosnippet>649</a>                            .get(<span class="kw-2">&amp;</span>node_id)
+<a href=#650 id=650 data-nosnippet>650</a>                            .cloned()
+<a href=#651 id=651 data-nosnippet>651</a>                            .unwrap_or_default(),
+<a href=#652 id=652 data-nosnippet>652</a>                        ..Default::default()
+<a href=#653 id=653 data-nosnippet>653</a>                    };
+<a href=#654 id=654 data-nosnippet>654</a>                    storage
+<a href=#655 id=655 data-nosnippet>655</a>                }),
+<a href=#656 id=656 data-nosnippet>656</a>                hotshot_config,
+<a href=#657 id=657 data-nosnippet>657</a>                validator_config,
+<a href=#658 id=658 data-nosnippet>658</a>            },
+<a href=#659 id=659 data-nosnippet>659</a>            metadata: <span class="self">self</span>,
+<a href=#660 id=660 data-nosnippet>660</a>            additional_test_tasks,
+<a href=#661 id=661 data-nosnippet>661</a>        }
+<a href=#662 id=662 data-nosnippet>662</a>        .map_hotshot_config(mod_hotshot_config)
+<a href=#663 id=663 data-nosnippet>663</a>    }
+<a href=#664 id=664 data-nosnippet>664</a>}</code></pre></div></section></main></body></html>

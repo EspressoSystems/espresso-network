@@ -146,7 +146,7 @@
 <a href=#146 id=146 data-nosnippet>146</a>        <span class="kw">use </span>ark_ec::CurveGroup;
 <a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">use </span>ark_std::{end_timer, start_timer, UniformRand};
 <a href=#148 id=148 data-nosnippet>148</a>
-<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span>setup_time = <span class="macro">start_timer!</span>(|| <span class="macro">format!</span>(<span class="string">"KZG10::Setup with degree {}"</span>, max_degree));
+<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span>setup_time = <span class="macro">start_timer!</span>(|| <span class="macro">format!</span>(<span class="string">"KZG10::Setup with degree {max_degree}"</span>));
 <a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">let </span>beta = &lt;Bn254 <span class="kw">as </span>Pairing&gt;::ScalarField::rand(rng);
 <a href=#151 id=151 data-nosnippet>151</a>        <span class="kw">let </span>g = &lt;Bn254 <span class="kw">as </span>Pairing&gt;::G1::rand(rng);
 <a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">let </span>h = &lt;Bn254 <span class="kw">as </span>Pairing&gt;::G2::rand(rng);

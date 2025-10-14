@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NetworkError"],"mod":["election","implementations","networking","node_implementation"],"struct":["NetworkNodeConfigBuilder"],"trait":["BlockPayload","NetworkReliability","NodeImplementation","TestableNodeImplementation","ValidatedState"]};
+window.SIDEBAR_ITEMS = {"enum":["NetworkError"],"mod":["implementations","networking","node_implementation"],"struct":["NetworkNodeConfigBuilder"],"trait":["BlockPayload","NetworkReliability","NodeImplementation","TestableNodeImplementation","ValidatedState"]};

@@ -52,9 +52,9 @@
 <a href=#52 id=52 data-nosnippet>52</a>    vid2: VidShares2&lt;TYPES&gt;,
 <a href=#53 id=53 data-nosnippet>53</a>    das: HashMap&lt;TYPES::View, Proposal&lt;TYPES, DaProposal&lt;TYPES&gt;&gt;&gt;,
 <a href=#54 id=54 data-nosnippet>54</a>    da2s: HashMap&lt;TYPES::View, Proposal&lt;TYPES, DaProposal2&lt;TYPES&gt;&gt;&gt;,
-<a href=#55 id=55 data-nosnippet>55</a>    proposals: BTreeMap&lt;TYPES::View, Proposal&lt;TYPES, QuorumProposal&lt;TYPES&gt;&gt;&gt;,
-<a href=#56 id=56 data-nosnippet>56</a>    proposals2: BTreeMap&lt;TYPES::View, Proposal&lt;TYPES, QuorumProposal2&lt;TYPES&gt;&gt;&gt;,
-<a href=#57 id=57 data-nosnippet>57</a>    proposals_wrapper: BTreeMap&lt;TYPES::View, Proposal&lt;TYPES, QuorumProposalWrapper&lt;TYPES&gt;&gt;&gt;,
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">pub </span>proposals: BTreeMap&lt;TYPES::View, Proposal&lt;TYPES, QuorumProposal&lt;TYPES&gt;&gt;&gt;,
+<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">pub </span>proposals2: BTreeMap&lt;TYPES::View, Proposal&lt;TYPES, QuorumProposal2&lt;TYPES&gt;&gt;&gt;,
+<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">pub </span>proposals_wrapper: BTreeMap&lt;TYPES::View, Proposal&lt;TYPES, QuorumProposalWrapper&lt;TYPES&gt;&gt;&gt;,
 <a href=#58 id=58 data-nosnippet>58</a>    high_qc: <span class="prelude-ty">Option</span>&lt;hotshot_types::simple_certificate::QuorumCertificate&lt;TYPES&gt;&gt;,
 <a href=#59 id=59 data-nosnippet>59</a>    high_qc2: <span class="prelude-ty">Option</span>&lt;hotshot_types::simple_certificate::QuorumCertificate2&lt;TYPES&gt;&gt;,
 <a href=#60 id=60 data-nosnippet>60</a>    eqc: <span class="prelude-ty">Option</span>&lt;(
@@ -99,7 +99,7 @@
 <a href=#99 id=99 data-nosnippet>99</a>
 <a href=#100 id=100 data-nosnippet>100</a><span class="attr">#[derive(Clone, Debug)]
 <a href=#101 id=101 data-nosnippet>101</a></span><span class="kw">pub struct </span>TestStorage&lt;TYPES: NodeType&gt; {
-<a href=#102 id=102 data-nosnippet>102</a>    inner: Arc&lt;RwLock&lt;TestStorageState&lt;TYPES&gt;&gt;&gt;,
+<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">pub </span>inner: Arc&lt;RwLock&lt;TestStorageState&lt;TYPES&gt;&gt;&gt;,
 <a href=#103 id=103 data-nosnippet>103</a>    <span class="doccomment">/// `should_return_err` is a testing utility to validate negative cases.
 <a href=#104 id=104 data-nosnippet>104</a>    </span><span class="kw">pub </span>should_return_err: Arc&lt;AtomicBool&gt;,
 <a href=#105 id=105 data-nosnippet>105</a>    <span class="kw">pub </span>delay_config: DelayConfig,

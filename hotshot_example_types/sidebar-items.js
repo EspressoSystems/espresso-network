@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["block_types","node_types","state_types","storage_types","testable_delay"]};
+window.SIDEBAR_ITEMS = {"mod":["block_types","membership","node_types","state_types","storage_types","testable_delay"]};

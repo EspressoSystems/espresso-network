@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["dummy_catchup_membership","helpers","randomized_committee","randomized_committee_members","static_committee","static_committee_leader_two_views","two_static_committees"]};

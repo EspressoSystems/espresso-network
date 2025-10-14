@@ -748,11 +748,11 @@
 <a href=#748 id=748 data-nosnippet>748</a>                <span class="comment">// Check that the signature is valid
 <a href=#749 id=749 data-nosnippet>749</a>                </span><span class="macro">ensure!</span>(
 <a href=#750 id=750 data-nosnippet>750</a>                    sender.validate(<span class="kw-2">&amp;</span>share.signature, payload_commitment.as_ref()),
-<a href=#751 id=751 data-nosnippet>751</a>                    <span class="string">"VID share signature is invalid, sender: {}, signature: {:?}, \
-<a href=#752 id=752 data-nosnippet>752</a>                     payload_commitment: {:?}"</span>,
-<a href=#753 id=753 data-nosnippet>753</a>                    sender,
-<a href=#754 id=754 data-nosnippet>754</a>                    share.signature,
-<a href=#755 id=755 data-nosnippet>755</a>                    payload_commitment
+<a href=#751 id=751 data-nosnippet>751</a>                    <span class="macro">error!</span>(
+<a href=#752 id=752 data-nosnippet>752</a>                        <span class="string">"VID share signature is invalid, sender: {}, signature: {:?}, \
+<a href=#753 id=753 data-nosnippet>753</a>                         payload_commitment: {:?}"</span>,
+<a href=#754 id=754 data-nosnippet>754</a>                        sender, share.signature, payload_commitment
+<a href=#755 id=755 data-nosnippet>755</a>                    )
 <a href=#756 id=756 data-nosnippet>756</a>                );
 <a href=#757 id=757 data-nosnippet>757</a>
 <a href=#758 id=758 data-nosnippet>758</a>                <span class="kw">let </span>vid_epoch = share.data.epoch();

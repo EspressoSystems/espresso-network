@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a></span><span class="attr">#[derive(Debug, Clone)]
 <a href=#34 id=34 data-nosnippet>34</a></span><span class="kw">pub struct </span>NetworkNodeHandle&lt;T: NodeType&gt; {
 <a href=#35 id=35 data-nosnippet>35</a>    <span class="doccomment">/// network configuration
-<a href=#36 id=36 data-nosnippet>36</a>    </span>network_config: NetworkNodeConfig&lt;T&gt;,
+<a href=#36 id=36 data-nosnippet>36</a>    </span>network_config: NetworkNodeConfig,
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a>    <span class="doccomment">/// send an action to the networkbehaviour
 <a href=#39 id=39 data-nosnippet>39</a>    </span>send_network: UnboundedSender&lt;ClientRequest&gt;,
@@ -88,12 +88,12 @@
 <a href=#88 id=88 data-nosnippet>88</a>/// # Errors
 <a href=#89 id=89 data-nosnippet>89</a>/// Errors if spawning the task fails
 <a href=#90 id=90 data-nosnippet>90</a></span><span class="kw">pub async fn </span>spawn_network_node&lt;T: NodeType, D: DhtPersistentStorage&gt;(
-<a href=#91 id=91 data-nosnippet>91</a>    config: NetworkNodeConfig&lt;T&gt;,
+<a href=#91 id=91 data-nosnippet>91</a>    config: NetworkNodeConfig,
 <a href=#92 id=92 data-nosnippet>92</a>    dht_persistent_storage: D,
 <a href=#93 id=93 data-nosnippet>93</a>    consensus_key_to_pid_map: Arc&lt;Mutex&lt;BiMap&lt;T::SignatureKey, PeerId&gt;&gt;&gt;,
 <a href=#94 id=94 data-nosnippet>94</a>    id: usize,
 <a href=#95 id=95 data-nosnippet>95</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(NetworkNodeReceiver, NetworkNodeHandle&lt;T&gt;), NetworkError&gt; {
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">let </span><span class="kw-2">mut </span>network = NetworkNode::new(
+<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">let </span><span class="kw-2">mut </span>network: NetworkNode&lt;T, <span class="kw">_</span>&gt; = NetworkNode::new(
 <a href=#97 id=97 data-nosnippet>97</a>        config.clone(),
 <a href=#98 id=98 data-nosnippet>98</a>        dht_persistent_storage,
 <a href=#99 id=99 data-nosnippet>99</a>        Arc::clone(<span class="kw-2">&amp;</span>consensus_key_to_pid_map),
@@ -485,7 +485,7 @@
 <a href=#485 id=485 data-nosnippet>485</a>
 <a href=#486 id=486 data-nosnippet>486</a>    <span class="doccomment">/// Return a reference to the network config
 <a href=#487 id=487 data-nosnippet>487</a>    </span><span class="attr">#[must_use]
-<a href=#488 id=488 data-nosnippet>488</a>    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>NetworkNodeConfig&lt;T&gt; {
+<a href=#488 id=488 data-nosnippet>488</a>    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>NetworkNodeConfig {
 <a href=#489 id=489 data-nosnippet>489</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.network_config
 <a href=#490 id=490 data-nosnippet>490</a>    }
 <a href=#491 id=491 data-nosnippet>491</a>}</code></pre></div></section></main></body></html>
