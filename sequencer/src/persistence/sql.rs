@@ -354,7 +354,18 @@ impl From<SqliteOptions> for Options {
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
-            ..Default::default()
+            uri: None,
+            prune: false,
+            pruning: Default::default(),
+            consensus_pruning: Default::default(),
+            fetch_rate_limit: None,
+            active_fetch_delay: None,
+            chunk_fetch_delay: None,
+            archive: false,
+            lightweight: false,
+            min_connections: 0,
+            types_migration_batch_size: None,
+            pool: None,
         }
     }
 }
@@ -485,6 +496,12 @@ pub struct PruningOptions {
     pages: Option<u64>,
 }
 
+impl Default for PruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
+}
+
 impl From<PruningOptions> for PrunerCfg {
     fn from(opt: PruningOptions) -> Self {
         let mut cfg = PrunerCfg::new();
@@ -575,6 +592,12 @@ pub struct ConsensusPruningOptions {
         default_value = "1000000000"
     )]
     target_usage: u64,
+}
+
+impl Default for ConsensusPruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
 }
 
 #[async_trait]
