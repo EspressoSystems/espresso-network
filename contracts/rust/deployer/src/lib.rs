@@ -1016,7 +1016,8 @@ pub async fn prepare_stake_table_v2_upgrade(
     }
 
     // For a non-major version upgrade the proxy storage must already be initialized.
-    let needs_initialization = !already_initialized(&provider, proxy_addr, target_version).await?;
+    let needs_initialization =
+        !already_initialized(&l1_client.provider, proxy_addr, target_version).await?;
     assert_eq!(
         needs_initialization,
         current_version.majorVersion < target_version,
@@ -1055,7 +1056,6 @@ pub async fn prepare_stake_table_v2_upgrade(
 
 /// Upgrade the stake table proxy from V1 to V2, or patch V2
 pub async fn upgrade_stake_table_v2(
-    provider: impl Provider,
     l1_client: L1Client,
     contracts: &mut Contracts,
     pauser: Address,
@@ -1068,17 +1068,17 @@ pub async fn upgrade_stake_table_v2(
 
     // First prepare upgrade data (including fetching commissions if needed)
     let (init_commissions, init_active_stake, init_data) =
-        prepare_stake_table_v2_upgrade(l1_client, proxy_addr, pauser, admin).await?;
+        prepare_stake_table_v2_upgrade(l1_client.clone(), proxy_addr, pauser, admin).await?;
 
     // Then deploy the new implementation
     let v2_addr = contracts
         .deploy(
             Contract::StakeTableV2,
-            StakeTableV2::deploy_builder(&provider),
+            StakeTableV2::deploy_builder(&l1_client),
         )
         .await?;
 
-    let proxy = StakeTable::new(proxy_addr, &provider);
+    let proxy = StakeTable::new(proxy_addr, &l1_client);
 
     let receipt = proxy
         .upgradeToAndCall(v2_addr, init_data.unwrap_or_default())
@@ -1089,7 +1089,7 @@ pub async fn upgrade_stake_table_v2(
 
     if receipt.inner.is_success() {
         // post deploy verification checks
-        let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
+        let proxy_as_v2 = StakeTableV2::new(proxy_addr, &l1_client);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
 
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
@@ -1948,7 +1948,7 @@ mod tests {
         let pauser = Address::random();
         let admin = proxy_owner;
 
-        upgrade_stake_table_v2(&provider, l1_client, &mut contracts, pauser, admin).await?;
+        upgrade_stake_table_v2(l1_client, &mut contracts, pauser, admin).await?;
         Ok(())
     }
 
@@ -2392,7 +2392,7 @@ mod tests {
 
         // upgrade to v2
         let pauser = Address::random();
-        upgrade_stake_table_v2(&provider, l1_client.clone(), &mut contracts, pauser, owner).await?;
+        upgrade_stake_table_v2(l1_client.clone(), &mut contracts, pauser, owner).await?;
 
         let stake_table_v2 = StakeTableV2::new(stake_table_addr, &provider);
 
@@ -2411,7 +2411,7 @@ mod tests {
 
         // ensure we can upgrade (again) to a V2 patch version
         let current_impl = read_proxy_impl(&provider, stake_table_addr).await?;
-        upgrade_stake_table_v2(&provider, l1_client, &mut contracts_v1, pauser, owner).await?;
+        upgrade_stake_table_v2(l1_client, &mut contracts_v1, pauser, owner).await?;
         assert_ne!(
             read_proxy_impl(&provider, stake_table_addr).await?,
             current_impl
@@ -3305,12 +3305,14 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_get_proxy_initialized_version_reinitialized() -> Result<()> {
-        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let anvil = Anvil::new().spawn();
+        let l1_client = L1Client::anvil(&anvil)?;
+
         let mut contracts = Contracts::new();
-        let owner = provider.get_accounts().await?[0];
+        let owner = l1_client.get_accounts().await?[0];
 
         let token_addr = deploy_token_proxy(
-            &provider,
+            &l1_client,
             &mut contracts,
             owner,
             owner,
@@ -3320,11 +3322,11 @@ mod tests {
         )
         .await?;
 
-        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let lc_addr = deploy_light_client_contract(&l1_client, &mut contracts, false).await?;
         let exit_escrow_period = U256::from(1000);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
-            &provider,
+            &l1_client,
             &mut contracts,
             token_addr,
             lc_addr,
@@ -3335,9 +3337,9 @@ mod tests {
 
         let pauser = Address::random();
         let admin = Address::random();
-        upgrade_stake_table_v2(&provider, &mut contracts, pauser, admin).await?;
+        upgrade_stake_table_v2(l1_client.clone(), &mut contracts, pauser, admin).await?;
 
-        let version = get_proxy_initialized_version(&provider, stake_table_proxy_addr).await?;
+        let version = get_proxy_initialized_version(&l1_client, stake_table_proxy_addr).await?;
         assert_eq!(version, 2, "Reinitialized proxy should return version 2");
 
         Ok(())

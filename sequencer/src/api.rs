@@ -5831,12 +5831,10 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, versions).await;
-        let provider = network.cfg.anvil().unwrap();
         let deployer_addr = network.cfg.signer().address();
         let mut contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
         upgrade_stake_table_v2(
-            provider,
             L1Client::new(vec![network.cfg.l1_url()])?,
             &mut contracts,
             deployer_addr,
