@@ -37,7 +37,6 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
     /// Add a proposal to the stored VID proposals.
-    /// TODO(Chengyu): fix this
     async fn append_vid2(&self, proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>)
         -> Result<()>;
 
