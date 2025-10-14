@@ -414,8 +414,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
                 } else {
-                    crate::upgrade_stake_table_v2(l1_client, contracts, multisig_pauser, admin)
-                        .await?;
+                    crate::upgrade_stake_table_v2(
+                        provider,
+                        l1_client,
+                        contracts,
+                        multisig_pauser,
+                        admin,
+                    )
+                    .await?;
 
                     let addr = contracts
                         .address(Contract::StakeTableProxy)
