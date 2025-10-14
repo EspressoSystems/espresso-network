@@ -1,6 +1,5 @@
 rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
 stake_table_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
-espresso_url = "https://query.decaf.testnet.espresso.network"
 
 [signer]
 mnemonic = "test test test test test test test test test test test junk"

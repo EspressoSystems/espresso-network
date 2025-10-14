@@ -83,8 +83,7 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
         Contract::LightClientProxy
         | Contract::FeeContractProxy
         | Contract::EspTokenProxy
-        | Contract::StakeTableProxy
-        | Contract::RewardClaimProxy => {
+        | Contract::StakeTableProxy => {
             let addr = contracts
                 .address(contract)
                 .ok_or_else(|| anyhow!("{contract} (multisig owner) not found, can't upgrade"))?;

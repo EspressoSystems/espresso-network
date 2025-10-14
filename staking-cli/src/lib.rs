@@ -50,10 +50,6 @@ pub struct Config {
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
 
-    /// Espresso sequencer API URL for reward claims.
-    #[clap(long, env = "ESPRESSO_URL")]
-    pub espresso_url: Option<Url>,
-
     #[clap(flatten)]
     pub signer: SignerConfig,
 
@@ -262,8 +258,6 @@ pub enum Commands {
         #[clap(long)]
         validator_address: Address,
     },
-    /// Claim staking rewards.
-    ClaimReward,
     /// Check ESP token balance.
     TokenBalance {
         /// The address to check.

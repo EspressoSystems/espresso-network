@@ -16,7 +16,6 @@ use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
     sol_types::{
         EspToken::{self, EspTokenErrors, EspTokenEvents},
-        RewardClaim::RewardClaimEvents,
         StakeTableV2::StakeTableV2Events,
     },
 };
@@ -25,7 +24,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
 };
 use staking_cli::{
-    claim::{claim_reward, claim_validator_exit, claim_withdrawal},
+    claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     info::{display_stake_table, fetch_token_address, stake_table_info},
@@ -168,10 +167,6 @@ fn decode_and_display_logs(logs: &[Log]) {
                 EspTokenEvents::Transfer(e) => output_success(format!("event: {e:?}")),
                 EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
                 _ => {},
-            }
-        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref()) {
-            if let RewardClaimEvents::RewardsClaimed(e) = &decoded.data {
-                output_success(format!("event: {e:?}"));
             }
         }
     }
@@ -415,13 +410,6 @@ pub async fn main() -> Result<()> {
         Commands::ClaimValidatorExit { validator_address } => {
             tracing::info!("Claiming validator exit for {validator_address}");
             claim_validator_exit(&provider, stake_table_addr, validator_address).await?
-        },
-        Commands::ClaimReward => {
-            let espresso_url = config.espresso_url.ok_or_else(|| {
-                anyhow::anyhow!("espresso_url not set, use --espresso-url or ESPRESSO_URL")
-            })?;
-            tracing::info!("Claiming rewards from {espresso_url}");
-            claim_reward(&provider, stake_table_addr, espresso_url, account).await?
         },
         Commands::StakeForDemo {
             num_validators,
