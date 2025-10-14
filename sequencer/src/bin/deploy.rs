@@ -142,6 +142,8 @@ struct Options {
     /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
+    #[clap(long, default_value = "false")]
+    deploy_reward_claim: bool,
     /// Option to upgrade esp token v2
     #[clap(long, default_value = "false")]
     upgrade_esp_token_v2: bool,
@@ -687,6 +689,10 @@ async fn main() -> anyhow::Result<()> {
     }
     if opt.deploy_esp_token {
         args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
+    }
+    if opt.deploy_reward_claim {
+        args.deploy(&mut contracts, Contract::RewardClaimProxy)
+            .await?;
     }
     if opt.upgrade_esp_token_v2 {
         args.deploy(&mut contracts, Contract::EspTokenV2).await?;
