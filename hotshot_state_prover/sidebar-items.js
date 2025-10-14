@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ProverError"],"mod":["v1","v2","v3"],"struct":["ProverServiceState","StateProverConfig"]};
+window.SIDEBAR_ITEMS = {"enum":["ProverError"],"mod":["utils","v1","v2","v3"],"struct":["ProverServiceState","StateProverConfig"]};
