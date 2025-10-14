@@ -1,6 +1,8 @@
-use hotshot_query_service::VidCommon;
+use hotshot_query_service::{availability::TransactionInclusionProof, VidCommon};
 use hotshot_types::data::VidCommitment;
 use serde::{Deserialize, Serialize};
+
+use crate::SeqTypes;
 
 use super::{v0_1::ADVZTxProof, v0_3::AvidMTxProof, Index, NsTable, Payload, Transaction};
 
@@ -24,8 +26,10 @@ impl TxProof {
                 .map(|(tx, proof)| (tx, TxProof::V1(proof))),
         }
     }
+}
 
-    pub fn verify(
+impl TransactionInclusionProof<SeqTypes> for TxProof {
+    fn verify(
         &self,
         ns_table: &NsTable,
         tx: &Transaction,

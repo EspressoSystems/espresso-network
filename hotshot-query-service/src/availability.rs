@@ -1070,31 +1070,44 @@ mod test {
                         .hash()
                 );
 
-                // We can also get the transaction with proof omitted.
-                assert_eq!(
-                    txn.hash(),
-                    client
-                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
-                            "transaction/{}/{}/proof",
-                            i, j.position
-                        ))
-                        .send()
-                        .await
-                        .unwrap()
-                        .hash()
-                );
-                assert_eq!(
-                    txn.hash(),
-                    client
-                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
-                            "transaction/hash/{}/proof",
-                            txn.hash()
-                        ))
-                        .send()
-                        .await
-                        .unwrap()
-                        .hash()
-                );
+                let tx_with_proof = client
+                    .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                        "transaction/{}/{}/proof",
+                        i, j.position
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.hash(), tx_with_proof.hash());
+                assert!(tx_with_proof
+                    .proof()
+                    .verify(
+                        block.metadata(),
+                        txn.transaction(),
+                        &block.payload_hash(),
+                        common.common()
+                    )
+                    .unwrap_or(false));
+
+                // Similar to above, but by hash
+                let tx_with_proof = client
+                    .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                        "transaction/hash/{}/proof",
+                        txn.hash()
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.hash(), tx_with_proof.hash());
+                assert!(tx_with_proof
+                    .proof()
+                    .verify(
+                        block.metadata(),
+                        txn.transaction(),
+                        &block.payload_hash(),
+                        common.common()
+                    )
+                    .unwrap_or(false));
             }
 
             let block_range: Vec<BlockQueryData<MockTypes>> = client

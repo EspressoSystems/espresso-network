@@ -46,8 +46,7 @@ pub type QcHash<Types> = Commitment<QuorumCertificate2<Types>>;
 /// payload, so we can commit to the entire block simply by hashing the header.
 pub type BlockHash<Types> = Commitment<Header<Types>>;
 pub type TransactionHash<Types> = Commitment<Transaction<Types>>;
-pub type TransactionInclusionProof<Types> =
-    <Payload<Types> as QueryablePayload<Types>>::InclusionProof;
+pub type InclusionProof<Types> = <Payload<Types> as QueryablePayload<Types>>::InclusionProof;
 pub type NamespaceIndex<Types> = <Header<Types> as QueryableHeader<Types>>::NamespaceIndex;
 pub type NamespaceId<Types> = <Header<Types> as QueryableHeader<Types>>::NamespaceId;
 
@@ -89,6 +88,26 @@ where
     pub position: u32,
 }
 
+/// The proof system and the statement which is proved will vary by application, with different
+/// applications proving stronger or weaker statements depending on the trust assumptions at
+/// play. Some may prove a very strong statement (for example, a shared sequencer proving that
+/// the transaction belongs not only to the block but to a section of the block dedicated to a
+/// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
+/// query service may use `()` for the proof).
+pub trait TransactionInclusionProof<Types: NodeType>:
+    Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync
+{
+    /// Verify the inclusion proof against a payload commitment.
+    /// Returns `None` on error.
+    fn verify(
+        &self,
+        metadata: &Metadata<Types>,
+        tx: &Transaction<Types>,
+        payload_commitment: &VidCommitment,
+        common: &VidCommon,
+    ) -> Option<bool>;
+}
+
 /// A block payload whose contents (e.g. individual transactions) can be examined.
 ///
 /// Note to implementers: this trait has only a few required methods. The provided methods, for
@@ -107,14 +126,7 @@ where
         Self: 'a;
 
     /// A proof that a certain transaction exists in the block.
-    ///
-    /// The proof system and the statement which is proved will vary by application, with different
-    /// applications proving stronger or weaker statements depending on the trust assumptions at
-    /// play. Some may prove a very strong statement (for example, a shared sequencer proving that
-    /// the transaction belongs not only to the block but to a section of the block dedicated to a
-    /// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
-    /// query service may use `()` for the proof).
-    type InclusionProof: Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync;
+    type InclusionProof: TransactionInclusionProof<Types>;
 
     /// The number of transactions in the block.
     fn len(&self, meta: &Self::Metadata) -> usize;
@@ -501,7 +513,7 @@ where
         &self,
         vid_common: &VidCommonQueryData<Types>,
         ix: &TransactionIndex<Types>,
-    ) -> Option<TransactionInclusionProof<Types>> {
+    ) -> Option<InclusionProof<Types>> {
         self.payload()
             .transaction_proof(self.metadata(), vid_common, ix)
     }
@@ -797,7 +809,7 @@ where
     transaction: Transaction<Types>,
     hash: TransactionHash<Types>,
     index: u64,
-    proof: TransactionInclusionProof<Types>,
+    proof: InclusionProof<Types>,
     block_hash: BlockHash<Types>,
     block_height: u64,
     namespace: NamespaceId<Types>,
@@ -857,7 +869,7 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    pub fn new(data: TransactionQueryData<Types>, proof: TransactionInclusionProof<Types>) -> Self {
+    pub fn new(data: TransactionQueryData<Types>, proof: InclusionProof<Types>) -> Self {
         Self {
             proof,
             transaction: data.transaction,
@@ -871,7 +883,7 @@ where
     }
 
     /// A proof of inclusion of this transaction in its block.
-    pub fn proof(&self) -> &TransactionInclusionProof<Types> {
+    pub fn proof(&self) -> &InclusionProof<Types> {
         &self.proof
     }
 
