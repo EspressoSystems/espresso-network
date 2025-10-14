@@ -473,7 +473,7 @@
 <a href=#473 id=473 data-nosnippet>473</a>        <span class="comment">// Process and clean up any leaves that we may have persisted last time we were running but
 <a href=#474 id=474 data-nosnippet>474</a>        // failed to handle due to a shutdown.
 <a href=#475 id=475 data-nosnippet>475</a>        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = persistence
-<a href=#476 id=476 data-nosnippet>476</a>            .append_decided_leaves(view, <span class="macro">vec!</span>[], <span class="kw-2">&amp;</span>event_consumer)
+<a href=#476 id=476 data-nosnippet>476</a>            .append_decided_leaves(view, <span class="macro">vec!</span>[], <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>event_consumer)
 <a href=#477 id=477 data-nosnippet>477</a>            .<span class="kw">await
 <a href=#478 id=478 data-nosnippet>478</a>        </span>{
 <a href=#479 id=479 data-nosnippet>479</a>            <span class="macro">tracing::warn!</span>(
