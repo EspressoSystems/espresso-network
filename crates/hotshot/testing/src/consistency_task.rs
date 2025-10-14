@@ -387,7 +387,7 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
             event:
                 EventType::Decide {
                     leaf_chain,
-                    qc,
+                    committing_qc,
                     deciding_qc,
                     ..
                 },
@@ -408,15 +408,15 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
             match deciding_qc {
                 Some(deciding_qc) => {
                     let last_leaf = &leaf_chain[0].leaf;
-                    ensure!(qc.view_number == last_leaf.view_number());
-                    ensure!(qc.data.leaf_commit == last_leaf.commit());
-                    ensure!(deciding_qc.view_number == qc.view_number + 1);
+                    ensure!(committing_qc.view_number == last_leaf.view_number());
+                    ensure!(committing_qc.data.leaf_commit == last_leaf.commit());
+                    ensure!(deciding_qc.view_number == committing_qc.view_number + 1);
                 },
                 None => {
                     // Once we hit the epoch upgrade, every subsequent decide should come with a QC
                     // chain proving its own finality.
                     ensure!(
-                        qc.data.epoch.is_none(),
+                        committing_qc.data.epoch.is_none(),
                         "expected 2nd deciding QC for post-epochs decide"
                     );
                 },

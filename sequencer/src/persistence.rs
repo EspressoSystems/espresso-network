@@ -773,10 +773,15 @@ mod tests {
         let events = consumer.events.read().await;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].view_number, ViewNumber::new(3));
-        let EventType::Decide { qc, leaf_chain, .. } = &events[0].event else {
+        let EventType::Decide {
+            committing_qc,
+            leaf_chain,
+            ..
+        } = &events[0].event
+        else {
             panic!("expected decide event, got {:?}", events[0]);
         };
-        assert_eq!(**qc, qcs[3]);
+        assert_eq!(**committing_qc, qcs[3]);
         assert_eq!(leaf_chain.len(), 1);
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);

@@ -741,7 +741,7 @@ pub trait SequencerPersistence:
     async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
         if let EventType::Decide {
             leaf_chain,
-            qc,
+            committing_qc,
             deciding_qc,
             ..
         } = &event.event
@@ -754,7 +754,7 @@ pub trait SequencerPersistence:
             // Associate each decided leaf with a QC.
             let chain = leaf_chain.iter().zip(
                 // The first (most recent) leaf corresponds to the QC triggering the decide event.
-                std::iter::once((**qc).clone())
+                std::iter::once((**committing_qc).clone())
                     // Moving backwards in the chain, each leaf corresponds with the subsequent
                     // leaf's justify QC.
                     .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc())),

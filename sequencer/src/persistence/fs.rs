@@ -452,7 +452,7 @@ impl Inner {
                 .handle_event(&Event {
                     view_number: view,
                     event: EventType::Decide {
-                        qc: Arc::new(qc),
+                        committing_qc: Arc::new(qc),
                         deciding_qc: qc2,
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,

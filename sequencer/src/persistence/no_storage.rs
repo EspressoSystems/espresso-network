@@ -88,7 +88,7 @@ impl SequencerPersistence for NoStorage {
                     view_number,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
-                        qc: Arc::new(qc),
+                        committing_qc: Arc::new(qc),
                         deciding_qc,
                         block_size: None,
                     },

@@ -241,7 +241,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 view_number: decided_view_number,
                 event: EventType::Decide {
                     leaf_chain: Arc::new(leaf_views.clone()),
-                    qc: committing_qc.clone(),
+                    committing_qc: committing_qc.clone(),
                     deciding_qc: deciding_qc.map(Arc::new),
                     block_size: included_txns.map(|txns| txns.len().try_into().unwrap()),
                 },

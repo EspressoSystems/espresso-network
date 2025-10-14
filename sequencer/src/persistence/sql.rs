@@ -851,7 +851,7 @@ impl Persistence {
                     view_number: to_view,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(leaf_chain),
-                        qc: Arc::new(final_qc),
+                        committing_qc: Arc::new(final_qc),
                         deciding_qc: qc2,
                         block_size: None,
                     },
