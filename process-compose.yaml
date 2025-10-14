@@ -81,8 +81,6 @@ processes:
     depends_on:
       deploy-sequencer-contracts:
         condition: process_completed
-      deploy-prover-contracts:
-        condition: process_completed
       sequencer1:
         condition: process_healthy
     availability: *exit-ok
@@ -99,10 +97,6 @@ processes:
     depends_on:
       deploy-sequencer-contracts:
         condition: process_completed
-      deploy-prover-contracts:
-        condition: process_completed
-      sequencer1:
-        condition: process_healthy
     availability: *exit-ok
 
   orchestrator:
@@ -192,7 +186,7 @@ processes:
         condition: process_healthy
       marshal_0:
         condition: process_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: process_completed
     availability: *run-forever
 
@@ -247,7 +241,7 @@ processes:
         condition: process_healthy
       marshal_0:
         condition: process_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: process_completed
     readiness_probe:
       http_get:
@@ -294,7 +288,7 @@ processes:
         condition: process_healthy
       marshal_0:
         condition: process_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: process_completed
     readiness_probe:
       http_get:
@@ -342,7 +336,7 @@ processes:
         condition: process_healthy
       marshal_0:
         condition: process_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: process_completed
     readiness_probe:
       http_get:
@@ -388,7 +382,7 @@ processes:
         condition: process_healthy
       marshal_0:
         condition: process_healthy
-      deploy-sequencer-contracts:
+      stake-for-demo:
         condition: process_completed
     readiness_probe:
       http_get:
