@@ -186,6 +186,13 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
 
     fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) {
         let num_views = self.latencies_by_view.len();
+        let total_size = self.sizes_by_view.values().sum::<i128>();
+
+        // Either we have no views logged yet, no TXNs or we are not in the DA committee and don't know block sizes
+        if num_views == 0 || total_size == 0 {
+            return;
+        }
+
         let total_latency = self.latencies_by_view.values().sum::<i128>();
         let average_latency = total_latency / num_views as i128;
         tracing::warn!("Average latency: {}ms", average_latency);
@@ -194,11 +201,6 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             epoch,
             self.timeouts.len()
         );
-        let total_size = self.sizes_by_view.values().sum::<i128>();
-        if total_size == 0 {
-            // Either no TXNs or we are not in the DA committee and don't know block sizes
-            return;
-        }
         if let Some(epoch_start_time) = self.epoch_start_times.get(epoch) {
             let elapsed_time = now - epoch_start_time;
             // multiply by 1000 to convert to seconds

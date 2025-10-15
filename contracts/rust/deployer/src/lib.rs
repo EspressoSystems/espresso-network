@@ -42,12 +42,12 @@ pub type HttpProviderWithWallet = FillProvider<
 /// a handy thin wrapper around wallet builder and provider builder that directly
 /// returns an instantiated `Provider` with default fillers with wallet, ready to send tx
 pub fn build_provider(
-    mnemonic: String,
+    mnemonic: impl AsRef<str>,
     account_index: u32,
     url: Url,
     poll_interval: Option<Duration>,
 ) -> HttpProviderWithWallet {
-    let signer = build_signer(mnemonic, account_index);
+    let signer = build_signer(mnemonic.as_ref(), account_index);
     let wallet = EthereumWallet::from(signer);
 
     // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this
@@ -87,9 +87,9 @@ pub fn build_provider_ledger(
     }
 }
 
-pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {
+pub fn build_signer(mnemonic: impl AsRef<str>, account_index: u32) -> PrivateKeySigner {
     MnemonicBuilder::<English>::default()
-        .phrase(mnemonic)
+        .phrase(mnemonic.as_ref())
         .index(account_index)
         .expect("wrong mnemonic or index")
         .build()
@@ -174,6 +174,12 @@ pub struct DeployedContracts {
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
+    /// RewardClaim.sol
+    #[clap(long, env = Contract::RewardClaim)]
+    reward_claim: Option<Address>,
+    /// Use an already-deployed RewardClaim.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::RewardClaimProxy)]
+    reward_claim_proxy: Option<Address>,
 }
 
 /// An identifier for a particular contract.
@@ -213,6 +219,10 @@ pub enum Contract {
     StakeTableV2,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
+    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_ADDRESS")]
+    RewardClaim,
+    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS")]
+    RewardClaimProxy,
 }
 
 impl From<Contract> for OsStr {
@@ -278,6 +288,12 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.stake_table_proxy {
             m.insert(Contract::StakeTableProxy, addr);
+        }
+        if let Some(addr) = deployed.reward_claim {
+            m.insert(Contract::RewardClaim, addr);
+        }
+        if let Some(addr) = deployed.reward_claim_proxy {
+            m.insert(Contract::RewardClaimProxy, addr);
         }
         Self(m)
     }
@@ -548,12 +564,18 @@ pub async fn upgrade_light_client_v2(
             let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
-            // prepare init calldata
+            // prepare initial function call calldata (checks if already initialized)
+            // you cannot initialize a proxy that is already initialized
+            // so if one wanted to use this function to upgrade a proxy to v2, that's already v2
+            // then we shouldn't call the initialize function
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-            let init_data = lcv2
-                .initializeV2(blocks_per_epoch, epoch_start_block)
-                .calldata()
-                .to_owned();
+            let init_data = if already_initialized(&provider, proxy_addr, 2).await? {
+                vec![].into()
+            } else {
+                lcv2.initializeV2(blocks_per_epoch, epoch_start_block)
+                    .calldata()
+                    .to_owned()
+            };
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv2_addr, init_data)
@@ -615,6 +637,17 @@ pub async fn upgrade_light_client_v3(
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
 
+            // Check proxy version, V3 requires at least V2 as a prerequisite
+            // This ensures we don't try to upgrade from V1 directly to V3
+            // V1 -> V2 -> V3 is the correct upgrade path
+            let version = proxy.getVersion().call().await?;
+            if version.majorVersion < 2 {
+                anyhow::bail!(
+                    "LightClientProxy is V{}, can't upgrade to V3. Must upgrade to V2 first.",
+                    version.majorVersion
+                );
+            }
+
             // first deploy PlonkVerifierV3.sol
             let pv3_addr = contracts
                 .deploy(
@@ -670,9 +703,18 @@ pub async fn upgrade_light_client_v3(
             let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
-            // prepare init calldata
             let lcv3 = LightClientV3::new(lcv3_addr, &provider);
-            let init_data = lcv3.initializeV3().calldata().to_owned();
+
+            // prepare initial function call calldata (checks if already initialized)
+            // you cannot initialize a proxy that is already initialized
+            // so if one wanted to use this function to upgrade a proxy to v3, that's already v3
+            // then we shouldn't call the initialize function
+            let init_data = if already_initialized(&provider, proxy_addr, 3).await? {
+                vec![].into()
+            } else {
+                lcv3.initializeV3().calldata().to_owned()
+            };
+
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv3_addr, init_data)
@@ -697,27 +739,14 @@ pub async fn upgrade_light_client_v3(
 async fn already_initialized(
     provider: impl Provider,
     proxy_addr: Address,
-    contract: Contract,
     expected_major_version: u8,
 ) -> Result<bool> {
     let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
     tracing::info!("Initialized version: {}", initialized);
 
-    let contract_major_version = match contract {
-        Contract::LightClientV2 => {
-            let contract_proxy = LightClientV2::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        Contract::LightClientV3 => {
-            let contract_proxy = LightClientV3::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        Contract::StakeTableV2 => {
-            let contract_proxy = StakeTableV2::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        _ => anyhow::bail!("Unsupported contract type for already_initialized"),
-    };
+    // since all upgradable contracts have a getVersion() function, we can use it to get the major version
+    let contract_proxy = LightClientV2::new(proxy_addr, &provider);
+    let contract_major_version = contract_proxy.getVersion().call().await?.majorVersion;
 
     Ok(initialized == contract_major_version && contract_major_version == expected_major_version)
 }
@@ -789,6 +818,7 @@ pub async fn deploy_token_proxy(
         )
         .calldata()
         .to_owned();
+
     let token_proxy_addr = contracts
         .deploy(
             Contract::EspTokenProxy,
@@ -817,7 +847,7 @@ pub async fn deploy_token_proxy(
 }
 
 /// Upgrade the esp token proxy to use EspTokenV2.
-async fn upgrade_esp_token_v2(
+pub async fn upgrade_esp_token_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
 ) -> Result<TransactionReceipt> {
@@ -833,9 +863,19 @@ async fn upgrade_esp_token_v2(
 
     assert!(is_contract(&provider, v2_addr).await?);
 
-    // invoke upgrade on proxy
+    // prepare init calldata for V2
+    let reward_claim_addr = contracts
+        .address(Contract::RewardClaimProxy)
+        .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
+    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+    let init_data = proxy_as_v2
+        .initializeV2(reward_claim_addr)
+        .calldata()
+        .to_owned();
+
+    // invoke upgrade on proxy with initializeV2 call
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
+        .upgradeToAndCall(v2_addr, init_data)
         .send()
         .await?
         .get_receipt()
@@ -846,7 +886,8 @@ async fn upgrade_esp_token_v2(
         let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
         assert_eq!(proxy_as_v2.name().call().await?, "Espresso");
-        tracing::info!(%v2_addr, "EspToken successfully upgraded to")
+        assert_eq!(proxy_as_v2.rewardClaim().call().await?, reward_claim_addr);
+        tracing::info!(%v2_addr, "EspToken successfully upgraded to");
     } else {
         anyhow::bail!("EspToken upgrade failed: {:?}", receipt);
     }
@@ -881,6 +922,7 @@ pub async fn deploy_stake_table_proxy(
         .initialize(token_addr, light_client_addr, exit_escrow_period, owner)
         .calldata()
         .to_owned();
+
     let st_proxy_addr = contracts
         .deploy(
             Contract::StakeTableProxy,
@@ -903,6 +945,62 @@ pub async fn deploy_stake_table_proxy(
     );
 
     Ok(st_proxy_addr)
+}
+
+/// Deploy and initialize the RewardClaim contract behind a proxy
+pub async fn deploy_reward_claim_proxy(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    esp_token_addr: Address,
+    light_client_addr: Address,
+    owner: Address,
+) -> Result<Address> {
+    let reward_claim_addr = contracts
+        .deploy(
+            Contract::RewardClaim,
+            RewardClaim::deploy_builder(&provider),
+        )
+        .await?;
+    let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+
+    // verify the esp token address contains a contract
+    if !is_contract(&provider, esp_token_addr).await? {
+        anyhow::bail!("EspToken address is not a contract, can't deploy RewardClaimProxy");
+    }
+
+    // verify the light client address contains a contract
+    if !is_contract(&provider, light_client_addr).await? {
+        anyhow::bail!("LightClient address is not a contract, can't deploy RewardClaimProxy");
+    }
+
+    let init_data = reward_claim
+        .initialize(owner, esp_token_addr, light_client_addr)
+        .calldata()
+        .to_owned();
+    let reward_claim_proxy_addr = contracts
+        .deploy(
+            Contract::RewardClaimProxy,
+            ERC1967Proxy::deploy_builder(&provider, reward_claim_addr, init_data),
+        )
+        .await?;
+
+    if !is_proxy_contract(&provider, reward_claim_proxy_addr).await? {
+        panic!("RewardClaimProxy detected not as a proxy, report error!");
+    }
+
+    let reward_claim_proxy = RewardClaim::new(reward_claim_proxy_addr, &provider);
+    assert_eq!(
+        reward_claim_proxy.getVersion().call().await?,
+        (1, 0, 0).into()
+    );
+    assert_eq!(reward_claim_proxy.owner().call().await?, owner);
+    assert_eq!(reward_claim_proxy.espToken().call().await?, esp_token_addr);
+    assert_eq!(
+        reward_claim_proxy.lightClient().call().await?,
+        light_client_addr
+    );
+
+    Ok(reward_claim_proxy_addr)
 }
 
 /// Read commission values from L1 StakeTable V1 ValidatorRegistered events for V2 migration
@@ -982,13 +1080,7 @@ pub async fn prepare_stake_table_v2_upgrade(
     }
 
     // For a non-major version upgrade the proxy storage must already be initialized.
-    let needs_initialization = !already_initialized(
-        &provider,
-        proxy_addr,
-        Contract::StakeTableV2,
-        target_version,
-    )
-    .await?;
+    let needs_initialization = !already_initialized(&provider, proxy_addr, target_version).await?;
     assert_eq!(
         needs_initialization,
         current_version.majorVersion < target_version,
@@ -2519,7 +2611,7 @@ mod tests {
         // deploy token
         let init_recipient = provider.get_accounts().await?[1];
         let token_owner = provider.get_accounts().await?[0];
-        let token_name = "Espresso Token";
+        let token_name = "Espresso";
         let token_symbol = "ESP";
         let initial_supply = U256::from(3590000000u64);
         let token_proxy_addr = deploy_token_proxy(
@@ -2534,6 +2626,9 @@ mod tests {
         .await?;
         let esp_token = EspToken::new(token_proxy_addr, &provider);
         assert_eq!(esp_token.name().call().await?, token_name);
+
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
 
         // upgrade to v2
         upgrade_esp_token_v2(&provider, &mut contracts).await?;
@@ -2561,6 +2656,8 @@ mod tests {
             esp_token_v2.balanceOf(token_owner).call().await?,
             U256::ZERO
         );
+
+        assert_eq!(esp_token_v2.rewardClaim().call().await?, fake_reward_claim);
 
         Ok(())
     }
@@ -2668,6 +2765,14 @@ mod tests {
         let esp_token = EspToken::new(esp_token_proxy_addr, &provider);
         assert_eq!(esp_token.owner().call().await?, multisig_admin);
 
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
+
+        let init_data = EspTokenV2::new(Address::ZERO, &provider)
+            .initializeV2(fake_reward_claim)
+            .calldata()
+            .to_owned();
+
         // then send upgrade proposal to the multisig wallet
         let result = upgrade_esp_token_v2_multisig_owner(
             &provider,
@@ -2685,7 +2790,7 @@ mod tests {
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
             assert_eq!(data["safeAddress"], multisig_admin.to_string());
             assert_eq!(data["proxyAddress"], esp_token_proxy_addr.to_string());
-            assert_eq!(data["initData"], "0x");
+            assert_eq!(data["initData"], init_data.to_string());
             assert_eq!(data["useHardwareWallet"], false);
         }
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
@@ -3152,5 +3257,81 @@ mod tests {
             },
         )
         .await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_proxy_initialized_version_initialized() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        let version = get_proxy_initialized_version(&provider, stake_table_proxy_addr).await?;
+        assert_eq!(version, 1, "Initialized proxy should return version 1");
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_proxy_initialized_version_reinitialized() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        let pauser = Address::random();
+        let admin = Address::random();
+        upgrade_stake_table_v2(&provider, &mut contracts, pauser, admin).await?;
+
+        let version = get_proxy_initialized_version(&provider, stake_table_proxy_addr).await?;
+        assert_eq!(version, 2, "Reinitialized proxy should return version 2");
+
+        Ok(())
     }
 }

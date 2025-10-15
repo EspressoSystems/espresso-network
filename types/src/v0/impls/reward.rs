@@ -9,7 +9,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
+use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
@@ -80,8 +80,8 @@ impl FromStringOrInteger for RewardAmount {
     }
 
     fn from_string(s: String) -> anyhow::Result<Self> {
-        // For backwards compatibility, we have an ad hoc parser for WEI amounts represented as hex
-        // strings.
+        // For backwards compatibility, we have an ad hoc parser for WEI amounts
+        // represented as hex strings.
         if let Some(s) = s.strip_prefix("0x") {
             return Ok(Self(s.parse()?));
         }
@@ -412,16 +412,14 @@ impl RewardAccountProofV2 {
     }
 }
 
-impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
+impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
     type Error = anyhow::Error;
 
     /// Generate a Solidity-compatible proof for this account
     ///
     /// The proof is returned without leaf value. The caller is expected to
     /// obtain the leaf value from the jellyfish proof (Self).
-    ///
-    /// TODO: review error handling / panics
-    fn try_into(self) -> anyhow::Result<AccruedRewardsProofSol> {
+    fn try_into(self) -> anyhow::Result<RewardProofSiblings> {
         // NOTE: rustfmt fails to format this file if the nesting is too deep.
         let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
             proof
@@ -438,7 +436,7 @@ impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
             bail!("Invalid proof: unexpected path length: {}", path.len());
         };
 
-        let siblings: Vec<B256> = proof
+        let siblings: [B256; REWARD_MERKLE_TREE_V2_HEIGHT] = proof
             .proof
             .iter()
             .enumerate()
@@ -476,9 +474,12 @@ impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
                 }
                 _ => None,
             })
-            .collect();
+            .collect::<Vec<B256>>().try_into().map_err(|err: Vec<_>| {
+                panic!("Invalid proof length: {:?}, this should never happen", err.len())
+            })
+            .unwrap();
 
-        Ok(AccruedRewardsProofSol { siblings })
+        Ok(siblings.into())
     }
 }
 
@@ -1012,8 +1013,8 @@ pub mod tests {
 
     #[test]
     fn test_reward_calculation_sanity_checks() {
-        // This test verifies that the total rewards distributed match the block reward.
-        // Due to rounding effects in distribution, the validator may receive a slightly higher amount
+        // This test verifies that the total rewards distributed match the block reward. Due to
+        // rounding effects in distribution, the validator may receive a slightly higher amount
         // because the remainder after delegator distribution is sent to the validator.
 
         let validator = Validator::mock();

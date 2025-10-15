@@ -18,7 +18,6 @@ pub mod cbor;
 
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use async_lock::RwLock;
 use bimap::BiMap;
 use futures::channel::oneshot::Sender;
 use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
@@ -162,7 +161,6 @@ type BoxedTransport = Boxed<(PeerId, StreamMuxerBox)>;
 #[instrument(skip(identity))]
 pub async fn gen_transport<T: NodeType>(
     identity: Keypair,
-    stake_table: Option<Arc<RwLock<T::Membership>>>,
     auth_message: Option<Vec<u8>>,
     consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
 ) -> Result<BoxedTransport, NetworkError> {
