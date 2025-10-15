@@ -12,13 +12,13 @@
 
 use hotshot::traits::{implementations::MemoryNetwork, NodeImplementation};
 use hotshot_example_types::{
-    block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
+    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{QuorumProposal, ViewNumber},
+    data::{QuorumProposal, VidCommitment, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::node_implementation::{NodeType, Versions},
 };
@@ -31,10 +31,14 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, TransactionIndex, VidCommonQueryData},
+    availability::{
+        QueryableHeader, QueryablePayload, TransactionIndex, VerifiableInclusion,
+        VidCommonQueryData,
+    },
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
     types::HeightIndexed,
+    VidCommon,
 };
 
 pub type MockHeader = TestBlockHeader;
@@ -110,9 +114,25 @@ impl HeightIndexed for MockHeader {
     }
 }
 
+/// A naive inclusion proof for `MockPayload` and `MockTransaction`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MockInclusionProof(MockPayload);
+
+impl VerifiableInclusion<MockTypes> for MockInclusionProof {
+    fn verify(
+        &self,
+        _metadata: &TestMetadata,
+        tx: &MockTransaction,
+        _payload_commitment: &VidCommitment,
+        _common: &VidCommon,
+    ) -> bool {
+        self.0.transactions.contains(tx)
+    }
+}
+
 impl QueryablePayload<MockTypes> for MockPayload {
     type Iter<'a> = <Vec<TransactionIndex<MockTypes>> as IntoIterator>::IntoIter;
-    type InclusionProof = ();
+    type InclusionProof = MockInclusionProof;
 
     fn len(&self, _meta: &Self::Metadata) -> usize {
         self.transactions.len()
@@ -142,7 +162,7 @@ impl QueryablePayload<MockTypes> for MockPayload {
         _vid: &VidCommonQueryData<MockTypes>,
         _index: &TransactionIndex<MockTypes>,
     ) -> Option<Self::InclusionProof> {
-        Some(())
+        Some(MockInclusionProof(self.clone()))
     }
 }
 
