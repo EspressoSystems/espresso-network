@@ -32,7 +32,7 @@ use vbs::version::StaticVersion;
 
 use crate::{
     availability::{
-        QueryableHeader, QueryablePayload, TransactionInclusionProof, TransactionIndex,
+        QueryableHeader, QueryablePayload, TransactionIndex, VerifiableInclusion,
         VidCommonQueryData,
     },
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
@@ -118,7 +118,7 @@ impl HeightIndexed for MockHeader {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MockInclusionProof(MockPayload);
 
-impl TransactionInclusionProof<MockTypes> for MockInclusionProof {
+impl VerifiableInclusion<MockTypes> for MockInclusionProof {
     fn verify(
         &self,
         _metadata: &TestMetadata,

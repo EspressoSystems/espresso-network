@@ -46,7 +46,8 @@ pub type QcHash<Types> = Commitment<QuorumCertificate2<Types>>;
 /// payload, so we can commit to the entire block simply by hashing the header.
 pub type BlockHash<Types> = Commitment<Header<Types>>;
 pub type TransactionHash<Types> = Commitment<Transaction<Types>>;
-pub type InclusionProof<Types> = <Payload<Types> as QueryablePayload<Types>>::InclusionProof;
+pub type TransactionInclusionProof<Types> =
+    <Payload<Types> as QueryablePayload<Types>>::InclusionProof;
 pub type NamespaceIndex<Types> = <Header<Types> as QueryableHeader<Types>>::NamespaceIndex;
 pub type NamespaceId<Types> = <Header<Types> as QueryableHeader<Types>>::NamespaceId;
 
@@ -94,7 +95,7 @@ where
 /// the transaction belongs not only to the block but to a section of the block dedicated to a
 /// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
 /// query service may use `()` for the proof).
-pub trait TransactionInclusionProof<Types: NodeType>:
+pub trait VerifiableInclusion<Types: NodeType>:
     Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync
 {
     /// Verify the inclusion proof against a payload commitment.
@@ -126,7 +127,7 @@ where
         Self: 'a;
 
     /// A proof that a certain transaction exists in the block.
-    type InclusionProof: TransactionInclusionProof<Types>;
+    type InclusionProof: VerifiableInclusion<Types>;
 
     /// The number of transactions in the block.
     fn len(&self, meta: &Self::Metadata) -> usize;
@@ -513,7 +514,7 @@ where
         &self,
         vid_common: &VidCommonQueryData<Types>,
         ix: &TransactionIndex<Types>,
-    ) -> Option<InclusionProof<Types>> {
+    ) -> Option<TransactionInclusionProof<Types>> {
         self.payload()
             .transaction_proof(self.metadata(), vid_common, ix)
     }
@@ -809,7 +810,7 @@ where
     transaction: Transaction<Types>,
     hash: TransactionHash<Types>,
     index: u64,
-    proof: InclusionProof<Types>,
+    proof: TransactionInclusionProof<Types>,
     block_hash: BlockHash<Types>,
     block_height: u64,
     namespace: NamespaceId<Types>,
@@ -869,7 +870,7 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    pub fn new(data: TransactionQueryData<Types>, proof: InclusionProof<Types>) -> Self {
+    pub fn new(data: TransactionQueryData<Types>, proof: TransactionInclusionProof<Types>) -> Self {
         Self {
             proof,
             transaction: data.transaction,
@@ -883,7 +884,7 @@ where
     }
 
     /// A proof of inclusion of this transaction in its block.
-    pub fn proof(&self) -> &InclusionProof<Types> {
+    pub fn proof(&self) -> &TransactionInclusionProof<Types> {
         &self.proof
     }
 

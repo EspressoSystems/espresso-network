@@ -1,4 +1,4 @@
-use hotshot_query_service::{availability::TransactionInclusionProof, VidCommon};
+use hotshot_query_service::{availability::VerifiableInclusion, VidCommon};
 use hotshot_types::data::VidCommitment;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +27,7 @@ impl TxProof {
     }
 }
 
-impl TransactionInclusionProof<SeqTypes> for TxProof {
+impl VerifiableInclusion<SeqTypes> for TxProof {
     fn verify(
         &self,
         ns_table: &NsTable,
