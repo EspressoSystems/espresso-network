@@ -2433,8 +2433,8 @@
 <a href=#2433 id=2433 data-nosnippet>2433</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.read().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#2434 id=2434 data-nosnippet>2434</a>
 <a href=#2435 id=2435 data-nosnippet>2435</a>        <span class="kw">let </span>rows = <span class="kw">match </span>query_as::&lt;(i64, Vec&lt;u8&gt;, <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;, <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;)&gt;(
-<a href=#2436 id=2436 data-nosnippet>2436</a>            <span class="string">"SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root ORDER BY \
-<a href=#2437 id=2437 data-nosnippet>2437</a>             epoch DESC LIMIT $1"</span>,
+<a href=#2436 id=2436 data-nosnippet>2436</a>            <span class="string">"SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
+<a href=#2437 id=2437 data-nosnippet>2437</a>             stake is NOT NULL ORDER BY epoch DESC LIMIT $1"</span>,
 <a href=#2438 id=2438 data-nosnippet>2438</a>        )
 <a href=#2439 id=2439 data-nosnippet>2439</a>        .bind(limit <span class="kw">as </span>i64)
 <a href=#2440 id=2440 data-nosnippet>2440</a>        .fetch_all(tx.as_mut())
