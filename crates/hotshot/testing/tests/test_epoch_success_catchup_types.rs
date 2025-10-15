@@ -6,8 +6,11 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{
-    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes, TestTypesEpochCatchupTypes,
+use hotshot_example_types::{
+    membership::static_committee::StaticStakeTable,
+    node_types::{
+        EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypesEpochCatchupTypes,
+    },
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -15,12 +18,18 @@ use hotshot_testing::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     test_builder::TestDescription,
 };
+use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_epoch_success,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypes>,
+        TestTypesEpochCatchupTypes<
+        StaticStakeTable<
+            BLSPubKey,
+            SchnorrPubKey,
+        >,
+        >,
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,

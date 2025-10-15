@@ -1,14 +1,10 @@
 pub use async_broadcast::broadcast;
-pub use hotshot::traits::election::static_committee::StaticCommittee;
 pub use hotshot_types::{
-    data::{EpochNumber, Leaf, ViewNumber},
+    data::{Leaf, ViewNumber},
     message::Proposal,
     signature_key::BLSPubKey,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
-    traits::{
-        block_contents::BlockPayload,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    traits::{block_contents::BlockPayload, node_implementation::ConsensusTime},
 };
 use vbs::version::StaticVersionType;
 
@@ -16,7 +12,7 @@ pub use crate::builder_state::{BuilderState, MessageType};
 /// The following tests are performed:
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
+    use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration};
 
     use async_lock::RwLock;
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
@@ -31,17 +27,15 @@ mod tests {
     };
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::TestVersions,
+        node_types::{TestTypes, TestVersions},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
         data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
-        signature_key::{BuilderKey, SchnorrPubKey},
         simple_vote::QuorumData2,
         traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
-    use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
     use tokio::time::{error::Elapsed, timeout};
     use tracing_subscriber::EnvFilter;
@@ -62,33 +56,6 @@ mod tests {
             .with_env_filter(EnvFilter::from_default_env())
             .try_init();
         tracing::info!("Testing the builder core with multiple messages from the channels");
-        #[derive(
-            Copy,
-            Clone,
-            Debug,
-            Default,
-            Hash,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Serialize,
-            Deserialize,
-        )]
-        struct TestTypes;
-        impl NodeType for TestTypes {
-            type View = ViewNumber;
-            type Epoch = EpochNumber;
-            type BlockHeader = TestBlockHeader;
-            type BlockPayload = TestBlockPayload;
-            type SignatureKey = BLSPubKey;
-            type Transaction = TestTransaction;
-            type ValidatedState = TestValidatedState;
-            type InstanceState = TestInstanceState;
-            type Membership = StaticCommittee<Self>;
-            type BuilderSignatureKey = BuilderKey;
-            type StateSignatureKey = SchnorrPubKey;
-        }
         // no of test messages to send
         let num_test_messages = 5;
         let multiplication_factor = 5;

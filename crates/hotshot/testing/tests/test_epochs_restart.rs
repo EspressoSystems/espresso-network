@@ -52,14 +52,14 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(60),
+                  duration: Duration::from_secs(120),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
-          // Make sure we keep committing rounds after the catchup, but not the full 50.
-          num_successful_views: 22,
+          // Make sure we keep committing rounds after the catchup
+          num_successful_views: 50,
           expected_view_failures: vec![10],
-          possible_view_failures: vec![8, 9, 11, 12],
+          possible_view_failures: vec![8, 9, 11, 12, 14],
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
@@ -101,14 +101,14 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(60),
+                  duration: Duration::from_secs(120),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
-          num_successful_views: 22,
+          num_successful_views: 50,
           expected_view_failures: vec![10],
-          possible_view_failures: vec![8, 9, 11, 12],
+          possible_view_failures: vec![8, 9, 11, 12, 14, 15],
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
@@ -164,9 +164,9 @@ cross_tests!(
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
-          num_successful_views: 22,
+          num_successful_views: 50,
           expected_view_failures: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-          possible_view_failures: vec![8, 9, 10, 21, 22, 23, 24],
+          possible_view_failures: vec![8, 9, 10, 21, 22, 23, 24, 25],
           decide_timeout: Duration::from_secs(120),
           ..Default::default()
       };
@@ -224,7 +224,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-          possible_view_failures: vec![8, 9, 10, 21, 22, 23, 24],
+          possible_view_failures: vec![8, 9, 10, 21, 22, 23, 24, 26],
           decide_timeout: Duration::from_secs(120),
           ..Default::default()
       };

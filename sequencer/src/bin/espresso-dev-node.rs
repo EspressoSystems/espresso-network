@@ -51,7 +51,7 @@ use sequencer::{
 };
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
-use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
@@ -536,7 +536,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let staking_priv_keys = network_config.staking_priv_keys();
-            setup_stake_table_contract_for_test(
+            StakingTransactions::create(
                 l1_url.clone(),
                 &provider,
                 l1_contracts
@@ -545,6 +545,8 @@ async fn main() -> anyhow::Result<()> {
                 staking_priv_keys,
                 DelegationConfig::default(),
             )
+            .await?
+            .apply_all()
             .await?;
         }
     }

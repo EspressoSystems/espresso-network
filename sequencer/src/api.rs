@@ -1002,7 +1002,7 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -1240,7 +1240,7 @@ pub mod test_helpers {
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
                 .expect("StakeTableProxy address not found");
-            setup_stake_table_contract_for_test(
+            StakingTransactions::create(
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,
@@ -1248,7 +1248,10 @@ pub mod test_helpers {
                 delegation_config,
             )
             .await
-            .expect("stake table setup failed");
+            .expect("stake table setup failed")
+            .apply_all()
+            .await
+            .expect("send all txns failed");
 
             // enable interval mining with a 1s interval.
             // This ensures that blocks are finalized every second, even when there are no transactions.
@@ -2007,6 +2010,7 @@ mod api_tests {
             .append_decided_leaves(
                 ViewNumber::new(1),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &FailConsumer,
             )
             .await
@@ -2024,6 +2028,7 @@ mod api_tests {
             .append_decided_leaves(
                 ViewNumber::new(4),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &consumer,
             )
             .await
@@ -2118,6 +2123,7 @@ mod api_tests {
             .append_decided_leaves(
                 leaf.view_number(),
                 [(&leaf_info(leaf.clone()), qc.clone())],
+                None,
                 &consumer,
             )
             .await
@@ -2150,6 +2156,7 @@ mod api_tests {
             .append_decided_leaves(
                 leaf.view_number(),
                 [(&leaf_info(leaf.clone()), qc)],
+                None,
                 &consumer,
             )
             .await
@@ -2261,7 +2268,7 @@ mod test {
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
-        testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
+        testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
 
     type PosVersionV3 = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
@@ -3249,21 +3256,21 @@ mod test {
             let view_number = event.view_number;
             views.insert(view_number.u64());
 
-            if let hotshot::types::EventType::Decide { qc, .. } = event.event {
-                assert!(qc.data.epoch.is_some(), "epochs are live");
-                assert!(qc.data.block_number.is_some());
+            if let hotshot::types::EventType::Decide { committing_qc, .. } = event.event {
+                assert!(committing_qc.data.epoch.is_some(), "epochs are live");
+                assert!(committing_qc.data.block_number.is_some());
 
-                let epoch = qc.data.epoch.unwrap().u64();
+                let epoch = committing_qc.data.epoch.unwrap().u64();
                 epochs.insert(epoch);
 
                 tracing::debug!(
                     "Got decide: epoch: {:?}, block: {:?} ",
                     epoch,
-                    qc.data.block_number
+                    committing_qc.data.block_number
                 );
 
                 let expected_epoch =
-                    epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
+                    epoch_from_block_number(committing_qc.data.block_number.unwrap(), epoch_height);
                 tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
 
                 assert_eq!(expected_epoch, epoch);
@@ -3569,6 +3576,7 @@ mod test {
         let mut target_bh = 0;
         while let Some(header) = headers.next().await {
             let header = header.unwrap();
+            println!("got header with height {}", header.height());
             if header.height() == 0 {
                 continue;
             }
@@ -4986,30 +4994,6 @@ mod test {
         Ok(())
     }
 
-    /// Waits until a node has reached the given target epoch (exclusive).
-    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
-    async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
-        epoch_height: u64,
-        target_epoch: u64,
-    ) {
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                println!(
-                    "Node decided at height: {}, epoch: {:?}",
-                    leaf.height(),
-                    epoch
-                );
-
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
-            }
-        }
-    }
-
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
@@ -5858,7 +5842,10 @@ mod test {
             .try_into()?;
             commissions.push((validator, commission, new_commission));
             tracing::info!(%validator, %commission, %new_commission, "Update commission");
-            update_commission(provider, st_addr, new_commission).await?;
+            update_commission(provider, st_addr, new_commission)
+                .await?
+                .get_receipt()
+                .await?;
         }
 
         // wait until new stake table takes effect
@@ -6093,10 +6080,7 @@ mod test {
                     .await
                     .unwrap();
 
-                assert_eq!(
-                    reward_claim_input,
-                    res.to_reward_claim_input(Default::default())?
-                );
+                assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
             }
         }
 

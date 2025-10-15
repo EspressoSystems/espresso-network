@@ -54,6 +54,9 @@ demo-native-pos-base *args: (build "test" "--no-default-features --features pos"
 demo-native-drb-header-upgrade *args: (build "test" "--no-default-features --features pos,drb-and-header")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-drb-header *args: (build "test" "--no-default-features --features drb-and-header")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features --features fee,drb-and-header")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
@@ -150,7 +153,7 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$|RewardClaim$|^RewardClaimPrototypeMock$"
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$|RewardClaim$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -234,10 +237,10 @@ gen-go-bindings:
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
-test-go:
+test-go *args:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
-    cd sdks/go && go test -v ./...
+    cd sdks/go && go test -v ./... {{args}}
 
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
