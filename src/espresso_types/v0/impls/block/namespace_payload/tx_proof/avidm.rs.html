@@ -74,16 +74,18 @@
 <a href=#74 id=74 data-nosnippet>74</a>        tx: <span class="kw-2">&amp;</span>Transaction,
 <a href=#75 id=75 data-nosnippet>75</a>        commit: <span class="kw-2">&amp;</span>VidCommitment,
 <a href=#76 id=76 data-nosnippet>76</a>        common: <span class="kw-2">&amp;</span>VidCommon,
-<a href=#77 id=77 data-nosnippet>77</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;bool&gt; {
+<a href=#77 id=77 data-nosnippet>77</a>    ) -&gt; bool {
 <a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">let </span>VidCommon::V1(common) = common <span class="kw">else </span>{
 <a href=#79 id=79 data-nosnippet>79</a>            <span class="macro">tracing::info!</span>(<span class="string">"VID version mismatch"</span>);
-<a href=#80 id=80 data-nosnippet>80</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#80 id=80 data-nosnippet>80</a>            <span class="kw">return </span><span class="bool-val">false</span>;
 <a href=#81 id=81 data-nosnippet>81</a>        };
 <a href=#82 id=82 data-nosnippet>82</a>
-<a href=#83 id=83 data-nosnippet>83</a>        <span class="kw">let </span>(txs, <span class="kw">_</span>) = <span class="self">self</span>.ns_proof.verify(ns_table, commit, common)<span class="question-mark">?</span>;
-<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">if </span><span class="self">self</span>.tx_index.<span class="number">0 </span>&gt; txs.len() {
-<a href=#85 id=85 data-nosnippet>85</a>            <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="bool-val">false</span>);
-<a href=#86 id=86 data-nosnippet>86</a>        }
-<a href=#87 id=87 data-nosnippet>87</a>        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>txs[<span class="self">self</span>.tx_index.<span class="number">0</span>] == tx)
-<a href=#88 id=88 data-nosnippet>88</a>    }
-<a href=#89 id=89 data-nosnippet>89</a>}</code></pre></div></section></main></body></html>
+<a href=#83 id=83 data-nosnippet>83</a>        <span class="kw">let </span><span class="prelude-val">Some</span>((txs, <span class="kw">_</span>)) = <span class="self">self</span>.ns_proof.verify(ns_table, commit, common) <span class="kw">else </span>{
+<a href=#84 id=84 data-nosnippet>84</a>            <span class="kw">return </span><span class="bool-val">false</span>;
+<a href=#85 id=85 data-nosnippet>85</a>        };
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">if </span><span class="self">self</span>.tx_index.<span class="number">0 </span>&gt; txs.len() {
+<a href=#87 id=87 data-nosnippet>87</a>            <span class="kw">return </span><span class="bool-val">false</span>;
+<a href=#88 id=88 data-nosnippet>88</a>        }
+<a href=#89 id=89 data-nosnippet>89</a>        <span class="kw-2">&amp;</span>txs[<span class="self">self</span>.tx_index.<span class="number">0</span>] == tx
+<a href=#90 id=90 data-nosnippet>90</a>    }
+<a href=#91 id=91 data-nosnippet>91</a>}</code></pre></div></section></main></body></html>
