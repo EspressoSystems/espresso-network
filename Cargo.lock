@@ -7489,6 +7489,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "light-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "committable",
+ "espresso-types",
+ "hotshot-query-service",
+ "hotshot-types",
+ "serde",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10270,6 +10282,7 @@ dependencies = [
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "libp2p",
+ "light-client",
  "num_enum",
  "parking_lot",
  "portpicker",

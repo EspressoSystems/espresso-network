@@ -29,6 +29,7 @@ members = [
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
+    "light-client",
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
@@ -175,6 +176,9 @@ hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
+
+espresso-types = { path = "types" }
+light-client = { path = "light-client" }
 
 # VID import
 vid = { path = "vid", features = ["parallel", "keccak256"] }

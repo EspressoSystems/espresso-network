@@ -1,0 +1,16 @@
+[package]
+name = "light-client"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+committable = { workspace = true }
+espresso-types = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-types = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true
