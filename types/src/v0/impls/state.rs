@@ -1050,7 +1050,7 @@ async fn validate_next_stake_table_hash(
     let next_stake_table_hash = epoch_membership
         .stake_table_hash()
         .await
-        .ok_or(ProposalValidationError::NextStakeTableNotFound)?;
+        .ok_or(ProposalValidationError::NextStakeTableHashNotFound)?;
     let Some(proposed_next_stake_table_hash) = proposed_header.next_stake_table_hash() else {
         return Err(ProposalValidationError::NextStakeTableHashNotFound);
     };
