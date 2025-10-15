@@ -59,7 +59,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup
           num_successful_views: 50,
           expected_view_failures: vec![10],
-          possible_view_failures: vec![8, 9, 11, 12, 14],
+          possible_view_failures: vec![8, 9, 11, 12, 13],
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
