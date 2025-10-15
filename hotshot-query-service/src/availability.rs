@@ -1079,15 +1079,12 @@ mod test {
                     .await
                     .unwrap();
                 assert_eq!(txn.hash(), tx_with_proof.hash());
-                assert!(tx_with_proof
-                    .proof()
-                    .verify(
-                        block.metadata(),
-                        txn.transaction(),
-                        &block.payload_hash(),
-                        common.common()
-                    )
-                    .unwrap_or(false));
+                assert!(tx_with_proof.proof().verify(
+                    block.metadata(),
+                    txn.transaction(),
+                    &block.payload_hash(),
+                    common.common()
+                ));
 
                 // Similar to above, but by hash
                 let tx_with_proof = client
@@ -1099,15 +1096,12 @@ mod test {
                     .await
                     .unwrap();
                 assert_eq!(txn.hash(), tx_with_proof.hash());
-                assert!(tx_with_proof
-                    .proof()
-                    .verify(
-                        block.metadata(),
-                        txn.transaction(),
-                        &block.payload_hash(),
-                        common.common()
-                    )
-                    .unwrap_or(false));
+                assert!(tx_with_proof.proof().verify(
+                    block.metadata(),
+                    txn.transaction(),
+                    &block.payload_hash(),
+                    common.common()
+                ));
             }
 
             let block_range: Vec<BlockQueryData<MockTypes>> = client

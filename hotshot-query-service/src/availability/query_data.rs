@@ -106,7 +106,7 @@ pub trait VerifiableInclusion<Types: NodeType>:
         tx: &Transaction<Types>,
         payload_commitment: &VidCommitment,
         common: &VidCommon,
-    ) -> Option<bool>;
+    ) -> bool;
 }
 
 /// A block payload whose contents (e.g. individual transactions) can be examined.

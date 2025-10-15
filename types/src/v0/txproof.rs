@@ -34,7 +34,7 @@ impl VerifiableInclusion<SeqTypes> for TxProof {
         tx: &Transaction,
         commit: &VidCommitment,
         common: &VidCommon,
-    ) -> Option<bool> {
+    ) -> bool {
         match self {
             TxProof::V0(tx_proof) => tx_proof.verify(ns_table, tx, commit, common),
             TxProof::V1(tx_proof) => tx_proof.verify(ns_table, tx, commit, common),

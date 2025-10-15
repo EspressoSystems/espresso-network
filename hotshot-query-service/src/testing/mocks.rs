@@ -125,8 +125,8 @@ impl VerifiableInclusion<MockTypes> for MockInclusionProof {
         tx: &MockTransaction,
         _payload_commitment: &VidCommitment,
         _common: &VidCommon,
-    ) -> Option<bool> {
-        Some(self.0.transactions.contains(tx))
+    ) -> bool {
+        self.0.transactions.contains(tx)
     }
 }
 
