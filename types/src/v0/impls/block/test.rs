@@ -70,9 +70,7 @@ async fn basic_correctness() {
                 assert_eq!(tx, tx2);
                 tx_proof
             };
-            assert!(tx_proof2
-                .verify(block.ns_table(), &tx, &vid_commit, &vid_common)
-                .unwrap());
+            assert!(tx_proof2.verify(block.ns_table(), &tx, &vid_commit, &vid_common));
         }
         assert!(
             all_txs.is_empty(),
