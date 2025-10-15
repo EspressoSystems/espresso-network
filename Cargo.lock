@@ -2584,14 +2584,14 @@ dependencies = [
 
 [[package]]
 name = "cdn-broker"
-version = "0.6.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
+version = "0.6.1"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.1#54ee47049c2c90cd418d1fa2fddfbd3533737c35"
 dependencies = [
  "cdn-proto",
  "clap 4.5.48",
  "console-subscriber",
  "derivative",
- "jf-signature 0.3.0",
+ "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "lazy_static",
  "local-ip-address",
  "parking_lot",
@@ -2606,13 +2606,13 @@ dependencies = [
 
 [[package]]
 name = "cdn-client"
-version = "0.6.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
+version = "0.6.1"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.1#54ee47049c2c90cd418d1fa2fddfbd3533737c35"
 dependencies = [
  "cdn-proto",
  "clap 4.5.48",
  "derive_more 1.0.0",
- "jf-signature 0.3.0",
+ "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "parking_lot",
  "rand 0.8.5",
  "tokio",
@@ -2622,12 +2622,12 @@ dependencies = [
 
 [[package]]
 name = "cdn-marshal"
-version = "0.6.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
+version = "0.6.1"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.1#54ee47049c2c90cd418d1fa2fddfbd3533737c35"
 dependencies = [
  "cdn-proto",
  "clap 4.5.48",
- "jf-signature 0.3.0",
+ "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
@@ -2635,8 +2635,8 @@ dependencies = [
 
 [[package]]
 name = "cdn-proto"
-version = "0.6.0"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.0#cc15fd411305de3d02fed6ed5bec0ab7af945f52"
+version = "0.6.1"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.1#54ee47049c2c90cd418d1fa2fddfbd3533737c35"
 dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
@@ -2645,7 +2645,7 @@ dependencies = [
  "capnp",
  "derivative",
  "derive_more 1.0.0",
- "jf-signature 0.3.0",
+ "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "lazy_static",
  "mnemonic",
  "num_enum",
@@ -6822,30 +6822,6 @@ dependencies = [
 
 [[package]]
 name = "jf-rescue"
-version = "0.2.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.2.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
-dependencies = [
- "ark-bls12-377",
- "ark-bls12-381",
- "ark-bn254 0.5.0",
- "ark-bw6-761",
- "ark-ed-on-bls12-377",
- "ark-ed-on-bls12-381",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-std 0.5.0",
- "displaydoc",
- "itertools 0.12.1",
- "jf-commitment",
- "jf-crhf",
- "jf-prf",
- "jf-utils",
- "spongefish",
- "zeroize",
-]
-
-[[package]]
-name = "jf-rescue"
 version = "0.3.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0#e6cc2704a91bca87152e39bd4bc01288f0c5f265"
 dependencies = [
@@ -6893,36 +6869,6 @@ dependencies = [
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
  "jf-utils",
  "spongefish",
- "zeroize",
-]
-
-[[package]]
-name = "jf-signature"
-version = "0.3.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.3.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
-dependencies = [
- "ark-bls12-381",
- "ark-bn254 0.5.0",
- "ark-ec 0.5.0",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "blst",
- "derivative",
- "digest 0.10.7",
- "displaydoc",
- "getrandom 0.2.16",
- "hashbrown 0.14.5",
- "itertools 0.12.1",
- "jf-crhf",
- "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
- "jf-rescue 0.2.0",
- "jf-utils",
- "num-bigint",
- "num-traits",
- "serde",
- "sha3",
- "tagged-base64",
  "zeroize",
 ]
 
