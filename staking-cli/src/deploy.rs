@@ -92,7 +92,7 @@ impl TestSystem {
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
         // mnemonic and the default signer is the first account.
-        let signer = build_signer(DEV_MNEMONIC.to_string(), 0);
+        let signer = build_signer(DEV_MNEMONIC, 0);
         assert_eq!(
             signer.address(),
             deployer_address,

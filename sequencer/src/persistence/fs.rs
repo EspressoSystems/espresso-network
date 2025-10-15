@@ -373,6 +373,7 @@ impl Inner {
     async fn generate_decide_events(
         &self,
         view: ViewNumber,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -438,11 +439,21 @@ impl Inner {
         let mut current_interval = None;
         for (view, (leaf, qc)) in leaves {
             let height = leaf.leaf.block_header().block_number();
+
+            // Insert the deciding QC at the appropriate position, with the last decide event in the
+            // chain.
+            let qc2 = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
+            } else {
+                None
+            };
+
             consumer
                 .handle_event(&Event {
                     view_number: view,
                     event: EventType::Decide {
-                        qc: Arc::new(qc),
+                        committing_qc: Arc::new(qc),
+                        deciding_qc: qc2,
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,
                     },
@@ -655,6 +666,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -701,7 +713,10 @@ impl SequencerPersistence for Persistence {
             )?;
         }
 
-        match inner.generate_decide_events(view, consumer).await {
+        match inner
+            .generate_decide_events(view, deciding_qc, consumer)
+            .await
+        {
             Err(err) => {
                 // Event processing failure is not an error, since by this point we have at least
                 // managed to persist the decided leaves successfully, and the event processing will
@@ -1486,7 +1501,7 @@ impl SequencerPersistence for Persistence {
             }
         }
 
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.drb_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create drb dir")?;
@@ -1497,10 +1512,20 @@ impl SequencerPersistence for Persistence {
         let file_path = dir_path
             .join(drb_input.epoch.to_string())
             .with_extension("bin");
-        fs::write(&file_path, drb_input_bytes).context(format!(
-            "writing epoch drb_input file for epoch {:?} at {:?}",
-            drb_input.epoch, file_path
-        ))
+
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                file.write_all(&drb_input_bytes).context(format!(
+                    "writing epoch drb_input file for epoch {:?} at {:?}",
+                    drb_input.epoch, file_path
+                ))
+            },
+        )
     }
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
@@ -1517,7 +1542,7 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.epoch_drb_result_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create epoch drb result dir")?;
@@ -1525,10 +1550,18 @@ impl SequencerPersistence for Persistence {
         let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        fs::write(file_path, drb_result_bytes)
-            .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
 
-        Ok(())
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                file.write_all(&drb_result_bytes)
+                    .context(format!("writing epoch drb result file for epoch {epoch:?}"))
+            },
+        )
     }
 
     async fn store_epoch_root(
@@ -1583,38 +1616,40 @@ impl SequencerPersistence for Persistence {
 
         let mut result = Vec::new();
 
-        if drb_dir_path.is_dir() {
-            for (epoch, path) in epoch_files(drb_dir_path)? {
-                let bytes = fs::read(&path)
-                    .context(format!("reading epoch drb result {}", path.display()))?;
-                let drb_result = bincode::deserialize::<DrbResult>(&bytes)
-                    .context(format!("parsing epoch drb result {}", path.display()))?;
+        if !drb_dir_path.is_dir() {
+            return Ok(Vec::new());
+        }
+        for (epoch, path) in epoch_files(drb_dir_path)? {
+            let bytes =
+                fs::read(&path).context(format!("reading epoch drb result {}", path.display()))?;
+            let drb_result = bincode::deserialize::<DrbResult>(&bytes)
+                .context(format!("parsing epoch drb result {}", path.display()))?;
 
-                let block_header_path = block_header_dir_path
-                    .join(epoch.to_string())
-                    .with_extension("txt");
-                let block_header = if block_header_path.is_file() {
-                    let bytes = fs::read(&block_header_path).context(format!(
-                        "reading epoch root block header {}",
-                        block_header_path.display()
-                    ))?;
-                    Some(
-                        bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes)
-                            .context(format!(
-                                "parsing epoch root block header {}",
-                                block_header_path.display()
-                            ))?,
-                    )
-                } else {
-                    None
-                };
+            let block_header_path = block_header_dir_path
+                .join(epoch.to_string())
+                .with_extension("txt");
+            let block_header = if block_header_path.is_file() {
+                let bytes = fs::read(&block_header_path).context(format!(
+                    "reading epoch root block header {}",
+                    block_header_path.display()
+                ))?;
+                Some(
+                    bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes).context(
+                        format!(
+                            "parsing epoch root block header {}",
+                            block_header_path.display()
+                        ),
+                    )?,
+                )
+            } else {
+                None
+            };
 
-                result.push(InitializerEpochInfo::<SeqTypes> {
-                    epoch,
-                    drb_result,
-                    block_header,
-                });
-            }
+            result.push(InitializerEpochInfo::<SeqTypes> {
+                epoch,
+                drb_result,
+                block_header,
+            });
         }
 
         result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
