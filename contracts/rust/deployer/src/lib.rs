@@ -106,22 +106,6 @@ pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
     ProviderBuilder::new().wallet(wallet).connect_http(url)
 }
 
-/// Create Anvil instance with provider and L1Client
-#[cfg(test)]
-fn build_anvil_provider_and_l1_client() -> Result<(
-    alloy::node_bindings::AnvilInstance,
-    HttpProviderWithWallet,
-    L1Client,
-)> {
-    let anvil = alloy::node_bindings::Anvil::new().spawn();
-    let wallet = anvil.wallet().unwrap();
-    let provider = ProviderBuilder::new()
-        .wallet(wallet)
-        .connect_http(anvil.endpoint_url());
-    let l1_client = L1Client::anvil(&anvil)?;
-    Ok((anvil, provider, l1_client))
-}
-
 // We pass this during `forge bind --libraries` as a placeholder for the actual deployed library address
 const LIBRARY_PLACEHOLDER_ADDRESS: &str = "ffffffffffffffffffffffffffffffffffffffff";
 /// `stateHistoryRetentionPeriod` in LightClient.sol as the maximum retention period in seconds
@@ -1399,7 +1383,7 @@ mod tests {
     use std::sync::Arc;
 
     use alloy::{
-        node_bindings::Anvil,
+        node_bindings::{Anvil, AnvilInstance},
         primitives::utils::parse_ether,
         providers::{ext::AnvilApi, layers::AnvilProvider, ProviderBuilder},
         sol_types::SolValue,
@@ -1422,6 +1406,22 @@ mod tests {
             },
         },
     };
+
+    trait ProviderBuilderExt: Sized {
+        fn connect_anvil_with_l1_client(
+            self,
+        ) -> Result<(AnvilInstance, HttpProviderWithWallet, L1Client)> {
+            let anvil = Anvil::new().spawn();
+            let wallet = anvil.wallet().unwrap();
+            let provider = ProviderBuilder::new()
+                .wallet(wallet)
+                .connect_http(anvil.endpoint_url());
+            let l1_client = L1Client::anvil(&anvil)?;
+            Ok((anvil, provider, l1_client))
+        }
+    }
+
+    impl<L, F, N> ProviderBuilderExt for ProviderBuilder<L, F, N> {}
 
     #[test_log::test(tokio::test)]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
@@ -1696,7 +1696,8 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_fetch_stake_table_for_stake_table_storage_migration() -> Result<()> {
-        let (_anvil, provider, l1_client) = build_anvil_provider_and_l1_client()?;
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
         let owner = provider.get_accounts().await?[0];
 
@@ -2340,7 +2341,8 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
-        let (_anvil, provider, l1_client) = build_anvil_provider_and_l1_client()?;
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
 
         // deploy token
@@ -2432,7 +2434,8 @@ mod tests {
     async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
-        let (_anvil, provider, l1_client) = build_anvil_provider_and_l1_client()?;
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
         let init_recipient = provider.get_accounts().await?[0];
         let token_owner = Address::random();
@@ -3306,13 +3309,8 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_get_proxy_initialized_version_reinitialized() -> Result<()> {
-        let anvil = Anvil::new().spawn();
-        let wallet = anvil.wallet().unwrap();
-        let provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .connect_http(anvil.endpoint_url());
-        let l1_client = L1Client::anvil(&anvil)?;
-
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
         let owner = l1_client.get_accounts().await?[0];
 
