@@ -42,7 +42,3 @@ path = "main.rs"
 
 [lints]
 workspace = true
-
-[dependencies]
-hotshot-query-service.workspace = true
-serde_json.workspace = true
