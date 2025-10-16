@@ -14,16 +14,26 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  inputs.rust-overlay.url = "github:oxalica/rust-overlay";
+  # Use ...foundry.nix/stable for latest stable release
+  # On 1.4 foundry's formatting is a bit strange, so we pin 1.3.6 for now
+  inputs.foundry-nix.url = "github:shazow/foundry.nix/e632b06dc759e381ef04f15ff9541f889eda6013";
+  inputs.foundry-nix.inputs.nixpkgs.follows = "nixpkgs";
 
-  inputs.nixpkgs-cross-overlay.url =
-    "github:alekseysidorov/nixpkgs-cross-overlay";
+  inputs.rust-overlay.url = "github:oxalica/rust-overlay";
+  inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+
+  inputs.nixpkgs-cross-overlay.url = "github:alekseysidorov/nixpkgs-cross-overlay";
+  inputs.nixpkgs-cross-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
+  inputs.flake-utils.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
+  inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
+
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
+  inputs.flake-compat.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.git-hooks.url = "github:cachix/git-hooks.nix";
   inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
@@ -31,6 +41,7 @@
   outputs =
     { self
     , nixpkgs
+    , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
@@ -72,6 +83,7 @@
 
       overlays = [
         (import rust-overlay)
+        foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
           solhint =
@@ -247,7 +259,7 @@
             coreutils
 
             # Ethereum contracts, solidity, ...
-            foundry
+            foundry-bin
             solc
             nodePackages.prettier
             solhint
@@ -352,7 +364,7 @@
         myShell {
           buildInputs = [
             # Foundry tools
-            foundry
+            foundry-bin
             solc
 
             # Security analysis tools
