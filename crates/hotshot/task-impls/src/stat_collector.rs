@@ -33,7 +33,32 @@ pub enum BenchmarkEventType {
     VidShareRecv,
     VidShareValidated,
     LeavesDecided,
+    // Builder
+    AvailableBlocksSent,
+    AvailableBlocksReceived,
+    BlockClaimsSent,
+    BlockClaimsReceived,
     Shutdown,
+}
+
+pub enum BuilderEventType {
+    AvailableBlocksSent,
+    AvailableBlocksReceived,
+    BlockClaimsSent,
+    BlockClaimsReceived,
+}
+
+impl From<BuilderEventType> for BenchmarkEventType {
+    fn from(event: BuilderEventType) -> Self {
+        match event {
+            BuilderEventType::AvailableBlocksSent => BenchmarkEventType::AvailableBlocksSent,
+            BuilderEventType::AvailableBlocksReceived => {
+                BenchmarkEventType::AvailableBlocksReceived
+            },
+            BuilderEventType::BlockClaimsSent => BenchmarkEventType::BlockClaimsSent,
+            BuilderEventType::BlockClaimsReceived => BenchmarkEventType::BlockClaimsReceived,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -62,6 +87,10 @@ pub struct ViewData {
     vid_share_recv: Option<i128>,
     vid_share_validated: Option<i128>,
     leaves_decided: Option<i128>,
+    available_blocks_sent: Option<i128>,
+    available_blocks_received: Option<i128>,
+    block_claims_sent: Option<i128>,
+    block_claims_received: Option<i128>,
 }
 
 impl ViewData {
@@ -148,6 +177,18 @@ impl ViewData {
             },
             BenchmarkEventType::Shutdown => {
                 panic!("Shutdown event should not ever be stored");
+            },
+            BenchmarkEventType::AvailableBlocksSent => {
+                self.available_blocks_sent.get_or_insert(timestamp);
+            },
+            BenchmarkEventType::AvailableBlocksReceived => {
+                self.available_blocks_received.get_or_insert(timestamp);
+            },
+            BenchmarkEventType::BlockClaimsSent => {
+                self.block_claims_sent.get_or_insert(timestamp);
+            },
+            BenchmarkEventType::BlockClaimsReceived => {
+                self.block_claims_received.get_or_insert(timestamp);
             },
         }
     }
@@ -297,15 +338,29 @@ pub fn hothshot_event_to_benchmark_event<TYPES: NodeType>(
     }
 }
 
+pub async fn send_builder_benchmark_event(
+    sender: &mpsc::Sender<BenchmarkEvent>,
+    event: BuilderEventType,
+    view_number: u64,
+) {
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let benchmark_event = BenchmarkEvent {
+        view_number,
+        event_type: event.into(),
+        timestamp,
+    };
+    let _ = sender.send(benchmark_event).await;
+}
+
 pub async fn send_hothshot_benchmark_event<TYPES: NodeType>(
-    sender: mpsc::Sender<BenchmarkEvent>,
+    sender: &mpsc::Sender<BenchmarkEvent>,
     event: &HotShotEvent<TYPES>,
 ) {
     let _ = sender.send(hothshot_event_to_benchmark_event(event)).await;
 }
 
 pub async fn send_benchmark_event(
-    sender: mpsc::Sender<BenchmarkEvent>,
+    sender: &mpsc::Sender<BenchmarkEvent>,
     types: BenchmarkEventType,
     view_number: u64,
 ) {

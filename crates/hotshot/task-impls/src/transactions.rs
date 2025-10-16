@@ -40,7 +40,7 @@ use crate::{
     builder::v0_1::BuilderClient as BuilderClientBase,
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
-    stat_collector::BenchmarkEvent,
+    stat_collector::{send_builder_benchmark_event, BenchmarkEvent, BuilderEventType},
 };
 
 // Parameters for builder querying algorithm
@@ -626,9 +626,21 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         view_number: TYPES::View,
         parent_comm_sig: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<BuilderResponse<TYPES>> {
+        send_builder_benchmark_event(
+            &self.stats_tx,
+            BuilderEventType::AvailableBlocksSent,
+            *view_number,
+        )
+        .await;
         let mut available_blocks = self
             .get_available_blocks(parent_comm, view_number, parent_comm_sig)
             .await;
+        send_builder_benchmark_event(
+            &self.stats_tx,
+            BuilderEventType::AvailableBlocksReceived,
+            *view_number,
+        )
+        .await;
 
         available_blocks.sort_by(|(l, _), (r, _)| {
             // We want the block with the highest fee per byte of data we're going to have to
@@ -669,6 +681,13 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     continue;
                 },
             };
+
+            send_builder_benchmark_event(
+                &self.stats_tx,
+                BuilderEventType::BlockClaimsSent,
+                *view_number,
+            )
+            .await;
 
             let response = {
                 let client = &self.builder_clients[builder_idx];
@@ -722,6 +741,13 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     metadata: block_data.metadata,
                 }
             };
+
+            send_builder_benchmark_event(
+                &self.stats_tx,
+                BuilderEventType::BlockClaimsReceived,
+                *view_number,
+            )
+            .await;
 
             return Ok(response);
         }
