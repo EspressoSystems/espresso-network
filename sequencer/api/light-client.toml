@@ -4,7 +4,7 @@ PATH = ["/leaf/:number", "/leaf/:number/:finalized"]
 ":finalized" = "Integer"
 DOC = """
 Fetch a leaf plus a proof of it's finality (a chain of leaves leading from that leaf to either a
-2-chain of consecutive valid QCs or a known-finalized leaf).
+chain of consecutive valid QCs or a known-finalized leaf).
 
 `:number`, and `:finalized` if provided, must both be block numbers. If provided, `:finalized` must
 be greater than `:number`.
@@ -13,14 +13,31 @@ The returned proof contains the requested leaf along with sufficient other leave
 requested leaf is finalized (possibly assuming that the leaf at height `:finalized` is already known
 to be finalized). This consists of a chain of valid leaves from the requested leaf until reaching
 either
-* a 2-chain of QCs
-* the `:finalized` leaf (in which case the returned QC chain is `null`)
+* a 2-chain of QCs (if the last leaf in the leaf chain is from HotShot >= 0.3)
+* a 3-chain of QCs (if the last leaf in the leaf chain is from HotShot < 0.3)
+* the assumed `:finalized` leaf
 
 Returns
 ```json
 {
     "leaves": [Leaf],
-    "qcs": [QC, QC] | null
+    "proof": {
+        // Finality proof for HotShot >= 0.3
+        "HotStuff2": {
+            "committing_qc": QC,
+            "deciding_qc": QC
+        } | undefined,
+
+        // Finality proof for HotShot < 0.3
+        "HotStuff": {
+            "precommit_qc": QC,
+            "committing_qc": QC,
+            "deciding_qc": QC
+        } | undefined,
+
+        // Leaf chain ends in assumed-finalized leaf.
+        "Assumption": {}
+    }
 }
 ```
 """

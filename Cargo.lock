@@ -7498,6 +7498,11 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-types",
  "serde",
+ "static_assertions",
+ "test-log",
+ "tokio",
+ "tracing",
+ "vbs",
 ]
 
 [[package]]

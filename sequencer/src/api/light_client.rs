@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use espresso_types::SeqTypes;
@@ -8,7 +8,7 @@ use hotshot_query_service::{
     data_source::{storage::NodeStorage, VersionedDataSource},
     Error,
 };
-use light_client::types::LeafProof;
+use light_client::core::leaf::LeafProof;
 use tide_disco::{method::ReadState, Api, StatusCode};
 use vbs::version::StaticVersionType;
 
@@ -67,13 +67,13 @@ where
     // leaf in the chain is not already assumed finalized by the client, we must prove it finalized
     // by appending two more QCs.
     if finalized.is_none() {
-        let Some(qc_chain) = qc_chain else {
+        let Some([committing_qc, deciding_qc]) = qc_chain else {
             return Err(Error::Custom {
                 message: "missing QC 2-chain to prove finality".into(),
                 status: StatusCode::NOT_FOUND,
             });
         };
-        proof.qcs = Some(qc_chain);
+        proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
     }
 
     Ok(proof)
@@ -134,17 +134,14 @@ where
 
 #[cfg(test)]
 mod test {
-    use committable::Committable;
-    use espresso_types::{Leaf2, NodeState};
-    use hotshot_example_types::node_types::TestVersions;
-    use hotshot_query_service::{
-        availability::LeafQueryData,
-        data_source::{storage::UpdateAvailabilityStorage, Transaction},
-    };
-    use hotshot_types::{
-        data::{QuorumProposal2, QuorumProposalWrapper, ViewNumber},
-        simple_certificate::QuorumCertificate2,
-        traits::node_implementation::ConsensusTime,
+    use espresso_types::EpochVersion;
+    use hotshot_query_service::data_source::{storage::UpdateAvailabilityStorage, Transaction};
+    use light_client::{
+        core::leaf::FinalityProof,
+        testing::{
+            leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, EnableEpochs, LegacyVersion,
+            VersionCheckQuorum,
+        },
     };
     use tide_disco::Error;
 
@@ -153,42 +150,6 @@ mod test {
         data_source::{testing::TestableSequencerDataSource, SequencerDataSource},
         sql::DataSource,
     };
-
-    async fn leaf_chain(range: impl IntoIterator<Item = u64>) -> Vec<LeafQueryData<SeqTypes>> {
-        let genesis_leaf: Leaf2 =
-            Leaf2::genesis::<TestVersions>(&Default::default(), &NodeState::mock()).await;
-        let mut qc =
-            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &NodeState::mock())
-                .await;
-        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
-            proposal: QuorumProposal2::<SeqTypes> {
-                epoch: None,
-                block_header: genesis_leaf.block_header().clone(),
-                view_number: genesis_leaf.view_number(),
-                justify_qc: qc.clone(),
-                upgrade_certificate: None,
-                view_change_evidence: None,
-                next_drb_result: None,
-                next_epoch_justify_qc: None,
-                state_cert: None,
-            },
-        };
-
-        let mut leaves = vec![];
-        for height in range {
-            *quorum_proposal.proposal.block_header.height_mut() = height;
-            quorum_proposal.proposal.view_number = ViewNumber::new(height);
-            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
-
-            qc.view_number = ViewNumber::new(height);
-            qc.data.leaf_commit = Committable::commit(&leaf);
-
-            leaves.push(LeafQueryData::new(leaf, qc.clone()).unwrap());
-            quorum_proposal.proposal.justify_qc = qc.clone();
-        }
-
-        leaves
-    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_two_chain() {
@@ -202,7 +163,7 @@ mod test {
         .unwrap();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain(1..=2).await;
+        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -212,7 +173,10 @@ mod test {
 
         // Ask for the first leaf; it is proved finalized by the chain formed along with the second.
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
-        assert_eq!(proof.verify(None).unwrap(), leaves[0]);
+        assert_eq!(
+            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            leaves[0]
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -228,7 +192,7 @@ mod test {
 
         // Insert a single leaf. We will not be able to provide proofs ending in a leaf chain, but
         // we can return a leaf if the leaf after it is already known to be finalized.
-        let leaves = leaf_chain(1..=2).await;
+        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -238,7 +202,13 @@ mod test {
         let proof = get_leaf_proof(&ds, 1, Some(2), Duration::MAX)
             .await
             .unwrap();
-        assert_eq!(proof.verify(Some(leaves[1].leaf())).unwrap(), leaves[0]);
+        assert_eq!(
+            proof
+                .verify(&AlwaysTrueQuorum, Some(leaves[1].leaf()))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -254,7 +224,7 @@ mod test {
 
         // Insert multiple leaves that don't chain. We will not be able to prove these are
         // finalized.
-        let leaves = leaf_chain(1..=3).await;
+        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -288,7 +258,7 @@ mod test {
         .unwrap();
 
         // Insert a single leaf, plus an extra QC proving it finalized.
-        let leaves = leaf_chain(1..=2).await;
+        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
         let qcs = [leaves[0].qc().clone(), leaves[1].qc().clone()];
         {
             let mut tx = ds.write().await.unwrap();
@@ -299,6 +269,50 @@ mod test {
         }
 
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
-        assert_eq!(proof.verify(None).unwrap(), leaves[0]);
+        assert_eq!(
+            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_upgrade_to_epochs() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Upgrade to epochs (and enabling HotStuff2) in the middle of a leaf chain, so that the
+        // last leaf in the chain only requires 2 QCs to verify, even though at the start of the
+        // chain we would have required 3.
+        let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=3, 2).await;
+        assert_eq!(leaves[0].header().version(), LegacyVersion::version());
+        assert_eq!(leaves[1].header().version(), EpochVersion::version());
+        let qcs = [leaves[1].qc().clone(), leaves[2].qc().clone()];
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.insert_leaf_with_qc_chain(leaves[1].clone(), Some(qcs.clone()))
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
+        assert_eq!(
+            proof
+                .verify(
+                    &VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone())),
+                    None
+                )
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }))
     }
 }

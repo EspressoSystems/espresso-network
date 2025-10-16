@@ -4,6 +4,10 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+testing = ["espresso-types/testing"]
+
 [dependencies]
 anyhow = { workspace = true }
 committable = { workspace = true }
@@ -11,6 +15,14 @@ espresso-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 serde = { workspace = true }
+static_assertions = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+vbs = { workspace = true }
+
+[dev-dependencies]
+espresso-types = { workspace = true, features = ["testing"] }
+test-log = { workspace = true }
 
 [lints]
 workspace = true
