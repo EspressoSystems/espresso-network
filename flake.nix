@@ -14,8 +14,6 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
-
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
 
   inputs.nixpkgs-cross-overlay.url =
@@ -32,7 +30,6 @@
   outputs =
     { self
     , nixpkgs
-    , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
@@ -74,7 +71,6 @@
 
       overlays = [
         (import rust-overlay)
-        foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
           solhint =
@@ -95,10 +91,14 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
-      myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-        # The mold linker is around 50% faster on Linux than the default linker.
-        stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
-      });
+      myShell = pkgs.mkShell.override {
+        stdenv =
+          if pkgs.stdenv.isLinux then
+          # The mold linker is around 50% faster on Linux than the default linker.
+            pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv
+          else
+            pkgs.stdenv;
+      };
       crossShell = { config }:
         let
           localSystem = system;
@@ -234,7 +234,7 @@
             coreutils
 
             # Ethereum contracts, solidity, ...
-            foundry-bin
+            foundry
             solc
             nodePackages.prettier
             solhint
@@ -258,6 +258,10 @@
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
+
+            # On macOS, we need to unset DEVELOPER_DIR_FOR_TARGET. The `go` buildInput will
+            # cause this to be set and it breaks rust compilation.
+            unset DEVELOPER_DIR_FOR_TARGET
           '' + self.checks.${system}.pre-commit-check.shellHook;
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
@@ -330,7 +334,7 @@
         myShell {
           buildInputs = [
             # Foundry tools
-            foundry-bin
+            foundry
             solc
 
             # Security analysis tools
