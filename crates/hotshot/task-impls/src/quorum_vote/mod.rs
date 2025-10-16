@@ -297,57 +297,57 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                 ));
             };
 
-            // If we belong to both epochs, we require VID shares from both epochs.
-            if current_epoch_membership.has_stake(&self.public_key).await
-                && next_epoch_membership.has_stake(&self.public_key).await
-            {
-                let (other_target_epoch, other_target_comm) =
-                    if vid_share.data.target_epoch() == current_epoch {
-                        maybe_current_epoch_vid_share = Some(vid_share.clone());
-                        (next_epoch, next_epoch_payload_commitment)
-                    } else {
-                        (current_epoch, payload_commitment)
-                    };
-                let Some(other_target_comm) = other_target_comm else {
-                    bail!(warn!("need next vid comm"));
-                };
-                match wait_for_second_vid_share(
-                    other_target_epoch,
-                    &vid_share,
-                    other_target_comm,
-                    // &da_cert,
-                    &self.consensus,
-                    &self.receiver.activate_cloned(),
-                    self.cancel_receiver.clone(),
-                    self.id,
-                )
-                .await
-                {
-                    Ok(other_vid_share) => {
-                        if maybe_current_epoch_vid_share.is_none() {
-                            maybe_current_epoch_vid_share = Some(other_vid_share);
-                        }
-                        ensure!(
-                            leaf.block_header().payload_commitment()
-                                == maybe_current_epoch_vid_share
-                                    .as_ref()
-                                    .unwrap()
-                                    .data
-                                    .payload_commitment(),
-                            error!(
-                                "We have both epochs vid shares but the leaf's vid commit doesn't \
-                                 match the old epoch vid share's commit. It should never happen."
-                            )
-                        );
-                    },
-                    Err(e) => {
-                        bail!(warn!(
-                            "This is an epoch transition block, we are in both epochs but we \
-                             received only one VID share. Do not vote! Error: {e:?}"
-                        ));
-                    },
-                }
-            }
+            // // If we belong to both epochs, we require VID shares from both epochs.
+            // if current_epoch_membership.has_stake(&self.public_key).await
+            //     && next_epoch_membership.has_stake(&self.public_key).await
+            // {
+            //     let (other_target_epoch, other_target_comm) =
+            //         if vid_share.data.target_epoch() == current_epoch {
+            //             maybe_current_epoch_vid_share = Some(vid_share.clone());
+            //             (next_epoch, next_epoch_payload_commitment)
+            //         } else {
+            //             (current_epoch, payload_commitment)
+            //         };
+            //     let Some(other_target_comm) = other_target_comm else {
+            //         bail!(warn!("need next vid comm"));
+            //     };
+            //     match wait_for_second_vid_share(
+            //         other_target_epoch,
+            //         &vid_share,
+            //         other_target_comm,
+            //         // &da_cert,
+            //         &self.consensus,
+            //         &self.receiver.activate_cloned(),
+            //         self.cancel_receiver.clone(),
+            //         self.id,
+            //     )
+            //     .await
+            //     {
+            //         Ok(other_vid_share) => {
+            //             if maybe_current_epoch_vid_share.is_none() {
+            //                 maybe_current_epoch_vid_share = Some(other_vid_share);
+            //             }
+            //             ensure!(
+            //                 leaf.block_header().payload_commitment()
+            //                     == maybe_current_epoch_vid_share
+            //                         .as_ref()
+            //                         .unwrap()
+            //                         .data
+            //                         .payload_commitment(),
+            //                 error!(
+            //                     "We have both epochs vid shares but the leaf's vid commit doesn't \
+            //                      match the old epoch vid share's commit. It should never happen."
+            //                 )
+            //             );
+            //         },
+            //         Err(e) => {
+            //             bail!(warn!(
+            //                 "This is an epoch transition block, we are in both epochs but we \
+            //                  received only one VID share. Do not vote! Error: {e:?}"
+            //             ));
+            //         },
+            //     }
+            // }
         }
 
         // Update internal state
