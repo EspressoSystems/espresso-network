@@ -79,7 +79,7 @@ mod tests {
     };
     use indexmap::IndexMap;
     use portpicker::pick_unused_port;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
@@ -140,6 +140,16 @@ mod tests {
         async fn handle_event(&self, event: &Event) -> anyhow::Result<()> {
             self.events.write().await.push(event.clone());
             Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct FailConsumer;
+
+    #[async_trait]
+    impl EventConsumer for FailConsumer {
+        async fn handle_event(&self, _: &Event) -> anyhow::Result<()> {
+            bail!("mock error injection");
         }
     }
 
@@ -683,6 +693,7 @@ mod tests {
             .append_decided_leaves(
                 ViewNumber::new(2),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, (*qc).clone())),
+                None,
                 &consumer,
             )
             .await
@@ -748,6 +759,7 @@ mod tests {
             .append_decided_leaves(
                 ViewNumber::new(3),
                 vec![(&leaf_info(leaves[3].clone()), qcs[3].clone())],
+                None,
                 &consumer,
             )
             .await
@@ -761,10 +773,15 @@ mod tests {
         let events = consumer.events.read().await;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].view_number, ViewNumber::new(3));
-        let EventType::Decide { qc, leaf_chain, .. } = &events[0].event else {
+        let EventType::Decide {
+            committing_qc,
+            leaf_chain,
+            ..
+        } = &events[0].event
+        else {
             panic!("expected decide event, got {:?}", events[0]);
         };
-        assert_eq!(**qc, qcs[3]);
+        assert_eq!(**committing_qc, qcs[3]);
         assert_eq!(leaf_chain.len(), 1);
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);
@@ -896,16 +913,6 @@ mod tests {
     pub async fn test_decide_with_failing_event_consumer<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) {
-        #[derive(Clone, Copy, Debug)]
-        struct FailConsumer;
-
-        #[async_trait]
-        impl EventConsumer for FailConsumer {
-            async fn handle_event(&self, _: &Event) -> anyhow::Result<()> {
-                bail!("mock error injection");
-            }
-        }
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -1014,6 +1021,7 @@ mod tests {
             .append_decided_leaves(
                 ViewNumber::new(1),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &FailConsumer,
             )
             .await
@@ -1061,6 +1069,7 @@ mod tests {
             .append_decided_leaves(
                 ViewNumber::new(3),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &consumer,
             )
             .await
@@ -1202,7 +1211,7 @@ mod tests {
 
         // Decide a newer view, view 1.
         storage
-            .append_decided_leaves(ViewNumber::new(1), [], &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(1), [], None, &NullEventConsumer)
             .await
             .unwrap();
 
@@ -1234,7 +1243,7 @@ mod tests {
 
         // Decide an even newer view, triggering GC of the old data.
         storage
-            .append_decided_leaves(ViewNumber::new(2), [], &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(2), [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(storage
@@ -1438,14 +1447,14 @@ mod tests {
         )
         .unwrap();
 
-        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..200)
+        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..20)
             .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed([1; 32], i as u64))
             .unzip();
-        let state_key_pairs = (0..200)
+        let state_key_pairs = (0..20)
             .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
             .collect::<Vec<_>>();
 
-        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 1000);
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 20);
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))
@@ -1486,6 +1495,24 @@ mod tests {
             .expect("StakeTableProxy deployed");
         let l1_url = network_config.l1_url().clone();
 
+        let mut planned_txns = StakingTransactions::create(
+            l1_url.clone(),
+            &deployer,
+            st_addr,
+            validators,
+            DelegationConfig::MultipleDelegators,
+        )
+        .await
+        .expect("stake table setup failed");
+
+        planned_txns
+            .apply_prerequisites()
+            .await
+            .expect("prerequisites failed");
+
+        // Ensure we have at least one stake table affecting transaction
+        planned_txns.apply_one().await.expect("send tx failed");
+
         // new block every 1s
         anvil_provider
             .anvil_set_interval_mining(1)
@@ -1496,18 +1523,13 @@ mod tests {
         // this is going to keep registering validators and multiple delegators
         // the interval mining is set to 1s so each transaction finalization would take atleast 1s
         spawn({
-            let l1_url = l1_url.clone();
             async move {
                 {
-                    setup_stake_table_contract_for_test(
-                        l1_url,
-                        &deployer,
-                        st_addr,
-                        validators,
-                        DelegationConfig::MultipleDelegators,
-                    )
-                    .await
-                    .expect("stake table setup failed");
+                    while let Some(receipt) =
+                        planned_txns.apply_one().await.expect("send tx failed")
+                    {
+                        tracing::debug!(?receipt, "transaction finalized");
+                    }
                 }
             }
         });
@@ -1726,5 +1748,101 @@ mod tests {
         assert_eq!(expected_all, loaded1_again);
 
         Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_non_consecutive_decide<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        let genesis_leaf: Leaf2 =
+            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                epoch: None,
+                block_header: genesis_leaf.block_header().clone(),
+                view_number: genesis_leaf.view_number(),
+                justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                    &ValidatedState::default(),
+                    &NodeState::mock(),
+                )
+                .await,
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                state_cert: None,
+            },
+        };
+
+        let leaf0 = Leaf2::from_quorum_proposal(&quorum_proposal);
+
+        quorum_proposal.proposal.view_number = ViewNumber::new(2);
+        *quorum_proposal.proposal.block_header.height_mut() = 2;
+        quorum_proposal.proposal.justify_qc.view_number = ViewNumber::new(1);
+        let leaf2 = Leaf2::from_quorum_proposal(&quorum_proposal);
+
+        let mut qc0 = leaf0.justify_qc();
+        qc0.data.leaf_commit = Committable::commit(&leaf0);
+
+        let mut qc2 = leaf2.justify_qc();
+        qc2.view_number += 1;
+        qc2.data.leaf_commit = Committable::commit(&leaf2);
+
+        let mut deciding_qc = qc2.clone();
+        deciding_qc.view_number += 1;
+        let deciding_qc = Arc::new(deciding_qc);
+
+        // Decide the first leaf, but fail to generate a decide event.
+        storage
+            .append_decided_leaves(
+                ViewNumber::new(0),
+                [(&leaf_info(leaf0.clone()), qc0)],
+                None,
+                &FailConsumer,
+            )
+            .await
+            .unwrap();
+
+        // Later, decide a new leaf, but skipping some leaf in the middle. This should generate
+        // decide events for both the leaves, correctly separating into two events since the leaves
+        // are non-consecutive, and correctly applying `deciding_qc` only to the last event.
+        let consumer = EventCollector::default();
+        storage
+            .append_decided_leaves(
+                ViewNumber::new(2),
+                [(&leaf_info(leaf2.clone()), qc2)],
+                Some(deciding_qc.clone()),
+                &consumer,
+            )
+            .await
+            .unwrap();
+
+        let events = consumer.events.read().await;
+        assert_eq!(events.len(), 2);
+
+        let EventType::Decide {
+            leaf_chain: leaf_chain0,
+            deciding_qc: deciding_qc0,
+            ..
+        } = &events[0].event
+        else {
+            panic!("expected decide event, got {:?}", events[0].event);
+        };
+        assert_eq!(leaf_chain0.len(), 1);
+        assert_eq!(leaf_chain0[0].leaf, leaf0);
+        assert_eq!(*deciding_qc0, None);
+
+        let EventType::Decide {
+            leaf_chain: leaf_chain2,
+            deciding_qc: deciding_qc2,
+            ..
+        } = &events[1].event
+        else {
+            panic!("expected decide event, got {:?}", events[1].event);
+        };
+        assert_eq!(leaf_chain2.len(), 1);
+        assert_eq!(leaf_chain2[0].leaf, leaf2);
+        assert_eq!(*deciding_qc2, Some(deciding_qc));
     }
 }

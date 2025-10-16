@@ -1,8 +1,9 @@
-use hotshot_query_service::VidCommon;
+use hotshot_query_service::{availability::VerifiableInclusion, VidCommon};
 use hotshot_types::data::VidCommitment;
 use serde::{Deserialize, Serialize};
 
 use super::{v0_1::ADVZTxProof, v0_3::AvidMTxProof, Index, NsTable, Payload, Transaction};
+use crate::SeqTypes;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxProof {
@@ -24,14 +25,16 @@ impl TxProof {
                 .map(|(tx, proof)| (tx, TxProof::V1(proof))),
         }
     }
+}
 
-    pub fn verify(
+impl VerifiableInclusion<SeqTypes> for TxProof {
+    fn verify(
         &self,
         ns_table: &NsTable,
         tx: &Transaction,
         commit: &VidCommitment,
         common: &VidCommon,
-    ) -> Option<bool> {
+    ) -> bool {
         match self {
             TxProof::V0(tx_proof) => tx_proof.verify(ns_table, tx, commit, common),
             TxProof::V1(tx_proof) => tx_proof.verify(ns_table, tx, commit, common),

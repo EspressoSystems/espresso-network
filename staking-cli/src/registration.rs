@@ -1,4 +1,8 @@
-use alloy::{primitives::Address, providers::Provider, rpc::types::TransactionReceipt};
+use alloy::{
+    network::Ethereum,
+    primitives::Address,
+    providers::{PendingTransactionBuilder, Provider},
+};
 use anyhow::Result;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
@@ -16,11 +20,15 @@ pub async fn register_validator(
     stake_table_addr: Address,
     commission: Commission,
     payload: NodeSignatures,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    tracing::info!(
+        "register validator {} with commission {commission}",
+        payload.address
+    );
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     let sol_payload = NodeSignaturesSol::from(payload);
 
     let version = stake_table.getVersion().call().await?.try_into()?;
@@ -28,35 +36,27 @@ pub async fn register_validator(
     // to be mined. We're very unlikely to hit this in practice, and since we only perform the
     // upgrade on decaf this is acceptable.
     Ok(match version {
-        StakeTableContractVersion::V1 => {
-            stake_table
-                .registerValidator(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                    commission.to_evm(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
-        StakeTableContractVersion::V2 => {
-            stake_table
-                .registerValidatorV2(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                    sol_payload.schnorr_signature.into(),
-                    commission.to_evm(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
+        StakeTableContractVersion::V1 => stake_table
+            .registerValidator(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+                commission.to_evm(),
+            )
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
+        StakeTableContractVersion::V2 => stake_table
+            .registerValidatorV2(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+                sol_payload.schnorr_signature.into(),
+                commission.to_evm(),
+            )
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
     })
 }
 
@@ -64,11 +64,11 @@ pub async fn update_consensus_keys(
     provider: impl Provider,
     stake_table_addr: Address,
     payload: NodeSignatures,
-) -> Result<TransactionReceipt> {
+) -> Result<PendingTransactionBuilder<Ethereum>> {
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     let sol_payload = NodeSignaturesSol::from(payload);
 
     // There is a race-condition here if the contract is upgraded while this transactions is waiting
@@ -76,63 +76,51 @@ pub async fn update_consensus_keys(
     // upgrade on decaf this is acceptable.
     let version = stake_table.getVersion().call().await?.try_into()?;
     Ok(match version {
-        StakeTableContractVersion::V1 => {
-            stake_table
-                .updateConsensusKeys(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
-        StakeTableContractVersion::V2 => {
-            stake_table
-                .updateConsensusKeysV2(
-                    sol_payload.bls_vk,
-                    sol_payload.schnorr_vk,
-                    sol_payload.bls_signature.into(),
-                    sol_payload.schnorr_signature.into(),
-                )
-                .send()
-                .await
-                .maybe_decode_revert::<StakeTableV2Errors>()?
-                .get_receipt()
-                .await?
-        },
+        StakeTableContractVersion::V1 => stake_table
+            .updateConsensusKeys(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+            )
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
+        StakeTableContractVersion::V2 => stake_table
+            .updateConsensusKeysV2(
+                sol_payload.bls_vk,
+                sol_payload.schnorr_vk,
+                sol_payload.bls_signature.into(),
+                sol_payload.schnorr_signature.into(),
+            )
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?,
     })
 }
 
 pub async fn deregister_validator(
     provider: impl Provider,
     stake_table_addr: Address,
-) -> Result<TransactionReceipt> {
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
-    Ok(stake_table
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
+    stake_table
         .deregisterValidator()
         .send()
         .await
-        .maybe_decode_revert::<StakeTableV2Errors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 pub async fn update_commission(
     provider: impl Provider,
     stake_table_addr: Address,
     new_commission: Commission,
-) -> Result<TransactionReceipt> {
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
-    Ok(stake_table
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
+    stake_table
         .updateCommission(new_commission.to_evm())
         .send()
         .await
-        .maybe_decode_revert::<StakeTableV2Errors>()?
-        .get_receipt()
-        .await?)
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 pub async fn fetch_commission(
@@ -140,7 +128,7 @@ pub async fn fetch_commission(
     stake_table_addr: Address,
     validator: Address,
 ) -> Result<Commission> {
-    let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
     let version: StakeTableContractVersion = stake_table.getVersion().call().await?.try_into()?;
     if matches!(version, StakeTableContractVersion::V1) {
         anyhow::bail!("fetching commission is not supported with stake table V1");
@@ -168,7 +156,7 @@ mod test {
     use rand::{rngs::StdRng, SeedableRng as _};
 
     use super::*;
-    use crate::deploy::TestSystem;
+    use crate::{deploy::TestSystem, receipt::ReceiptExt};
 
     #[tokio::test]
     async fn test_register_validator() -> Result<()> {
@@ -186,8 +174,9 @@ mod test {
             system.commission,
             payload,
         )
+        .await?
+        .assert_success()
         .await?;
-        assert!(receipt.status());
 
         let event = receipt
             .decoded_log::<StakeTableV2::ValidatorRegisteredV2>()
@@ -207,8 +196,10 @@ mod test {
         let system = TestSystem::deploy().await?;
         system.register_validator().await?;
 
-        let receipt = deregister_validator(&system.provider, system.stake_table).await?;
-        assert!(receipt.status());
+        let receipt = deregister_validator(&system.provider, system.stake_table)
+            .await?
+            .assert_success()
+            .await?;
 
         let event = receipt
             .decoded_log::<StakeTableV2::ValidatorExit>()
@@ -227,8 +218,10 @@ mod test {
         let (_, new_bls, new_schnorr) = TestSystem::gen_keys(&mut rng);
         let payload = NodeSignatures::create(validator_address, &new_bls, &new_schnorr);
 
-        let receipt = update_consensus_keys(&system.provider, system.stake_table, payload).await?;
-        assert!(receipt.status());
+        let receipt = update_consensus_keys(&system.provider, system.stake_table, payload)
+            .await?
+            .assert_success()
+            .await?;
 
         let event = receipt
             .decoded_log::<StakeTableV2::ConsensusKeysUpdatedV2>()
@@ -249,13 +242,12 @@ mod test {
 
         // Set commission update interval to 1 second for testing
         let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
-        let receipt = stake_table
+        stake_table
             .setMinCommissionUpdateInterval(U256::from(1)) // 1 second
             .send()
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         system.register_validator().await?;
         let validator_address = system.deployer_address;
@@ -264,9 +256,10 @@ mod test {
         // Wait 2 seconds to ensure we're past the interval
         system.anvil_increase_time(U256::from(2)).await?;
 
-        let receipt =
-            update_commission(&system.provider, system.stake_table, new_commission).await?;
-        assert!(receipt.status());
+        let receipt = update_commission(&system.provider, system.stake_table, new_commission)
+            .await?
+            .assert_success()
+            .await?;
 
         let event = receipt
             .decoded_log::<StakeTableV2::CommissionUpdated>()
@@ -294,7 +287,7 @@ mod test {
         // NOTE: we can't register a validator with a bad BLS signature because the contract will revert
 
         let provider = build_provider(
-            "test test test test test test test test test test test junk".to_string(),
+            "test test test test test test test test test test test junk",
             1,
             system.rpc_url.clone(),
             /* polling_interval */ None,
@@ -329,9 +322,8 @@ mod test {
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let l1 = L1Client::new(vec![system.rpc_url])?;
         let events = Fetcher::fetch_events_from_contract(
@@ -390,9 +382,8 @@ mod test {
             .send()
             .await
             .maybe_decode_revert::<StakeTableV2Errors>()?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let l1 = L1Client::new(vec![system.rpc_url])?;
         let events = Fetcher::fetch_events_from_contract(
