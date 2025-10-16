@@ -16,6 +16,14 @@ path = "src/bin/espresso-dev-node.rs"
 required-features = ["testing", "embedded-db"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
+[profile.dev]
+# This profile should allow connecting debuggers. Compiles more slowly and
+# requires significantly more memory to compile.
+strip = "none"
+debug = "full"
+
+
 [features]
 default = ["fee", "pos", "drb-and-header"]
 testing = [
