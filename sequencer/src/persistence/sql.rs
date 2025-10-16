@@ -121,7 +121,7 @@ pub struct SqliteOptions {
         env = "ESPRESSO_SEQUENCER_STORAGE_PATH",
         value_parser = build_sqlite_path
     )]
-    pub(crate) path: Option<PathBuf>,
+    pub(crate) path: PathBuf,
 }
 
 pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
@@ -321,9 +321,7 @@ impl From<SqliteOptions> for Config {
     fn from(opt: SqliteOptions) -> Self {
         let mut cfg = Config::default();
 
-        if let Some(path) = opt.path {
-            cfg = cfg.db_path(path);
-        }
+        cfg = cfg.db_path(opt.path);
 
         cfg = cfg.max_connections(20);
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
@@ -356,7 +354,18 @@ impl From<SqliteOptions> for Options {
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
-            ..Default::default()
+            uri: None,
+            prune: false,
+            pruning: Default::default(),
+            consensus_pruning: Default::default(),
+            fetch_rate_limit: None,
+            active_fetch_delay: None,
+            chunk_fetch_delay: None,
+            archive: false,
+            lightweight: false,
+            min_connections: 0,
+            types_migration_batch_size: None,
+            pool: None,
         }
     }
 }
@@ -418,9 +427,7 @@ impl TryFrom<&Options> for Config {
                 "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
             ));
 
-            if let Some(path) = &opt.sqlite_options.path {
-                cfg = cfg.db_path(path.clone());
-            }
+            cfg = cfg.db_path(opt.sqlite_options.path.clone());
         }
 
         if opt.prune {
@@ -487,6 +494,12 @@ pub struct PruningOptions {
     /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
     pages: Option<u64>,
+}
+
+impl Default for PruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
 }
 
 impl From<PruningOptions> for PrunerCfg {
@@ -579,6 +592,12 @@ pub struct ConsensusPruningOptions {
         default_value = "1000000000"
     )]
     target_usage: u64,
+}
+
+impl Default for ConsensusPruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
 }
 
 #[async_trait]
@@ -2433,8 +2452,8 @@ impl MembershipPersistence for Persistence {
         let mut tx = self.db.read().await?;
 
         let rows = match query_as::<(i64, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)>(
-            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root ORDER BY \
-             epoch DESC LIMIT $1",
+            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
+             stake is NOT NULL ORDER BY epoch DESC LIMIT $1",
         )
         .bind(limit as i64)
         .fetch_all(tx.as_mut())
@@ -2953,10 +2972,7 @@ mod testing {
 
             #[cfg(feature = "embedded-db")]
             {
-                SqliteOptions {
-                    path: Some(db.path()),
-                }
-                .into()
+                SqliteOptions { path: db.path() }.into()
             }
         }
     }

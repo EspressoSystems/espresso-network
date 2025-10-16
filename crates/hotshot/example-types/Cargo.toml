@@ -14,8 +14,10 @@ slow-tests = []
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
+async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
+bincode = { workspace = true }
 committable = { workspace = true }
 hotshot = { workspace = true }
 hotshot-task-impls = { workspace = true }
@@ -30,11 +32,9 @@ sha3 = "^0.10"
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
-tracing = { workspace = true }
-bincode = { workspace = true }
-async-broadcast = { workspace = true }
 
 [lints]
 workspace = true

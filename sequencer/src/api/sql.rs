@@ -992,9 +992,7 @@ pub(crate) mod impl_testable_data_source {
 
         #[cfg(feature = "embedded-db")]
         {
-            let opt = crate::persistence::sql::SqliteOptions {
-                path: Some(db.path()),
-            };
+            let opt = crate::persistence::sql::SqliteOptions { path: db.path() };
             opt.into()
         }
     }
