@@ -619,6 +619,7 @@ constructor(address implementation, bytes _data) payable;
         }
     };
     ///Container for all the [`ERC1967Proxy`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum ERC1967ProxyErrors {
@@ -631,7 +632,6 @@ constructor(address implementation, bytes _data) payable;
         #[allow(missing_docs)]
         FailedInnerCall(FailedInnerCall),
     }
-    #[automatically_derived]
     impl ERC1967ProxyErrors {
         /// All the selectors of this enum.
         ///
@@ -645,6 +645,40 @@ constructor(address implementation, bytes _data) payable;
             [153u8, 150u8, 179u8, 21u8],
             [179u8, 152u8, 151u8, 159u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(FailedInnerCall),
+            ::core::stringify!(ERC1967InvalidImplementation),
+            ::core::stringify!(AddressEmptyCode),
+            ::core::stringify!(ERC1967NonPayable),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <FailedInnerCall as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967InvalidImplementation as alloy_sol_types::SolError>::SIGNATURE,
+            <AddressEmptyCode as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967NonPayable as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for ERC1967ProxyErrors {
@@ -860,13 +894,13 @@ constructor(address implementation, bytes _data) payable;
         }
     }
     ///Container for all the [`ERC1967Proxy`](self) events.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum ERC1967ProxyEvents {
         #[allow(missing_docs)]
         Upgraded(Upgraded),
     }
-    #[automatically_derived]
     impl ERC1967ProxyEvents {
         /// All the selectors of this enum.
         ///
@@ -881,6 +915,34 @@ constructor(address implementation, bytes _data) payable;
                 12u8, 192u8, 34u8, 91u8, 57u8, 218u8, 46u8, 92u8, 45u8, 59u8,
             ],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(Upgraded),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <Upgraded as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for ERC1967ProxyEvents {
@@ -999,7 +1061,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1092,7 +1153,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1109,7 +1169,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

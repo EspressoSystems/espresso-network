@@ -856,6 +856,7 @@ function claimedRewards(address claimer) external view returns (uint256);
         }
     };
     ///Container for all the [`IRewardClaim`](self) function calls.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum IRewardClaimCalls {
@@ -864,7 +865,6 @@ function claimedRewards(address claimer) external view returns (uint256);
         #[allow(missing_docs)]
         claimedRewards(claimedRewardsCall),
     }
-    #[automatically_derived]
     impl IRewardClaimCalls {
         /// All the selectors of this enum.
         ///
@@ -876,6 +876,36 @@ function claimedRewards(address claimer) external view returns (uint256);
             [84u8, 157u8, 216u8, 195u8],
             [189u8, 131u8, 67u8, 69u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(claimRewards),
+            ::core::stringify!(claimedRewards),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <claimRewardsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <claimedRewardsCall as alloy_sol_types::SolCall>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for IRewardClaimCalls {
@@ -1019,6 +1049,7 @@ function claimedRewards(address claimer) external view returns (uint256);
         }
     }
     ///Container for all the [`IRewardClaim`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimErrors {
@@ -1031,7 +1062,6 @@ function claimedRewards(address claimer) external view returns (uint256);
         #[allow(missing_docs)]
         InvalidRewardAmount(InvalidRewardAmount),
     }
-    #[automatically_derived]
     impl IRewardClaimErrors {
         /// All the selectors of this enum.
         ///
@@ -1045,6 +1075,40 @@ function claimedRewards(address claimer) external view returns (uint256);
             [56u8, 83u8, 152u8, 101u8],
             [100u8, 108u8, 245u8, 88u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(DailyLimitExceeded),
+            ::core::stringify!(InvalidAuthRoot),
+            ::core::stringify!(InvalidRewardAmount),
+            ::core::stringify!(AlreadyClaimed),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <DailyLimitExceeded as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidAuthRoot as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidRewardAmount as alloy_sol_types::SolError>::SIGNATURE,
+            <AlreadyClaimed as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for IRewardClaimErrors {
@@ -1260,13 +1324,13 @@ function claimedRewards(address claimer) external view returns (uint256);
         }
     }
     ///Container for all the [`IRewardClaim`](self) events.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimEvents {
         #[allow(missing_docs)]
         RewardsClaimed(RewardsClaimed),
     }
-    #[automatically_derived]
     impl IRewardClaimEvents {
         /// All the selectors of this enum.
         ///
@@ -1281,6 +1345,34 @@ function claimedRewards(address claimer) external view returns (uint256);
                 150u8, 59u8, 216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
             ],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(RewardsClaimed),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <RewardsClaimed as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for IRewardClaimEvents {
@@ -1396,7 +1488,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1473,7 +1564,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1510,7 +1600,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

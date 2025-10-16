@@ -58,7 +58,6 @@ pub mod TimelockController {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
-        #[automatically_derived]
         impl OperationState {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -193,7 +192,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -245,7 +243,6 @@ See the [wrapper's documentation](`TimelockControllerInstance`) for more details
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -262,7 +259,6 @@ See the [wrapper's documentation](`TimelockControllerInstance`) for more details
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -7929,6 +7925,7 @@ function updateDelay(uint256 newDelay) external;
         }
     };
     ///Container for all the [`OpsTimelock`](self) function calls.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum OpsTimelockCalls {
@@ -7989,7 +7986,6 @@ function updateDelay(uint256 newDelay) external;
         #[allow(missing_docs)]
         updateDelay(updateDelayCall),
     }
-    #[automatically_derived]
     impl OpsTimelockCalls {
         /// All the selectors of this enum.
         ///
@@ -8027,6 +8023,88 @@ function updateDelay(uint256 newDelay) external;
             [242u8, 58u8, 110u8, 97u8],
             [242u8, 122u8, 12u8, 146u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(schedule),
+            ::core::stringify!(supportsInterface),
+            ::core::stringify!(EXECUTOR_ROLE),
+            ::core::stringify!(execute),
+            ::core::stringify!(isOperationReady),
+            ::core::stringify!(onERC721Received),
+            ::core::stringify!(getRoleAdmin),
+            ::core::stringify!(isOperationDone),
+            ::core::stringify!(grantRole),
+            ::core::stringify!(isOperation),
+            ::core::stringify!(renounceRole),
+            ::core::stringify!(isOperationPending),
+            ::core::stringify!(updateDelay),
+            ::core::stringify!(getOperationState),
+            ::core::stringify!(hashOperation),
+            ::core::stringify!(scheduleBatch),
+            ::core::stringify!(PROPOSER_ROLE),
+            ::core::stringify!(hasRole),
+            ::core::stringify!(DEFAULT_ADMIN_ROLE),
+            ::core::stringify!(CANCELLER_ROLE),
+            ::core::stringify!(hashOperationBatch),
+            ::core::stringify!(onERC1155BatchReceived),
+            ::core::stringify!(cancel),
+            ::core::stringify!(getTimestamp),
+            ::core::stringify!(revokeRole),
+            ::core::stringify!(executeBatch),
+            ::core::stringify!(onERC1155Received),
+            ::core::stringify!(getMinDelay),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <scheduleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <supportsInterfaceCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
+            <executeCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <isOperationReadyCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <onERC721ReceivedCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getRoleAdminCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <isOperationDoneCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <grantRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <isOperationCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <renounceRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <isOperationPendingCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <updateDelayCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getOperationStateCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <hashOperationCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <scheduleBatchCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <PROPOSER_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
+            <hasRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
+            <CANCELLER_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
+            <hashOperationBatchCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <cancelCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getTimestampCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <revokeRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <executeBatchCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <onERC1155ReceivedCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getMinDelayCall as alloy_sol_types::SolCall>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for OpsTimelockCalls {
@@ -9063,6 +9141,7 @@ function updateDelay(uint256 newDelay) external;
         }
     }
     ///Container for all the [`OpsTimelock`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum OpsTimelockErrors {
@@ -9083,7 +9162,6 @@ function updateDelay(uint256 newDelay) external;
         #[allow(missing_docs)]
         TimelockUnexpectedOperationState(TimelockUnexpectedOperationState),
     }
-    #[automatically_derived]
     impl OpsTimelockErrors {
         /// All the selectors of this enum.
         ///
@@ -9101,6 +9179,48 @@ function updateDelay(uint256 newDelay) external;
             [226u8, 133u8, 12u8, 89u8],
             [255u8, 176u8, 50u8, 17u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(FailedInnerCall),
+            ::core::stringify!(TimelockInsufficientDelay),
+            ::core::stringify!(TimelockUnexpectedOperationState),
+            ::core::stringify!(AccessControlBadConfirmation),
+            ::core::stringify!(TimelockUnexecutedPredecessor),
+            ::core::stringify!(AccessControlUnauthorizedAccount),
+            ::core::stringify!(TimelockUnauthorizedCaller),
+            ::core::stringify!(TimelockInvalidOperationLength),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <FailedInnerCall as alloy_sol_types::SolError>::SIGNATURE,
+            <TimelockInsufficientDelay as alloy_sol_types::SolError>::SIGNATURE,
+            <TimelockUnexpectedOperationState as alloy_sol_types::SolError>::SIGNATURE,
+            <AccessControlBadConfirmation as alloy_sol_types::SolError>::SIGNATURE,
+            <TimelockUnexecutedPredecessor as alloy_sol_types::SolError>::SIGNATURE,
+            <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::SIGNATURE,
+            <TimelockUnauthorizedCaller as alloy_sol_types::SolError>::SIGNATURE,
+            <TimelockInvalidOperationLength as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for OpsTimelockErrors {
@@ -9460,6 +9580,7 @@ function updateDelay(uint256 newDelay) external;
         }
     }
     ///Container for all the [`OpsTimelock`](self) events.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum OpsTimelockEvents {
@@ -9480,7 +9601,6 @@ function updateDelay(uint256 newDelay) external;
         #[allow(missing_docs)]
         RoleRevoked(RoleRevoked),
     }
-    #[automatically_derived]
     impl OpsTimelockEvents {
         /// All the selectors of this enum.
         ///
@@ -9530,6 +9650,48 @@ function updateDelay(uint256 newDelay) external;
                 253u8, 100u8, 235u8, 33u8, 224u8, 71u8, 168u8, 57u8, 23u8, 27u8,
             ],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(MinDelayChange),
+            ::core::stringify!(CallSalt),
+            ::core::stringify!(RoleGranted),
+            ::core::stringify!(CallScheduled),
+            ::core::stringify!(Cancelled),
+            ::core::stringify!(RoleAdminChanged),
+            ::core::stringify!(CallExecuted),
+            ::core::stringify!(RoleRevoked),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <MinDelayChange as alloy_sol_types::SolEvent>::SIGNATURE,
+            <CallSalt as alloy_sol_types::SolEvent>::SIGNATURE,
+            <RoleGranted as alloy_sol_types::SolEvent>::SIGNATURE,
+            <CallScheduled as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Cancelled as alloy_sol_types::SolEvent>::SIGNATURE,
+            <RoleAdminChanged as alloy_sol_types::SolEvent>::SIGNATURE,
+            <CallExecuted as alloy_sol_types::SolEvent>::SIGNATURE,
+            <RoleRevoked as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for OpsTimelockEvents {
@@ -9749,7 +9911,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -9862,7 +10023,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -10203,7 +10363,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

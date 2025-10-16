@@ -61,7 +61,6 @@ pub mod BN254 {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
-        #[automatically_derived]
         impl BaseField {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -206,7 +205,6 @@ pub mod BN254 {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
-        #[automatically_derived]
         impl ScalarField {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -547,7 +545,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -599,7 +596,6 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -616,7 +612,6 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2154,7 +2149,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2206,7 +2200,6 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2223,7 +2216,6 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -10670,6 +10662,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         }
     };
     ///Container for all the [`LightClient`](self) function calls.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum LightClientCalls {
@@ -10724,7 +10717,6 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         #[allow(missing_docs)]
         upgradeToAndCall(upgradeToAndCallCall),
     }
-    #[automatically_derived]
     impl LightClientCalls {
         /// All the selectors of this enum.
         ///
@@ -10759,6 +10751,82 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             [242u8, 253u8, 227u8, 139u8],
             [249u8, 229u8, 13u8, 25u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(setPermissionedProver),
+            ::core::stringify!(stateHistoryCommitments),
+            ::core::stringify!(getVersion),
+            ::core::stringify!(_getVk),
+            ::core::stringify!(newFinalizedState),
+            ::core::stringify!(stateHistoryFirstIndex),
+            ::core::stringify!(permissionedProver),
+            ::core::stringify!(currentBlockNumber),
+            ::core::stringify!(genesisStakeTableState),
+            ::core::stringify!(upgradeToAndCall),
+            ::core::stringify!(proxiableUUID),
+            ::core::stringify!(disablePermissionedProverMode),
+            ::core::stringify!(renounceOwnership),
+            ::core::stringify!(isPermissionedProverEnabled),
+            ::core::stringify!(getHotShotCommitment),
+            ::core::stringify!(owner),
+            ::core::stringify!(setstateHistoryRetentionPeriod),
+            ::core::stringify!(initialize),
+            ::core::stringify!(finalizedState),
+            ::core::stringify!(UPGRADE_INTERFACE_VERSION),
+            ::core::stringify!(stateHistoryRetentionPeriod),
+            ::core::stringify!(genesisState),
+            ::core::stringify!(lagOverEscapeHatchThreshold),
+            ::core::stringify!(transferOwnership),
+            ::core::stringify!(getStateHistoryCount),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <setPermissionedProverCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <stateHistoryCommitmentsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getVersionCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <_getVkCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <newFinalizedStateCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <stateHistoryFirstIndexCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <permissionedProverCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <currentBlockNumberCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <genesisStakeTableStateCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <upgradeToAndCallCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <proxiableUUIDCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <disablePermissionedProverModeCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <renounceOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <isPermissionedProverEnabledCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getHotShotCommitmentCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <ownerCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <setstateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <initializeCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <finalizedStateCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <stateHistoryRetentionPeriodCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <genesisStateCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <lagOverEscapeHatchThresholdCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <transferOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getStateHistoryCountCall as alloy_sol_types::SolCall>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for LightClientCalls {
@@ -11700,6 +11768,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         }
     }
     ///Container for all the [`LightClient`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum LightClientErrors {
@@ -11746,7 +11815,6 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         #[allow(missing_docs)]
         WrongStakeTableUsed(WrongStakeTableUsed),
     }
-    #[automatically_derived]
     impl LightClientErrors {
         /// All the selectors of this enum.
         ///
@@ -11777,6 +11845,74 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             [244u8, 160u8, 238u8, 224u8],
             [249u8, 46u8, 232u8, 169u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(OutdatedState),
+            ::core::stringify!(InvalidScalar),
+            ::core::stringify!(InvalidProof),
+            ::core::stringify!(OwnableUnauthorizedAccount),
+            ::core::stringify!(FailedInnerCall),
+            ::core::stringify!(OwnableInvalidOwner),
+            ::core::stringify!(ERC1967InvalidImplementation),
+            ::core::stringify!(WrongStakeTableUsed),
+            ::core::stringify!(InvalidHotShotBlockForCommitmentCheck),
+            ::core::stringify!(AddressEmptyCode),
+            ::core::stringify!(InvalidArgs),
+            ::core::stringify!(ProverNotPermissioned),
+            ::core::stringify!(NoChangeRequired),
+            ::core::stringify!(UUPSUnsupportedProxiableUUID),
+            ::core::stringify!(InsufficientSnapshotHistory),
+            ::core::stringify!(ERC1967NonPayable),
+            ::core::stringify!(NotInitializing),
+            ::core::stringify!(UUPSUnauthorizedCallContext),
+            ::core::stringify!(InvalidAddress),
+            ::core::stringify!(InvalidMaxStateHistory),
+            ::core::stringify!(InvalidInitialization),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <OutdatedState as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidScalar as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidProof as alloy_sol_types::SolError>::SIGNATURE,
+            <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::SIGNATURE,
+            <FailedInnerCall as alloy_sol_types::SolError>::SIGNATURE,
+            <OwnableInvalidOwner as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967InvalidImplementation as alloy_sol_types::SolError>::SIGNATURE,
+            <WrongStakeTableUsed as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidHotShotBlockForCommitmentCheck as alloy_sol_types::SolError>::SIGNATURE,
+            <AddressEmptyCode as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidArgs as alloy_sol_types::SolError>::SIGNATURE,
+            <ProverNotPermissioned as alloy_sol_types::SolError>::SIGNATURE,
+            <NoChangeRequired as alloy_sol_types::SolError>::SIGNATURE,
+            <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::SIGNATURE,
+            <InsufficientSnapshotHistory as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967NonPayable as alloy_sol_types::SolError>::SIGNATURE,
+            <NotInitializing as alloy_sol_types::SolError>::SIGNATURE,
+            <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidAddress as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidMaxStateHistory as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidInitialization as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for LightClientErrors {
@@ -12596,6 +12732,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         }
     }
     ///Container for all the [`LightClient`](self) events.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum LightClientEvents {
@@ -12614,7 +12751,6 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         #[allow(missing_docs)]
         Upgraded(Upgraded),
     }
-    #[automatically_derived]
     impl LightClientEvents {
         /// All the selectors of this enum.
         ///
@@ -12659,6 +12795,46 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 185u8, 62u8, 237u8, 168u8, 59u8, 121u8, 250u8, 64u8, 0u8, 125u8,
             ],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(PermissionedProverRequired),
+            ::core::stringify!(OwnershipTransferred),
+            ::core::stringify!(PermissionedProverNotRequired),
+            ::core::stringify!(NewState),
+            ::core::stringify!(Upgraded),
+            ::core::stringify!(Initialized),
+            ::core::stringify!(Upgrade),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <PermissionedProverRequired as alloy_sol_types::SolEvent>::SIGNATURE,
+            <OwnershipTransferred as alloy_sol_types::SolEvent>::SIGNATURE,
+            <PermissionedProverNotRequired as alloy_sol_types::SolEvent>::SIGNATURE,
+            <NewState as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Upgraded as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Initialized as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Upgrade as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for LightClientEvents {
@@ -12849,7 +13025,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -12926,7 +13101,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -13138,7 +13312,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

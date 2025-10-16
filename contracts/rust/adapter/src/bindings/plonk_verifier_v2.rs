@@ -61,7 +61,6 @@ pub mod BN254 {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
-        #[automatically_derived]
         impl BaseField {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -206,7 +205,6 @@ pub mod BN254 {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
-        #[automatically_derived]
         impl ScalarField {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -547,7 +545,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -599,7 +596,6 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -616,7 +612,6 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2154,7 +2149,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2206,7 +2200,6 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2223,7 +2216,6 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -5249,6 +5241,7 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] mem
         }
     };
     ///Container for all the [`PlonkVerifierV2`](self) function calls.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum PlonkVerifierV2Calls {
@@ -5271,7 +5264,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] mem
         #[allow(missing_docs)]
         verify(verifyCall),
     }
-    #[automatically_derived]
     impl PlonkVerifierV2Calls {
         /// All the selectors of this enum.
         ///
@@ -5290,6 +5282,50 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] mem
             [227u8, 81u8, 45u8, 86u8],
             [245u8, 20u8, 67u8, 38u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(COSET_K2),
+            ::core::stringify!(BETA_H_Y1),
+            ::core::stringify!(COSET_K3),
+            ::core::stringify!(BETA_H_X0),
+            ::core::stringify!(verify),
+            ::core::stringify!(BETA_H_X1),
+            ::core::stringify!(COSET_K4),
+            ::core::stringify!(COSET_K1),
+            ::core::stringify!(BETA_H_Y0),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <COSET_K2Call as alloy_sol_types::SolCall>::SIGNATURE,
+            <BETA_H_Y1Call as alloy_sol_types::SolCall>::SIGNATURE,
+            <COSET_K3Call as alloy_sol_types::SolCall>::SIGNATURE,
+            <BETA_H_X0Call as alloy_sol_types::SolCall>::SIGNATURE,
+            <verifyCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <BETA_H_X1Call as alloy_sol_types::SolCall>::SIGNATURE,
+            <COSET_K4Call as alloy_sol_types::SolCall>::SIGNATURE,
+            <COSET_K1Call as alloy_sol_types::SolCall>::SIGNATURE,
+            <BETA_H_Y0Call as alloy_sol_types::SolCall>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for PlonkVerifierV2Calls {
@@ -5636,6 +5672,7 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] mem
         }
     }
     ///Container for all the [`PlonkVerifierV2`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum PlonkVerifierV2Errors {
@@ -5660,7 +5697,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] mem
         #[allow(missing_docs)]
         WrongPlonkVK(WrongPlonkVK),
     }
-    #[automatically_derived]
     impl PlonkVerifierV2Errors {
         /// All the selectors of this enum.
         ///
@@ -5680,6 +5716,52 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] mem
             [226u8, 239u8, 9u8, 229u8],
             [253u8, 154u8, 45u8, 27u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(InvalidScalar),
+            ::core::stringify!(BN254ScalarMulFailed),
+            ::core::stringify!(PowPrecompileFailed),
+            ::core::stringify!(WrongPlonkVK),
+            ::core::stringify!(BN254G1AddFailed),
+            ::core::stringify!(InvalidG1),
+            ::core::stringify!(BN254PairingProdFailed),
+            ::core::stringify!(BN254ScalarInvZero),
+            ::core::stringify!(UnsupportedDegree),
+            ::core::stringify!(InvalidPlonkArgs),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <InvalidScalar as alloy_sol_types::SolError>::SIGNATURE,
+            <BN254ScalarMulFailed as alloy_sol_types::SolError>::SIGNATURE,
+            <PowPrecompileFailed as alloy_sol_types::SolError>::SIGNATURE,
+            <WrongPlonkVK as alloy_sol_types::SolError>::SIGNATURE,
+            <BN254G1AddFailed as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidG1 as alloy_sol_types::SolError>::SIGNATURE,
+            <BN254PairingProdFailed as alloy_sol_types::SolError>::SIGNATURE,
+            <BN254ScalarInvZero as alloy_sol_types::SolError>::SIGNATURE,
+            <UnsupportedDegree as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidPlonkArgs as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for PlonkVerifierV2Errors {
@@ -6162,7 +6244,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -6239,7 +6320,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -6303,7 +6383,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

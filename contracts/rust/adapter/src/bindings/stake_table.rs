@@ -61,7 +61,6 @@ pub mod BN254 {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
-        #[automatically_derived]
         impl BaseField {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -639,7 +638,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -691,7 +689,6 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -708,7 +705,6 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -997,7 +993,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1049,7 +1044,6 @@ See the [wrapper's documentation](`EdOnBN254Instance`) for more details.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1066,7 +1060,6 @@ See the [wrapper's documentation](`EdOnBN254Instance`) for more details.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2253,7 +2246,6 @@ pub mod StakeTable {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
-        #[automatically_derived]
         impl ValidatorStatus {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -9620,6 +9612,7 @@ function validators(address account) external view returns (uint256 delegatedAmo
         }
     };
     ///Container for all the [`StakeTable`](self) function calls.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum StakeTableCalls {
@@ -9674,7 +9667,6 @@ function validators(address account) external view returns (uint256 delegatedAmo
         #[allow(missing_docs)]
         validators(validatorsCall),
     }
-    #[automatically_derived]
     impl StakeTableCalls {
         /// All the selectors of this enum.
         ///
@@ -9709,6 +9701,82 @@ function validators(address account) external view returns (uint256 delegatedAmo
             [250u8, 82u8, 199u8, 216u8],
             [252u8, 12u8, 84u8, 106u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(delegate),
+            ::core::stringify!(getVersion),
+            ::core::stringify!(registerValidator),
+            ::core::stringify!(claimValidatorExit),
+            ::core::stringify!(initializedAtBlock),
+            ::core::stringify!(undelegate),
+            ::core::stringify!(upgradeToAndCall),
+            ::core::stringify!(proxiableUUID),
+            ::core::stringify!(updateConsensusKeys),
+            ::core::stringify!(deregisterValidator),
+            ::core::stringify!(renounceOwnership),
+            ::core::stringify!(owner),
+            ::core::stringify!(_hashBlsKey),
+            ::core::stringify!(exitEscrowPeriod),
+            ::core::stringify!(undelegations),
+            ::core::stringify!(claimWithdrawal),
+            ::core::stringify!(UPGRADE_INTERFACE_VERSION),
+            ::core::stringify!(blsKeys),
+            ::core::stringify!(lightClient),
+            ::core::stringify!(validatorExits),
+            ::core::stringify!(initialize),
+            ::core::stringify!(delegations),
+            ::core::stringify!(transferOwnership),
+            ::core::stringify!(validators),
+            ::core::stringify!(token),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <delegateCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getVersionCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <registerValidatorCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <claimValidatorExitCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <initializedAtBlockCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <undelegateCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <upgradeToAndCallCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <proxiableUUIDCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <updateConsensusKeysCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <deregisterValidatorCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <renounceOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <ownerCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <_hashBlsKeyCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <exitEscrowPeriodCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <undelegationsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <claimWithdrawalCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <blsKeysCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <lightClientCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <validatorExitsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <initializeCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <delegationsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <transferOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <validatorsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <tokenCall as alloy_sol_types::SolCall>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for StakeTableCalls {
@@ -10627,6 +10695,7 @@ function validators(address account) external view returns (uint256 delegatedAmo
         }
     }
     ///Container for all the [`StakeTable`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum StakeTableErrors {
@@ -10689,7 +10758,6 @@ function validators(address account) external view returns (uint256 delegatedAmo
         #[allow(missing_docs)]
         ZeroAmount(ZeroAmount),
     }
-    #[automatically_derived]
     impl StakeTableErrors {
         /// All the selectors of this enum.
         ///
@@ -10728,6 +10796,90 @@ function validators(address account) external view returns (uint256 delegatedAmo
             [242u8, 83u8, 20u8, 166u8],
             [249u8, 46u8, 232u8, 169u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(BlsKeyAlreadyUsed),
+            ::core::stringify!(InvalidSchnorrVK),
+            ::core::stringify!(BLSSigVerificationFailed),
+            ::core::stringify!(OwnableUnauthorizedAccount),
+            ::core::stringify!(FailedInnerCall),
+            ::core::stringify!(OwnableInvalidOwner),
+            ::core::stringify!(ZeroAmount),
+            ::core::stringify!(InsufficientAllowance),
+            ::core::stringify!(PowPrecompileFailed),
+            ::core::stringify!(ERC1967InvalidImplementation),
+            ::core::stringify!(ValidatorInactive),
+            ::core::stringify!(PrematureWithdrawal),
+            ::core::stringify!(InsufficientBalance),
+            ::core::stringify!(ValidatorAlreadyRegistered),
+            ::core::stringify!(AddressEmptyCode),
+            ::core::stringify!(InvalidG1),
+            ::core::stringify!(UUPSUnsupportedProxiableUUID),
+            ::core::stringify!(ERC1967NonPayable),
+            ::core::stringify!(ExitEscrowPeriodInvalid),
+            ::core::stringify!(BN254PairingProdFailed),
+            ::core::stringify!(NothingToWithdraw),
+            ::core::stringify!(UndelegationAlreadyExists),
+            ::core::stringify!(NotInitializing),
+            ::core::stringify!(ZeroAddress),
+            ::core::stringify!(InvalidCommission),
+            ::core::stringify!(UUPSUnauthorizedCallContext),
+            ::core::stringify!(ValidatorAlreadyExited),
+            ::core::stringify!(ValidatorNotExited),
+            ::core::stringify!(InvalidInitialization),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <BlsKeyAlreadyUsed as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidSchnorrVK as alloy_sol_types::SolError>::SIGNATURE,
+            <BLSSigVerificationFailed as alloy_sol_types::SolError>::SIGNATURE,
+            <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::SIGNATURE,
+            <FailedInnerCall as alloy_sol_types::SolError>::SIGNATURE,
+            <OwnableInvalidOwner as alloy_sol_types::SolError>::SIGNATURE,
+            <ZeroAmount as alloy_sol_types::SolError>::SIGNATURE,
+            <InsufficientAllowance as alloy_sol_types::SolError>::SIGNATURE,
+            <PowPrecompileFailed as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967InvalidImplementation as alloy_sol_types::SolError>::SIGNATURE,
+            <ValidatorInactive as alloy_sol_types::SolError>::SIGNATURE,
+            <PrematureWithdrawal as alloy_sol_types::SolError>::SIGNATURE,
+            <InsufficientBalance as alloy_sol_types::SolError>::SIGNATURE,
+            <ValidatorAlreadyRegistered as alloy_sol_types::SolError>::SIGNATURE,
+            <AddressEmptyCode as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidG1 as alloy_sol_types::SolError>::SIGNATURE,
+            <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967NonPayable as alloy_sol_types::SolError>::SIGNATURE,
+            <ExitEscrowPeriodInvalid as alloy_sol_types::SolError>::SIGNATURE,
+            <BN254PairingProdFailed as alloy_sol_types::SolError>::SIGNATURE,
+            <NothingToWithdraw as alloy_sol_types::SolError>::SIGNATURE,
+            <UndelegationAlreadyExists as alloy_sol_types::SolError>::SIGNATURE,
+            <NotInitializing as alloy_sol_types::SolError>::SIGNATURE,
+            <ZeroAddress as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidCommission as alloy_sol_types::SolError>::SIGNATURE,
+            <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::SIGNATURE,
+            <ValidatorAlreadyExited as alloy_sol_types::SolError>::SIGNATURE,
+            <ValidatorNotExited as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidInitialization as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for StakeTableErrors {
@@ -11823,6 +11975,7 @@ function validators(address account) external view returns (uint256 delegatedAmo
         }
     }
     ///Container for all the [`StakeTable`](self) events.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum StakeTableEvents {
@@ -11845,7 +11998,6 @@ function validators(address account) external view returns (uint256 delegatedAmo
         #[allow(missing_docs)]
         Withdrawal(Withdrawal),
     }
-    #[automatically_derived]
     impl StakeTableEvents {
         /// All the selectors of this enum.
         ///
@@ -11900,6 +12052,50 @@ function validators(address account) external view returns (uint256 delegatedAmo
                 125u8, 216u8, 175u8, 255u8, 142u8, 31u8, 111u8, 202u8, 240u8, 221u8, 22u8,
             ],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(Undelegated),
+            ::core::stringify!(Withdrawal),
+            ::core::stringify!(ConsensusKeysUpdated),
+            ::core::stringify!(OwnershipTransferred),
+            ::core::stringify!(Upgraded),
+            ::core::stringify!(Initialized),
+            ::core::stringify!(Delegated),
+            ::core::stringify!(ValidatorRegistered),
+            ::core::stringify!(ValidatorExit),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <Undelegated as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Withdrawal as alloy_sol_types::SolEvent>::SIGNATURE,
+            <ConsensusKeysUpdated as alloy_sol_types::SolEvent>::SIGNATURE,
+            <OwnershipTransferred as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Upgraded as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Initialized as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Delegated as alloy_sol_types::SolEvent>::SIGNATURE,
+            <ValidatorRegistered as alloy_sol_types::SolEvent>::SIGNATURE,
+            <ValidatorExit as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for StakeTableEvents {
@@ -12122,7 +12318,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -12199,7 +12394,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -12434,7 +12628,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

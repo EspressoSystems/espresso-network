@@ -7836,6 +7836,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         }
     };
     ///Container for all the [`RewardClaim`](self) function calls.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum RewardClaimCalls {
@@ -7890,7 +7891,6 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         #[allow(missing_docs)]
         upgradeToAndCall(upgradeToAndCallCall),
     }
-    #[automatically_derived]
     impl RewardClaimCalls {
         /// All the selectors of this enum.
         ///
@@ -7925,6 +7925,82 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             [242u8, 253u8, 227u8, 139u8],
             [248u8, 200u8, 118u8, 94u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(supportsInterface),
+            ::core::stringify!(getVersion),
+            ::core::stringify!(getRoleAdmin),
+            ::core::stringify!(grantRole),
+            ::core::stringify!(renounceRole),
+            ::core::stringify!(unpause),
+            ::core::stringify!(upgradeToAndCall),
+            ::core::stringify!(proxiableUUID),
+            ::core::stringify!(claimRewards),
+            ::core::stringify!(paused),
+            ::core::stringify!(dailyLimit),
+            ::core::stringify!(renounceOwnership),
+            ::core::stringify!(pause),
+            ::core::stringify!(owner),
+            ::core::stringify!(hasRole),
+            ::core::stringify!(DEFAULT_ADMIN_ROLE),
+            ::core::stringify!(UPGRADE_INTERFACE_VERSION),
+            ::core::stringify!(setDailyLimit),
+            ::core::stringify!(lightClient),
+            ::core::stringify!(claimedRewards),
+            ::core::stringify!(revokeRole),
+            ::core::stringify!(PAUSER_ROLE),
+            ::core::stringify!(espToken),
+            ::core::stringify!(transferOwnership),
+            ::core::stringify!(initialize),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <supportsInterfaceCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getVersionCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <getRoleAdminCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <grantRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <renounceRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <unpauseCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <upgradeToAndCallCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <proxiableUUIDCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <claimRewardsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <pausedCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <dailyLimitCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <renounceOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <pauseCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <ownerCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <hasRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
+            <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <setDailyLimitCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <lightClientCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <claimedRewardsCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <revokeRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <PAUSER_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
+            <espTokenCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <transferOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <initializeCall as alloy_sol_types::SolCall>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for RewardClaimCalls {
@@ -8821,6 +8897,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         }
     }
     ///Container for all the [`RewardClaim`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum RewardClaimErrors {
@@ -8873,7 +8950,6 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         #[allow(missing_docs)]
         ZeroTotalSupply(ZeroTotalSupply),
     }
-    #[automatically_derived]
     impl RewardClaimErrors {
         /// All the selectors of this enum.
         ///
@@ -8907,6 +8983,80 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
             [249u8, 46u8, 232u8, 169u8],
             [252u8, 171u8, 221u8, 189u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(OwnableUnauthorizedAccount),
+            ::core::stringify!(FailedInnerCall),
+            ::core::stringify!(DailyLimitExceeded),
+            ::core::stringify!(OwnableInvalidOwner),
+            ::core::stringify!(InvalidAuthRoot),
+            ::core::stringify!(InvalidRewardAmount),
+            ::core::stringify!(ReentrancyGuardReentrantCall),
+            ::core::stringify!(ZeroTotalSupply),
+            ::core::stringify!(ERC1967InvalidImplementation),
+            ::core::stringify!(AlreadyClaimed),
+            ::core::stringify!(AccessControlBadConfirmation),
+            ::core::stringify!(ZeroTokenAddress),
+            ::core::stringify!(ExpectedPause),
+            ::core::stringify!(AddressEmptyCode),
+            ::core::stringify!(ZeroDailyLimit),
+            ::core::stringify!(ZeroPauserAddress),
+            ::core::stringify!(UUPSUnsupportedProxiableUUID),
+            ::core::stringify!(ERC1967NonPayable),
+            ::core::stringify!(NotInitializing),
+            ::core::stringify!(EnforcedPause),
+            ::core::stringify!(UUPSUnauthorizedCallContext),
+            ::core::stringify!(AccessControlUnauthorizedAccount),
+            ::core::stringify!(InvalidInitialization),
+            ::core::stringify!(ZeroLightClientAddress),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::SIGNATURE,
+            <FailedInnerCall as alloy_sol_types::SolError>::SIGNATURE,
+            <DailyLimitExceeded as alloy_sol_types::SolError>::SIGNATURE,
+            <OwnableInvalidOwner as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidAuthRoot as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidRewardAmount as alloy_sol_types::SolError>::SIGNATURE,
+            <ReentrancyGuardReentrantCall as alloy_sol_types::SolError>::SIGNATURE,
+            <ZeroTotalSupply as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967InvalidImplementation as alloy_sol_types::SolError>::SIGNATURE,
+            <AlreadyClaimed as alloy_sol_types::SolError>::SIGNATURE,
+            <AccessControlBadConfirmation as alloy_sol_types::SolError>::SIGNATURE,
+            <ZeroTokenAddress as alloy_sol_types::SolError>::SIGNATURE,
+            <ExpectedPause as alloy_sol_types::SolError>::SIGNATURE,
+            <AddressEmptyCode as alloy_sol_types::SolError>::SIGNATURE,
+            <ZeroDailyLimit as alloy_sol_types::SolError>::SIGNATURE,
+            <ZeroPauserAddress as alloy_sol_types::SolError>::SIGNATURE,
+            <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::SIGNATURE,
+            <ERC1967NonPayable as alloy_sol_types::SolError>::SIGNATURE,
+            <NotInitializing as alloy_sol_types::SolError>::SIGNATURE,
+            <EnforcedPause as alloy_sol_types::SolError>::SIGNATURE,
+            <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::SIGNATURE,
+            <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidInitialization as alloy_sol_types::SolError>::SIGNATURE,
+            <ZeroLightClientAddress as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for RewardClaimErrors {
@@ -9838,6 +9988,7 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         }
     }
     ///Container for all the [`RewardClaim`](self) events.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum RewardClaimEvents {
@@ -9864,7 +10015,6 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
         #[allow(missing_docs)]
         Upgraded(Upgraded),
     }
-    #[automatically_derived]
     impl RewardClaimEvents {
         /// All the selectors of this enum.
         ///
@@ -9929,6 +10079,54 @@ function upgradeToAndCall(address newImplementation, bytes memory data) external
                 150u8, 59u8, 216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
             ],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(DailyLimitUpdated),
+            ::core::stringify!(RoleGranted),
+            ::core::stringify!(Unpaused),
+            ::core::stringify!(Paused),
+            ::core::stringify!(OwnershipTransferred),
+            ::core::stringify!(Upgraded),
+            ::core::stringify!(RoleAdminChanged),
+            ::core::stringify!(Initialized),
+            ::core::stringify!(RoleRevoked),
+            ::core::stringify!(Upgrade),
+            ::core::stringify!(RewardsClaimed),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <DailyLimitUpdated as alloy_sol_types::SolEvent>::SIGNATURE,
+            <RoleGranted as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Unpaused as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Paused as alloy_sol_types::SolEvent>::SIGNATURE,
+            <OwnershipTransferred as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Upgraded as alloy_sol_types::SolEvent>::SIGNATURE,
+            <RoleAdminChanged as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Initialized as alloy_sol_types::SolEvent>::SIGNATURE,
+            <RoleRevoked as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Upgrade as alloy_sol_types::SolEvent>::SIGNATURE,
+            <RewardsClaimed as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for RewardClaimEvents {
@@ -10166,7 +10364,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -10243,7 +10440,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -10447,7 +10643,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

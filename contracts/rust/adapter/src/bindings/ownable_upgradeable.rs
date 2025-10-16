@@ -1121,6 +1121,7 @@ function transferOwnership(address newOwner) external;
         }
     };
     ///Container for all the [`OwnableUpgradeable`](self) function calls.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum OwnableUpgradeableCalls {
@@ -1131,7 +1132,6 @@ function transferOwnership(address newOwner) external;
         #[allow(missing_docs)]
         transferOwnership(transferOwnershipCall),
     }
-    #[automatically_derived]
     impl OwnableUpgradeableCalls {
         /// All the selectors of this enum.
         ///
@@ -1144,6 +1144,38 @@ function transferOwnership(address newOwner) external;
             [141u8, 165u8, 203u8, 91u8],
             [242u8, 253u8, 227u8, 139u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(renounceOwnership),
+            ::core::stringify!(owner),
+            ::core::stringify!(transferOwnership),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <renounceOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <ownerCall as alloy_sol_types::SolCall>::SIGNATURE,
+            <transferOwnershipCall as alloy_sol_types::SolCall>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for OwnableUpgradeableCalls {
@@ -1314,6 +1346,7 @@ function transferOwnership(address newOwner) external;
         }
     }
     ///Container for all the [`OwnableUpgradeable`](self) custom errors.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum OwnableUpgradeableErrors {
@@ -1326,7 +1359,6 @@ function transferOwnership(address newOwner) external;
         #[allow(missing_docs)]
         OwnableUnauthorizedAccount(OwnableUnauthorizedAccount),
     }
-    #[automatically_derived]
     impl OwnableUpgradeableErrors {
         /// All the selectors of this enum.
         ///
@@ -1340,6 +1372,40 @@ function transferOwnership(address newOwner) external;
             [215u8, 230u8, 188u8, 248u8],
             [249u8, 46u8, 232u8, 169u8],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(OwnableUnauthorizedAccount),
+            ::core::stringify!(OwnableInvalidOwner),
+            ::core::stringify!(NotInitializing),
+            ::core::stringify!(InvalidInitialization),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::SIGNATURE,
+            <OwnableInvalidOwner as alloy_sol_types::SolError>::SIGNATURE,
+            <NotInitializing as alloy_sol_types::SolError>::SIGNATURE,
+            <InvalidInitialization as alloy_sol_types::SolError>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for OwnableUpgradeableErrors {
@@ -1555,6 +1621,7 @@ function transferOwnership(address newOwner) external;
         }
     }
     ///Container for all the [`OwnableUpgradeable`](self) events.
+    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum OwnableUpgradeableEvents {
@@ -1563,7 +1630,6 @@ function transferOwnership(address newOwner) external;
         #[allow(missing_docs)]
         OwnershipTransferred(OwnershipTransferred),
     }
-    #[automatically_derived]
     impl OwnableUpgradeableEvents {
         /// All the selectors of this enum.
         ///
@@ -1583,6 +1649,36 @@ function transferOwnership(address newOwner) external;
                 33u8, 238u8, 209u8, 205u8, 174u8, 182u8, 17u8, 81u8, 129u8, 210u8,
             ],
         ];
+        /// The names of the variants in the same order as `SELECTORS`.
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(OwnershipTransferred),
+            ::core::stringify!(Initialized),
+        ];
+        /// The signatures in the same order as `SELECTORS`.
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <OwnershipTransferred as alloy_sol_types::SolEvent>::SIGNATURE,
+            <Initialized as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
+        /// Returns the signature for the given selector, if known.
+        #[inline]
+        pub fn signature_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            match Self::SELECTORS.binary_search(&selector) {
+                ::core::result::Result::Ok(idx) => {
+                    ::core::option::Option::Some(Self::SIGNATURES[idx])
+                }
+                ::core::result::Result::Err(_) => ::core::option::Option::None,
+            }
+        }
+        /// Returns the enum variant name for the given selector, if known.
+        #[inline]
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
+            let sig = Self::signature_by_selector(selector)?;
+            sig.split_once('(').map(|(name, _)| name)
+        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for OwnableUpgradeableEvents {
@@ -1713,7 +1809,6 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1790,7 +1885,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1824,7 +1918,6 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
-    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
