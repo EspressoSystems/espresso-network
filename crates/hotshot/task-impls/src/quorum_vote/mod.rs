@@ -49,8 +49,8 @@ mod handlers;
 enum VoteDependency {
     /// For the `QuorumProposalValidated` event after validating `QuorumProposalRecv`.
     QuorumProposal,
-    /// For the `DaCertificateRecv` event.
-    Dac,
+    // /// For the `DaCertificateRecv` event.
+    // Dac,
     /// For the `VidShareRecv` event.
     Vid,
 }
@@ -140,7 +140,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         let mut next_epoch_payload_commitment = None;
         let mut leaf = None;
         let mut vid_share = None;
-        let mut da_cert = None;
+        // let mut da_cert = None;
         let mut parent_view_number = None;
         for event in res.iter() {
             match event.as_ref() {
@@ -209,7 +209,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                     } else {
                         next_epoch_payload_commitment = next_epoch_cert_payload_comm;
                     }
-                    da_cert = Some(cert.clone());
+                    // da_cert = Some(cert.clone());
                 },
                 HotShotEvent::VidShareValidated(share) => {
                     let vid_payload_commitment = &share.data.payload_commitment();
@@ -258,13 +258,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             ));
         };
 
-        let Some(da_cert) = da_cert else {
-            bail!(error!(
-                "We don't have the DA cert for this view {}, but we should, because the vote \
-                 dependencies have completed.",
-                self.view_number
-            ));
-        };
+        // let Some(da_cert) = da_cert else {
+        //     bail!(error!(
+        //         "We don't have the DA cert for this view {}, but we should, because the vote \
+        //          dependencies have completed.",
+        //         self.view_number
+        //     ));
+        // };
 
         let mut maybe_current_epoch_vid_share = None;
         // If this is an epoch transition block, we might need two VID shares.
@@ -301,16 +301,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             if current_epoch_membership.has_stake(&self.public_key).await
                 && next_epoch_membership.has_stake(&self.public_key).await
             {
-                let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
-                    maybe_current_epoch_vid_share = Some(vid_share.clone());
-                    next_epoch
-                } else {
-                    current_epoch
+                let (other_target_epoch, other_target_comm) =
+                    if vid_share.data.target_epoch() == current_epoch {
+                        maybe_current_epoch_vid_share = Some(vid_share.clone());
+                        (next_epoch, next_epoch_payload_commitment)
+                    } else {
+                        (current_epoch, payload_commitment)
+                    };
+                let Some(other_target_comm) = other_target_comm else {
+                    bail!(warn!("need next vid comm"));
                 };
                 match wait_for_second_vid_share(
                     other_target_epoch,
                     &vid_share,
-                    &da_cert,
+                    other_target_comm,
+                    // &da_cert,
                     &self.consensus,
                     &self.receiver.activate_cloned(),
                     self.cancel_receiver.clone(),
@@ -513,13 +518,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                             return false;
                         }
                     },
-                    VoteDependency::Dac => {
-                        if let HotShotEvent::DaCertificateValidated(cert) = event {
-                            cert.view_number
-                        } else {
-                            return false;
-                        }
-                    },
+                    // VoteDependency::Dac => {
+                    //     if let HotShotEvent::DaCertificateValidated(cert) = event {
+                    //         cert.view_number
+                    //     } else {
+                    //         return false;
+                    //     }
+                    // },
                     VoteDependency::Vid => {
                         if let HotShotEvent::VidShareValidated(disperse) = event {
                             disperse.data.view_number()
@@ -566,12 +571,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             event_receiver.clone(),
             cancel_receiver.clone(),
         );
-        let dac_dependency = self.create_event_dependency(
-            VoteDependency::Dac,
-            view_number,
-            event_receiver.clone(),
-            cancel_receiver.clone(),
-        );
+        // let dac_dependency = self.create_event_dependency(
+        //     VoteDependency::Dac,
+        //     view_number,
+        //     event_receiver.clone(),
+        //     cancel_receiver.clone(),
+        // );
         let vid_dependency = self.create_event_dependency(
             VoteDependency::Vid,
             view_number,
@@ -583,7 +588,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             quorum_proposal_dependency.mark_as_completed(event);
         }
 
-        let deps = vec![quorum_proposal_dependency, dac_dependency, vid_dependency];
+        let deps = vec![quorum_proposal_dependency, vid_dependency];
 
         let dependency_chain = AndDependency::from_deps(deps);
 
@@ -687,6 +692,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 );
             },
             HotShotEvent::DaCertificateRecv(cert) => {
+                panic!("Received DAC for view {}", cert.view_number);
                 let view = cert.view_number;
 
                 tracing::trace!("Received DAC for view {view}");

@@ -22,7 +22,7 @@ use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSo
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
+    data::{Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewChangeEvidence2},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
@@ -30,8 +30,8 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
     },
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
@@ -1408,7 +1408,8 @@ pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
 pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     target_epoch: Option<TYPES::Epoch>,
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
-    da_cert: &DaCertificate2<TYPES>,
+    // da_cert: &DaCertificate2<TYPES>,
+    commitment: VidCommitment,
     consensus: &OuterConsensus<TYPES>,
     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
     cancel_receiver: Receiver<()>,
@@ -1424,18 +1425,12 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         .and_then(|epoch_map| epoch_map.get(&target_epoch))
         .cloned();
     if let Some(second_vid_share) = maybe_second_vid_share {
-        if (target_epoch == da_cert.epoch()
-            && second_vid_share.data.payload_commitment() == da_cert.data().payload_commit)
-            || (target_epoch != da_cert.epoch()
-                && Some(second_vid_share.data.payload_commitment())
-                    == da_cert.data().next_epoch_payload_commit)
-        {
+        if second_vid_share.data.payload_commitment() == commitment {
             return Ok(second_vid_share);
         }
     }
 
     let receiver = receiver.clone();
-    let da_cert_clone = da_cert.clone();
     let Some(event) = EventDependency::new(
         receiver,
         cancel_receiver,
@@ -1447,13 +1442,7 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         Box::new(move |event| {
             let event = event.as_ref();
             if let HotShotEvent::VidShareValidated(second_vid_share) = event {
-                if target_epoch == da_cert_clone.epoch() {
-                    second_vid_share.data.payload_commitment()
-                        == da_cert_clone.data().payload_commit
-                } else {
-                    Some(second_vid_share.data.payload_commitment())
-                        == da_cert_clone.data().next_epoch_payload_commit
-                }
+                second_vid_share.data.payload_commitment() == commitment
             } else {
                 false
             }
