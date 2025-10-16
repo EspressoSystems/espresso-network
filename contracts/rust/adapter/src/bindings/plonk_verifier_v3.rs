@@ -61,6 +61,7 @@ pub mod BN254 {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
+        #[automatically_derived]
         impl BaseField {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -205,6 +206,7 @@ pub mod BN254 {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
+        #[automatically_derived]
         impl ScalarField {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -328,7 +330,6 @@ struct G1Point { BaseField x; BaseField y; }
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (BaseField, BaseField);
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = (
@@ -517,8 +518,8 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
     pub const fn new<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    >(address: alloy_sol_types::private::Address, __provider: P) -> BN254Instance<P, N> {
-        BN254Instance::<P, N>::new(address, __provider)
+    >(address: alloy_sol_types::private::Address, provider: P) -> BN254Instance<P, N> {
+        BN254Instance::<P, N>::new(address, provider)
     }
     /**A [`BN254`](self) instance.
 
@@ -545,6 +546,7 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -555,11 +557,11 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            __provider: P,
+            provider: P,
         ) -> Self {
             Self {
                 address,
-                provider: __provider,
+                provider,
                 _network: ::core::marker::PhantomData,
             }
         }
@@ -596,6 +598,7 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Function calls.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -612,6 +615,7 @@ See the [wrapper's documentation](`BN254Instance`) for more details.*/
         }
     }
     /// Event filters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -710,7 +714,6 @@ struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (
             BN254::G1Point,
             BN254::G1Point,
@@ -1431,7 +1434,6 @@ struct VerifyingKey { uint256 domainSize; uint256 numInputs; BN254.G1Point sigma
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (
             alloy::sol_types::sol_data::Uint<256>,
             alloy::sol_types::sol_data::Uint<256>,
@@ -2120,9 +2122,9 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        __provider: P,
+        provider: P,
     ) -> IPlonkVerifierInstance<P, N> {
-        IPlonkVerifierInstance::<P, N>::new(address, __provider)
+        IPlonkVerifierInstance::<P, N>::new(address, provider)
     }
     /**A [`IPlonkVerifier`](self) instance.
 
@@ -2149,6 +2151,7 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2159,11 +2162,11 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            __provider: P,
+            provider: P,
         ) -> Self {
             Self {
                 address,
-                provider: __provider,
+                provider,
                 _network: ::core::marker::PhantomData,
             }
         }
@@ -2200,6 +2203,7 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         }
     }
     /// Function calls.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -2216,6 +2220,7 @@ See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         }
     }
     /// Event filters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -3157,7 +3162,6 @@ error BN254G1AddFailed();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3231,7 +3235,6 @@ error BN254PairingProdFailed();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3305,7 +3308,6 @@ error BN254ScalarInvZero();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3379,7 +3381,6 @@ error BN254ScalarMulFailed();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3453,7 +3454,6 @@ error InvalidG1();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3527,7 +3527,6 @@ error InvalidPlonkArgs();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3601,7 +3600,6 @@ error InvalidScalar();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3675,7 +3673,6 @@ error PowPrecompileFailed();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3749,7 +3746,6 @@ error UnsupportedDegree();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3823,7 +3819,6 @@ error WrongPlonkVK();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -3907,7 +3902,6 @@ function BETA_H_X0() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -3939,7 +3933,6 @@ function BETA_H_X0() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4054,7 +4047,6 @@ function BETA_H_X1() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4086,7 +4078,6 @@ function BETA_H_X1() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4201,7 +4192,6 @@ function BETA_H_Y0() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4233,7 +4223,6 @@ function BETA_H_Y0() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4348,7 +4337,6 @@ function BETA_H_Y1() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4380,7 +4368,6 @@ function BETA_H_Y1() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4495,7 +4482,6 @@ function COSET_K1() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4527,7 +4513,6 @@ function COSET_K1() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4642,7 +4627,6 @@ function COSET_K2() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4674,7 +4658,6 @@ function COSET_K2() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4789,7 +4772,6 @@ function COSET_K3() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4821,7 +4803,6 @@ function COSET_K3() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4936,7 +4917,6 @@ function COSET_K4() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4968,7 +4948,6 @@ function COSET_K4() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -5090,7 +5069,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 IPlonkVerifier::VerifyingKey,
                 alloy::sol_types::sol_data::FixedArray<
@@ -5137,7 +5115,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -5241,7 +5218,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
         }
     };
     ///Container for all the [`PlonkVerifierV3`](self) function calls.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum PlonkVerifierV3Calls {
@@ -5264,6 +5240,7 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
         #[allow(missing_docs)]
         verify(verifyCall),
     }
+    #[automatically_derived]
     impl PlonkVerifierV3Calls {
         /// All the selectors of this enum.
         ///
@@ -5282,50 +5259,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
             [227u8, 81u8, 45u8, 86u8],
             [245u8, 20u8, 67u8, 38u8],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(COSET_K2),
-            ::core::stringify!(BETA_H_Y1),
-            ::core::stringify!(COSET_K3),
-            ::core::stringify!(verify),
-            ::core::stringify!(BETA_H_X0),
-            ::core::stringify!(BETA_H_X1),
-            ::core::stringify!(COSET_K4),
-            ::core::stringify!(COSET_K1),
-            ::core::stringify!(BETA_H_Y0),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <COSET_K2Call as alloy_sol_types::SolCall>::SIGNATURE,
-            <BETA_H_Y1Call as alloy_sol_types::SolCall>::SIGNATURE,
-            <COSET_K3Call as alloy_sol_types::SolCall>::SIGNATURE,
-            <verifyCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <BETA_H_X0Call as alloy_sol_types::SolCall>::SIGNATURE,
-            <BETA_H_X1Call as alloy_sol_types::SolCall>::SIGNATURE,
-            <COSET_K4Call as alloy_sol_types::SolCall>::SIGNATURE,
-            <COSET_K1Call as alloy_sol_types::SolCall>::SIGNATURE,
-            <BETA_H_Y0Call as alloy_sol_types::SolCall>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for PlonkVerifierV3Calls {
@@ -5672,7 +5605,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
         }
     }
     ///Container for all the [`PlonkVerifierV3`](self) custom errors.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum PlonkVerifierV3Errors {
@@ -5697,6 +5629,7 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
         #[allow(missing_docs)]
         WrongPlonkVK(WrongPlonkVK),
     }
+    #[automatically_derived]
     impl PlonkVerifierV3Errors {
         /// All the selectors of this enum.
         ///
@@ -5716,52 +5649,6 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[5] memo
             [226u8, 239u8, 9u8, 229u8],
             [253u8, 154u8, 45u8, 27u8],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(InvalidScalar),
-            ::core::stringify!(BN254ScalarMulFailed),
-            ::core::stringify!(PowPrecompileFailed),
-            ::core::stringify!(WrongPlonkVK),
-            ::core::stringify!(BN254G1AddFailed),
-            ::core::stringify!(InvalidG1),
-            ::core::stringify!(BN254PairingProdFailed),
-            ::core::stringify!(BN254ScalarInvZero),
-            ::core::stringify!(UnsupportedDegree),
-            ::core::stringify!(InvalidPlonkArgs),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <InvalidScalar as alloy_sol_types::SolError>::SIGNATURE,
-            <BN254ScalarMulFailed as alloy_sol_types::SolError>::SIGNATURE,
-            <PowPrecompileFailed as alloy_sol_types::SolError>::SIGNATURE,
-            <WrongPlonkVK as alloy_sol_types::SolError>::SIGNATURE,
-            <BN254G1AddFailed as alloy_sol_types::SolError>::SIGNATURE,
-            <InvalidG1 as alloy_sol_types::SolError>::SIGNATURE,
-            <BN254PairingProdFailed as alloy_sol_types::SolError>::SIGNATURE,
-            <BN254ScalarInvZero as alloy_sol_types::SolError>::SIGNATURE,
-            <UnsupportedDegree as alloy_sol_types::SolError>::SIGNATURE,
-            <InvalidPlonkArgs as alloy_sol_types::SolError>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for PlonkVerifierV3Errors {
@@ -6187,9 +6074,9 @@ See the [wrapper's documentation](`PlonkVerifierV3Instance`) for more details.*/
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        __provider: P,
+        provider: P,
     ) -> PlonkVerifierV3Instance<P, N> {
-        PlonkVerifierV3Instance::<P, N>::new(address, __provider)
+        PlonkVerifierV3Instance::<P, N>::new(address, provider)
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
@@ -6201,11 +6088,11 @@ For more fine-grained control over the deployment process, use [`deploy_builder`
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
-        __provider: P,
+        provider: P,
     ) -> impl ::core::future::Future<
         Output = alloy_contract::Result<PlonkVerifierV3Instance<P, N>>,
     > {
-        PlonkVerifierV3Instance::<P, N>::deploy(__provider)
+        PlonkVerifierV3Instance::<P, N>::deploy(provider)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
 and constructor arguments, if any.
@@ -6216,8 +6103,8 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
     pub fn deploy_builder<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    >(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
-        PlonkVerifierV3Instance::<P, N>::deploy_builder(__provider)
+    >(provider: P) -> alloy_contract::RawCallBuilder<P, N> {
+        PlonkVerifierV3Instance::<P, N>::deploy_builder(provider)
     }
     /**A [`PlonkVerifierV3`](self) instance.
 
@@ -6244,6 +6131,7 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -6254,11 +6142,11 @@ See the [wrapper's documentation](`PlonkVerifierV3Instance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            __provider: P,
+            provider: P,
         ) -> Self {
             Self {
                 address,
-                provider: __provider,
+                provider,
                 _network: ::core::marker::PhantomData,
             }
         }
@@ -6269,9 +6157,9 @@ Returns a new instance of the contract, if the deployment was successful.
 For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
         pub async fn deploy(
-            __provider: P,
+            provider: P,
         ) -> alloy_contract::Result<PlonkVerifierV3Instance<P, N>> {
-            let call_builder = Self::deploy_builder(__provider);
+            let call_builder = Self::deploy_builder(provider);
             let contract_address = call_builder.deploy().await?;
             Ok(Self::new(contract_address, call_builder.provider))
         }
@@ -6281,9 +6169,9 @@ and constructor arguments, if any.
 This is a simple wrapper around creating a `RawCallBuilder` with the data set to
 the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
-        pub fn deploy_builder(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
+        pub fn deploy_builder(provider: P) -> alloy_contract::RawCallBuilder<P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
-                __provider,
+                provider,
                 ::core::clone::Clone::clone(&BYTECODE),
             )
         }
@@ -6320,6 +6208,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -6383,6 +6272,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

@@ -144,7 +144,6 @@ error AlreadyClaimed();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -218,7 +217,6 @@ error DailyLimitExceeded();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -292,7 +290,6 @@ error InvalidAuthRoot();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -366,7 +363,6 @@ error InvalidRewardAmount();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -566,7 +562,6 @@ function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Uint<256>,
                 alloy::sol_types::sol_data::Bytes,
@@ -607,7 +602,6 @@ function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -730,7 +724,6 @@ function claimedRewards(address claimer) external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Address,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::Address,);
@@ -762,7 +755,6 @@ function claimedRewards(address claimer) external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -856,7 +848,6 @@ function claimedRewards(address claimer) external view returns (uint256);
         }
     };
     ///Container for all the [`IRewardClaim`](self) function calls.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum IRewardClaimCalls {
@@ -865,6 +856,7 @@ function claimedRewards(address claimer) external view returns (uint256);
         #[allow(missing_docs)]
         claimedRewards(claimedRewardsCall),
     }
+    #[automatically_derived]
     impl IRewardClaimCalls {
         /// All the selectors of this enum.
         ///
@@ -876,36 +868,6 @@ function claimedRewards(address claimer) external view returns (uint256);
             [84u8, 157u8, 216u8, 195u8],
             [189u8, 131u8, 67u8, 69u8],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(claimRewards),
-            ::core::stringify!(claimedRewards),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <claimRewardsCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <claimedRewardsCall as alloy_sol_types::SolCall>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for IRewardClaimCalls {
@@ -1049,7 +1011,6 @@ function claimedRewards(address claimer) external view returns (uint256);
         }
     }
     ///Container for all the [`IRewardClaim`](self) custom errors.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimErrors {
@@ -1062,6 +1023,7 @@ function claimedRewards(address claimer) external view returns (uint256);
         #[allow(missing_docs)]
         InvalidRewardAmount(InvalidRewardAmount),
     }
+    #[automatically_derived]
     impl IRewardClaimErrors {
         /// All the selectors of this enum.
         ///
@@ -1075,40 +1037,6 @@ function claimedRewards(address claimer) external view returns (uint256);
             [56u8, 83u8, 152u8, 101u8],
             [100u8, 108u8, 245u8, 88u8],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(DailyLimitExceeded),
-            ::core::stringify!(InvalidAuthRoot),
-            ::core::stringify!(InvalidRewardAmount),
-            ::core::stringify!(AlreadyClaimed),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <DailyLimitExceeded as alloy_sol_types::SolError>::SIGNATURE,
-            <InvalidAuthRoot as alloy_sol_types::SolError>::SIGNATURE,
-            <InvalidRewardAmount as alloy_sol_types::SolError>::SIGNATURE,
-            <AlreadyClaimed as alloy_sol_types::SolError>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for IRewardClaimErrors {
@@ -1324,13 +1252,13 @@ function claimedRewards(address claimer) external view returns (uint256);
         }
     }
     ///Container for all the [`IRewardClaim`](self) events.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimEvents {
         #[allow(missing_docs)]
         RewardsClaimed(RewardsClaimed),
     }
+    #[automatically_derived]
     impl IRewardClaimEvents {
         /// All the selectors of this enum.
         ///
@@ -1345,34 +1273,6 @@ function claimedRewards(address claimer) external view returns (uint256);
                 150u8, 59u8, 216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
             ],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(RewardsClaimed),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <RewardsClaimed as alloy_sol_types::SolEvent>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 32usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 32usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for IRewardClaimEvents {
@@ -1431,9 +1331,9 @@ See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        __provider: P,
+        provider: P,
     ) -> IRewardClaimInstance<P, N> {
-        IRewardClaimInstance::<P, N>::new(address, __provider)
+        IRewardClaimInstance::<P, N>::new(address, provider)
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
@@ -1445,11 +1345,11 @@ For more fine-grained control over the deployment process, use [`deploy_builder`
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
-        __provider: P,
+        provider: P,
     ) -> impl ::core::future::Future<
         Output = alloy_contract::Result<IRewardClaimInstance<P, N>>,
     > {
-        IRewardClaimInstance::<P, N>::deploy(__provider)
+        IRewardClaimInstance::<P, N>::deploy(provider)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
 and constructor arguments, if any.
@@ -1460,8 +1360,8 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
     pub fn deploy_builder<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
-    >(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
-        IRewardClaimInstance::<P, N>::deploy_builder(__provider)
+    >(provider: P) -> alloy_contract::RawCallBuilder<P, N> {
+        IRewardClaimInstance::<P, N>::deploy_builder(provider)
     }
     /**A [`IRewardClaim`](self) instance.
 
@@ -1488,6 +1388,7 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1498,11 +1399,11 @@ See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            __provider: P,
+            provider: P,
         ) -> Self {
             Self {
                 address,
-                provider: __provider,
+                provider,
                 _network: ::core::marker::PhantomData,
             }
         }
@@ -1513,9 +1414,9 @@ Returns a new instance of the contract, if the deployment was successful.
 For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
         pub async fn deploy(
-            __provider: P,
+            provider: P,
         ) -> alloy_contract::Result<IRewardClaimInstance<P, N>> {
-            let call_builder = Self::deploy_builder(__provider);
+            let call_builder = Self::deploy_builder(provider);
             let contract_address = call_builder.deploy().await?;
             Ok(Self::new(contract_address, call_builder.provider))
         }
@@ -1525,9 +1426,9 @@ and constructor arguments, if any.
 This is a simple wrapper around creating a `RawCallBuilder` with the data set to
 the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
-        pub fn deploy_builder(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
+        pub fn deploy_builder(provider: P) -> alloy_contract::RawCallBuilder<P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
-                __provider,
+                provider,
                 ::core::clone::Clone::clone(&BYTECODE),
             )
         }
@@ -1564,6 +1465,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1600,6 +1502,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,

@@ -58,6 +58,7 @@ pub mod TimelockController {
                 > as alloy_sol_types::SolType>::abi_encoded_size(self)
             }
         }
+        #[automatically_derived]
         impl OperationState {
             /// The Solidity type name.
             pub const NAME: &'static str = stringify!(@ name);
@@ -163,9 +164,9 @@ See the [wrapper's documentation](`TimelockControllerInstance`) for more details
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        __provider: P,
+        provider: P,
     ) -> TimelockControllerInstance<P, N> {
-        TimelockControllerInstance::<P, N>::new(address, __provider)
+        TimelockControllerInstance::<P, N>::new(address, provider)
     }
     /**A [`TimelockController`](self) instance.
 
@@ -192,6 +193,7 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -202,11 +204,11 @@ See the [wrapper's documentation](`TimelockControllerInstance`) for more details
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            __provider: P,
+            provider: P,
         ) -> Self {
             Self {
                 address,
-                provider: __provider,
+                provider,
                 _network: ::core::marker::PhantomData,
             }
         }
@@ -243,6 +245,7 @@ See the [wrapper's documentation](`TimelockControllerInstance`) for more details
         }
     }
     /// Function calls.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -259,6 +262,7 @@ See the [wrapper's documentation](`TimelockControllerInstance`) for more details
         }
     }
     /// Event filters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -1385,7 +1389,6 @@ error AccessControlBadConfirmation();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -1466,7 +1469,6 @@ error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (
             alloy::sol_types::sol_data::Address,
             alloy::sol_types::sol_data::FixedBytes<32>,
@@ -1558,7 +1560,6 @@ error FailedInnerCall();
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = ();
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = ();
@@ -1637,7 +1638,6 @@ error TimelockInsufficientDelay(uint256 delay, uint256 minDelay);
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (
             alloy::sol_types::sol_data::Uint<256>,
             alloy::sol_types::sol_data::Uint<256>,
@@ -1736,7 +1736,6 @@ error TimelockInvalidOperationLength(uint256 targets, uint256 payloads, uint256 
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (
             alloy::sol_types::sol_data::Uint<256>,
             alloy::sol_types::sol_data::Uint<256>,
@@ -1837,7 +1836,6 @@ error TimelockUnauthorizedCaller(address caller);
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Address,);
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = (alloy::sol_types::private::Address,);
@@ -1920,7 +1918,6 @@ error TimelockUnexecutedPredecessor(bytes32 predecessorId);
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
         #[doc(hidden)]
         type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -2005,7 +2002,6 @@ error TimelockUnexpectedOperationState(bytes32 operationId, bytes32 expectedStat
     const _: () = {
         use alloy::sol_types as alloy_sol_types;
         #[doc(hidden)]
-        #[allow(dead_code)]
         type UnderlyingSolTuple<'a> = (
             alloy::sol_types::sol_data::FixedBytes<32>,
             alloy::sol_types::sol_data::FixedBytes<32>,
@@ -3115,7 +3111,6 @@ constructor(uint256 minDelay, address[] proposers, address[] executors, address 
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Uint<256>,
                 alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Address>,
@@ -3224,7 +3219,6 @@ function CANCELLER_ROLE() external view returns (bytes32);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -3256,7 +3250,6 @@ function CANCELLER_ROLE() external view returns (bytes32);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -3371,7 +3364,6 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -3405,7 +3397,6 @@ function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -3520,7 +3511,6 @@ function EXECUTOR_ROLE() external view returns (bytes32);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -3552,7 +3542,6 @@ function EXECUTOR_ROLE() external view returns (bytes32);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -3665,7 +3654,6 @@ function PROPOSER_ROLE() external view returns (bytes32);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -3697,7 +3685,6 @@ function PROPOSER_ROLE() external view returns (bytes32);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -3808,7 +3795,6 @@ function cancel(bytes32 id) external;
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -3840,7 +3826,6 @@ function cancel(bytes32 id) external;
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -3960,7 +3945,6 @@ function execute(address target, uint256 value, bytes memory payload, bytes32 pr
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Uint<256>,
@@ -4016,7 +4000,6 @@ function execute(address target, uint256 value, bytes memory payload, bytes32 pr
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4156,7 +4139,6 @@ function executeBatch(address[] memory targets, uint256[] memory values, bytes[]
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Address>,
                 alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Uint<256>>,
@@ -4214,7 +4196,6 @@ function executeBatch(address[] memory targets, uint256[] memory values, bytes[]
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4346,7 +4327,6 @@ function getMinDelay() external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -4378,7 +4358,6 @@ function getMinDelay() external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4496,7 +4475,6 @@ function getOperationState(bytes32 id) external view returns (TimelockController
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -4530,7 +4508,6 @@ function getOperationState(bytes32 id) external view returns (TimelockController
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (TimelockController::OperationState,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4654,7 +4631,6 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -4686,7 +4662,6 @@ function getRoleAdmin(bytes32 role) external view returns (bytes32);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -4806,7 +4781,6 @@ function getTimestamp(bytes32 id) external view returns (uint256);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -4838,7 +4812,6 @@ function getTimestamp(bytes32 id) external view returns (uint256);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -4957,7 +4930,6 @@ function grantRole(bytes32 role, address account) external;
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
@@ -4998,7 +4970,6 @@ function grantRole(bytes32 role, address account) external;
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -5123,7 +5094,6 @@ function hasRole(bytes32 role, address account) external view returns (bool);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
@@ -5164,7 +5134,6 @@ function hasRole(bytes32 role, address account) external view returns (bool);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -5298,7 +5267,6 @@ function hashOperation(address target, uint256 value, bytes memory data, bytes32
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Uint<256>,
@@ -5354,7 +5322,6 @@ function hashOperation(address target, uint256 value, bytes memory data, bytes32
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -5502,7 +5469,6 @@ function hashOperationBatch(address[] memory targets, uint256[] memory values, b
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Address>,
                 alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Uint<256>>,
@@ -5562,7 +5528,6 @@ function hashOperationBatch(address[] memory targets, uint256[] memory values, b
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -5702,7 +5667,6 @@ function isOperation(bytes32 id) external view returns (bool);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -5734,7 +5698,6 @@ function isOperation(bytes32 id) external view returns (bool);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -5854,7 +5817,6 @@ function isOperationDone(bytes32 id) external view returns (bool);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -5886,7 +5848,6 @@ function isOperationDone(bytes32 id) external view returns (bool);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -6008,7 +5969,6 @@ function isOperationPending(bytes32 id) external view returns (bool);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -6042,7 +6002,6 @@ function isOperationPending(bytes32 id) external view returns (bool);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -6164,7 +6123,6 @@ function isOperationReady(bytes32 id) external view returns (bool);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<32>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<32>,);
@@ -6198,7 +6156,6 @@ function isOperationReady(bytes32 id) external view returns (bool);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -6332,7 +6289,6 @@ function onERC1155BatchReceived(address, address, uint256[] memory, uint256[] me
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Address,
@@ -6388,7 +6344,6 @@ function onERC1155BatchReceived(address, address, uint256[] memory, uint256[] me
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<4>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<4>,);
@@ -6536,7 +6491,6 @@ function onERC1155Received(address, address, uint256, uint256, bytes memory) ext
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Address,
@@ -6588,7 +6542,6 @@ function onERC1155Received(address, address, uint256, uint256, bytes memory) ext
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<4>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<4>,);
@@ -6734,7 +6687,6 @@ function onERC721Received(address, address, uint256, bytes memory) external retu
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Address,
@@ -6783,7 +6735,6 @@ function onERC721Received(address, address, uint256, bytes memory) external retu
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<4>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<4>,);
@@ -6916,7 +6867,6 @@ function renounceRole(bytes32 role, address callerConfirmation) external;
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
@@ -6957,7 +6907,6 @@ function renounceRole(bytes32 role, address callerConfirmation) external;
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -7077,7 +7026,6 @@ function revokeRole(bytes32 role, address account) external;
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
@@ -7118,7 +7066,6 @@ function revokeRole(bytes32 role, address account) external;
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -7246,7 +7193,6 @@ function schedule(address target, uint256 value, bytes memory data, bytes32 pred
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Address,
                 alloy::sol_types::sol_data::Uint<256>,
@@ -7306,7 +7252,6 @@ function schedule(address target, uint256 value, bytes memory data, bytes32 pred
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -7452,7 +7397,6 @@ function scheduleBatch(address[] memory targets, uint256[] memory values, bytes[
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (
                 alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Address>,
                 alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Uint<256>>,
@@ -7514,7 +7458,6 @@ function scheduleBatch(address[] memory targets, uint256[] memory values, bytes[
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -7653,7 +7596,6 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::FixedBytes<4>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::FixedBytes<4>,);
@@ -7687,7 +7629,6 @@ function supportsInterface(bytes4 interfaceId) external view returns (bool);
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (bool,);
@@ -7804,7 +7745,6 @@ function updateDelay(uint256 newDelay) external;
         use alloy::sol_types as alloy_sol_types;
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
@@ -7838,7 +7778,6 @@ function updateDelay(uint256 newDelay) external;
         }
         {
             #[doc(hidden)]
-            #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = ();
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = ();
@@ -7925,7 +7864,6 @@ function updateDelay(uint256 newDelay) external;
         }
     };
     ///Container for all the [`OpsTimelock`](self) function calls.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
     pub enum OpsTimelockCalls {
@@ -7986,6 +7924,7 @@ function updateDelay(uint256 newDelay) external;
         #[allow(missing_docs)]
         updateDelay(updateDelayCall),
     }
+    #[automatically_derived]
     impl OpsTimelockCalls {
         /// All the selectors of this enum.
         ///
@@ -8023,88 +7962,6 @@ function updateDelay(uint256 newDelay) external;
             [242u8, 58u8, 110u8, 97u8],
             [242u8, 122u8, 12u8, 146u8],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(schedule),
-            ::core::stringify!(supportsInterface),
-            ::core::stringify!(EXECUTOR_ROLE),
-            ::core::stringify!(execute),
-            ::core::stringify!(isOperationReady),
-            ::core::stringify!(onERC721Received),
-            ::core::stringify!(getRoleAdmin),
-            ::core::stringify!(isOperationDone),
-            ::core::stringify!(grantRole),
-            ::core::stringify!(isOperation),
-            ::core::stringify!(renounceRole),
-            ::core::stringify!(isOperationPending),
-            ::core::stringify!(updateDelay),
-            ::core::stringify!(getOperationState),
-            ::core::stringify!(hashOperation),
-            ::core::stringify!(scheduleBatch),
-            ::core::stringify!(PROPOSER_ROLE),
-            ::core::stringify!(hasRole),
-            ::core::stringify!(DEFAULT_ADMIN_ROLE),
-            ::core::stringify!(CANCELLER_ROLE),
-            ::core::stringify!(hashOperationBatch),
-            ::core::stringify!(onERC1155BatchReceived),
-            ::core::stringify!(cancel),
-            ::core::stringify!(getTimestamp),
-            ::core::stringify!(revokeRole),
-            ::core::stringify!(executeBatch),
-            ::core::stringify!(onERC1155Received),
-            ::core::stringify!(getMinDelay),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <scheduleCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <supportsInterfaceCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <EXECUTOR_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
-            <executeCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <isOperationReadyCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <onERC721ReceivedCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <getRoleAdminCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <isOperationDoneCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <grantRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <isOperationCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <renounceRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <isOperationPendingCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <updateDelayCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <getOperationStateCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <hashOperationCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <scheduleBatchCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <PROPOSER_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
-            <hasRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <DEFAULT_ADMIN_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
-            <CANCELLER_ROLECall as alloy_sol_types::SolCall>::SIGNATURE,
-            <hashOperationBatchCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <onERC1155BatchReceivedCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <cancelCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <getTimestampCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <revokeRoleCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <executeBatchCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <onERC1155ReceivedCall as alloy_sol_types::SolCall>::SIGNATURE,
-            <getMinDelayCall as alloy_sol_types::SolCall>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for OpsTimelockCalls {
@@ -9141,7 +8998,6 @@ function updateDelay(uint256 newDelay) external;
         }
     }
     ///Container for all the [`OpsTimelock`](self) custom errors.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum OpsTimelockErrors {
@@ -9162,6 +9018,7 @@ function updateDelay(uint256 newDelay) external;
         #[allow(missing_docs)]
         TimelockUnexpectedOperationState(TimelockUnexpectedOperationState),
     }
+    #[automatically_derived]
     impl OpsTimelockErrors {
         /// All the selectors of this enum.
         ///
@@ -9179,48 +9036,6 @@ function updateDelay(uint256 newDelay) external;
             [226u8, 133u8, 12u8, 89u8],
             [255u8, 176u8, 50u8, 17u8],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(FailedInnerCall),
-            ::core::stringify!(TimelockInsufficientDelay),
-            ::core::stringify!(TimelockUnexpectedOperationState),
-            ::core::stringify!(AccessControlBadConfirmation),
-            ::core::stringify!(TimelockUnexecutedPredecessor),
-            ::core::stringify!(AccessControlUnauthorizedAccount),
-            ::core::stringify!(TimelockUnauthorizedCaller),
-            ::core::stringify!(TimelockInvalidOperationLength),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <FailedInnerCall as alloy_sol_types::SolError>::SIGNATURE,
-            <TimelockInsufficientDelay as alloy_sol_types::SolError>::SIGNATURE,
-            <TimelockUnexpectedOperationState as alloy_sol_types::SolError>::SIGNATURE,
-            <AccessControlBadConfirmation as alloy_sol_types::SolError>::SIGNATURE,
-            <TimelockUnexecutedPredecessor as alloy_sol_types::SolError>::SIGNATURE,
-            <AccessControlUnauthorizedAccount as alloy_sol_types::SolError>::SIGNATURE,
-            <TimelockUnauthorizedCaller as alloy_sol_types::SolError>::SIGNATURE,
-            <TimelockInvalidOperationLength as alloy_sol_types::SolError>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 4usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for OpsTimelockErrors {
@@ -9580,7 +9395,6 @@ function updateDelay(uint256 newDelay) external;
         }
     }
     ///Container for all the [`OpsTimelock`](self) events.
-    #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum OpsTimelockEvents {
@@ -9601,6 +9415,7 @@ function updateDelay(uint256 newDelay) external;
         #[allow(missing_docs)]
         RoleRevoked(RoleRevoked),
     }
+    #[automatically_derived]
     impl OpsTimelockEvents {
         /// All the selectors of this enum.
         ///
@@ -9650,48 +9465,6 @@ function updateDelay(uint256 newDelay) external;
                 253u8, 100u8, 235u8, 33u8, 224u8, 71u8, 168u8, 57u8, 23u8, 27u8,
             ],
         ];
-        /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[
-            ::core::stringify!(MinDelayChange),
-            ::core::stringify!(CallSalt),
-            ::core::stringify!(RoleGranted),
-            ::core::stringify!(CallScheduled),
-            ::core::stringify!(Cancelled),
-            ::core::stringify!(RoleAdminChanged),
-            ::core::stringify!(CallExecuted),
-            ::core::stringify!(RoleRevoked),
-        ];
-        /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] = &[
-            <MinDelayChange as alloy_sol_types::SolEvent>::SIGNATURE,
-            <CallSalt as alloy_sol_types::SolEvent>::SIGNATURE,
-            <RoleGranted as alloy_sol_types::SolEvent>::SIGNATURE,
-            <CallScheduled as alloy_sol_types::SolEvent>::SIGNATURE,
-            <Cancelled as alloy_sol_types::SolEvent>::SIGNATURE,
-            <RoleAdminChanged as alloy_sol_types::SolEvent>::SIGNATURE,
-            <CallExecuted as alloy_sol_types::SolEvent>::SIGNATURE,
-            <RoleRevoked as alloy_sol_types::SolEvent>::SIGNATURE,
-        ];
-        /// Returns the signature for the given selector, if known.
-        #[inline]
-        pub fn signature_by_selector(
-            selector: [u8; 32usize],
-        ) -> ::core::option::Option<&'static str> {
-            match Self::SELECTORS.binary_search(&selector) {
-                ::core::result::Result::Ok(idx) => {
-                    ::core::option::Option::Some(Self::SIGNATURES[idx])
-                }
-                ::core::result::Result::Err(_) => ::core::option::Option::None,
-            }
-        }
-        /// Returns the enum variant name for the given selector, if known.
-        #[inline]
-        pub fn name_by_selector(
-            selector: [u8; 32usize],
-        ) -> ::core::option::Option<&'static str> {
-            let sig = Self::signature_by_selector(selector)?;
-            sig.split_once('(').map(|(name, _)| name)
-        }
     }
     #[automatically_derived]
     impl alloy_sol_types::SolEventInterface for OpsTimelockEvents {
@@ -9838,9 +9611,9 @@ See the [wrapper's documentation](`OpsTimelockInstance`) for more details.*/
         N: alloy_contract::private::Network,
     >(
         address: alloy_sol_types::private::Address,
-        __provider: P,
+        provider: P,
     ) -> OpsTimelockInstance<P, N> {
-        OpsTimelockInstance::<P, N>::new(address, __provider)
+        OpsTimelockInstance::<P, N>::new(address, provider)
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
@@ -9852,7 +9625,7 @@ For more fine-grained control over the deployment process, use [`deploy_builder`
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
-        __provider: P,
+        provider: P,
         minDelay: alloy::sol_types::private::primitives::aliases::U256,
         proposers: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
@@ -9863,7 +9636,7 @@ For more fine-grained control over the deployment process, use [`deploy_builder`
         OpsTimelockInstance::<
             P,
             N,
-        >::deploy(__provider, minDelay, proposers, executors, admin)
+        >::deploy(provider, minDelay, proposers, executors, admin)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
 and constructor arguments, if any.
@@ -9875,7 +9648,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
-        __provider: P,
+        provider: P,
         minDelay: alloy::sol_types::private::primitives::aliases::U256,
         proposers: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
         executors: alloy::sol_types::private::Vec<alloy::sol_types::private::Address>,
@@ -9884,7 +9657,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         OpsTimelockInstance::<
             P,
             N,
-        >::deploy_builder(__provider, minDelay, proposers, executors, admin)
+        >::deploy_builder(provider, minDelay, proposers, executors, admin)
     }
     /**A [`OpsTimelock`](self) instance.
 
@@ -9911,6 +9684,7 @@ See the [module-level documentation](self) for all the available methods.*/
         }
     }
     /// Instantiation and getters/setters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -9921,11 +9695,11 @@ See the [wrapper's documentation](`OpsTimelockInstance`) for more details.*/
         #[inline]
         pub const fn new(
             address: alloy_sol_types::private::Address,
-            __provider: P,
+            provider: P,
         ) -> Self {
             Self {
                 address,
-                provider: __provider,
+                provider,
                 _network: ::core::marker::PhantomData,
             }
         }
@@ -9936,7 +9710,7 @@ Returns a new instance of the contract, if the deployment was successful.
 For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
         pub async fn deploy(
-            __provider: P,
+            provider: P,
             minDelay: alloy::sol_types::private::primitives::aliases::U256,
             proposers: alloy::sol_types::private::Vec<
                 alloy::sol_types::private::Address,
@@ -9947,7 +9721,7 @@ For more fine-grained control over the deployment process, use [`deploy_builder`
             admin: alloy::sol_types::private::Address,
         ) -> alloy_contract::Result<OpsTimelockInstance<P, N>> {
             let call_builder = Self::deploy_builder(
-                __provider,
+                provider,
                 minDelay,
                 proposers,
                 executors,
@@ -9963,7 +9737,7 @@ This is a simple wrapper around creating a `RawCallBuilder` with the data set to
 the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
         pub fn deploy_builder(
-            __provider: P,
+            provider: P,
             minDelay: alloy::sol_types::private::primitives::aliases::U256,
             proposers: alloy::sol_types::private::Vec<
                 alloy::sol_types::private::Address,
@@ -9974,7 +9748,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
             admin: alloy::sol_types::private::Address,
         ) -> alloy_contract::RawCallBuilder<P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
-                __provider,
+                provider,
                 [
                     &BYTECODE[..],
                     &alloy_sol_types::SolConstructor::abi_encode(
@@ -10023,6 +9797,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Function calls.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
@@ -10363,6 +10138,7 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         }
     }
     /// Event filters.
+    #[automatically_derived]
     impl<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
