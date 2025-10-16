@@ -32,12 +32,13 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
+use tokio::sync::mpsc;
 use tracing::instrument;
 
 use self::handlers::{ProposalDependency, ProposalDependencyHandle};
 use crate::{
     events::HotShotEvent, helpers::broadcast_view_change,
-    quorum_proposal::handlers::handle_eqc_formed,
+    quorum_proposal::handlers::handle_eqc_formed, stat_collector::BenchmarkEvent,
 };
 
 pub mod handlers;
@@ -103,6 +104,9 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>

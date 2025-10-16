@@ -29,12 +29,13 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
-use tokio::{spawn, task::JoinHandle, time::sleep};
+use tokio::{spawn, sync::mpsc, task::JoinHandle, time::sleep};
 use tracing::instrument;
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::{broadcast_event, broadcast_view_change},
+    stat_collector::BenchmarkEvent,
     vote_collection::{
         create_vote_accumulator, AccumulatorInfo, HandleVoteEvent, VoteCollectionTaskState,
     },
@@ -121,6 +122,9 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
     pub highest_finalized_epoch_view: (Option<TYPES::Epoch>, TYPES::View),
 
     pub epoch_height: u64,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 #[async_trait]

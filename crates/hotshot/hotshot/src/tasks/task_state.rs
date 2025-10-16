@@ -16,8 +16,8 @@ use hotshot_task_impls::{
     builder::BuilderClient, consensus::ConsensusTaskState, da::DaTaskState,
     quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState,
     quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState,
-    stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState,
-    vid::VidTaskState, view_sync::ViewSyncTaskState,
+    stat_collector::BenchmarkEvent, stats::StatsTaskState, transactions::TransactionTaskState,
+    upgrade::UpgradeTaskState, vid::VidTaskState, view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -26,7 +26,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
 };
-use tokio::spawn;
+use tokio::{spawn, sync::mpsc};
 
 use crate::{types::SystemContextHandle, Versions};
 
@@ -39,14 +39,20 @@ where
     V: Versions,
 {
     /// Function to create the task state from a given `SystemContextHandle`.
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self;
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self;
 }
 
 #[async_trait]
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for NetworkRequestState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         Self {
             network: Arc::clone(&handle.hotshot.network),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
@@ -59,6 +65,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             spawned_tasks: BTreeMap::new(),
             epoch_height: handle.epoch_height,
+            stats_tx,
         }
     }
 }
@@ -67,7 +74,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for UpgradeTaskState<TYPES, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         #[cfg(not(feature = "example-upgrade"))]
         return Self {
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
@@ -90,6 +100,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
+            stats_tx,
         };
 
         #[cfg(feature = "example-upgrade")]
@@ -112,6 +123,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             start_voting_time: 0,
             stop_voting_time: u64::MAX,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            stats_tx,
         };
     }
 }
@@ -120,7 +132,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for VidTaskState<TYPES, I, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         Self {
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             cur_view: handle.cur_view().await,
@@ -132,6 +147,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
+            stats_tx,
         }
     }
 }
@@ -140,7 +156,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for DaTaskState<TYPES, I, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         Self {
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
@@ -155,6 +174,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             storage: handle.storage.clone(),
             storage_metrics: handle.storage_metrics(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            stats_tx,
         }
     }
 }
@@ -163,7 +183,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for ViewSyncTaskState<TYPES, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         let cur_view = handle.cur_view().await;
 
         Self {
@@ -185,6 +208,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             first_epoch: None,
             highest_finalized_epoch_view: (None, TYPES::View::new(0)),
             epoch_height: handle.epoch_height,
+            stats_tx,
         }
     }
 }
@@ -193,7 +217,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for TransactionTaskState<TYPES, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         Self {
             builder_timeout: handle.builder_timeout(),
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
@@ -215,6 +242,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
                 .collect(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
+            stats_tx,
         }
     }
 }
@@ -223,7 +251,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for QuorumVoteTaskState<TYPES, I, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         let consensus = handle.hotshot.consensus();
 
         // Clone the consensus metrics
@@ -248,6 +279,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             consensus_metrics,
             first_epoch: None,
             stake_table_capacity: handle.hotshot.config.stake_table_capacity,
+            stats_tx,
         }
     }
 }
@@ -256,7 +288,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for QuorumProposalTaskState<TYPES, I, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         let consensus = handle.hotshot.consensus();
 
         Self {
@@ -278,6 +313,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             first_epoch: None,
+            stats_tx,
         }
     }
 }
@@ -286,7 +322,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for QuorumProposalRecvTaskState<TYPES, I, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         let consensus = handle.hotshot.consensus();
 
         Self {
@@ -304,6 +343,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             first_epoch: None,
+            stats_tx,
         }
     }
 }
@@ -312,7 +352,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for ConsensusTaskState<TYPES, I, V>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         let consensus = handle.hotshot.consensus();
 
         Self {
@@ -338,6 +381,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             epoch_height: handle.hotshot.config.epoch_height,
             view_start_time: Instant::now(),
             first_epoch: None,
+            stats_tx,
         }
     }
 }
@@ -346,7 +390,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for StatsTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        _stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         StatsTaskState::<TYPES>::new(
             handle.hotshot.id,
             handle.cur_view().await,
@@ -363,7 +410,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
     for RewindTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(
+        handle: &SystemContextHandle<TYPES, I, V>,
+        _stats_tx: mpsc::Sender<BenchmarkEvent>,
+    ) -> Self {
         Self {
             events: Vec::new(),
             id: handle.hotshot.id,

@@ -274,18 +274,6 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .vote_send
                     .get_or_insert(now);
             },
-            HotShotEvent::QcFormed(either) => {
-                match either {
-                    Either::Left(qc) => self
-                        .leader_entry(qc.view_number() + 1)
-                        .qc_formed
-                        .get_or_insert(now),
-                    Either::Right(tc) => self
-                        .leader_entry(tc.view_number())
-                        .timeout_certificate_formed
-                        .get_or_insert(now),
-                };
-            },
             HotShotEvent::Qc2Formed(either) => {
                 match either {
                     Either::Left(qc) => self

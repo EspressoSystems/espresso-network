@@ -32,10 +32,10 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use rand::{seq::SliceRandom, thread_rng};
 use sha2::{Digest, Sha256};
-use tokio::{spawn, task::JoinHandle, time::sleep};
+use tokio::{spawn, sync::mpsc, task::JoinHandle, time::sleep};
 use tracing::instrument;
 
-use crate::{events::HotShotEvent, helpers::broadcast_event};
+use crate::{events::HotShotEvent, helpers::broadcast_event, stat_collector::BenchmarkEvent};
 
 /// Amount of time to try for a request before timing out.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
@@ -79,6 +79,9 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>> Drop for NetworkRequestState<TYPES, I> {

@@ -35,13 +35,14 @@ use hotshot_types::{
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
-use tokio::{spawn, task::JoinHandle, time::Instant};
+use tokio::{spawn, sync::mpsc, task::JoinHandle, time::Instant};
 use tracing::instrument;
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
     quorum_proposal::handlers::PROPOSAL_CREATION_TIMES,
+    stat_collector::BenchmarkEvent,
 };
 
 /// the network message task state
@@ -64,6 +65,9 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
 
     /// Node's id
     pub id: u64,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
@@ -706,6 +710,9 @@ pub struct NetworkEventTaskState<
 
     /// Node's id
     pub id: u64,
+
+    /// The sender for the benchmark events
+    pub stats_tx: mpsc::Sender<BenchmarkEvent>,
 }
 
 #[async_trait]
