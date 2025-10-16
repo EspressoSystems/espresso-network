@@ -25,7 +25,8 @@
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
 
-  inputs.pre-commit-hooks.url = "github:cachix/pre-commit-hooks.nix";
+  inputs.git-hooks.url = "github:cachix/git-hooks.nix";
+  inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
     { self
@@ -33,7 +34,7 @@
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
-    , pre-commit-hooks
+    , git-hooks
     , solc-bin
     , ...
     }:
@@ -89,16 +90,19 @@
             vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
           });
         })
+
+        (final: prev: {
+          prek-as-pre-commit = final.runCommand "prek-as-pre-commit" { } ''
+            mkdir -p $out/bin
+            ln -s ${final.prek}/bin/prek $out/bin/pre-commit
+          '';
+        })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
-      myShell = pkgs.mkShell.override {
-        stdenv =
-          if pkgs.stdenv.isLinux then
-          # The mold linker is around 50% faster on Linux than the default linker.
-            pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv
-          else
-            pkgs.stdenv;
-      };
+      myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        # The mold linker is around 50% faster on Linux than the default linker.
+        stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
+      });
       crossShell = { config }:
         let
           localSystem = system;
@@ -119,8 +123,14 @@
     in
     with pkgs; {
       checks = {
-        pre-commit-check = pre-commit-hooks.lib.${system}.run {
+        pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
+          # Use the rust pre-commit implementation `prek`
+          imports = [
+            ({ lib, ... }: {
+              config.package = lib.mkForce prek;
+            })
+          ];
           hooks = {
             doc = {
               enable = true;
@@ -197,6 +207,7 @@
             extensions = [ "rust-analyzer" "rustfmt" ];
           });
           solc = pkgs.solc-bin."0.8.28";
+          pre-commit = self.checks.${system}.pre-commit-check;
         in
         myShell (rustEnvVars // {
           buildInputs = [
@@ -221,6 +232,8 @@
 
             # Tools
             nixpkgs-fmt
+            prek
+            prek-as-pre-commit # compat to allow running pre-commit
             entr
             process-compose
             lazydocker # a docker compose TUI
@@ -247,8 +260,10 @@
             # provides abigen
             go-ethereum
           ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
-          ;
-          shellHook = rustShellHook + ''
+          ++ pre-commit.enabledPackages;
+          shellHook = ''
+            ${rustShellHook}
+
             # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
 
@@ -262,7 +277,9 @@
             # On macOS, we need to unset DEVELOPER_DIR_FOR_TARGET. The `go` buildInput will
             # cause this to be set and it breaks rust compilation.
             unset DEVELOPER_DIR_FOR_TARGET
-          '' + self.checks.${system}.pre-commit-check.shellHook;
+
+            ${pre-commit.shellHook}
+          '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
@@ -302,7 +319,8 @@
             grcov
           ];
           CARGO_INCREMENTAL = "0";
-          shellHook = rustShellHook + ''
+          shellHook = ''
+            ${rustShellHook}
             RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
           '';
           RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
