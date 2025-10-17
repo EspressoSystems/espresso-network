@@ -157,6 +157,7 @@ impl BuilderConfig {
         let global_state: GlobalState<SeqTypes> = GlobalState::<SeqTypes>::new(
             req_sender,
             tx_sender.clone(),
+            da_sender.clone(),
             vid_commitment,
             bootstrapped_view,
             bootstrapped_view,

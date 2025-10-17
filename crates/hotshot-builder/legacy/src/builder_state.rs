@@ -48,15 +48,13 @@ pub struct DecideMessage<Types: NodeType> {
 /// DA Proposal Message to be put on the da proposal channel
 #[derive(Clone, PartialEq)]
 pub struct DaProposalMessage<Types: NodeType> {
-    pub proposal: Arc<Proposal<Types, DaProposal2<Types>>>,
-    pub sender: Types::SignatureKey,
+    pub proposal: Arc<DaProposal2<Types>>,
 }
 
 impl<Types: NodeType> Debug for DaProposalMessage<Types> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DaProposalMessage")
             .field("proposal", &self.proposal)
-            .field("sender", &format_args!("{}", self.sender))
             .finish()
     }
 }
@@ -121,7 +119,7 @@ pub enum Status {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DAProposalInfo<Types: NodeType> {
     pub view_number: Types::View,
-    pub proposal: Arc<Proposal<Types, DaProposal2<Types>>>,
+    pub proposal: Arc<DaProposal2<Types>>,
 }
 
 /// [`ALLOW_EMPTY_BLOCK_PERIOD`] is a constant that is used to determine the
@@ -419,7 +417,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
     async fn process_da_proposal(&mut self, da_msg: DaProposalMessage<Types>) {
         tracing::debug!(
             "Builder Received DA message for view {}",
-            da_msg.proposal.data.view_number
+            da_msg.proposal.view_number
         );
 
         // we do not have the option to ignore DA proposals if we want to be able to handle failed view reorgs.
@@ -428,10 +426,10 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         let proposal = da_msg.proposal.clone();
 
         // get the view number and encoded txns from the da_proposal_data
-        let view_number = proposal.data.view_number;
-        let encoded_txns = &proposal.data.encoded_transactions;
+        let view_number = proposal.view_number;
+        let encoded_txns = &proposal.encoded_transactions;
 
-        let metadata = &proposal.data.metadata;
+        let metadata = &proposal.metadata;
 
         // form a block payload from the encoded transactions
         let block_payload =
@@ -678,8 +676,8 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             }
         }
 
-        let encoded_txns = &da_proposal_info.proposal.data.encoded_transactions;
-        let metadata = &da_proposal_info.proposal.data.metadata;
+        let encoded_txns = &da_proposal_info.proposal.encoded_transactions;
+        let metadata = &da_proposal_info.proposal.metadata;
 
         let block_payload =
             <Types::BlockPayload as BlockPayload<Types>>::from_bytes(encoded_txns, metadata);
@@ -944,7 +942,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
                         match da {
                             Some(da) => {
                                 if let MessageType::DaProposalMessage(rda_msg) = da {
-                                    tracing::debug!("Received da proposal msg in builder {:?}:\n {:?}", self.parent_block_references, rda_msg.proposal.data.view_number);
+                                    tracing::debug!("Received da proposal msg in builder {:?}:\n {:?}", self.parent_block_references, rda_msg.proposal.view_number);
                                     self.process_da_proposal(rda_msg).await;
                                 } else {
                                     tracing::warn!("Unexpected message on da proposals channel: {da:?}");
@@ -1208,7 +1206,7 @@ mod test {
         correct_da_proposal_payload_commit_to_da_proposal.insert(
             (
                 payload_builder_commitment,
-                da_proposal_msg.proposal.data.view_number,
+                da_proposal_msg.proposal.view_number,
             ),
             da_proposal_info,
         );

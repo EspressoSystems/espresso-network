@@ -32,8 +32,9 @@ use hotshot_types::{
         block_contents::{BlockHeader, BlockPayload, Transaction},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{BuilderSignatureKey, SignatureKey},
+        EncodeBytes,
     },
-    utils::BuilderCommitment,
+    utils::{BuilderCommitment, EpochTransitionIndicator},
     vote::HasViewNumber,
 };
 use lru::LruCache;
@@ -168,6 +169,9 @@ pub struct GlobalState<Types: NodeType> {
     // NOTE: Currently, we don't differentiate between the transactions from the hotshot and the private mempool
     pub tx_sender: BroadcastSender<Arc<ReceivedTransaction<Types>>>,
 
+    // sending a DA proposal from the hotshot to the builder states
+    pub da_sender: BroadcastSender<MessageType<Types>>,
+
     // last garbage collected view number
     pub last_garbage_collected_view_num: Types::View,
 
@@ -229,6 +233,7 @@ impl<Types: NodeType> GlobalState<Types> {
     pub fn new(
         bootstrap_sender: BroadcastSender<MessageType<Types>>,
         tx_sender: BroadcastSender<Arc<ReceivedTransaction<Types>>>,
+        da_sender: BroadcastSender<MessageType<Types>>,
         bootstrapped_builder_state_id: VidCommitment,
         bootstrapped_view_num: Types::View,
         last_garbage_collected_view_num: Types::View,
@@ -247,6 +252,7 @@ impl<Types: NodeType> GlobalState<Types> {
             blocks: LruCache::new(NonZeroUsize::new(256).unwrap()),
             spawned_builder_states,
             tx_sender,
+            da_sender,
             last_garbage_collected_view_num,
             builder_state_to_last_built_block: Default::default(),
             highest_view_num_builder_id: bootstrap_id,
@@ -1006,6 +1012,22 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                 signature: signature_over_builder_commitment,
                 sender: pub_key.clone(),
             };
+            let da_msg = DaProposalMessage {
+                proposal: Arc::new(DaProposal2 {
+                    encoded_transactions: block_payload.encode(),
+                    metadata: metadata.clone(),
+                    view_number: Types::View::new(view_number),
+                    epoch: None,
+                    epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+                }),
+            };
+            let _ = self
+                .global_state
+                .read_arc()
+                .await
+                .da_sender
+                .broadcast(MessageType::DaProposalMessage(da_msg))
+                .await;
             tracing::info!("Sending Claim Block data for {block_id}");
             Ok(block_data)
         } else {
@@ -1464,11 +1486,10 @@ async fn handle_da_event_implementation<Types: NodeType>(
     }
 
     let da_msg = DaProposalMessage::<Types> {
-        proposal: da_proposal,
-        sender,
+        proposal: Arc::new(da_proposal.data.clone()),
     };
 
-    let view_number = da_msg.proposal.data.view_number;
+    let view_number = da_msg.proposal.view_number;
     tracing::debug!("Sending DA proposal to the builder states for view {view_number}");
 
     if let Err(e) = da_channel_sender
@@ -1827,6 +1848,7 @@ mod test {
     #[tokio::test]
     async fn test_global_state_new() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[],
@@ -1837,6 +1859,7 @@ mod test {
         let state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(1),
             ViewNumber::new(2),
@@ -1917,6 +1940,7 @@ mod test {
     async fn test_global_state_register_builder_state_different_states() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[],
             &[],
@@ -1926,6 +1950,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -2018,6 +2043,7 @@ mod test {
     async fn test_global_state_register_builder_state_same_builder_state_id() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[],
             &[],
@@ -2027,6 +2053,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -2150,6 +2177,7 @@ mod test {
     async fn test_global_state_register_builder_state_decrementing_builder_state_ids() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[],
             &[],
@@ -2159,6 +2187,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -2257,6 +2286,7 @@ mod test {
     async fn test_global_state_update_global_state_success() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[],
             &[],
@@ -2266,6 +2296,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -2435,6 +2466,7 @@ mod test {
     async fn test_global_state_update_global_state_replacement() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[],
             &[],
@@ -2444,6 +2476,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -2675,6 +2708,7 @@ mod test {
     async fn test_global_state_remove_handles_prune_up_to_latest() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[0],
             &[],
@@ -2684,6 +2718,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -2793,6 +2828,7 @@ mod test {
     async fn test_global_state_remove_handles_can_reduce_last_garbage_collected_view_num_simple() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[0],
             &[],
@@ -2802,6 +2838,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -2891,6 +2928,7 @@ mod test {
     async fn test_global_state_remove_handles_can_reduce_last_garbage_collected_view_num_strict() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[0],
             &[],
@@ -2900,6 +2938,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -3017,6 +3056,7 @@ mod test {
     async fn test_global_state_remove_handles_expected() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let parent_commit = vid_commitment::<TestVersions>(
             &[0],
             &[],
@@ -3026,6 +3066,7 @@ mod test {
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
+            da_sender,
             parent_commit,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -3155,6 +3196,7 @@ mod test {
     async fn test_get_available_blocks_error_no_blocks_available() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -3170,6 +3212,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -3226,6 +3269,7 @@ mod test {
     async fn test_get_available_blocks_error_invalid_signature() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, _leader_private_key) =
@@ -3241,6 +3285,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -3297,6 +3342,7 @@ mod test {
     async fn test_get_available_blocks_error_requesting_previous_view_number() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -3312,6 +3358,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(2),
@@ -3369,6 +3416,7 @@ mod test {
     async fn test_get_available_blocks_error_get_channel_for_matching_builder() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -3384,6 +3432,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(4),
                 ViewNumber::new(4),
@@ -3445,6 +3494,7 @@ mod test {
     async fn test_get_available_blocks_requested_before_blocks_available() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -3460,6 +3510,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -3591,6 +3642,7 @@ mod test {
     async fn test_get_available_blocks_requested_after_blocks_available() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -3606,6 +3658,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -3744,6 +3797,7 @@ mod test {
     async fn test_claim_block_error_signature_validation_failed() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, _leader_private_key) =
@@ -3759,6 +3813,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -3805,6 +3860,7 @@ mod test {
     async fn test_claim_block_error_block_data_not_found() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -3820,6 +3876,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -3859,6 +3916,7 @@ mod test {
     async fn test_claim_block_success() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -3874,6 +3932,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -3963,6 +4022,7 @@ mod test {
     async fn test_claim_block_header_input_error_signature_verification_failed() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, _leader_private_key) =
@@ -3978,6 +4038,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -4025,6 +4086,7 @@ mod test {
     async fn test_claim_block_header_input_error_block_header_not_found() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -4040,6 +4102,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -4080,6 +4143,7 @@ mod test {
     async fn test_claim_block_header_input_success() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
+        let (da_sender, _) = async_broadcast::broadcast(10);
         let (builder_public_key, builder_private_key) =
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
@@ -4095,6 +4159,7 @@ mod test {
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
                 bootstrap_sender,
                 tx_sender,
+                da_sender,
                 parent_commit,
                 ViewNumber::new(0),
                 ViewNumber::new(0),
@@ -4282,7 +4347,7 @@ mod test {
             <BLSPubKey as SignatureKey>::sign(&sender_private_key, &encoded_txns_hash).unwrap();
 
         let signed_da_proposal = Arc::new(Proposal {
-            data: da_proposal,
+            data: da_proposal.clone(),
             signature,
             _pd: Default::default(),
         });
@@ -4306,7 +4371,7 @@ mod test {
         let mut da_channel_receiver = da_channel_receiver;
         match da_channel_receiver.next().await {
             Some(MessageType::DaProposalMessage(da_proposal_message)) => {
-                assert_eq!(da_proposal_message.proposal, signed_da_proposal);
+                assert_eq!(da_proposal_message.proposal, Arc::new(da_proposal));
             },
             _ => {
                 panic!("Expected a DaProposalMessage, but got something else");

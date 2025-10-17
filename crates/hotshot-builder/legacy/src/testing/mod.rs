@@ -31,7 +31,6 @@ use hotshot_types::{
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
-use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;
 
 use crate::{
@@ -56,7 +55,7 @@ pub async fn create_builder_state<V: Versions>(
     let (bootstrap_sender, bootstrap_receiver) =
         broadcast::<MessageType<TestTypes>>(channel_capacity);
     let (_decide_sender, decide_receiver) = broadcast::<MessageType<TestTypes>>(channel_capacity);
-    let (_da_sender, da_receiver) = broadcast::<MessageType<TestTypes>>(channel_capacity);
+    let (da_sender, da_receiver) = broadcast::<MessageType<TestTypes>>(channel_capacity);
     let (_quorum_sender, quorum_proposal_receiver) =
         broadcast::<MessageType<TestTypes>>(channel_capacity);
     let (senders, _receivers) = broadcast::<MessageType<TestTypes>>(channel_capacity);
@@ -71,6 +70,7 @@ pub async fn create_builder_state<V: Versions>(
     let global_state = Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
         bootstrap_sender,
         tx_sender.clone(),
+        da_sender.clone(),
         genesis_vid_commitment,
         ViewNumber::genesis(),
         ViewNumber::genesis(),
@@ -154,21 +154,8 @@ pub async fn calc_proposal_msg<V: Versions>(
             epoch: None,
             epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
-        let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
-        let da_signature =
-    <TestTypes as hotshot_types::traits::node_implementation::NodeType>::SignatureKey::sign(
-        &private_key,
-        &encoded_transactions_hash,
-    )
-    .expect("Failed to sign encoded tx hash while preparing da proposal");
-
         DaProposalMessage::<TestTypes> {
-            proposal: Arc::new(Proposal {
-                data: da_proposal,
-                signature: da_signature.clone(),
-                _pd: PhantomData,
-            }),
-            sender: pub_key,
+            proposal: Arc::new(da_proposal),
         }
     };
 
@@ -260,10 +247,10 @@ pub async fn calc_builder_commitment(
     // If the respective builder state exists to handle the request
     let proposal = da_proposal_message.proposal.clone();
     // get the view number and encoded txns from the da_proposal_data
-    let view_number = proposal.data.view_number;
-    let encoded_txns = &proposal.data.encoded_transactions;
+    let view_number = proposal.view_number;
+    let encoded_txns = &proposal.encoded_transactions;
 
-    let metadata = &proposal.data.metadata;
+    let metadata = &proposal.metadata;
     // form a block payload from the encoded transactions
     let block_payload =
         <TestBlockPayload as BlockPayload<TestTypes>>::from_bytes(encoded_txns, metadata);
