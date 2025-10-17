@@ -20,7 +20,6 @@ use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use hotshot_types::{
     data::VidShare,
-    simple_certificate::QuorumCertificate2,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use snafu::OptionExt;
@@ -300,17 +299,6 @@ where
         };
 
         Ok(TimeWindowQueryData { window, prev, next })
-    }
-
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>> {
-        let Some((json,)) = query_as("SELECT qcs FROM latest_qc_chain LIMIT 1")
-            .fetch_optional(self.as_mut())
-            .await?
-        else {
-            return Ok(None);
-        };
-        let qcs = serde_json::from_value(json).decode_error("malformed QC")?;
-        Ok(qcs)
     }
 }
 

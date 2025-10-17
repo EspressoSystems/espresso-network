@@ -29,7 +29,6 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
-    simple_certificate::QuorumCertificate2,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
@@ -87,7 +86,6 @@ where
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
     state_cert_storage: LedgerLog<StateCertQueryDataV2<Types>>,
-    latest_qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -224,7 +222,6 @@ where
                     "state_cert",
                     CACHED_STATE_CERT_COUNT,
                 )?,
-                latest_qc_chain: None,
             }),
             metrics: Default::default(),
         })
@@ -302,7 +299,6 @@ where
                 vid_storage,
                 state_cert_storage,
                 top_storage: None,
-                latest_qc_chain: None,
             }),
             metrics: Default::default(),
         })
@@ -669,11 +665,7 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
 {
-    async fn insert_leaf_with_qc_chain(
-        &mut self,
-        leaf: LeafQueryData<Types>,
-        qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
-    ) -> anyhow::Result<()> {
+    async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
         self.inner
             .leaf_storage
             .insert(leaf.height() as usize, leaf.clone())?;
@@ -695,21 +687,6 @@ where
             .entry(leaf.header().timestamp())
             .or_default()
             .push(leaf.height());
-
-        if leaf.height() + 1 >= (self.inner.leaf_storage.iter().len() as u64) {
-            // If this is the latest leaf we know about, also store it's QC chain so that we can
-            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
-            // is unnecessary, since we can prove it is an ancestor of some later, finalized
-            // leaf.)
-            if let Some(qc_chain) = qc_chain {
-                self.inner.latest_qc_chain = Some(qc_chain);
-            } else {
-                // Since we have a new latest leaf, we have to updated latest QC chain even if we
-                // don't actually have a QC chain to store.
-                self.inner.latest_qc_chain = None;
-            }
-        }
-
         Ok(())
     }
 
@@ -780,7 +757,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    T: Revert + Deref<Target = FileSystemStorageInner<Types>> + Send + Sync,
+    T: Revert + Deref<Target = FileSystemStorageInner<Types>> + Send,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
         Ok(self.inner.leaf_storage.iter().len())
@@ -916,10 +893,6 @@ where
         }
 
         Ok(res)
-    }
-
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>> {
-        Ok(self.inner.latest_qc_chain.clone())
     }
 }
 

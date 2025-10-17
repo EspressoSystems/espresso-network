@@ -61,9 +61,7 @@ use std::ops::RangeBounds;
 use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
 use futures::future::Future;
-use hotshot_types::{
-    data::VidShare, simple_certificate::QuorumCertificate2, traits::node_implementation::NodeType,
-};
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
@@ -208,14 +206,6 @@ where
     fn insert_leaf(
         &mut self,
         leaf: LeafQueryData<Types>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        self.insert_leaf_with_qc_chain(leaf, None)
-    }
-
-    fn insert_leaf_with_qc_chain(
-        &mut self,
-        leaf: LeafQueryData<Types>,
-        qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
     fn insert_block(
         &mut self,
@@ -258,8 +248,6 @@ where
         end: u64,
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>>;
-
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>>;
 
     /// Search the database for missing objects and generate a report.
     async fn sync_status(&mut self) -> QueryResult<SyncStatus>;
