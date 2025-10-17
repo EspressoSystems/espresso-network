@@ -1156,7 +1156,11 @@ pub async fn run_non_permissioned_standalone_builder_service<
                 }
             },
             // decide event
-            EventType::Decide { leaf_chain, .. } => {
+            EventType::Decide {
+                block_size: _,
+                leaf_chain,
+                qc: _,
+            } => {
                 let latest_decide_view_num = leaf_chain[0].leaf.view_number();
                 handle_decide_event(&decide_sender, latest_decide_view_num).await;
             },

@@ -225,8 +225,7 @@ async fn test_pruning() {
                     vid_share: None,
                     state_cert: None,
                 }]),
-                committing_qc: Arc::new(mock_qc.clone()),
-                deciding_qc: None,
+                qc: Arc::new(mock_qc),
                 block_size: None,
             },
         })

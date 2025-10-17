@@ -587,10 +587,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
-                let EventType::Decide {
-                    committing_qc: qc, ..
-                } = event.event
-                else {
+                let EventType::Decide { qc, .. } = event.event else {
                     continue;
                 };
                 if qc.data.epoch >= Some(epoch) {
