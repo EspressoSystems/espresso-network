@@ -79,15 +79,9 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn update(&self, event: &Event<Types>) -> Result<(), u64> {
-        if let EventType::Decide {
-            leaf_chain,
-            committing_qc,
-            deciding_qc,
-            ..
-        } = &event.event
-        {
+        if let EventType::Decide { leaf_chain, qc, .. } = &event.event {
             // `qc` justifies the first (most recent) leaf...
-            let qcs = once((**committing_qc).clone())
+            let qcs = once((**qc).clone())
                 // ...and each leaf in the chain justifies the subsequent leaf (its parent) through
                 // `leaf.justify_qc`.
                 .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc()))
@@ -114,7 +108,7 @@ where
                         tracing::error!(
                             height,
                             ?leaf2,
-                            ?committing_qc,
+                            ?qc,
                             "inconsistent leaf; cannot append leaf information: {err:#}"
                         );
                         return Err(leaf2.block_header().block_number());
@@ -165,20 +159,16 @@ where
                     tracing::info!(height, "VID not available at decide");
                 }
 
-                let mut info = BlockInfo::new(
-                    leaf_data,
-                    block_data,
-                    vid_common,
-                    vid_share,
-                    state_cert.clone().map(StateCertQueryDataV2),
-                );
-                if let Some(deciding_qc) = deciding_qc {
-                    if deciding_qc.view_number == info.leaf.leaf().view_number() + 1 {
-                        let qc_chain = [info.leaf.qc().clone(), (**deciding_qc).clone()];
-                        info = info.with_qc_chain(qc_chain);
-                    }
-                }
-                if let Err(err) = self.append(info).await {
+                if let Err(err) = self
+                    .append(BlockInfo::new(
+                        leaf_data,
+                        block_data,
+                        vid_common,
+                        vid_share,
+                        state_cert.clone().map(StateCertQueryDataV2),
+                    ))
+                    .await
+                {
                     tracing::error!(height, "failed to append leaf information: {err:#}");
                     return Err(leaf2.block_header().block_number());
                 }

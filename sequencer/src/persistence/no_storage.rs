@@ -27,7 +27,6 @@ use hotshot_types::{
         UpgradeCertificate,
     },
     traits::metrics::Metrics,
-    vote::HasViewNumber,
 };
 
 use crate::{NodeType, SeqTypes, ViewNumber};
@@ -67,7 +66,6 @@ impl SequencerPersistence for NoStorage {
         &self,
         view_number: ViewNumber,
         leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let leaves = leaves
@@ -75,21 +73,12 @@ impl SequencerPersistence for NoStorage {
             .map(|(info_ref, qc)| (info_ref.clone(), qc))
             .collect::<Vec<_>>();
         for (leaf_info, qc) in leaves {
-            // Insert the deciding QC at the appropriate position, with the last decide event in the
-            // chain.
-            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
-                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
-            } else {
-                None
-            };
-
             consumer
                 .handle_event(&Event {
                     view_number,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
-                        committing_qc: Arc::new(qc),
-                        deciding_qc,
+                        qc: Arc::new(qc),
                         block_size: None,
                     },
                 })

@@ -239,10 +239,10 @@ gen-go-bindings:
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
-test-go *args:
+test-go:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
-    cd sdks/go && go test -v ./... {{args}}
+    cd sdks/go && go test -v ./...
 
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
