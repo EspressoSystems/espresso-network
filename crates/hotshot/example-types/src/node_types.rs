@@ -348,6 +348,21 @@ impl Versions for EpochUpgradeTestVersions {
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
 }
 
+#[derive(Clone, Debug, Copy)]
+pub struct DaCommitteeTestVersions {}
+
+impl Versions for DaCommitteeTestVersions {
+    type Base = StaticVersion<0, 2>;
+    type Upgrade = StaticVersion<0, 4>;
+    const UPGRADE_HASH: [u8; 32] = [
+        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    type Epochs = StaticVersion<0, 1>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 1>;
+}
+
 #[cfg(test)]
 mod tests {
     use committable::{Commitment, Committable};

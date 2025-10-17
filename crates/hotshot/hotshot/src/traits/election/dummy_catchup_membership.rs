@@ -322,4 +322,14 @@ where
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
         self.inner.first_epoch().map(Into::into)
     }
+
+    fn add_da_committee(&mut self, first_epoch: u64, da_committee: Vec<PeerConfig<TYPES>>) {
+        self.inner.add_da_committee(
+            first_epoch,
+            da_committee
+                .into_iter()
+                .map(Self::convert_peer_config)
+                .collect(),
+        );
+    }
 }

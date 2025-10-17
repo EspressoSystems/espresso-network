@@ -2,7 +2,6 @@ use std::{
     cmp::{max, min},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
-    ops::Bound,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -31,6 +30,7 @@ use hotshot_contract_adapter::sol_types::{
     },
 };
 use hotshot_types::{
+    da_committee::{DaCommittee, DaCommittees},
     data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
     drb::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
@@ -649,19 +649,13 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     /// DA committees, indexed by the first epoch in which they apply
-    da_committees: BTreeMap<u64, DaCommittee>,
+    da_committees: DaCommittees<SeqTypes>,
     first_epoch: Option<Epoch>,
     epoch_height: u64,
     /// Fixed block reward (used only in V3).
     /// starting from V4, block reward is dynamic
     fixed_block_reward: Option<RewardAmount>,
     fetcher: Arc<Fetcher>,
-}
-
-#[derive(Debug, Clone)]
-struct DaCommittee {
-    committee: Vec<PeerConfig<SeqTypes>>,
-    indexed_committee: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 impl Fetcher {
@@ -1322,7 +1316,7 @@ struct NonEpochCommittee {
     /// Keys for nodes participating in the network
     stake_table: Vec<PeerConfig<SeqTypes>>,
 
-    da_committee: DaCommittee,
+    da_committee: DaCommittee<SeqTypes>,
 
     /// Stake entries indexed by public key, for efficient lookup.
     indexed_stake_table: HashMap<PubKey, PeerConfig<SeqTypes>>,
@@ -1779,7 +1773,7 @@ impl EpochCommittees {
 
         Self {
             non_epoch_committee: members,
-            da_committees: BTreeMap::new(),
+            da_committees: DaCommittees::default(),
             state: map,
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
@@ -1837,17 +1831,10 @@ impl EpochCommittees {
         }
     }
 
-    fn get_da_committee(&self, epoch: Option<Epoch>) -> DaCommittee {
-        if let Some(e) = epoch {
-            // returns the greatest key smaller than or equal to `e`
-            self.da_committees
-                .range((Bound::Included(&0), Bound::Included(&*e)))
-                .last()
-                .map(|(_, committee)| committee.clone())
-                .unwrap_or(self.non_epoch_committee.da_committee.clone())
-        } else {
-            self.non_epoch_committee.da_committee.clone()
-        }
+    fn get_da_committee(&self, epoch: Option<Epoch>) -> &DaCommittee<SeqTypes> {
+        self.da_committees
+            .get(epoch)
+            .unwrap_or(&self.non_epoch_committee.da_committee)
     }
 }
 
@@ -2377,22 +2364,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn add_da_committee(&mut self, first_epoch: u64, committee: Vec<PeerConfig<SeqTypes>>) {
-        let indexed_committee: HashMap<PubKey, _> = committee
-            .iter()
-            .map(|peer_config| {
-                (
-                    PubKey::public_key(&peer_config.stake_table_entry),
-                    peer_config.clone(),
-                )
-            })
-            .collect();
-
-        let da_committee = DaCommittee {
-            committee,
-            indexed_committee,
-        };
-
-        self.da_committees.insert(first_epoch, da_committee);
+        self.da_committees.add(first_epoch, committee);
     }
 }
 

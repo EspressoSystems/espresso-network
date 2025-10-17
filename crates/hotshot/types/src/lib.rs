@@ -24,6 +24,7 @@ use crate::utils::bincode_opts;
 pub mod bundle;
 pub mod consensus;
 pub mod constants;
+pub mod da_committee;
 pub mod data;
 /// Holds the types and functions for DRB computation.
 pub mod drb;

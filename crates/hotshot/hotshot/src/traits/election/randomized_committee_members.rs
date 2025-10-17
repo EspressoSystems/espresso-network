@@ -11,6 +11,7 @@ use std::{
 use alloy::primitives::U256;
 use anyhow::Context;
 use hotshot_types::{
+    da_committee::{DaCommittee, DaCommittees},
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
@@ -41,14 +42,11 @@ pub struct RandomizedCommitteeMembers<
     /// The nodes on the committee and their stake
     stake_table: Vec<PeerConfig<T>>,
 
-    /// The nodes on the da committee and their stake
-    da_stake_table: Vec<PeerConfig<T>>,
-
     /// The nodes on the committee and their stake, indexed by public key
     indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
 
-    /// The nodes on the da committee and their stake, indexed by public key
-    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
+    /// The non-epoch-based DA committee
+    known_da_nodes: DaCommittee<T>,
 
     /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
     /// when first_epoch is None or is Some greater than that epoch.
@@ -56,6 +54,9 @@ pub struct RandomizedCommitteeMembers<
 
     /// `DrbResult`s indexed by epoch
     drb_results: BTreeMap<T::Epoch, DrbResult>,
+
+    /// DA committees, indexed by the first epoch in which they apply
+    da_committees: DaCommittees<T>,
 
     /// Phantom
     _pd: PhantomData<CONFIG>,
@@ -74,7 +75,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig>
 
     /// Creates a set of indices into the da_stake_table which reference the nodes selected for this epoch's da committee
     fn make_da_quorum_filter(&self, epoch: <TYPES as NodeType>::Epoch) -> BTreeSet<usize> {
-        DaConfig::execute(epoch.u64(), self.da_stake_table.len())
+        DaConfig::execute(epoch.u64(), self.get_da_committee(Some(epoch)).len())
     }
 
     /// Writes the offsets used for the quorum filter and da_quorum filter to stdout
@@ -105,6 +106,12 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig>
                 );
             }
         });
+    }
+
+    fn get_da_committee(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> &DaCommittee<TYPES> {
+        self.da_committees
+            .get(epoch)
+            .unwrap_or(&self.known_da_nodes)
     }
 }
 
@@ -147,25 +154,14 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
             })
             .collect();
 
-        // Index the stake table by public key
-        let indexed_da_stake_table = da_members
-            .iter()
-            .map(|entry| {
-                (
-                    TYPES::SignatureKey::public_key(&entry.stake_table_entry),
-                    entry.clone(),
-                )
-            })
-            .collect();
-
         let s = Self {
             eligible_leaders,
             stake_table: members,
-            da_stake_table: da_members,
             indexed_stake_table,
-            indexed_da_stake_table,
+            known_da_nodes: DaCommittee::new(da_members),
             first_epoch: None,
             drb_results: BTreeMap::new(),
+            da_committees: DaCommittees::default(),
             _pd: PhantomData,
             _da_pd: PhantomData,
         };
@@ -197,14 +193,15 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
             //self.stake_table.clone()s
-            self.da_stake_table
+            self.get_da_committee(Some(epoch))
+                .committee
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
                 .map(|(_, v)| v.clone())
                 .collect()
         } else {
-            self.da_stake_table.clone()
+            self.get_da_committee(epoch).committee.clone()
         }
         .into()
     }
@@ -239,14 +236,16 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
-            self.da_stake_table
+            self.get_da_committee(Some(epoch))
+                .committee
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
                 .map(|(_, v)| TYPES::SignatureKey::public_key(&v.stake_table_entry))
                 .collect()
         } else {
-            self.da_stake_table
+            self.get_da_committee(epoch)
+                .committee
                 .iter()
                 .map(|config| TYPES::SignatureKey::public_key(&config.stake_table_entry))
                 .collect()
@@ -286,10 +285,11 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
         pub_key: &<TYPES as NodeType>::SignatureKey,
         epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Option<PeerConfig<TYPES>> {
+        let da_committee = self.get_da_committee(epoch);
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
-            let actual_members: BTreeSet<_> = self
-                .da_stake_table
+            let actual_members: BTreeSet<_> = da_committee
+                .committee
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
@@ -298,13 +298,13 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
 
             if actual_members.contains(pub_key) {
                 // Only return the stake if it is above zero
-                self.indexed_da_stake_table.get(pub_key).cloned()
+                da_committee.indexed_committee.get(pub_key).cloned()
             } else {
                 // Skip members which aren't included based on the quorum filter
                 None
             }
         } else {
-            self.indexed_da_stake_table.get(pub_key).cloned()
+            da_committee.indexed_committee.get(pub_key).cloned()
         }
     }
 
@@ -345,10 +345,11 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
         pub_key: &<TYPES as NodeType>::SignatureKey,
         epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> bool {
+        let da_committee = self.get_da_committee(epoch);
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
-            let actual_members: BTreeSet<_> = self
-                .da_stake_table
+            let actual_members: BTreeSet<_> = da_committee
+                .committee
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
@@ -356,7 +357,8 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
                 .collect();
 
             if actual_members.contains(pub_key) {
-                self.indexed_da_stake_table
+                da_committee
+                    .indexed_committee
                     .get(pub_key)
                     .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
             } else {
@@ -364,7 +366,8 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
                 false
             }
         } else {
-            self.indexed_da_stake_table
+            da_committee
+                .indexed_committee
                 .get(pub_key)
                 .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
         }
@@ -428,7 +431,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
         if let Some(epoch) = epoch {
             self.make_da_quorum_filter(epoch).len()
         } else {
-            self.da_stake_table.len()
+            self.get_da_committee(epoch).len()
         }
     }
 
@@ -489,5 +492,9 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig, DaConfig: QuorumFilterConfig> 
             .get(&epoch)
             .context("DRB result missing")
             .copied()
+    }
+
+    fn add_da_committee(&mut self, first_epoch: u64, da_committee: Vec<PeerConfig<TYPES>>) {
+        self.da_committees.add(first_epoch, da_committee);
     }
 }

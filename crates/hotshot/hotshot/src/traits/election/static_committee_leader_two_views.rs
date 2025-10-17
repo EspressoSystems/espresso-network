@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use alloy::primitives::U256;
 use anyhow::Context;
 use hotshot_types::{
+    da_committee::{DaCommittee, DaCommittees},
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
@@ -34,17 +35,17 @@ pub struct StaticCommitteeLeaderForTwoViews<T: NodeType> {
     /// The nodes on the committee and their stake
     stake_table: HSStakeTable<T>,
 
-    /// The nodes on the committee and their stake
-    da_stake_table: HSStakeTable<T>,
-
     /// The nodes on the committee and their stake, indexed by public key
     indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
 
-    /// The nodes on the committee and their stake, indexed by public key
-    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
+    /// The non-epoch-based DA committee
+    known_da_nodes: DaCommittee<T>,
 
     /// `DrbResult`s indexed by epoch
     drb_results: BTreeMap<T::Epoch, DrbResult>,
+
+    /// DA committees, indexed by the first epoch in which they apply
+    da_committees: DaCommittees<T>,
 }
 
 impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYPES> {
@@ -84,24 +85,13 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
             })
             .collect();
 
-        // Index the stake table by public key
-        let indexed_da_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES>> = da_members
-            .iter()
-            .map(|member| {
-                (
-                    TYPES::SignatureKey::public_key(&member.stake_table_entry),
-                    member.clone(),
-                )
-            })
-            .collect();
-
         Self {
             eligible_leaders,
             stake_table: members.into(),
-            da_stake_table: da_members.into(),
             indexed_stake_table,
-            indexed_da_stake_table,
+            known_da_nodes: DaCommittee::new(da_members),
             drb_results: BTreeMap::new(),
+            da_committees: DaCommittees::default(),
         }
     }
 
@@ -111,8 +101,8 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
-        self.da_stake_table.clone()
+    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
+        self.get_da_committee(epoch).committee.clone().into()
     }
 
     /// Get all members of the committee for the current view
@@ -131,9 +121,10 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     fn da_committee_members(
         &self,
         _view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        self.da_stake_table
+        self.get_da_committee(epoch)
+            .committee
             .iter()
             .map(|da| TYPES::SignatureKey::public_key(&da.stake_table_entry))
             .collect()
@@ -153,10 +144,13 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     fn da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Option<PeerConfig<TYPES>> {
         // Only return the stake if it is above zero
-        self.indexed_da_stake_table.get(pub_key).cloned()
+        self.get_da_committee(epoch)
+            .indexed_committee
+            .get(pub_key)
+            .cloned()
     }
 
     /// Check if a node has stake in the committee
@@ -174,9 +168,10 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     fn has_da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> bool {
-        self.indexed_da_stake_table
+        self.get_da_committee(epoch)
+            .indexed_committee
             .get(pub_key)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
@@ -200,8 +195,8 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     }
 
     /// Get the total number of DA nodes in the committee
-    fn da_total_nodes(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
-        self.da_stake_table.len()
+    fn da_total_nodes(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
+        self.get_da_committee(epoch).len()
     }
 
     /// Get the voting success threshold for the committee
@@ -210,8 +205,8 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
-        U256::from(((self.da_stake_table.len() as u64 * 2) / 3) + 1)
+    fn da_success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.da_total_nodes(epoch) as u64 * 2) / 3) + 1)
     }
 
     /// Get the voting failure threshold for the committee
@@ -250,5 +245,17 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
         self.add_drb_result(epoch, initial_drb_result);
         self.add_drb_result(epoch + 1, initial_drb_result);
+    }
+
+    fn add_da_committee(&mut self, first_epoch: u64, da_committee: Vec<PeerConfig<TYPES>>) {
+        self.da_committees.add(first_epoch, da_committee);
+    }
+}
+
+impl<TYPES: NodeType> StaticCommitteeLeaderForTwoViews<TYPES> {
+    fn get_da_committee(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> &DaCommittee<TYPES> {
+        self.da_committees
+            .get(epoch)
+            .unwrap_or(&self.known_da_nodes)
     }
 }

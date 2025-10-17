@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use alloy::primitives::U256;
 use anyhow::Context;
 use hotshot_types::{
+    da_committee::{DaCommittee, DaCommittees},
     drb::DrbResult,
     stake_table::HSStakeTable,
     traits::{
@@ -33,14 +34,11 @@ pub struct StaticCommittee<T: NodeType> {
     /// The nodes on the committee and their stake
     stake_table: HSStakeTable<T>,
 
-    /// The nodes on the committee and their stake
-    da_stake_table: HSStakeTable<T>,
-
     /// The nodes on the committee and their stake, indexed by public key
     indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
 
-    /// The nodes on the committee and their stake, indexed by public key
-    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
+    /// The non-epoch-based DA committee
+    known_da_nodes: DaCommittee<T>,
 
     /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
     /// when first_epoch is None or is Some greater than that epoch.
@@ -48,6 +46,9 @@ pub struct StaticCommittee<T: NodeType> {
 
     /// `DrbResult`s indexed by epoch
     drb_results: BTreeMap<T::Epoch, DrbResult>,
+
+    /// DA committees, indexed by the first epoch in which they apply
+    da_committees: DaCommittees<T>,
 }
 
 impl<TYPES: NodeType> StaticCommittee<TYPES> {
@@ -104,25 +105,14 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
             })
             .collect();
 
-        // Index the stake table by public key
-        let indexed_da_stake_table: BTreeMap<TYPES::SignatureKey, _> = da_members
-            .iter()
-            .map(|entry| {
-                (
-                    TYPES::SignatureKey::public_key(&entry.stake_table_entry),
-                    entry.clone(),
-                )
-            })
-            .collect();
-
         Self {
             eligible_leaders,
             stake_table: members.into(),
-            da_stake_table: da_members.into(),
             indexed_stake_table,
-            indexed_da_stake_table,
+            known_da_nodes: DaCommittee::new(da_members),
             first_epoch: None,
             drb_results: BTreeMap::new(),
+            da_committees: DaCommittees::default(),
         }
     }
 
@@ -135,7 +125,7 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     /// Get the stake table for the current view
     fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         self.check_first_epoch(epoch);
-        self.da_stake_table.clone()
+        self.get_da_committee(epoch).committee.clone().into()
     }
 
     /// Get all members of the committee for the current view
@@ -158,7 +148,8 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
         epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
         self.check_first_epoch(epoch);
-        self.da_stake_table
+        self.get_da_committee(epoch)
+            .committee
             .iter()
             .map(|da| TYPES::SignatureKey::public_key(&da.stake_table_entry))
             .collect()
@@ -183,7 +174,10 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     ) -> Option<PeerConfig<TYPES>> {
         self.check_first_epoch(epoch);
         // Only return the stake if it is above zero
-        self.indexed_da_stake_table.get(pub_key).cloned()
+        self.get_da_committee(epoch)
+            .indexed_committee
+            .get(pub_key)
+            .cloned()
     }
 
     /// Check if a node has stake in the committee
@@ -205,7 +199,8 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
         epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> bool {
         self.check_first_epoch(epoch);
-        self.indexed_da_stake_table
+        self.get_da_committee(epoch)
+            .indexed_committee
             .get(pub_key)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
@@ -232,7 +227,7 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     /// Get the total number of DA nodes in the committee
     fn da_total_nodes(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
         self.check_first_epoch(epoch);
-        self.da_stake_table.len()
+        self.get_da_committee(epoch).len()
     }
 
     /// Get the voting success threshold for the committee
@@ -296,5 +291,17 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
             .get(&epoch)
             .context("DRB result missing")
             .copied()
+    }
+
+    fn add_da_committee(&mut self, first_epoch: u64, da_committee: Vec<PeerConfig<TYPES>>) {
+        self.da_committees.add(first_epoch, da_committee);
+    }
+}
+
+impl<TYPES: NodeType> StaticCommittee<TYPES> {
+    fn get_da_committee(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> &DaCommittee<TYPES> {
+        self.da_committees
+            .get(epoch)
+            .unwrap_or(&self.known_da_nodes)
     }
 }

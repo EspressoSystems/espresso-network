@@ -435,4 +435,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
         self.first_epoch
     }
+
+    /// add_da_committee is a no-op here as dynamic DA committees don't make sense here.
+    fn add_da_committee(&mut self, _first_epoch: u64, _da_committee: Vec<PeerConfig<TYPES>>) {}
 }
