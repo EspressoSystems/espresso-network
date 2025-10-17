@@ -222,6 +222,7 @@
         myShell (rustEnvVars // {
           packages = [
             # Rust dependencies
+            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
@@ -301,6 +302,7 @@
         myShell (rustEnvVars // {
           packages = [
             # Rust dependencies
+            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
@@ -315,6 +317,7 @@
         myShell (rustEnvVars // {
           packages = [
             # Rust dependencies
+            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
@@ -338,6 +341,7 @@
         myShell (rustEnvVars // {
           packages = [
             # Rust dependencies
+            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
