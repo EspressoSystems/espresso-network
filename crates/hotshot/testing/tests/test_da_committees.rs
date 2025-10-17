@@ -24,8 +24,6 @@ cross_tests!(
     TestName: test_da_committees,
     Impls: [MemoryImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    // TODO: we need some test infrastructure + Membership trait fixes to get this to work with:
-    // Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
     Versions: [DaCommitteeTestVersions],
     Ignore: false,
     Metadata: {
