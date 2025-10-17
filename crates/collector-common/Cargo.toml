@@ -1,0 +1,8 @@
+[package]
+name = "collector-common"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rkyv = "0.8"
+anyhow = "1"

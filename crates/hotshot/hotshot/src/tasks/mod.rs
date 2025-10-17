@@ -13,6 +13,7 @@ use std::{collections::BTreeMap, fmt::Debug, num::NonZeroUsize, sync::Arc, time:
 use async_broadcast::{broadcast, RecvError};
 use async_lock::RwLock;
 use async_trait::async_trait;
+use collector_common::{send_trace, Trace};
 use futures::{
     future::{BoxFuture, FutureExt},
     stream, StreamExt,
@@ -35,12 +36,16 @@ use hotshot_task_impls::{
 use hotshot_types::{
     consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
-    message::{Message, MessageKind, UpgradeLock, EXTERNAL_MESSAGE_VERSION},
+    message::{
+        GeneralConsensusMessage, Message, MessageKind, SequencingMessage, UpgradeLock,
+        EXTERNAL_MESSAGE_VERSION,
+    },
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
+    vote::HasViewNumber,
 };
 use tokio::{spawn, time::sleep};
 use vbs::version::{StaticVersionType, Version};
@@ -175,6 +180,27 @@ pub fn add_network_message_task<
                             continue;
                         }
                     };
+
+                    // Match on the message kind
+                    match &deserialized_message.kind {
+                        MessageKind::Consensus(SequencingMessage::General(
+                            GeneralConsensusMessage::Proposal(proposal),
+                        )) => {
+                            let _ = send_trace(&Trace::ProposalReceived(*(proposal.data.view_number())));
+                        },
+                        MessageKind::Consensus(SequencingMessage::General(
+                            GeneralConsensusMessage::Proposal2Legacy(proposal),
+                        )) => {
+                            let _ = send_trace(&Trace::ProposalReceived(*(proposal.data.view_number())));
+                        },
+                        MessageKind::Consensus(SequencingMessage::General(
+                            GeneralConsensusMessage::Proposal2(proposal),
+                        )) => {
+                            let _ = send_trace(&Trace::ProposalReceived(*(proposal.data.view_number())));
+                        },
+                        _ => {},
+                    }
+
 
                     // Special case: external messages (version 0.0). We want to make sure it is an external message
                     // and warn and continue otherwise.

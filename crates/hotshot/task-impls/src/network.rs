@@ -12,6 +12,7 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
+use collector_common::{send_trace, Trace};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -41,7 +42,6 @@ use tracing::instrument;
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
-    quorum_proposal::handlers::PROPOSAL_CREATION_TIMES,
 };
 
 /// the network message task state
@@ -102,7 +102,19 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
+
+                            let proposal_view_number = proposal.data.view_number();
+                            let event = HotShotEvent::QuorumProposalRecv(
+                                convert_proposal(proposal),
+                                sender,
+                            );
+
+                            // Send the trace when we receive the proposal
+                            let _ = send_trace(&Trace::ProposalReceivedEventGenerated(
+                                *proposal_view_number,
+                            ));
+
+                            event
                         },
                         GeneralConsensusMessage::Proposal2Legacy(proposal) => {
                             if !self
@@ -117,7 +129,19 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
+
+                            let proposal_view_number = proposal.data.view_number();
+                            let event = HotShotEvent::QuorumProposalRecv(
+                                convert_proposal(proposal),
+                                sender,
+                            );
+
+                            // Send the trace when we receive the proposal
+                            let _ = send_trace(&Trace::ProposalReceivedEventGenerated(
+                                *proposal_view_number,
+                            ));
+
+                            event
                         },
                         GeneralConsensusMessage::Proposal2(proposal) => {
                             if !self
@@ -132,7 +156,19 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
+
+                            let proposal_view_number = proposal.data.view_number();
+                            let event = HotShotEvent::QuorumProposalRecv(
+                                convert_proposal(proposal),
+                                sender,
+                            );
+
+                            // Send the trace when we receive the proposal
+                            let _ = send_trace(&Trace::ProposalReceivedEventGenerated(
+                                *proposal_view_number,
+                            ));
+
+                            event
                         },
                         GeneralConsensusMessage::ProposalRequested(req, sig) => {
                             HotShotEvent::QuorumProposalRequestRecv(req, sig)
@@ -1524,38 +1560,24 @@ impl<
                 },
             };
 
-            // Get the view number from the message
-            let view_number = {
-                if let MessageKind::Consensus(SequencingMessage::General(
+            // Match on the message kind
+            match &message.kind {
+                MessageKind::Consensus(SequencingMessage::General(
                     GeneralConsensusMessage::Proposal(proposal),
-                )) = &message.kind
-                {
-                    Some(*proposal.data.view_number)
-                } else if let MessageKind::Consensus(SequencingMessage::General(
+                )) => {
+                    let _ = send_trace(&Trace::ProposalSent(*(proposal.data.view_number())));
+                },
+                MessageKind::Consensus(SequencingMessage::General(
                     GeneralConsensusMessage::Proposal2(proposal),
-                )) = &message.kind
-                {
-                    Some(*proposal.data.view_number)
-                } else if let MessageKind::Consensus(SequencingMessage::General(
+                )) => {
+                    let _ = send_trace(&Trace::ProposalSent(*(proposal.data.view_number())));
+                },
+                MessageKind::Consensus(SequencingMessage::General(
                     GeneralConsensusMessage::Proposal2Legacy(proposal),
-                )) = &message.kind
-                {
-                    Some(*proposal.data.view_number)
-                } else {
-                    None
-                }
-            };
-
-            // If the view number is not None, log the proposal creation time from the map
-            if let Some(view_number) = view_number {
-                let proposal_creation_time =
-                    PROPOSAL_CREATION_TIMES.lock().unwrap().remove(&view_number);
-                if let Some(proposal_creation_time) = proposal_creation_time {
-                    println!(
-                        "Proposal creation to send time for view {view_number}: {:?}",
-                        proposal_creation_time.elapsed()
-                    );
-                }
+                )) => {
+                    let _ = send_trace(&Trace::ProposalSent(*(proposal.data.view_number())));
+                },
+                _ => {},
             }
 
             let transmit_result = match transmit {
