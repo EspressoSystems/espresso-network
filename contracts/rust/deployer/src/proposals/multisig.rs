@@ -10,18 +10,20 @@ use alloy::{
     providers::Provider,
 };
 use anyhow::{anyhow, Context, Result};
+use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
     EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
     LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
     StakeTableV2,
 };
+use url::Url;
 
 use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS};
 
 #[derive(Clone)]
 pub struct TransferOwnershipParams {
     pub new_owner: Address,
-    pub rpc_url: String,
+    pub rpc_url: Url,
     pub safe_addr: Address,
     pub use_hardware_wallet: bool,
     pub dry_run: bool,
@@ -46,7 +48,7 @@ pub async fn call_transfer_ownership_script(
         .arg("--new-owner")
         .arg(params.new_owner.to_string())
         .arg("--rpc-url")
-        .arg(params.rpc_url)
+        .arg(params.rpc_url.to_string())
         .arg("--safe-address")
         .arg(params.safe_addr.to_string())
         .arg("--dry-run")
@@ -603,6 +605,7 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 /// This function can only be called on a real network supported by the safeSDK
 pub async fn upgrade_stake_table_v2_multisig_owner(
     provider: impl Provider,
+    l1_client: L1Client,
     contracts: &mut Contracts,
     rpc_url: String,
     multisig_address: Address,
@@ -630,8 +633,8 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     }
     // TODO: check if owner is a SAFE multisig
 
-    let (_init_commissions, init_data) =
-        crate::prepare_stake_table_v2_upgrade(&provider, proxy_addr, pauser, owner_addr).await?;
+    let (_init_commissions, _init_active_stake, init_data) =
+        crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, pauser, owner_addr).await?;
 
     let stake_table_v2_addr = contracts
         .deploy(

@@ -57,6 +57,10 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 ///
 /// 8. The commission rate for validators can be updated with the `updateCommission` function.
 ///
+/// 9. The `activeStake` variable is added to allow governance to
+/// track the total stake in the contract. The activeStake is the
+/// total stake that is not awaiting exit or in exited state.
+///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
@@ -83,6 +87,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Maximum commission increase allowed per increase (in basis points)
     uint16 public maxCommissionIncrease;
+
+    /// @notice Total stake in active (not marked for exit) validators in the contract
+    uint256 public activeStake;
 
     /// @notice Commission tracking for each validator
     mapping(address validator => CommissionTracking tracking) public commissionTracking;
@@ -163,6 +170,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The validator commission has already been initialized
     error CommissionAlreadyInitialized(address validator);
 
+    /// The initial active stake exceeds the balance of the contract
+    error InitialActiveStakeExceedsBalance();
+
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
 
@@ -176,6 +186,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     ///
     /// @param admin The address to be granted the default admin role
     /// @param pauser The address to be granted the pauser role
+    /// @param initialActiveStake The initial active stake in the contract
     /// @param initialCommissions commissions of validators
     ///
     /// @notice initialCommissions must be an empty array if the contract we're
@@ -187,6 +198,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     function initializeV2(
         address pauser,
         address admin,
+        uint256 initialActiveStake,
         InitialCommission[] calldata initialCommissions
     ) public onlyOwner reinitializer(2) {
         __AccessControl_init();
@@ -201,6 +213,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // initialize commissions (if the contract under upgrade has existing state)
         _initializeCommissions(initialCommissions);
+        _initializeActiveStake(initialActiveStake);
     }
 
     /// @notice Get the version of the contract
@@ -272,6 +285,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function is overridden to add pausable functionality
     function delegate(address validator, uint256 amount) public virtual override whenNotPaused {
         super.delegate(validator, amount);
+        activeStake += amount;
     }
 
     /// @notice Undelegate funds from a validator
@@ -280,6 +294,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function is overridden to add pausable functionality
     function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
         super.undelegate(validator, amount);
+        activeStake -= amount;
     }
 
     /// @notice Deregister a validator
@@ -295,6 +310,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         validatorExits[validator] = block.timestamp + exitEscrowPeriod;
         // in v2, the delegatedAmount is not updated until withdrawal
 
+        activeStake -= validators[validator].delegatedAmount;
         emit ValidatorExit(validator);
     }
 
@@ -462,6 +478,16 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             commissionTracking[validator] =
                 CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
         }
+    }
+
+    /// @notice Initialize the active stake in the contract
+    /// @param initialActiveStake The initial active stake in the contract
+    function _initializeActiveStake(uint256 initialActiveStake) private {
+        require(
+            initialActiveStake <= token.balanceOf(address(this)), InitialActiveStakeExceedsBalance()
+        );
+
+        activeStake = initialActiveStake;
     }
 
     /// @notice Update the exit escrow period

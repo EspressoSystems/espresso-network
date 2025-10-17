@@ -917,6 +917,7 @@ pub mod testing {
                     let mut contracts = Contracts::new();
                     let args = DeployerArgsBuilder::default()
                         .deployer(deployer.clone())
+                        .rpc_url(self.l1_url.clone())
                         .mock_light_client(true)
                         .genesis_lc_state(genesis_state)
                         .genesis_st_state(genesis_stake)

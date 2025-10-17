@@ -1,0 +1,1919 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "DEFAULT_ADMIN_ROLE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "PAUSER_ROLE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "UPGRADE_INTERFACE_VERSION",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "_hashBlsKey",
+    "inputs": [
+      {
+        "name": "blsVK",
+        "type": "tuple",
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "activeStake",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "blsKeys",
+    "inputs": [
+      {
+        "name": "blsKeyHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "used",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "claimValidatorExit",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "claimWithdrawal",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "commissionTracking",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "commission",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "lastIncreaseTime",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "delegate",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "delegations",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "delegator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "deregisterValidator",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "exitEscrowPeriod",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getRoleAdmin",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getVersion",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "majorVersion",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "minorVersion",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "patchVersion",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "grantRole",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "hasRole",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "initialize",
+    "inputs": [
+      {
+        "name": "_tokenAddress",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_lightClientAddress",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_exitEscrowPeriod",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_timelock",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "initializeV2",
+    "inputs": [
+      {
+        "name": "pauser",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "admin",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "initialActiveStake",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "initialCommissions",
+        "type": "tuple[]",
+        "internalType": "struct StakeTableV2.InitialCommission[]",
+        "components": [
+          {
+            "name": "validator",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "commission",
+            "type": "uint16",
+            "internalType": "uint16"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "initializedAtBlock",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "lightClient",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract ILightClient"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "maxCommissionIncrease",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "minCommissionIncreaseInterval",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pause",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "paused",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proxiableUUID",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "registerValidator",
+    "inputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct BN254.G1Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "registerValidatorV2",
+    "inputs": [
+      {
+        "name": "blsVK",
+        "type": "tuple",
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrVK",
+        "type": "tuple",
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "blsSig",
+        "type": "tuple",
+        "internalType": "struct BN254.G1Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrSig",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "commission",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "renounceOwnership",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "renounceRole",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "callerConfirmation",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "revokeRole",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "schnorrKeys",
+    "inputs": [
+      {
+        "name": "schnorrKey",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "used",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setMaxCommissionIncrease",
+    "inputs": [
+      {
+        "name": "newMaxIncrease",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMinCommissionUpdateInterval",
+    "inputs": [
+      {
+        "name": "newInterval",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "supportsInterface",
+    "inputs": [
+      {
+        "name": "interfaceId",
+        "type": "bytes4",
+        "internalType": "bytes4"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "token",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract ERC20"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "transferOwnership",
+    "inputs": [
+      {
+        "name": "newOwner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "undelegate",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "undelegations",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "delegator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "unlocksAt",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "unpause",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateCommission",
+    "inputs": [
+      {
+        "name": "newCommission",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateConsensusKeys",
+    "inputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct BN254.G1Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "updateConsensusKeysV2",
+    "inputs": [
+      {
+        "name": "blsVK",
+        "type": "tuple",
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrVK",
+        "type": "tuple",
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "blsSig",
+        "type": "tuple",
+        "internalType": "struct BN254.G1Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrSig",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateExitEscrowPeriod",
+    "inputs": [
+      {
+        "name": "newExitEscrowPeriod",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "upgradeToAndCall",
+    "inputs": [
+      {
+        "name": "newImplementation",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "validatorExits",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "unlocksAt",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "validators",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "delegatedAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "status",
+        "type": "uint8",
+        "internalType": "enum StakeTable.ValidatorStatus"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "CommissionUpdated",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "timestamp",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "oldCommission",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "newCommission",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ConsensusKeysUpdated",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "blsVK",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrVK",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ConsensusKeysUpdatedV2",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "blsVK",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrVK",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "blsSig",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct BN254.G1Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrSig",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Delegated",
+    "inputs": [
+      {
+        "name": "delegator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "validator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ExitEscrowPeriodUpdated",
+    "inputs": [
+      {
+        "name": "newExitEscrowPeriod",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MaxCommissionIncreaseUpdated",
+    "inputs": [
+      {
+        "name": "newMaxIncrease",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MinCommissionUpdateIntervalUpdated",
+    "inputs": [
+      {
+        "name": "newInterval",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "OwnershipTransferred",
+    "inputs": [
+      {
+        "name": "previousOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Paused",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleAdminChanged",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "previousAdminRole",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "newAdminRole",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleGranted",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "sender",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleRevoked",
+    "inputs": [
+      {
+        "name": "role",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "sender",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Undelegated",
+    "inputs": [
+      {
+        "name": "delegator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "validator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Unpaused",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Upgraded",
+    "inputs": [
+      {
+        "name": "implementation",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ValidatorExit",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ValidatorRegistered",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "blsVk",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrVk",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "commission",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ValidatorRegisteredV2",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "blsVK",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct BN254.G2Point",
+        "components": [
+          {
+            "name": "x0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "x1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y0",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y1",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrVK",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct EdOnBN254.EdOnBN254Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "commission",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "blsSig",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct BN254.G1Point",
+        "components": [
+          {
+            "name": "x",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          },
+          {
+            "name": "y",
+            "type": "uint256",
+            "internalType": "BN254.BaseField"
+          }
+        ]
+      },
+      {
+        "name": "schnorrSig",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Withdrawal",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AccessControlBadConfirmation",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "AccessControlUnauthorizedAccount",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "neededRole",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "AddressEmptyCode",
+    "inputs": [
+      {
+        "name": "target",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "BLSSigVerificationFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "BN254PairingProdFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "BlsKeyAlreadyUsed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CommissionAlreadyInitialized",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "CommissionIncreaseExceedsMax",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CommissionUnchanged",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CommissionUpdateTooSoon",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DeprecatedFunction",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ERC1967InvalidImplementation",
+    "inputs": [
+      {
+        "name": "implementation",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ERC1967NonPayable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EnforcedPause",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExitEscrowPeriodInvalid",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExpectedPause",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "FailedInnerCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InitialActiveStakeExceedsBalance",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientAllowance",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InsufficientBalance",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidCommission",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidG1",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidRateLimitParameters",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidSchnorrSig",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidSchnorrVK",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NothingToWithdraw",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "OwnableInvalidOwner",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "OwnableUnauthorizedAccount",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PowPrecompileFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PrematureWithdrawal",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SchnorrKeyAlreadyUsed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UUPSUnauthorizedCallContext",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UUPSUnsupportedProxiableUUID",
+    "inputs": [
+      {
+        "name": "slot",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "UndelegationAlreadyExists",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ValidatorAlreadyExited",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ValidatorAlreadyRegistered",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ValidatorInactive",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ValidatorNotExited",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAmount",
+    "inputs": []
+  }
+]
