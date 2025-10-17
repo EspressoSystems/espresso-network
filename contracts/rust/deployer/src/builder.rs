@@ -512,8 +512,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let lc_addr = contracts
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
+                let pauser = self.multisig_pauser.context(
+                    "Multisig pauser address must be set for RewardClaimProxy deployment",
+                )?;
                 let addr = crate::deploy_reward_claim_proxy(
-                    provider, contracts, token_addr, lc_addr, admin,
+                    provider, contracts, token_addr, lc_addr, admin, pauser,
                 )
                 .await?;
 

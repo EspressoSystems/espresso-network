@@ -1216,6 +1216,33 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
     }
 
+    function test_onlyOwnerCanCallInitializeV2() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        // Upgrade to V2
+        StakeTableV2 newImpl = new StakeTableV2();
+        proxy.upgradeToAndCall(address(newImpl), "");
+        vm.stopPrank();
+
+        // Test that non-owner cannot call initializeV2
+        address nonOwner = makeAddr("nonOwner");
+        vm.startPrank(nonOwner);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
+        );
+        StakeTableV2(address(proxy)).initializeV2(
+            makeAddr("pauser"), makeAddr("admin"), new StakeTableV2.InitialCommission[](0)
+        );
+        vm.stopPrank();
+
+        vm.startPrank(stakeTableRegisterTest.admin());
+        StakeTableV2(address(proxy)).initializeV2(
+            makeAddr("pauser"), makeAddr("admin"), new StakeTableV2.InitialCommission[](0)
+        );
+        vm.stopPrank();
+    }
+
     function test_updateExitEscrowPeriod() public {
         vm.startPrank(stakeTableRegisterTest.admin());
         address proxy = address(stakeTableRegisterTest.stakeTable());
@@ -2365,6 +2392,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         assertEq(majorVersionNew, 2);
 
         address admin = stakeTableV2.owner();
+        vm.startPrank(admin);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         stakeTableV2.initializeV2(pauser, admin, 0, emptyCommissions);

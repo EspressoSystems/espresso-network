@@ -153,7 +153,9 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$|RewardClaim$"
+VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|IRewardClaim|IPlonkVerifier"
+REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
