@@ -21,7 +21,7 @@ use hotshot_types::{
     event::Event,
     message::UpgradeLock,
     simple_vote::HasEpoch,
-    stake_table::StakeTableEntries,
+    // stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
@@ -37,7 +37,7 @@ use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, broadcast_view_change, wait_for_second_vid_share},
+    helpers::{broadcast_event, broadcast_view_change},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
 };
 
@@ -266,36 +266,36 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         //     ));
         // };
 
-        let mut maybe_current_epoch_vid_share = None;
+        // let mut maybe_current_epoch_vid_share = None;
         // If this is an epoch transition block, we might need two VID shares.
         if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
             && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
         {
-            let current_epoch = option_epoch_from_block_number::<TYPES>(
-                leaf.with_epoch,
-                leaf.block_header().block_number(),
-                self.epoch_height,
-            );
-            let next_epoch = current_epoch.map(|e| e + 1);
+            // let current_epoch = option_epoch_from_block_number::<TYPES>(
+            //     leaf.with_epoch,
+            //     leaf.block_header().block_number(),
+            //     self.epoch_height,
+            // );
+            // let next_epoch = current_epoch.map(|e| e + 1);
 
-            let Ok(current_epoch_membership) = self
-                .membership_coordinator
-                .stake_table_for_epoch(current_epoch)
-                .await
-            else {
-                bail!(warn!(
-                    "Couldn't acquire current epoch membership. Do not vote!"
-                ));
-            };
-            let Ok(next_epoch_membership) = self
-                .membership_coordinator
-                .stake_table_for_epoch(next_epoch)
-                .await
-            else {
-                bail!(warn!(
-                    "Couldn't acquire next epoch membership. Do not vote!"
-                ));
-            };
+            // let Ok(current_epoch_membership) = self
+            //     .membership_coordinator
+            //     .stake_table_for_epoch(current_epoch)
+            //     .await
+            // else {
+            //     bail!(warn!(
+            //         "Couldn't acquire current epoch membership. Do not vote!"
+            //     ));
+            // };
+            // let Ok(next_epoch_membership) = self
+            //     .membership_coordinator
+            //     .stake_table_for_epoch(next_epoch)
+            //     .await
+            // else {
+            //     bail!(warn!(
+            //         "Couldn't acquire next epoch membership. Do not vote!"
+            //     ));
+            // };
 
             // // If we belong to both epochs, we require VID shares from both epochs.
             // if current_epoch_membership.has_stake(&self.public_key).await
@@ -362,7 +362,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.view_number,
             Arc::clone(&self.instance_state),
             &leaf,
-            maybe_current_epoch_vid_share.as_ref().unwrap_or(&vid_share),
+            &vid_share,
             parent_view_number,
             self.epoch_height,
         )
@@ -420,7 +420,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.storage.clone(),
             Arc::clone(&self.storage_metrics),
             leaf,
-            maybe_current_epoch_vid_share.unwrap_or(vid_share),
+            vid_share,
             is_vote_leaf_extended,
             is_vote_epoch_root,
             self.epoch_height,
@@ -693,47 +693,47 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             },
             HotShotEvent::DaCertificateRecv(cert) => {
                 panic!("Received DAC for view {}", cert.view_number);
-                let view = cert.view_number;
+                // let view = cert.view_number;
 
-                tracing::trace!("Received DAC for view {view}");
-                // Do nothing if the DAC is old
-                ensure!(
-                    view > self.latest_voted_view,
-                    "Received DAC for an older view."
-                );
+                // tracing::trace!("Received DAC for view {view}");
+                // // Do nothing if the DAC is old
+                // ensure!(
+                //     view > self.latest_voted_view,
+                //     "Received DAC for an older view."
+                // );
 
-                let cert_epoch = cert.data.epoch;
+                // let cert_epoch = cert.data.epoch;
 
-                let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
-                let membership_da_stake_table = epoch_membership.da_stake_table().await;
-                let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
+                // let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
+                // let membership_da_stake_table = epoch_membership.da_stake_table().await;
+                // let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
 
-                // Validate the DAC.
-                cert.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
-                    membership_da_success_threshold,
-                    &self.upgrade_lock,
-                )
-                .await
-                .context(|e| warn!("Invalid DAC: {e}"))?;
+                // // Validate the DAC.
+                // cert.is_valid_cert(
+                //     &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
+                //     membership_da_success_threshold,
+                //     &self.upgrade_lock,
+                // )
+                // .await
+                // .context(|e| warn!("Invalid DAC: {e}"))?;
 
-                // Add to the storage.
-                self.consensus
-                    .write()
-                    .await
-                    .update_saved_da_certs(view, cert.clone());
+                // // Add to the storage.
+                // self.consensus
+                //     .write()
+                //     .await
+                //     .update_saved_da_certs(view, cert.clone());
 
-                broadcast_event(
-                    Arc::new(HotShotEvent::DaCertificateValidated(cert.clone())),
-                    &event_sender.clone(),
-                )
-                .await;
-                self.create_dependency_task_if_new(
-                    view,
-                    event_receiver,
-                    &event_sender,
-                    Arc::clone(&event),
-                );
+                // broadcast_event(
+                //     Arc::new(HotShotEvent::DaCertificateValidated(cert.clone())),
+                //     &event_sender.clone(),
+                // )
+                // .await;
+                // self.create_dependency_task_if_new(
+                //     view,
+                //     event_receiver,
+                //     &event_sender,
+                //     Arc::clone(&event),
+                // );
             },
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();

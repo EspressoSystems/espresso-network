@@ -42,7 +42,6 @@ mod tests {
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use serde::{Deserialize, Serialize};
-    use sha2::{Digest, Sha256};
     use tokio::time::{error::Elapsed, timeout};
     use tracing_subscriber::EnvFilter;
 
@@ -121,6 +120,7 @@ mod tests {
         let global_state = Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender.clone(),
+            da_sender.clone(),
             initial_commitment,
             ViewNumber::new(0),
             ViewNumber::new(0),
@@ -303,24 +303,19 @@ mod tests {
                         epoch: None, // TODO: check if this is okay
                         epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
                     };
-                    let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
-                    let seed = [round as u8; 32];
-                    let (pub_key, private_key) =
-                        BLSPubKey::generated_from_seed_indexed(seed, round as u64);
-                    let da_signature =
-                <TestTypes as hotshot_types::traits::node_implementation::NodeType>::SignatureKey::sign(
-                    &private_key,
-                    &encoded_transactions_hash,
-                )
-                .expect("Failed to sign encoded tx hash while preparing da proposal");
+                    //     let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
+                    //     let seed = [round as u8; 32];
+                    //     let (pub_key, private_key) =
+                    //         BLSPubKey::generated_from_seed_indexed(seed, round as u64);
+                    //     let da_signature =
+                    // <TestTypes as hotshot_types::traits::node_implementation::NodeType>::SignatureKey::sign(
+                    //     &private_key,
+                    //     &encoded_transactions_hash,
+                    // )
+                    // .expect("Failed to sign encoded tx hash while preparing da proposal");
 
                     DaProposalMessage::<TestTypes> {
-                        proposal: Arc::new(Proposal {
-                            data: da_proposal,
-                            signature: da_signature.clone(),
-                            _pd: PhantomData,
-                        }),
-                        sender: pub_key,
+                        proposal: Arc::new(da_proposal),
                     }
                 };
 

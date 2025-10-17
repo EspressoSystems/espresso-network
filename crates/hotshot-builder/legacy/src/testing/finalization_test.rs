@@ -36,7 +36,6 @@ use hotshot_types::{
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
-use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;
 
 use super::basic_test::{BuilderState, MessageType};
@@ -59,7 +58,7 @@ type TestSetup = (
 pub fn setup_builder_for_test() -> TestSetup {
     let (req_sender, req_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
     let (tx_sender, tx_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
-
+    let (da_sender, _da_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
     let parent_commitment = vid_commitment::<TestVersions>(
         &[],
         &[],
@@ -74,6 +73,7 @@ pub fn setup_builder_for_test() -> TestSetup {
     let global_state = Arc::new(RwLock::new(GlobalState::new(
         req_sender,
         tx_sender.clone(),
+        da_sender.clone(),
         bootstrap_builder_state_id.parent_commitment,
         bootstrap_builder_state_id.parent_view,
         bootstrap_builder_state_id.parent_view,
@@ -82,7 +82,6 @@ pub fn setup_builder_for_test() -> TestSetup {
         TEST_NUM_NODES_IN_VID_COMPUTATION,
         TEST_MAX_TX_NUM,
     )));
-
     let max_api_duration = Duration::from_millis(100);
 
     let proxy_global_state = ProxyGlobalState::new(
@@ -269,32 +268,19 @@ async fn progress_round_with_transactions(
 
     // Create and send the DA Proposals and Quorum Proposals
     {
-        let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
-        let da_signature =
-        <TestTypes as hotshot_types::traits::node_implementation::NodeType>::SignatureKey::sign(
-            &leader_priv,
-            &encoded_transactions_hash,
-        )
-        .expect("should sign encoded transactions hash successfully");
-
         let metadata = TestMetadata {
             num_transactions: transactions.len() as u64,
         };
 
         da_proposal_sender
             .broadcast(MessageType::DaProposalMessage(DaProposalMessage {
-                proposal: Arc::new(Proposal {
-                    data: DaProposal2::<TestTypes> {
-                        encoded_transactions: encoded_transactions.clone().into(),
-                        metadata,
-                        view_number: next_view,
-                        epoch: None, // TODO
-                        epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-                    },
-                    signature: da_signature,
-                    _pd: Default::default(),
+                proposal: Arc::new(DaProposal2::<TestTypes> {
+                    encoded_transactions: encoded_transactions.clone().into(),
+                    metadata,
+                    view_number: next_view,
+                    epoch: None, // TODO
+                    epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
                 }),
-                sender: leader_pub,
             }))
             .await
             .expect("should broadcast DA Proposal successfully");

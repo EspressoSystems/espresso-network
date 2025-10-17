@@ -4,31 +4,31 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
+use hotshot_types::vote::HasViewNumber;
 use hotshot_types::{
-    consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{vid_commitment, vid_disperse::vid_total_weight},
+    consensus::OuterConsensus,
+    // data::{vid_commitment, vid_disperse::vid_total_weight},
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, EventType},
+    event::Event,
     message::UpgradeLock,
     simple_certificate::DaCertificate2,
-    simple_vote::{DaData2, DaVote2},
+    simple_vote::DaVote2,
     storage_metrics::StorageMetricsValue,
     traits::{
         node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
-        BlockPayload, EncodeBytes,
+        EncodeBytes,
     },
     utils::EpochTransitionIndicator,
-    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use sha2::{Digest, Sha256};
-use tokio::task::spawn_blocking;
+// use tokio::task::spawn_blocking;
 use tracing::instrument;
 
 use crate::{
@@ -149,7 +149,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 )
                 .await;
             },
-            HotShotEvent::DaProposalValidated(proposal, sender) => {
+            HotShotEvent::DaProposalValidated(..) => {
                 panic!("Received DA proposal validated");
                 // let cur_view = self.consensus.read().await.cur_view();
                 // let view_number = proposal.data.view_number();
