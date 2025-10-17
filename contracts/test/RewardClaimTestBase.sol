@@ -11,7 +11,7 @@ import "../src/interfaces/IRewardClaim.sol";
 // Conventions:
 // - Always use `validateTestCase()` to validate successful claims before fuzzing without changing
 //   the state of the test contracts.
-abstract contract RewardClaimTestBase is Test {
+contract RewardClaimTestBase is Test {
     RewardClaim public rewardClaim;
     LightClientV3Mock public lightClient;
     EspTokenV2 public espToken;
@@ -56,6 +56,18 @@ abstract contract RewardClaimTestBase is Test {
 
         vm.prank(owner);
         espToken.initializeV2(address(rewardClaim));
+    }
+
+    // Valid claims should be validated before fuzzing to ensure the test setup is correct.
+    function validateTestCase(RewardClaimTestCase memory testCase, uint256 authRoot) internal {
+        uint256 snapshot = vm.snapshotState();
+
+        lightClient.setAuthRoot(authRoot);
+        vm.prank(testCase.account);
+        rewardClaim.claimRewards(testCase.lifetimeRewards, testCase.authData);
+        assertEq(espToken.balanceOf(testCase.account), testCase.lifetimeRewards);
+
+        vm.revertToState(snapshot);
     }
 
     function getFixtures(uint256 numAccounts)
@@ -107,21 +119,5 @@ abstract contract RewardClaimTestBase is Test {
         cmds[3] = vm.toString(amount);
         bytes memory result = vm.ffi(cmds);
         (authRoot, fixtures) = abi.decode(result, (uint256, RewardClaimTestCase[]));
-    }
-
-    function validateTestCase(RewardClaimTestCase memory testCase, uint256 authRoot) internal {
-        RewardClaimTestHelper helper = new RewardClaimTestHelper();
-        helper.setUp();
-        helper.doValidate(testCase, authRoot);
-    }
-}
-
-contract RewardClaimTestHelper is RewardClaimTestBase {
-    function doValidate(RewardClaimTestCase memory testCase, uint256 authRoot) public {
-        lightClient.setAuthRoot(authRoot);
-
-        vm.prank(testCase.account);
-        rewardClaim.claimRewards(testCase.lifetimeRewards, testCase.authData);
-        assertEq(espToken.balanceOf(testCase.account), testCase.lifetimeRewards);
     }
 }
