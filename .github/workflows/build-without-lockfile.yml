@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # NOTE: no rust cache, this isn't a time critical job
 
@@ -36,7 +36,7 @@ jobs:
           cargo check --all-targets
 
       - name: Comment on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         if: failure() && github.event_name == 'pull_request'
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
