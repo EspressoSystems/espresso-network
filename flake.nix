@@ -26,14 +26,12 @@
   inputs.nixpkgs-cross-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
-  inputs.flake-utils.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
   inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
-  inputs.flake-compat.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.git-hooks.url = "github:cachix/git-hooks.nix";
   inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
@@ -222,9 +220,8 @@
           pre-commit = self.checks.${system}.pre-commit-check;
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
-            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
@@ -286,10 +283,6 @@
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
 
-            # On macOS, we need to unset DEVELOPER_DIR_FOR_TARGET. The `go` buildInput will
-            # cause this to be set and it breaks rust compilation.
-            unset DEVELOPER_DIR_FOR_TARGET
-
             ${pre-commit.shellHook}
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
@@ -306,9 +299,8 @@
           };
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
-            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
@@ -321,9 +313,8 @@
           toolchain = pkgs.rust-bin.nightly.latest.minimal;
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
-            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
@@ -345,9 +336,8 @@
           };
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
-            pkg-config
             openssl
             curl
             protobuf # to compile libp2p-autonat
@@ -362,7 +352,7 @@
           solc = pkgs.solc-bin."0.8.28";
         in
         myShell {
-          buildInputs = [
+          packages = [
             # Foundry tools
             foundry-bin
             solc
