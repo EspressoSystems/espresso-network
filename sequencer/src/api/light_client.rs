@@ -8,7 +8,7 @@ use hotshot_query_service::{
     data_source::{storage::NodeStorage, VersionedDataSource},
     Error,
 };
-use light_client::core::leaf::LeafProof;
+use light_client::consensus::leaf::LeafProof;
 use tide_disco::{method::ReadState, Api, StatusCode};
 use vbs::version::StaticVersionType;
 
@@ -136,8 +136,9 @@ where
 mod test {
     use espresso_types::EpochVersion;
     use hotshot_query_service::data_source::{storage::UpdateAvailabilityStorage, Transaction};
+    use hotshot_types::simple_certificate::CertificatePair;
     use light_client::{
-        core::leaf::FinalityProof,
+        consensus::leaf::FinalityProof,
         testing::{
             leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, EnableEpochs, LegacyVersion,
             VersionCheckQuorum,
@@ -163,11 +164,12 @@ mod test {
         .unwrap();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
+        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
             tx.insert_leaf(leaves[1].clone()).await.unwrap();
+            tx.insert_leaf(leaves[2].clone()).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -224,11 +226,12 @@ mod test {
 
         // Insert multiple leaves that don't chain. We will not be able to prove these are
         // finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain::<EpochVersion>(1..=4).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
             tx.insert_leaf(leaves[2].clone()).await.unwrap();
+            tx.insert_leaf(leaves[3].clone()).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -257,9 +260,12 @@ mod test {
         .await
         .unwrap();
 
-        // Insert a single leaf, plus an extra QC proving it finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
-        let qcs = [leaves[0].qc().clone(), leaves[1].qc().clone()];
+        // Insert a single leaf, plus an extra QC chain proving it finalized.
+        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let qcs = [
+            CertificatePair::for_parent(leaves[1].leaf()),
+            CertificatePair::for_parent(leaves[2].leaf()),
+        ];
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf_with_qc_chain(leaves[0].clone(), Some(qcs.clone()))
@@ -289,10 +295,13 @@ mod test {
         // Upgrade to epochs (and enabling HotStuff2) in the middle of a leaf chain, so that the
         // last leaf in the chain only requires 2 QCs to verify, even though at the start of the
         // chain we would have required 3.
-        let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=3, 2).await;
+        let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=4, 2).await;
         assert_eq!(leaves[0].header().version(), LegacyVersion::version());
         assert_eq!(leaves[1].header().version(), EpochVersion::version());
-        let qcs = [leaves[1].qc().clone(), leaves[2].qc().clone()];
+        let qcs = [
+            CertificatePair::for_parent(leaves[2].leaf()),
+            CertificatePair::for_parent(leaves[3].leaf()),
+        ];
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();

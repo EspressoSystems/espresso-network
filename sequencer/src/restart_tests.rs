@@ -593,7 +593,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 else {
                     continue;
                 };
-                if qc.data.epoch >= Some(epoch) {
+                if qc.epoch() >= Some(epoch) {
                     tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }

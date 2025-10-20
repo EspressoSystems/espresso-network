@@ -7494,6 +7494,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "committable",
+ "derivative",
  "espresso-types",
  "hotshot-query-service",
  "hotshot-types",

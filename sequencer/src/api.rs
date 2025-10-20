@@ -1718,7 +1718,7 @@ mod api_tests {
         },
         event::LeafInfo,
         message::Proposal,
-        simple_certificate::QuorumCertificate2,
+        simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
@@ -2002,7 +2002,7 @@ mod api_tests {
             qc.view_number = leaf.view_number();
             qc.data.leaf_commit = Committable::commit(&leaf);
             justify_qc = qc.clone();
-            chain1.push((leaf.clone(), qc.clone()));
+            chain1.push((leaf.clone(), CertificatePair::non_epoch_change(qc.clone())));
 
             // Include a quorum proposal for each leaf.
             let quorum_proposal_signature =
@@ -2093,13 +2093,13 @@ mod api_tests {
 
         // Check that the leaves were moved to archive storage, along with payload and VID
         // information.
-        for (leaf, qc) in chain1.iter().chain(&chain2) {
+        for (leaf, cert) in chain1.iter().chain(&chain2) {
             tracing::info!(height = leaf.height(), "check archive");
             let qd = data_source.get_leaf(leaf.height() as usize).await.await;
             let stored_leaf: Leaf2 = qd.leaf().clone();
             let stored_qc = qd.qc().clone();
             assert_eq!(&stored_leaf, leaf);
-            assert_eq!(&stored_qc, qc);
+            assert_eq!(&stored_qc, cert.qc());
 
             data_source
                 .get_block(leaf.height() as usize)
@@ -2179,7 +2179,10 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 leaf.view_number(),
-                [(&leaf_info(leaf.clone()), qc.clone())],
+                [(
+                    &leaf_info(leaf.clone()),
+                    CertificatePair::non_epoch_change(qc.clone()),
+                )],
                 None,
                 &consumer,
             )
@@ -2212,7 +2215,10 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 leaf.view_number(),
-                [(&leaf_info(leaf.clone()), qc)],
+                [(
+                    &leaf_info(leaf.clone()),
+                    CertificatePair::non_epoch_change(qc),
+                )],
                 None,
                 &consumer,
             )
@@ -3318,20 +3324,20 @@ mod test {
             views.insert(view_number.u64());
 
             if let hotshot::types::EventType::Decide { committing_qc, .. } = event.event {
-                assert!(committing_qc.data.epoch.is_some(), "epochs are live");
-                assert!(committing_qc.data.block_number.is_some());
+                assert!(committing_qc.epoch().is_some(), "epochs are live");
+                assert!(committing_qc.block_number().is_some());
 
-                let epoch = committing_qc.data.epoch.unwrap().u64();
+                let epoch = committing_qc.epoch().unwrap().u64();
                 epochs.insert(epoch);
 
                 tracing::debug!(
                     "Got decide: epoch: {:?}, block: {:?} ",
                     epoch,
-                    committing_qc.data.block_number
+                    committing_qc.block_number()
                 );
 
                 let expected_epoch =
-                    epoch_from_block_number(committing_qc.data.block_number.unwrap(), epoch_height);
+                    epoch_from_block_number(committing_qc.block_number().unwrap(), epoch_height);
                 tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
 
                 assert_eq!(expected_epoch, epoch);

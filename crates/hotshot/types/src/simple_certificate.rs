@@ -19,7 +19,7 @@ use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    data::serialize_signature2,
+    data::{serialize_signature2, Leaf2},
     epoch_membership::EpochMembership,
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
@@ -34,6 +34,7 @@ use crate::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{SignatureKey, StateSignatureKey},
     },
+    utils::is_epoch_transition,
     vote::{Certificate, HasViewNumber},
     PeerConfig,
 };
@@ -899,5 +900,116 @@ impl<TYPES: NodeType> From<EpochRootQuorumCertificateV2<TYPES>>
             qc: root_qc.qc,
             state_cert: root_qc.state_cert.into(),
         }
+    }
+}
+
+/// A pair of QCs (or a single QC) attesting to a leaf.
+///
+/// Generally we only need a single QC, but during an epoch transition, we require a pair: one
+/// signed by the current membership and one signed by the next epoch's membership. This type
+/// encapsulates both.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(bound = "")]
+pub struct CertificatePair<TYPES: NodeType> {
+    /// The basic QC.
+    qc: QuorumCertificate2<TYPES>,
+
+    /// A QC from the next epoch's membership, if this QC is part of an epoch transition.
+    next_epoch_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+}
+
+impl<TYPES: NodeType> CertificatePair<TYPES> {
+    /// Create a certificate pair.
+    pub fn new(
+        qc: QuorumCertificate2<TYPES>,
+        next_epoch_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+    ) -> Self {
+        Self { qc, next_epoch_qc }
+    }
+
+    /// Create a certificate for a non-epoch-transitioning block.
+    pub fn non_epoch_change(qc: QuorumCertificate2<TYPES>) -> Self {
+        Self::new(qc, None)
+    }
+
+    /// Create a certificate for the parent of a leaf, using the justifying QCs in the leaf.
+    pub fn for_parent(leaf: &Leaf2<TYPES>) -> Self {
+        Self {
+            qc: leaf.justify_qc(),
+            next_epoch_qc: leaf.next_epoch_justify_qc(),
+        }
+    }
+
+    /// The raw QC.
+    pub fn qc(&self) -> &QuorumCertificate2<TYPES> {
+        &self.qc
+    }
+
+    /// A raw QC from the subsequent epoch's quorum, if this certificate is part of an epoch change.
+    pub fn next_epoch_qc(&self) -> Option<&NextEpochQuorumCertificate2<TYPES>> {
+        self.next_epoch_qc.as_ref()
+    }
+
+    /// The leaf commitment signed by this certificate.
+    pub fn leaf_commit(&self) -> Commitment<Leaf2<TYPES>> {
+        self.qc.data.leaf_commit
+    }
+
+    /// The epoch number this certificate belongs to.
+    ///
+    /// [`None`] if this certificate originated before epochs were enabled.
+    pub fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.qc.data.epoch
+    }
+
+    /// The block number attached to this certificate.
+    ///
+    /// [`None`] if this certificate originated before epochs were enabled.
+    pub fn block_number(&self) -> Option<u64> {
+        self.qc.data.block_number
+    }
+
+    /// Verify that the next epoch QC is present and consistent if required.
+    ///
+    /// This checks that if required, the next epoch QC is present and is consistent with the
+    /// primary QC. It does not check the signature on either QC, only that the data being signed
+    /// over is consistent between the two.
+    ///
+    /// Returns the next epoch QC if it is present and invariants are satisfied. Returns an error if
+    /// a required next epoch QC is missing or if it is inconsistent with the primary QC. Returns
+    /// [`None`] if a next epoch QC is not required for this certificate.
+    pub fn verify_next_epoch_qc(
+        &self,
+        epoch_height: u64,
+    ) -> Result<Option<&NextEpochQuorumCertificate2<TYPES>>> {
+        let block_number = self
+            .qc
+            .data
+            .block_number
+            .context(warn!("block number is missing from post-epochs QC"))?;
+        if !is_epoch_transition(block_number, epoch_height) {
+            tracing::trace!(
+                block_number,
+                epoch_height,
+                "QC is not in an epoch transition"
+            );
+            return Ok(None);
+        }
+
+        let next_epoch_qc = self.next_epoch_qc.as_ref().context(warn!(
+            "next epoch QC is missing from epoch transition cert at block number {block_number}"
+        ))?;
+
+        // The signature from the next epoch must be over the same data.
+        ensure!(self.qc.view_number == next_epoch_qc.view_number);
+        ensure!(self.qc.data == *next_epoch_qc.data);
+
+        Ok(Some(next_epoch_qc))
+    }
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for CertificatePair<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.qc.view_number()
     }
 }

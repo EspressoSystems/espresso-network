@@ -8,13 +8,14 @@ use espresso_types::{EpochVersion, FeeVersion, Leaf2, NodeState, SeqTypes, Seque
 use hotshot_query_service::availability::LeafQueryData;
 use hotshot_types::{
     data::{QuorumProposal2, QuorumProposalWrapper, ViewNumber},
-    simple_certificate::{QuorumCertificate2, UpgradeCertificate},
-    simple_vote::UpgradeProposalData,
+    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_vote::{NextEpochQuorumData2, UpgradeProposalData},
     traits::node_implementation::{ConsensusTime, Versions},
+    utils::is_epoch_transition,
 };
 use vbs::version::StaticVersionType;
 
-use crate::core::quorum::Quorum;
+use crate::consensus::quorum::{Certificate, Quorum};
 
 /// Upgrade to epochs during testing.
 pub type EnableEpochs = SequencerVersions<LegacyVersion, EpochVersion>;
@@ -22,11 +23,24 @@ pub type EnableEpochs = SequencerVersions<LegacyVersion, EpochVersion>;
 /// Test without epochs and with legacy HotStuff.
 pub type LegacyVersion = FeeVersion;
 
+/// Extract a chain of QCs from a chain of leaves.
+///
+/// The resulting QC chain will be one shorter than the leaf chain, and will justify the finality of
+/// the leaf _preceding_ this leaf chain, since we extract QCs from the justifying QC of each leaf.
+pub fn qc_chain_from_leaf_chain<'a>(
+    leaves: impl IntoIterator<Item = &'a LeafQueryData<SeqTypes>>,
+) -> Vec<Certificate> {
+    leaves
+        .into_iter()
+        .map(|leaf| Certificate::for_parent(leaf.leaf()))
+        .collect()
+}
+
 /// Construct a valid leaf chain for the given height range.
 pub async fn leaf_chain<V: StaticVersionType + 'static>(
     range: impl IntoIterator<Item = u64>,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_leaf_range::<SequencerVersions<V, V>>(range, |_| {}).await
+    custom_leaf_chain::<SequencerVersions<V, V>>(range, |_| {}).await
 }
 
 /// Construct a valid leaf chain for the given height range.
@@ -71,7 +85,7 @@ pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
         Default::default(),
     );
 
-    custom_leaf_range::<V>(range, |proposal| {
+    custom_leaf_chain::<V>(range, |proposal| {
         let height = proposal.block_header.height();
         if height < upgrade_height {
             // All views leading up to the upgrade get a certificate indicating the coming upgrade.
@@ -89,7 +103,7 @@ pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
 }
 
 /// Construct a customized leaf chain for the given height range.
-pub async fn custom_leaf_range<V: Versions>(
+pub async fn custom_leaf_chain<V: Versions>(
     range: impl IntoIterator<Item = u64>,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
@@ -123,6 +137,9 @@ pub async fn custom_leaf_range<V: Versions>(
 
         qc.view_number = ViewNumber::new(height);
         qc.data.leaf_commit = Committable::commit(&leaf);
+        if leaf.block_header().version() >= EpochVersion::version() {
+            qc.data.block_number = Some(height);
+        }
 
         leaves.push(LeafQueryData::new(leaf, qc.clone()).unwrap());
         quorum_proposal.proposal.justify_qc = qc.clone();
@@ -131,14 +148,42 @@ pub async fn custom_leaf_range<V: Versions>(
     leaves
 }
 
+/// Construct a valid leaf chain during which the epoch advances.
+pub async fn epoch_change_leaf_chain<V: StaticVersionType + 'static>(
+    range: impl IntoIterator<Item = u64>,
+    epoch_height: u64,
+) -> Vec<LeafQueryData<SeqTypes>> {
+    custom_epoch_change_leaf_chain::<V>(range, epoch_height, |_| {}).await
+}
+
+/// Construct a customized leaf chain during which the epoch advances.
+pub async fn custom_epoch_change_leaf_chain<V: StaticVersionType + 'static>(
+    range: impl IntoIterator<Item = u64>,
+    epoch_height: u64,
+    map: impl Fn(&mut QuorumProposal2<SeqTypes>),
+) -> Vec<LeafQueryData<SeqTypes>> {
+    custom_leaf_chain::<SequencerVersions<V, V>>(range, |proposal| {
+        if is_epoch_transition(proposal.block_header.height(), epoch_height) {
+            let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.clone().into();
+            let commit = data.commit();
+            proposal.next_epoch_justify_qc = Some(NextEpochQuorumCertificate2::new(
+                data,
+                commit,
+                proposal.justify_qc.view_number,
+                Default::default(),
+                Default::default(),
+            ));
+            map(proposal);
+        }
+    })
+    .await
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AlwaysTrueQuorum;
 
 impl Quorum for AlwaysTrueQuorum {
-    async fn verify_static<V: StaticVersionType + 'static>(
-        &self,
-        _: &QuorumCertificate2<SeqTypes>,
-    ) -> Result<()> {
+    async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
         Ok(())
     }
 }
@@ -147,10 +192,7 @@ impl Quorum for AlwaysTrueQuorum {
 pub struct AlwaysFalseQuorum;
 
 impl Quorum for AlwaysFalseQuorum {
-    async fn verify_static<V: StaticVersionType + 'static>(
-        &self,
-        _: &QuorumCertificate2<SeqTypes>,
-    ) -> Result<()> {
+    async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
         bail!("always false quorum");
     }
 }
@@ -176,18 +218,42 @@ impl VersionCheckQuorum {
 impl Quorum for VersionCheckQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(
         &self,
-        qc: &QuorumCertificate2<SeqTypes>,
+        cert: &Certificate,
     ) -> anyhow::Result<()> {
         let leaf = self
             .leaves
-            .get(&qc.data.leaf_commit)
-            .context(format!("unknown leaf {}", qc.data.leaf_commit))?;
+            .get(&cert.leaf_commit())
+            .context(format!("unknown leaf {}", cert.leaf_commit()))?;
         ensure!(
             leaf.block_header().version() == V::version(),
             "version mismatch: leaf has version {}, but verifier is using version {}",
             leaf.block_header().version(),
             V::version()
         );
+        Ok(())
+    }
+}
+
+/// A quorum which verifies that epoch change QCs are provided, but does not check signatures.
+#[derive(Clone, Debug, Default)]
+pub struct EpochChangeQuorum {
+    epoch_height: u64,
+}
+
+impl EpochChangeQuorum {
+    pub fn new(epoch_height: u64) -> Self {
+        Self { epoch_height }
+    }
+}
+
+impl Quorum for EpochChangeQuorum {
+    async fn verify_static<V: StaticVersionType + 'static>(
+        &self,
+        cert: &Certificate,
+    ) -> anyhow::Result<()> {
+        if V::version() >= EpochVersion::version() {
+            cert.verify_next_epoch_qc(self.epoch_height)?;
+        }
         Ok(())
     }
 }

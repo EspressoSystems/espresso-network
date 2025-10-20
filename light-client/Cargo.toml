@@ -11,6 +11,7 @@ testing = ["espresso-types/testing"]
 [dependencies]
 anyhow = { workspace = true }
 committable = { workspace = true }
+derivative = { workspace = true }
 espresso-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
