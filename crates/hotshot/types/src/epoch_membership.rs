@@ -592,6 +592,10 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         self.coordinator.membership_for_epoch(epoch).await
     }
 
+    pub async fn get_new_epoch_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Result<Self> {
+        self.coordinator.stake_table_for_epoch(epoch).await
+    }
+
     /// Wraps the same named Membership trait fn
     async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<Leaf2<TYPES>> {
         let Some(epoch) = self.epoch else {

@@ -6,18 +6,19 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
+use std::{cmp::max, sync::Arc};
 
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposal, QuorumProposalWrapper},
+    data::{Leaf2, QuorumProposal, QuorumProposalWrapper, ViewChangeEvidence2},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
     simple_vote::HasEpoch,
+    stake_table::StakeTableEntries,
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         election::Membership,
@@ -27,8 +28,8 @@ use hotshot_types::{
         ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
-        option_epoch_from_block_number, View, ViewInner,
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
+        is_transition_block, option_epoch_from_block_number, View, ViewInner,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -242,6 +243,157 @@ async fn validate_block_height<TYPES: NodeType>(
     Ok(())
 }
 
+async fn view_change_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+    proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
+    validation_info: &ValidationInfo<TYPES, I, V>,
+    event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    task_state: &mut QuorumProposalRecvTaskState<TYPES, I, V>,
+) {
+    let membership = validation_info.membership.clone();
+
+    let mut network_view = TYPES::View::new(0);
+    let mut network_epoch = None;
+
+    if let Some(vce) = proposal.data.view_change_evidence().clone() {
+        match vce {
+            ViewChangeEvidence2::Timeout(cert) => {
+                match membership.get_new_epoch_stake_table(cert.epoch()).await {
+                    Ok(membership) => {
+                        let membership_stake_table = membership.stake_table().await;
+                        let membership_success_threshold = membership.success_threshold().await;
+
+                        if cert
+                            .is_valid_cert(
+                                &StakeTableEntries::<TYPES>::from(membership_stake_table.clone()).0,
+                                membership_success_threshold,
+                                &validation_info.upgrade_lock,
+                            )
+                            .await
+                            .is_ok()
+                        {
+                            network_epoch = max(network_epoch, cert.epoch());
+                            network_view = max(network_view, cert.view_number() + 1);
+                        } else {
+                            tracing::warn!(
+                                "Failed to view change from received timeout certificate because \
+                                 it is invalid"
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to view change from received timeout certificate because we \
+                             do not have the stake table for that epoch: {e}"
+                        );
+                    },
+                }
+            },
+            ViewChangeEvidence2::ViewSync(cert) => {
+                match membership.get_new_epoch_stake_table(cert.epoch()).await {
+                    Ok(membership) => {
+                        let membership_stake_table = membership.stake_table().await;
+                        let membership_success_threshold = membership.success_threshold().await;
+
+                        if cert
+                            .is_valid_cert(
+                                &StakeTableEntries::<TYPES>::from(membership_stake_table.clone()).0,
+                                membership_success_threshold,
+                                &validation_info.upgrade_lock,
+                            )
+                            .await
+                            .is_ok()
+                        {
+                            network_epoch = max(network_epoch, cert.epoch());
+                            network_view = max(network_view, cert.view_number());
+                        } else {
+                            tracing::warn!(
+                                "Failed to view change from received view sync certificate \
+                                 because it is invalid"
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to view change from received view sync certificate because we \
+                             do not have the stake table for that epoch: {e}"
+                        );
+                    },
+                }
+            },
+        }
+    }
+
+    let justify_qc = proposal.data.justify_qc().clone();
+
+    match membership
+        .get_new_epoch_stake_table(justify_qc.epoch())
+        .await
+    {
+        Ok(membership) => {
+            let membership_stake_table = membership.stake_table().await;
+            let membership_success_threshold = membership.success_threshold().await;
+            if justify_qc
+                .is_valid_cert(
+                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    membership_success_threshold,
+                    &validation_info.upgrade_lock,
+                )
+                .await
+                .is_ok()
+                // We skip the view change if the justify qc is signing the last block of an epoch, 
+                // since we must have come out of a transition. If the block number is `None`, we unwrap to `0`
+                // which is never the last block and so we always pass this check.
+                && !is_last_block(
+                    justify_qc.data.block_number.unwrap_or(0),
+                    validation_info.epoch_height,
+                )
+            {
+                network_epoch = max(network_epoch, justify_qc.epoch());
+                network_view = max(network_view, justify_qc.view_number()) + 1;
+            } else {
+                tracing::warn!(
+                    "Failed to view change from received quorum certificate because it is invalid"
+                );
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Failed to view change from received quorum certificate because we do not have \
+                 the stake table for that epoch: {e}"
+            );
+        },
+    }
+
+    if (network_epoch > task_state.cur_epoch && network_view <= task_state.cur_view)
+        || (network_epoch < task_state.cur_epoch && network_view > task_state.cur_view)
+    {
+        tracing::error!(
+            "The internal state of consensus is inconsistent with the network's state. We are \
+             currently in view {} in epoch {:?}, but we received a proposal with certificates \
+             signing a conflicting view and epoch combination:\n\n{proposal:?}",
+            task_state.cur_view,
+            task_state.cur_epoch
+        );
+
+        return;
+    }
+
+    if (network_epoch > task_state.cur_epoch && network_view > task_state.cur_view)
+        || (network_epoch == task_state.cur_epoch && network_view > task_state.cur_view)
+    {
+        task_state.cur_epoch = network_epoch;
+        task_state.cur_view = network_view;
+
+        broadcast_view_change(
+            event_sender,
+            network_view,
+            network_epoch,
+            validation_info.first_epoch,
+        )
+        .await;
+    }
+}
+
 /// Handles the `QuorumProposalRecv` event by first validating the cert itself for the view, and then
 /// updating the states, which runs when the proposal cannot be found in the internal state map.
 ///
@@ -261,7 +413,10 @@ pub(crate) async fn handle_quorum_proposal_recv<
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
     validation_info: ValidationInfo<TYPES, I, V>,
+    task_state: &mut QuorumProposalRecvTaskState<TYPES, I, V>,
 ) -> Result<()> {
+    view_change_from_proposal(proposal, &validation_info, event_sender, task_state).await;
+
     proposal
         .data
         .validate_epoch(&validation_info.upgrade_lock, validation_info.epoch_height)
@@ -286,17 +441,10 @@ pub(crate) async fn handle_quorum_proposal_recv<
         verify_drb_result(&proposal.data, &validation_info).await?;
     }
 
-    let view_number = proposal.data.view_number();
-
     let justify_qc = proposal.data.justify_qc().clone();
     let maybe_next_epoch_justify_qc = proposal.data.next_epoch_justify_qc().clone();
 
     let proposal_block_number = proposal.data.block_header().block_number();
-    let proposal_epoch = option_epoch_from_block_number::<TYPES>(
-        proposal.data.epoch().is_some(),
-        proposal_block_number,
-        validation_info.epoch_height,
-    );
 
     if justify_qc
         .data
@@ -402,13 +550,6 @@ pub(crate) async fn handle_quorum_proposal_recv<
             .write()
             .await
             .update_highest_block(proposal_block_number);
-        broadcast_view_change(
-            event_sender,
-            view_number,
-            proposal_epoch,
-            validation_info.first_epoch,
-        )
-        .await;
         return Ok(());
     };
 
@@ -427,16 +568,6 @@ pub(crate) async fn handle_quorum_proposal_recv<
         .write()
         .await
         .update_highest_block(proposal_block_number);
-    {
-        validation_info.consensus.write().await.highest_block = proposal_block_number;
-    }
-    broadcast_view_change(
-        event_sender,
-        view_number,
-        proposal_epoch,
-        validation_info.first_epoch,
-    )
-    .await;
 
     Ok(())
 }

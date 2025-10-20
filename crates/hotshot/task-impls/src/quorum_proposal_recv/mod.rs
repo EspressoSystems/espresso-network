@@ -191,6 +191,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     &event_sender,
                     &event_receiver,
                     validation_info,
+                    self,
                 )
                 .await
                 {
