@@ -1232,13 +1232,13 @@ contract StakeTableUpgradeV2Test is Test {
             abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
         );
         StakeTableV2(address(proxy)).initializeV2(
-            makeAddr("pauser"), makeAddr("admin"), new StakeTableV2.InitialCommission[](0)
+            makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
         );
         vm.stopPrank();
 
         vm.startPrank(stakeTableRegisterTest.admin());
         StakeTableV2(address(proxy)).initializeV2(
-            makeAddr("pauser"), makeAddr("admin"), new StakeTableV2.InitialCommission[](0)
+            makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
         );
         vm.stopPrank();
     }
