@@ -111,7 +111,6 @@ impl LeafProof {
                 // was introduced with the epochs version of HotShot.
                 ensure!(version >= EpochVersion::version());
 
-                // If the current leaf is also the requested leaf, return the QC which signs it.
                 committing_qc.qc().clone()
             },
             FinalityProof::HotStuff {
@@ -132,12 +131,11 @@ impl LeafProof {
                 // was deprecated with the epochs version of HotShot.
                 ensure!(version < EpochVersion::version());
 
-                // If the current leaf is also the requested leaf, save the QC which signs it.
                 precommit_qc.qc().clone()
             },
         };
 
-        // Take the QC which signs the requested leaf, either the one we saved earlier, or the one
+        // Take the QC which signs the requested leaf: either the one we saved earlier, or the one
         // signing the latest leaf in case the latest leaf is also the requested leaf.
         let qc = opt_qc.unwrap_or(final_qc);
 
