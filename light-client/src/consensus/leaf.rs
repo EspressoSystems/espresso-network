@@ -158,6 +158,11 @@ impl LeafProof {
             if committing_qc.view_number() == self.leaves[len - 2].view_number()
                 && deciding_qc.view_number() == committing_qc.view_number() + 1
             {
+                // Sanity check: if we have a chain of QCs from consecutive views, they must refer
+                // to consecutive leaves.
+                debug_assert!(committing_qc.leaf_commit() == self.leaves[len - 2].commit());
+                debug_assert!(deciding_qc.leaf_commit() == self.leaves[len - 1].commit());
+
                 self.proof = FinalityProof::HotStuff2 {
                     committing_qc: Arc::new(committing_qc),
                     deciding_qc: Arc::new(deciding_qc),
@@ -181,6 +186,12 @@ impl LeafProof {
                 && committing_qc.view_number() == precommit_qc.view_number() + 1
                 && deciding_qc.view_number() == committing_qc.view_number() + 1
             {
+                // Sanity check: if we have a chain of QCs from consecutive views, they must refer
+                // to consecutive leaves.
+                debug_assert!(precommit_qc.leaf_commit() == self.leaves[len - 3].commit());
+                debug_assert!(committing_qc.leaf_commit() == self.leaves[len - 2].commit());
+                debug_assert!(deciding_qc.leaf_commit() == self.leaves[len - 1].commit());
+
                 self.proof = FinalityProof::HotStuff {
                     precommit_qc: Arc::new(precommit_qc),
                     committing_qc: Arc::new(committing_qc),
@@ -207,6 +218,12 @@ impl LeafProof {
     /// correctly form a 2-chain and that the protocol version is HotStuff2. If these conditions are
     /// met, this function will not fail but may produce a proof which fails to verify.
     pub fn add_qc_chain(&mut self, committing_qc: Arc<Certificate>, deciding_qc: Arc<Certificate>) {
+        debug_assert!(
+            committing_qc.view_number() == self.leaves[self.leaves.len() - 1].view_number()
+        );
+        debug_assert!(committing_qc.leaf_commit() == self.leaves[self.leaves.len() - 1].commit());
+        debug_assert!(deciding_qc.view_number() == committing_qc.view_number() + 1);
+
         self.proof = FinalityProof::HotStuff2 {
             committing_qc,
             deciding_qc,
