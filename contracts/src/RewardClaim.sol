@@ -42,6 +42,12 @@ contract RewardClaim is
     /// This offers a second layer of protection beyond cryptographic verification.
     uint256 public dailyLimit;
 
+    /// @notice Maximum daily limit as percentage of total supply (5% = 5000000000000000000)
+    /// @dev Hardcoded to prevent setting dangerously high limits without a contract upgrade.
+    /// Increasing this value further would require upgrading the contract, which is
+    /// intentional to ensure careful consideration and governance of security parameters.
+    uint256 public constant MAX_DAILY_LIMIT_PERCENTAGE = 5e18; // 5% in 18 decimal fixed point
+
     /// @notice Current day number (days since epoch)
     uint256 private _currentDay;
 
@@ -67,6 +73,9 @@ contract RewardClaim is
 
     /// @notice Attempting to set daily limit to zero
     error ZeroDailyLimit();
+
+    /// @notice Attempting to set daily limit above the maximum allowed percentage
+    error DailyLimitTooHigh();
 
     /// @notice Total ESP token supply is zero during initialization
     error ZeroTotalSupply();
@@ -131,9 +140,14 @@ contract RewardClaim is
     }
 
     /// @notice Updates the daily limit
-    /// @param newLimit New daily limit in wei, must be greater than zero
-    function setDailyLimit(uint256 newLimit) external onlyOwner {
+    /// @param newLimit New daily limit in wei, must be greater than zero and less than max
+    /// @dev nonReentrant protects against reentrancy during the external call to
+    /// espToken.totalSupply(). While unlikely to be exploited, this provides defense-in-depth
+    /// security for critical security parameters.
+    function setDailyLimit(uint256 newLimit) external onlyOwner nonReentrant {
         require(newLimit > 0, ZeroDailyLimit());
+        uint256 maxLimit = (espToken.totalSupply() * MAX_DAILY_LIMIT_PERCENTAGE) / 100e18;
+        require(newLimit <= maxLimit, DailyLimitTooHigh());
         emit DailyLimitUpdated(dailyLimit, newLimit);
         dailyLimit = newLimit;
     }
