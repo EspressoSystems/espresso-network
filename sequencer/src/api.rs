@@ -2249,6 +2249,10 @@ mod test {
         time::Duration,
     };
 
+    use ::light_client::{
+        consensus::leaf::LeafProof,
+        testing::{EpochChangeQuorum, LegacyVersion},
+    };
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
@@ -2981,8 +2985,10 @@ mod test {
             .await
             .build();
 
+        let chain_config_genesis = ValidatedState::default().chain_config.resolve().unwrap();
         let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
-        tracing::debug!(?chain_config_upgrade);
+        assert_ne!(chain_config_genesis, chain_config_upgrade);
+        tracing::debug!(?chain_config_genesis, ?chain_config_upgrade);
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::from(options::Http {
@@ -3028,25 +3034,34 @@ mod test {
 
             tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
             if view_number > wanted_view {
-                let states: Vec<_> = network
-                    .peers
+                tracing::info!(?view_number, ?upgrade.new_version_first_view, "passed upgrade view");
+                let states = join_all(
+                    network
+                        .peers
+                        .iter()
+                        .map(|peer| async { peer.consensus().read().await.decided_state().await }),
+                )
+                .await;
+                let leaves = join_all(
+                    network
+                        .peers
+                        .iter()
+                        .map(|peer| async { peer.consensus().read().await.decided_leaf().await }),
+                )
+                .await;
+                let configs: Vec<ChainConfig> = states
                     .iter()
-                    .map(|peer| async { peer.consensus().read().await.decided_state().await })
+                    .map(|state| state.chain_config.resolve().unwrap())
                     .collect();
 
-                let configs: Option<Vec<ChainConfig>> = join_all(states)
-                    .await
-                    .iter()
-                    .map(|state| state.chain_config.resolve())
-                    .collect();
-
-                tracing::debug!(?configs, "`ChainConfig`s for nodes");
-                if let Some(configs) = configs {
-                    for config in configs {
-                        assert_eq!(config, chain_config_upgrade);
-                    }
-                    break; // if assertion did not panic, the test was successful, so we exit the loop
+                tracing::info!(?leaves, ?configs, "post upgrade state");
+                for config in configs {
+                    assert_eq!(config, chain_config_upgrade);
                 }
+                for leaf in leaves {
+                    assert_eq!(leaf.block_header().version(), upgrade_version);
+                }
+                break;
             }
             sleep(Duration::from_millis(200)).await;
         }
@@ -6456,5 +6471,133 @@ mod test {
         }
 
         network.server.shut_down().await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_completeness() {
+        // Run the through a protocol upgrade and epoch change, then check that we are able to get a
+        // correct light client proof for every finalized leaf.
+
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 200;
+
+        let upgrade_version = EpochVersion::version();
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(321)
+            .set_upgrades(upgrade_version)
+            .await
+            .build();
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                SqlDataSource::options(&storage[0], Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let _network = TestNetwork::new(
+            config,
+            SequencerVersions::<LegacyVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        // Wait for the upgrade to take effect.
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe()
+            .await
+            .unwrap();
+        let (upgrade_height, first_epoch) = loop {
+            let leaf: LeafQueryData<SeqTypes> = leaves.next().await.unwrap().unwrap();
+            if leaf.header().version() < EpochVersion::version() {
+                tracing::info!(version = %leaf.header().version(), height = leaf.header().height(), view = ?leaf.leaf().view_number(), "waiting for epoch upgrade");
+                continue;
+            }
+            break (leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT));
+        };
+        tracing::info!(upgrade_height, ?first_epoch, "epochs enabled");
+
+        // Wait for an epoch change.
+        let next_epoch_height = loop {
+            let leaf = leaves.next().await.unwrap().unwrap();
+            let epoch = leaf.leaf().epoch(EPOCH_HEIGHT);
+            if epoch > first_epoch {
+                tracing::info!(
+                    height = leaf.height(),
+                    ?first_epoch,
+                    ?epoch,
+                    "changed epoch"
+                );
+                break leaf.height();
+            }
+            tracing::info!(
+                ?epoch,
+                height = leaf.header().height(),
+                view = ?leaf.leaf().view_number(),
+                "waiting for epoch change"
+            );
+        };
+
+        // Wait a few more blocks.
+        let neighborhood = 2;
+        let max_block = next_epoch_height + neighborhood;
+        loop {
+            let leaf = leaves.next().await.unwrap().unwrap();
+            if leaf.height() >= max_block {
+                break;
+            }
+            tracing::info!(max_block, height = leaf.height(), "waiting for block");
+        }
+
+        // Check light client. Querying every single block is too slow, so we'll check a few blocks
+        // around various critical points:
+        let heights =
+        // * The first few blocks, including genesis
+            (0..=neighborhood)
+        // * A few blocks just before and after the upgrade
+            .chain(upgrade_height-neighborhood..upgrade_height+neighborhood)
+        // * A few blocks just before and after the epoch change
+            .chain(next_epoch_height-neighborhood..max_block);
+
+        let quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
+        for i in heights {
+            tracing::info!(i, "check leaf");
+            let leaf: LeafQueryData<SeqTypes> = client
+                .get(&format!("availability/leaf/{i}"))
+                .send()
+                .await
+                .unwrap();
+            tracing::debug!(?leaf, "expected leaf");
+            let leaf_proof: LeafProof = client
+                .get(&format!("light-client/leaf/{i}"))
+                .send()
+                .await
+                .unwrap();
+            tracing::debug!(?leaf_proof, "fetched proof");
+            assert_eq!(leaf_proof.verify(&quorum, None).await.unwrap(), leaf);
+        }
     }
 }
