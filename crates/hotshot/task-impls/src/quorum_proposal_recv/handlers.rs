@@ -344,7 +344,7 @@ async fn view_change_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>
                 // since we must have come out of a transition. If the block number is `None`, we unwrap to `0`
                 // which is never the last block and so we always pass this check.
                 && !is_last_block(
-                    justify_qc.data.block_number.unwrap_or(0).saturating_sub(1),
+                    justify_qc.data.block_number.unwrap_or(0),
                     validation_info.epoch_height,
                 )
             {
@@ -378,7 +378,7 @@ async fn view_change_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>
         return;
     }
 
-    if (network_epoch > task_state.cur_epoch && network_view > task_state.cur_view)
+    if (network_epoch > task_state.cur_epoch && network_view >= task_state.cur_view)
         || (network_epoch == task_state.cur_epoch && network_view > task_state.cur_view)
     {
         task_state.cur_epoch = network_epoch;
@@ -562,12 +562,8 @@ pub(crate) async fn handle_quorum_proposal_recv<
         quorum_proposal_sender_key,
     )
     .await?;
-
-    validation_info
-        .consensus
-        .write()
-        .await
-        .update_highest_block(proposal_block_number);
+      
+    validation_info.consensus.write().await.highest_block = proposal_block_number;
 
     Ok(())
 }
