@@ -83,6 +83,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 totalPendingWithdrawal;
         uint256 numPendingWithdrawals;
         uint256 numActiveDelegations;
+        uint256 activeStake;
     }
 
     // Actors can be validators and/or delegators
@@ -203,7 +204,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         StakeTable(payable(address(proxy))).upgradeToAndCall(
             address(stakeTableV2Impl),
             abi.encodeWithSignature(
-                "initializeV2(address,address,(address,uint16)[])", admin, admin, emptyCommissions
+                "initializeV2(address,address,uint256,(address,uint16)[])",
+                admin,
+                admin,
+                0,
+                emptyCommissions
             )
         );
 
@@ -417,6 +422,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function trackDelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated += amount;
+        testState.activeStake += amount;
         actors.trackedFunds[actorAddr].delegated += amount;
         validators.staked.add(val);
 
@@ -431,6 +437,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     function trackUndelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated -= amount;
         testState.totalPendingWithdrawal += amount;
+        testState.activeStake -= amount;
         actors.trackedFunds[actorAddr].delegated -= amount;
         actors.trackedFunds[actorAddr].pendingWithdrawal += amount;
         addPendingWithdrawal(actorAddr, val);
@@ -461,6 +468,9 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         validators.active.remove(val);
         validators.exited.add(val);
         validators.staked.remove(val);
+
+        (uint256 validatorDelegatedAmount,) = stakeTable.validators(val);
+        testState.activeStake -= validatorDelegatedAmount;
     }
 
     function trackClaimWithdrawal(address actorAddr, address val, uint256 undelegationAmount)
@@ -555,6 +565,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function getTestState() external view returns (TestState memory) {
         return testState;
+    }
+
+    function getActiveStake() external view returns (uint256) {
+        return testState.activeStake;
     }
 
     function getTotalSuccesses() external view returns (uint256) {
@@ -732,6 +746,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         // Verify no pending withdrawals remain
         require(testState.totalPendingWithdrawal == 0, "No pending withdrawals should remain");
         require(testState.totalDelegated == 0, "No delegations should remain");
+
+        require(
+            testState.activeStake == 0, "Total validator stake should be zero after full withdrawal"
+        );
     }
 
     /// @dev Assert sum of delegated amounts to a validator equals validator.delegatedAmount
@@ -756,5 +774,13 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                 validatorDelegatedAmount == sumOfDelegations, "Validator delegatedAmount mismatch"
             );
         }
+    }
+
+    /// @dev Assert that contract's activeStake matches our tracking
+    function assertStakeInvariants() public view {
+        require(
+            stakeTable.activeStake() == testState.activeStake,
+            "Contract activeStake does not match tracked activeStake"
+        );
     }
 }
