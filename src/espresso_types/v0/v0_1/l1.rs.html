@@ -3,7 +3,7 @@
 <a href=#3 id=3 data-nosnippet>3</a>    primitives::{B256, U256},
 <a href=#4 id=4 data-nosnippet>4</a>    providers::{
 <a href=#5 id=5 data-nosnippet>5</a>        fillers::{FillProvider, JoinFill, RecommendedFillers},
-<a href=#6 id=6 data-nosnippet>6</a>        Identity, RootProvider,
+<a href=#6 id=6 data-nosnippet>6</a>        Identity, Provider, RootProvider,
 <a href=#7 id=7 data-nosnippet>7</a>    },
 <a href=#8 id=8 data-nosnippet>8</a>    transports::http::{Client, Http},
 <a href=#9 id=9 data-nosnippet>9</a>};
@@ -238,64 +238,70 @@
 <a href=#238 id=238 data-nosnippet>238</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) update_task: Arc&lt;L1UpdateTask&gt;,
 <a href=#239 id=239 data-nosnippet>239</a>}
 <a href=#240 id=240 data-nosnippet>240</a>
-<a href=#241 id=241 data-nosnippet>241</a><span class="doccomment">/// In-memory view of the L1 state, updated asynchronously.
-<a href=#242 id=242 data-nosnippet>242</a></span><span class="attr">#[derive(Debug)]
-<a href=#243 id=243 data-nosnippet>243</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>L1State {
-<a href=#244 id=244 data-nosnippet>244</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) snapshot: L1Snapshot,
-<a href=#245 id=245 data-nosnippet>245</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) finalized: LruCache&lt;u64, L1BlockInfoWithParent&gt;,
-<a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) last_finalized: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#247 id=247 data-nosnippet>247</a>}
-<a href=#248 id=248 data-nosnippet>248</a>
-<a href=#249 id=249 data-nosnippet>249</a><span class="attr">#[derive(Clone, Debug)]
-<a href=#250 id=250 data-nosnippet>250</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>L1Event {
-<a href=#251 id=251 data-nosnippet>251</a>    NewHead { head: u64 },
-<a href=#252 id=252 data-nosnippet>252</a>    NewFinalized { finalized: L1BlockInfoWithParent },
+<a href=#241 id=241 data-nosnippet>241</a><span class="kw">impl </span>Provider <span class="kw">for </span>L1Client {
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="kw">fn </span>root(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>RootProvider {
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="self">self</span>.provider.root()
+<a href=#244 id=244 data-nosnippet>244</a>    }
+<a href=#245 id=245 data-nosnippet>245</a>}
+<a href=#246 id=246 data-nosnippet>246</a>
+<a href=#247 id=247 data-nosnippet>247</a><span class="doccomment">/// In-memory view of the L1 state, updated asynchronously.
+<a href=#248 id=248 data-nosnippet>248</a></span><span class="attr">#[derive(Debug)]
+<a href=#249 id=249 data-nosnippet>249</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>L1State {
+<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) snapshot: L1Snapshot,
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) finalized: LruCache&lt;u64, L1BlockInfoWithParent&gt;,
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) last_finalized: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 <a href=#253 id=253 data-nosnippet>253</a>}
 <a href=#254 id=254 data-nosnippet>254</a>
-<a href=#255 id=255 data-nosnippet>255</a><span class="attr">#[derive(Debug, Default)]
-<a href=#256 id=256 data-nosnippet>256</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>L1UpdateTask(<span class="kw">pub</span>(<span class="kw">crate</span>) Mutex&lt;<span class="prelude-ty">Option</span>&lt;JoinHandle&lt;()&gt;&gt;&gt;);
-<a href=#257 id=257 data-nosnippet>257</a>
-<a href=#258 id=258 data-nosnippet>258</a><span class="attr">#[derive(Clone, Debug)]
-<a href=#259 id=259 data-nosnippet>259</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>L1ClientMetrics {
-<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) head: Arc&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) finalized: Arc&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) reconnects: Arc&lt;<span class="kw">dyn </span>Counter&gt;,
-<a href=#263 id=263 data-nosnippet>263</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) failovers: Arc&lt;<span class="kw">dyn </span>Counter&gt;,
-<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) failures: Arc&lt;Vec&lt;Box&lt;<span class="kw">dyn </span>Counter&gt;&gt;&gt;,
-<a href=#265 id=265 data-nosnippet>265</a>}
-<a href=#266 id=266 data-nosnippet>266</a>
-<a href=#267 id=267 data-nosnippet>267</a><span class="doccomment">/// An RPC client with multiple remote (HTTP) providers.
-<a href=#268 id=268 data-nosnippet>268</a>///
-<a href=#269 id=269 data-nosnippet>269</a>/// This client utilizes one RPC provider at a time, but if it detects that the provider is in a
-<a href=#270 id=270 data-nosnippet>270</a>/// failing state, it will automatically switch to the next provider in its list.
-<a href=#271 id=271 data-nosnippet>271</a></span><span class="attr">#[derive(Clone, Debug)]
-<a href=#272 id=272 data-nosnippet>272</a></span><span class="kw">pub struct </span>SwitchingTransport {
-<a href=#273 id=273 data-nosnippet>273</a>    <span class="doccomment">/// The transport currently being used by the client
-<a href=#274 id=274 data-nosnippet>274</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) current_transport: Arc&lt;RwLock&lt;SingleTransport&gt;&gt;,
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="doccomment">/// The list of configured HTTP URLs to use for RPC requests
-<a href=#276 id=276 data-nosnippet>276</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) urls: Arc&lt;Vec&lt;Url&gt;&gt;,
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) opt: Arc&lt;L1ClientOptions&gt;,
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) metrics: L1ClientMetrics,
-<a href=#279 id=279 data-nosnippet>279</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) switch_notify: Arc&lt;Notify&gt;,
-<a href=#280 id=280 data-nosnippet>280</a>}
-<a href=#281 id=281 data-nosnippet>281</a>
-<a href=#282 id=282 data-nosnippet>282</a><span class="doccomment">/// The state of the current provider being used by a [`SwitchingTransport`].
-<a href=#283 id=283 data-nosnippet>283</a>/// This is cloneable and returns a reference to the same underlying data.
-<a href=#284 id=284 data-nosnippet>284</a></span><span class="attr">#[derive(Debug, Clone)]
-<a href=#285 id=285 data-nosnippet>285</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>SingleTransport {
-<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) generation: usize,
-<a href=#287 id=287 data-nosnippet>287</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) client: Http&lt;Client&gt;,
-<a href=#288 id=288 data-nosnippet>288</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) status: Arc&lt;RwLock&lt;SingleTransportStatus&gt;&gt;,
-<a href=#289 id=289 data-nosnippet>289</a>    <span class="doccomment">/// Time at which to revert back to the primary provider after a failover.
-<a href=#290 id=290 data-nosnippet>290</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) revert_at: <span class="prelude-ty">Option</span>&lt;Instant&gt;,
-<a href=#291 id=291 data-nosnippet>291</a>}
-<a href=#292 id=292 data-nosnippet>292</a>
-<a href=#293 id=293 data-nosnippet>293</a><span class="doccomment">/// The status of a single transport
-<a href=#294 id=294 data-nosnippet>294</a></span><span class="attr">#[derive(Debug, Default)]
-<a href=#295 id=295 data-nosnippet>295</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>SingleTransportStatus {
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) last_failure: <span class="prelude-ty">Option</span>&lt;Instant&gt;,
-<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) consecutive_failures: usize,
-<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) rate_limited_until: <span class="prelude-ty">Option</span>&lt;Instant&gt;,
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="doccomment">/// Whether or not this current transport is being shut down (switching to the next transport)
-<a href=#300 id=300 data-nosnippet>300</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) shutting_down: bool,
-<a href=#301 id=301 data-nosnippet>301</a>}</code></pre></div></section></main></body></html>
+<a href=#255 id=255 data-nosnippet>255</a><span class="attr">#[derive(Clone, Debug)]
+<a href=#256 id=256 data-nosnippet>256</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>L1Event {
+<a href=#257 id=257 data-nosnippet>257</a>    NewHead { head: u64 },
+<a href=#258 id=258 data-nosnippet>258</a>    NewFinalized { finalized: L1BlockInfoWithParent },
+<a href=#259 id=259 data-nosnippet>259</a>}
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a><span class="attr">#[derive(Debug, Default)]
+<a href=#262 id=262 data-nosnippet>262</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>L1UpdateTask(<span class="kw">pub</span>(<span class="kw">crate</span>) Mutex&lt;<span class="prelude-ty">Option</span>&lt;JoinHandle&lt;()&gt;&gt;&gt;);
+<a href=#263 id=263 data-nosnippet>263</a>
+<a href=#264 id=264 data-nosnippet>264</a><span class="attr">#[derive(Clone, Debug)]
+<a href=#265 id=265 data-nosnippet>265</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>L1ClientMetrics {
+<a href=#266 id=266 data-nosnippet>266</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) head: Arc&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) finalized: Arc&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) reconnects: Arc&lt;<span class="kw">dyn </span>Counter&gt;,
+<a href=#269 id=269 data-nosnippet>269</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) failovers: Arc&lt;<span class="kw">dyn </span>Counter&gt;,
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) failures: Arc&lt;Vec&lt;Box&lt;<span class="kw">dyn </span>Counter&gt;&gt;&gt;,
+<a href=#271 id=271 data-nosnippet>271</a>}
+<a href=#272 id=272 data-nosnippet>272</a>
+<a href=#273 id=273 data-nosnippet>273</a><span class="doccomment">/// An RPC client with multiple remote (HTTP) providers.
+<a href=#274 id=274 data-nosnippet>274</a>///
+<a href=#275 id=275 data-nosnippet>275</a>/// This client utilizes one RPC provider at a time, but if it detects that the provider is in a
+<a href=#276 id=276 data-nosnippet>276</a>/// failing state, it will automatically switch to the next provider in its list.
+<a href=#277 id=277 data-nosnippet>277</a></span><span class="attr">#[derive(Clone, Debug)]
+<a href=#278 id=278 data-nosnippet>278</a></span><span class="kw">pub struct </span>SwitchingTransport {
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="doccomment">/// The transport currently being used by the client
+<a href=#280 id=280 data-nosnippet>280</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) current_transport: Arc&lt;RwLock&lt;SingleTransport&gt;&gt;,
+<a href=#281 id=281 data-nosnippet>281</a>    <span class="doccomment">/// The list of configured HTTP URLs to use for RPC requests
+<a href=#282 id=282 data-nosnippet>282</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) urls: Arc&lt;Vec&lt;Url&gt;&gt;,
+<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) opt: Arc&lt;L1ClientOptions&gt;,
+<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) metrics: L1ClientMetrics,
+<a href=#285 id=285 data-nosnippet>285</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) switch_notify: Arc&lt;Notify&gt;,
+<a href=#286 id=286 data-nosnippet>286</a>}
+<a href=#287 id=287 data-nosnippet>287</a>
+<a href=#288 id=288 data-nosnippet>288</a><span class="doccomment">/// The state of the current provider being used by a [`SwitchingTransport`].
+<a href=#289 id=289 data-nosnippet>289</a>/// This is cloneable and returns a reference to the same underlying data.
+<a href=#290 id=290 data-nosnippet>290</a></span><span class="attr">#[derive(Debug, Clone)]
+<a href=#291 id=291 data-nosnippet>291</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>SingleTransport {
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) generation: usize,
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) client: Http&lt;Client&gt;,
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) status: Arc&lt;RwLock&lt;SingleTransportStatus&gt;&gt;,
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="doccomment">/// Time at which to revert back to the primary provider after a failover.
+<a href=#296 id=296 data-nosnippet>296</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) revert_at: <span class="prelude-ty">Option</span>&lt;Instant&gt;,
+<a href=#297 id=297 data-nosnippet>297</a>}
+<a href=#298 id=298 data-nosnippet>298</a>
+<a href=#299 id=299 data-nosnippet>299</a><span class="doccomment">/// The status of a single transport
+<a href=#300 id=300 data-nosnippet>300</a></span><span class="attr">#[derive(Debug, Default)]
+<a href=#301 id=301 data-nosnippet>301</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>SingleTransportStatus {
+<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) last_failure: <span class="prelude-ty">Option</span>&lt;Instant&gt;,
+<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) consecutive_failures: usize,
+<a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) rate_limited_until: <span class="prelude-ty">Option</span>&lt;Instant&gt;,
+<a href=#305 id=305 data-nosnippet>305</a>    <span class="doccomment">/// Whether or not this current transport is being shut down (switching to the next transport)
+<a href=#306 id=306 data-nosnippet>306</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) shutting_down: bool,
+<a href=#307 id=307 data-nosnippet>307</a>}</code></pre></div></section></main></body></html>

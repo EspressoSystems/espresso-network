@@ -917,620 +917,621 @@
 <a href=#917 id=917 data-nosnippet>917</a>                    <span class="kw">let </span><span class="kw-2">mut </span>contracts = Contracts::new();
 <a href=#918 id=918 data-nosnippet>918</a>                    <span class="kw">let </span>args = DeployerArgsBuilder::default()
 <a href=#919 id=919 data-nosnippet>919</a>                        .deployer(deployer.clone())
-<a href=#920 id=920 data-nosnippet>920</a>                        .mock_light_client(<span class="bool-val">true</span>)
-<a href=#921 id=921 data-nosnippet>921</a>                        .genesis_lc_state(genesis_state)
-<a href=#922 id=922 data-nosnippet>922</a>                        .genesis_st_state(genesis_stake)
-<a href=#923 id=923 data-nosnippet>923</a>                        .blocks_per_epoch(blocks_per_epoch)
-<a href=#924 id=924 data-nosnippet>924</a>                        .epoch_start_block(epoch_start_block)
-<a href=#925 id=925 data-nosnippet>925</a>                        .exit_escrow_period(U256::from(blocks_per_epoch * <span class="number">15 </span>+ <span class="number">100</span>))
-<a href=#926 id=926 data-nosnippet>926</a>                        .multisig_pauser(<span class="self">self</span>.signer.address())
-<a href=#927 id=927 data-nosnippet>927</a>                        .token_name(<span class="string">"Espresso"</span>.to_string())
-<a href=#928 id=928 data-nosnippet>928</a>                        .token_symbol(<span class="string">"ESP"</span>.to_string())
-<a href=#929 id=929 data-nosnippet>929</a>                        .initial_token_supply(U256::from(<span class="number">3590000000u64</span>))
-<a href=#930 id=930 data-nosnippet>930</a>                        .ops_timelock_delay(U256::from(<span class="number">0</span>))
-<a href=#931 id=931 data-nosnippet>931</a>                        .ops_timelock_admin(<span class="self">self</span>.signer.address())
-<a href=#932 id=932 data-nosnippet>932</a>                        .ops_timelock_proposers(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
-<a href=#933 id=933 data-nosnippet>933</a>                        .ops_timelock_executors(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
-<a href=#934 id=934 data-nosnippet>934</a>                        .safe_exit_timelock_delay(U256::from(<span class="number">10</span>))
-<a href=#935 id=935 data-nosnippet>935</a>                        .safe_exit_timelock_admin(<span class="self">self</span>.signer.address())
-<a href=#936 id=936 data-nosnippet>936</a>                        .safe_exit_timelock_proposers(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
-<a href=#937 id=937 data-nosnippet>937</a>                        .safe_exit_timelock_executors(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
-<a href=#938 id=938 data-nosnippet>938</a>                        .build()
-<a href=#939 id=939 data-nosnippet>939</a>                        .unwrap();
-<a href=#940 id=940 data-nosnippet>940</a>                    args.deploy_all(<span class="kw-2">&amp;mut </span>contracts)
-<a href=#941 id=941 data-nosnippet>941</a>                        .<span class="kw">await
-<a href=#942 id=942 data-nosnippet>942</a>                        </span>.expect(<span class="string">"failed to deploy all contracts"</span>);
-<a href=#943 id=943 data-nosnippet>943</a>
-<a href=#944 id=944 data-nosnippet>944</a>                    <span class="kw">let </span>st_addr = contracts
-<a href=#945 id=945 data-nosnippet>945</a>                        .address(Contract::StakeTableProxy)
-<a href=#946 id=946 data-nosnippet>946</a>                        .expect(<span class="string">"StakeTableProxy address not found"</span>);
-<a href=#947 id=947 data-nosnippet>947</a>                    StakingTransactions::create(
-<a href=#948 id=948 data-nosnippet>948</a>                        <span class="self">self</span>.l1_url.clone(),
-<a href=#949 id=949 data-nosnippet>949</a>                        <span class="kw-2">&amp;</span>deployer,
-<a href=#950 id=950 data-nosnippet>950</a>                        st_addr,
-<a href=#951 id=951 data-nosnippet>951</a>                        validators,
-<a href=#952 id=952 data-nosnippet>952</a>                        DelegationConfig::default(),
-<a href=#953 id=953 data-nosnippet>953</a>                    )
-<a href=#954 id=954 data-nosnippet>954</a>                    .<span class="kw">await
-<a href=#955 id=955 data-nosnippet>955</a>                    </span>.expect(<span class="string">"stake table setup failed"</span>)
-<a href=#956 id=956 data-nosnippet>956</a>                    .apply_all()
-<a href=#957 id=957 data-nosnippet>957</a>                    .<span class="kw">await
-<a href=#958 id=958 data-nosnippet>958</a>                    </span>.expect(<span class="string">"send all txns failed"</span>);
-<a href=#959 id=959 data-nosnippet>959</a>
-<a href=#960 id=960 data-nosnippet>960</a>                    Upgrade::pos_view_based(st_addr)
-<a href=#961 id=961 data-nosnippet>961</a>                },
-<a href=#962 id=962 data-nosnippet>962</a>                <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Upgrade not configured for version {version:?}"</span>),
-<a href=#963 id=963 data-nosnippet>963</a>            };
-<a href=#964 id=964 data-nosnippet>964</a>
-<a href=#965 id=965 data-nosnippet>965</a>            <span class="kw">let </span><span class="kw-2">mut </span>upgrades = std::collections::BTreeMap::new();
-<a href=#966 id=966 data-nosnippet>966</a>            upgrade.set_hotshot_config_parameters(<span class="kw-2">&amp;mut </span><span class="self">self</span>.config);
-<a href=#967 id=967 data-nosnippet>967</a>            upgrades.insert(version, upgrade);
-<a href=#968 id=968 data-nosnippet>968</a>
-<a href=#969 id=969 data-nosnippet>969</a>            <span class="self">self</span>.upgrades = upgrades;
-<a href=#970 id=970 data-nosnippet>970</a>            <span class="self">self
-<a href=#971 id=971 data-nosnippet>971</a>        </span>}
-<a href=#972 id=972 data-nosnippet>972</a>
-<a href=#973 id=973 data-nosnippet>973</a>        <span class="kw">pub fn </span>epoch_height(<span class="kw-2">mut </span><span class="self">self</span>, epoch_height: u64) -&gt; <span class="self">Self </span>{
-<a href=#974 id=974 data-nosnippet>974</a>            <span class="self">self</span>.config.epoch_height = epoch_height;
-<a href=#975 id=975 data-nosnippet>975</a>            <span class="self">self
-<a href=#976 id=976 data-nosnippet>976</a>        </span>}
-<a href=#977 id=977 data-nosnippet>977</a>
-<a href=#978 id=978 data-nosnippet>978</a>        <span class="kw">pub fn </span>epoch_start_block(<span class="kw-2">mut </span><span class="self">self</span>, start_block: u64) -&gt; <span class="self">Self </span>{
-<a href=#979 id=979 data-nosnippet>979</a>            <span class="self">self</span>.config.epoch_start_block = start_block;
-<a href=#980 id=980 data-nosnippet>980</a>            <span class="self">self
-<a href=#981 id=981 data-nosnippet>981</a>        </span>}
-<a href=#982 id=982 data-nosnippet>982</a>
-<a href=#983 id=983 data-nosnippet>983</a>        <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; TestConfig&lt;NUM_NODES&gt; {
-<a href=#984 id=984 data-nosnippet>984</a>            TestConfig {
-<a href=#985 id=985 data-nosnippet>985</a>                config: <span class="self">self</span>.config,
-<a href=#986 id=986 data-nosnippet>986</a>                priv_keys: <span class="self">self</span>.priv_keys,
-<a href=#987 id=987 data-nosnippet>987</a>                state_key_pairs: <span class="self">self</span>.state_key_pairs,
-<a href=#988 id=988 data-nosnippet>988</a>                master_map: <span class="self">self</span>.master_map,
-<a href=#989 id=989 data-nosnippet>989</a>                l1_url: <span class="self">self</span>.l1_url,
-<a href=#990 id=990 data-nosnippet>990</a>                l1_opt: <span class="self">self</span>.l1_opt,
-<a href=#991 id=991 data-nosnippet>991</a>                signer: <span class="self">self</span>.signer,
-<a href=#992 id=992 data-nosnippet>992</a>                state_relay_url: <span class="self">self</span>.state_relay_url,
-<a href=#993 id=993 data-nosnippet>993</a>                builder_port: <span class="self">self</span>.builder_port,
-<a href=#994 id=994 data-nosnippet>994</a>                upgrades: <span class="self">self</span>.upgrades,
-<a href=#995 id=995 data-nosnippet>995</a>                anvil_provider: <span class="self">self</span>.anvil_provider,
-<a href=#996 id=996 data-nosnippet>996</a>            }
-<a href=#997 id=997 data-nosnippet>997</a>        }
-<a href=#998 id=998 data-nosnippet>998</a>
-<a href=#999 id=999 data-nosnippet>999</a>        <span class="kw">pub fn </span>stake_table_capacity(<span class="kw-2">mut </span><span class="self">self</span>, stake_table_capacity: usize) -&gt; <span class="self">Self </span>{
-<a href=#1000 id=1000 data-nosnippet>1000</a>            <span class="self">self</span>.config.stake_table_capacity = stake_table_capacity;
-<a href=#1001 id=1001 data-nosnippet>1001</a>            <span class="self">self
-<a href=#1002 id=1002 data-nosnippet>1002</a>        </span>}
-<a href=#1003 id=1003 data-nosnippet>1003</a>    }
-<a href=#1004 id=1004 data-nosnippet>1004</a>
-<a href=#1005 id=1005 data-nosnippet>1005</a>    <span class="kw">impl</span>&lt;<span class="kw">const </span>NUM_NODES: usize&gt; Default <span class="kw">for </span>TestConfigBuilder&lt;NUM_NODES&gt; {
-<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#1007 id=1007 data-nosnippet>1007</a>            <span class="kw">let </span>num_nodes = NUM_NODES;
-<a href=#1008 id=1008 data-nosnippet>1008</a>
-<a href=#1009 id=1009 data-nosnippet>1009</a>            <span class="comment">// Generate keys for the nodes.
-<a href=#1010 id=1010 data-nosnippet>1010</a>            </span><span class="kw">let </span>seed = [<span class="number">0</span>; <span class="number">32</span>];
-<a href=#1011 id=1011 data-nosnippet>1011</a>            <span class="kw">let </span>(pub_keys, priv_keys): (Vec&lt;<span class="kw">_</span>&gt;, Vec&lt;<span class="kw">_</span>&gt;) = (<span class="number">0</span>..num_nodes)
-<a href=#1012 id=1012 data-nosnippet>1012</a>                .map(|i| &lt;PubKey <span class="kw">as </span>SignatureKey&gt;::generated_from_seed_indexed(seed, i <span class="kw">as </span>u64))
-<a href=#1013 id=1013 data-nosnippet>1013</a>                .unzip();
-<a href=#1014 id=1014 data-nosnippet>1014</a>            <span class="kw">let </span>state_key_pairs = (<span class="number">0</span>..num_nodes)
-<a href=#1015 id=1015 data-nosnippet>1015</a>                .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i <span class="kw">as </span>u64))
-<a href=#1016 id=1016 data-nosnippet>1016</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#1017 id=1017 data-nosnippet>1017</a>            <span class="kw">let </span>known_nodes_with_stake = pub_keys
-<a href=#1018 id=1018 data-nosnippet>1018</a>                .iter()
-<a href=#1019 id=1019 data-nosnippet>1019</a>                .zip(<span class="kw-2">&amp;</span>state_key_pairs)
-<a href=#1020 id=1020 data-nosnippet>1020</a>                .map(|(pub_key, state_key_pair)| PeerConfig::&lt;SeqTypes&gt; {
-<a href=#1021 id=1021 data-nosnippet>1021</a>                    stake_table_entry: pub_key.stake_table_entry(U256::from(<span class="number">1</span>)),
-<a href=#1022 id=1022 data-nosnippet>1022</a>                    state_ver_key: state_key_pair.ver_key(),
-<a href=#1023 id=1023 data-nosnippet>1023</a>                })
-<a href=#1024 id=1024 data-nosnippet>1024</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#1025 id=1025 data-nosnippet>1025</a>
-<a href=#1026 id=1026 data-nosnippet>1026</a>            <span class="kw">let </span>master_map = MasterMap::new();
-<a href=#1027 id=1027 data-nosnippet>1027</a>
-<a href=#1028 id=1028 data-nosnippet>1028</a>            <span class="kw">let </span>config: HotShotConfig&lt;SeqTypes&gt; = HotShotConfig {
-<a href=#1029 id=1029 data-nosnippet>1029</a>                fixed_leader_for_gpuvid: <span class="number">0</span>,
-<a href=#1030 id=1030 data-nosnippet>1030</a>                num_nodes_with_stake: num_nodes.try_into().unwrap(),
-<a href=#1031 id=1031 data-nosnippet>1031</a>                known_da_nodes: known_nodes_with_stake.clone(),
-<a href=#1032 id=1032 data-nosnippet>1032</a>                da_committees: Default::default(),
-<a href=#1033 id=1033 data-nosnippet>1033</a>                known_nodes_with_stake: known_nodes_with_stake.clone(),
-<a href=#1034 id=1034 data-nosnippet>1034</a>                next_view_timeout: Duration::from_secs(<span class="number">5</span>).as_millis() <span class="kw">as </span>u64,
-<a href=#1035 id=1035 data-nosnippet>1035</a>                num_bootstrap: <span class="number">1usize</span>,
-<a href=#1036 id=1036 data-nosnippet>1036</a>                da_staked_committee_size: num_nodes,
-<a href=#1037 id=1037 data-nosnippet>1037</a>                view_sync_timeout: Duration::from_secs(<span class="number">1</span>),
-<a href=#1038 id=1038 data-nosnippet>1038</a>                data_request_delay: Duration::from_secs(<span class="number">1</span>),
-<a href=#1039 id=1039 data-nosnippet>1039</a>                builder_urls: <span class="macro">vec1::vec1!</span>[Url::parse(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#1040 id=1040 data-nosnippet>1040</a>                    <span class="string">"http://127.0.0.1:{}"</span>,
-<a href=#1041 id=1041 data-nosnippet>1041</a>                    pick_unused_port().unwrap()
-<a href=#1042 id=1042 data-nosnippet>1042</a>                ))
-<a href=#1043 id=1043 data-nosnippet>1043</a>                .unwrap()],
-<a href=#1044 id=1044 data-nosnippet>1044</a>                builder_timeout: Duration::from_secs(<span class="number">1</span>),
-<a href=#1045 id=1045 data-nosnippet>1045</a>                start_threshold: (
-<a href=#1046 id=1046 data-nosnippet>1046</a>                    known_nodes_with_stake.clone().len() <span class="kw">as </span>u64,
+<a href=#920 id=920 data-nosnippet>920</a>                        .rpc_url(<span class="self">self</span>.l1_url.clone())
+<a href=#921 id=921 data-nosnippet>921</a>                        .mock_light_client(<span class="bool-val">true</span>)
+<a href=#922 id=922 data-nosnippet>922</a>                        .genesis_lc_state(genesis_state)
+<a href=#923 id=923 data-nosnippet>923</a>                        .genesis_st_state(genesis_stake)
+<a href=#924 id=924 data-nosnippet>924</a>                        .blocks_per_epoch(blocks_per_epoch)
+<a href=#925 id=925 data-nosnippet>925</a>                        .epoch_start_block(epoch_start_block)
+<a href=#926 id=926 data-nosnippet>926</a>                        .exit_escrow_period(U256::from(blocks_per_epoch * <span class="number">15 </span>+ <span class="number">100</span>))
+<a href=#927 id=927 data-nosnippet>927</a>                        .multisig_pauser(<span class="self">self</span>.signer.address())
+<a href=#928 id=928 data-nosnippet>928</a>                        .token_name(<span class="string">"Espresso"</span>.to_string())
+<a href=#929 id=929 data-nosnippet>929</a>                        .token_symbol(<span class="string">"ESP"</span>.to_string())
+<a href=#930 id=930 data-nosnippet>930</a>                        .initial_token_supply(U256::from(<span class="number">3590000000u64</span>))
+<a href=#931 id=931 data-nosnippet>931</a>                        .ops_timelock_delay(U256::from(<span class="number">0</span>))
+<a href=#932 id=932 data-nosnippet>932</a>                        .ops_timelock_admin(<span class="self">self</span>.signer.address())
+<a href=#933 id=933 data-nosnippet>933</a>                        .ops_timelock_proposers(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
+<a href=#934 id=934 data-nosnippet>934</a>                        .ops_timelock_executors(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
+<a href=#935 id=935 data-nosnippet>935</a>                        .safe_exit_timelock_delay(U256::from(<span class="number">10</span>))
+<a href=#936 id=936 data-nosnippet>936</a>                        .safe_exit_timelock_admin(<span class="self">self</span>.signer.address())
+<a href=#937 id=937 data-nosnippet>937</a>                        .safe_exit_timelock_proposers(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
+<a href=#938 id=938 data-nosnippet>938</a>                        .safe_exit_timelock_executors(<span class="macro">vec!</span>[<span class="self">self</span>.signer.address()])
+<a href=#939 id=939 data-nosnippet>939</a>                        .build()
+<a href=#940 id=940 data-nosnippet>940</a>                        .unwrap();
+<a href=#941 id=941 data-nosnippet>941</a>                    args.deploy_all(<span class="kw-2">&amp;mut </span>contracts)
+<a href=#942 id=942 data-nosnippet>942</a>                        .<span class="kw">await
+<a href=#943 id=943 data-nosnippet>943</a>                        </span>.expect(<span class="string">"failed to deploy all contracts"</span>);
+<a href=#944 id=944 data-nosnippet>944</a>
+<a href=#945 id=945 data-nosnippet>945</a>                    <span class="kw">let </span>st_addr = contracts
+<a href=#946 id=946 data-nosnippet>946</a>                        .address(Contract::StakeTableProxy)
+<a href=#947 id=947 data-nosnippet>947</a>                        .expect(<span class="string">"StakeTableProxy address not found"</span>);
+<a href=#948 id=948 data-nosnippet>948</a>                    StakingTransactions::create(
+<a href=#949 id=949 data-nosnippet>949</a>                        <span class="self">self</span>.l1_url.clone(),
+<a href=#950 id=950 data-nosnippet>950</a>                        <span class="kw-2">&amp;</span>deployer,
+<a href=#951 id=951 data-nosnippet>951</a>                        st_addr,
+<a href=#952 id=952 data-nosnippet>952</a>                        validators,
+<a href=#953 id=953 data-nosnippet>953</a>                        DelegationConfig::default(),
+<a href=#954 id=954 data-nosnippet>954</a>                    )
+<a href=#955 id=955 data-nosnippet>955</a>                    .<span class="kw">await
+<a href=#956 id=956 data-nosnippet>956</a>                    </span>.expect(<span class="string">"stake table setup failed"</span>)
+<a href=#957 id=957 data-nosnippet>957</a>                    .apply_all()
+<a href=#958 id=958 data-nosnippet>958</a>                    .<span class="kw">await
+<a href=#959 id=959 data-nosnippet>959</a>                    </span>.expect(<span class="string">"send all txns failed"</span>);
+<a href=#960 id=960 data-nosnippet>960</a>
+<a href=#961 id=961 data-nosnippet>961</a>                    Upgrade::pos_view_based(st_addr)
+<a href=#962 id=962 data-nosnippet>962</a>                },
+<a href=#963 id=963 data-nosnippet>963</a>                <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Upgrade not configured for version {version:?}"</span>),
+<a href=#964 id=964 data-nosnippet>964</a>            };
+<a href=#965 id=965 data-nosnippet>965</a>
+<a href=#966 id=966 data-nosnippet>966</a>            <span class="kw">let </span><span class="kw-2">mut </span>upgrades = std::collections::BTreeMap::new();
+<a href=#967 id=967 data-nosnippet>967</a>            upgrade.set_hotshot_config_parameters(<span class="kw-2">&amp;mut </span><span class="self">self</span>.config);
+<a href=#968 id=968 data-nosnippet>968</a>            upgrades.insert(version, upgrade);
+<a href=#969 id=969 data-nosnippet>969</a>
+<a href=#970 id=970 data-nosnippet>970</a>            <span class="self">self</span>.upgrades = upgrades;
+<a href=#971 id=971 data-nosnippet>971</a>            <span class="self">self
+<a href=#972 id=972 data-nosnippet>972</a>        </span>}
+<a href=#973 id=973 data-nosnippet>973</a>
+<a href=#974 id=974 data-nosnippet>974</a>        <span class="kw">pub fn </span>epoch_height(<span class="kw-2">mut </span><span class="self">self</span>, epoch_height: u64) -&gt; <span class="self">Self </span>{
+<a href=#975 id=975 data-nosnippet>975</a>            <span class="self">self</span>.config.epoch_height = epoch_height;
+<a href=#976 id=976 data-nosnippet>976</a>            <span class="self">self
+<a href=#977 id=977 data-nosnippet>977</a>        </span>}
+<a href=#978 id=978 data-nosnippet>978</a>
+<a href=#979 id=979 data-nosnippet>979</a>        <span class="kw">pub fn </span>epoch_start_block(<span class="kw-2">mut </span><span class="self">self</span>, start_block: u64) -&gt; <span class="self">Self </span>{
+<a href=#980 id=980 data-nosnippet>980</a>            <span class="self">self</span>.config.epoch_start_block = start_block;
+<a href=#981 id=981 data-nosnippet>981</a>            <span class="self">self
+<a href=#982 id=982 data-nosnippet>982</a>        </span>}
+<a href=#983 id=983 data-nosnippet>983</a>
+<a href=#984 id=984 data-nosnippet>984</a>        <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; TestConfig&lt;NUM_NODES&gt; {
+<a href=#985 id=985 data-nosnippet>985</a>            TestConfig {
+<a href=#986 id=986 data-nosnippet>986</a>                config: <span class="self">self</span>.config,
+<a href=#987 id=987 data-nosnippet>987</a>                priv_keys: <span class="self">self</span>.priv_keys,
+<a href=#988 id=988 data-nosnippet>988</a>                state_key_pairs: <span class="self">self</span>.state_key_pairs,
+<a href=#989 id=989 data-nosnippet>989</a>                master_map: <span class="self">self</span>.master_map,
+<a href=#990 id=990 data-nosnippet>990</a>                l1_url: <span class="self">self</span>.l1_url,
+<a href=#991 id=991 data-nosnippet>991</a>                l1_opt: <span class="self">self</span>.l1_opt,
+<a href=#992 id=992 data-nosnippet>992</a>                signer: <span class="self">self</span>.signer,
+<a href=#993 id=993 data-nosnippet>993</a>                state_relay_url: <span class="self">self</span>.state_relay_url,
+<a href=#994 id=994 data-nosnippet>994</a>                builder_port: <span class="self">self</span>.builder_port,
+<a href=#995 id=995 data-nosnippet>995</a>                upgrades: <span class="self">self</span>.upgrades,
+<a href=#996 id=996 data-nosnippet>996</a>                anvil_provider: <span class="self">self</span>.anvil_provider,
+<a href=#997 id=997 data-nosnippet>997</a>            }
+<a href=#998 id=998 data-nosnippet>998</a>        }
+<a href=#999 id=999 data-nosnippet>999</a>
+<a href=#1000 id=1000 data-nosnippet>1000</a>        <span class="kw">pub fn </span>stake_table_capacity(<span class="kw-2">mut </span><span class="self">self</span>, stake_table_capacity: usize) -&gt; <span class="self">Self </span>{
+<a href=#1001 id=1001 data-nosnippet>1001</a>            <span class="self">self</span>.config.stake_table_capacity = stake_table_capacity;
+<a href=#1002 id=1002 data-nosnippet>1002</a>            <span class="self">self
+<a href=#1003 id=1003 data-nosnippet>1003</a>        </span>}
+<a href=#1004 id=1004 data-nosnippet>1004</a>    }
+<a href=#1005 id=1005 data-nosnippet>1005</a>
+<a href=#1006 id=1006 data-nosnippet>1006</a>    <span class="kw">impl</span>&lt;<span class="kw">const </span>NUM_NODES: usize&gt; Default <span class="kw">for </span>TestConfigBuilder&lt;NUM_NODES&gt; {
+<a href=#1007 id=1007 data-nosnippet>1007</a>        <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#1008 id=1008 data-nosnippet>1008</a>            <span class="kw">let </span>num_nodes = NUM_NODES;
+<a href=#1009 id=1009 data-nosnippet>1009</a>
+<a href=#1010 id=1010 data-nosnippet>1010</a>            <span class="comment">// Generate keys for the nodes.
+<a href=#1011 id=1011 data-nosnippet>1011</a>            </span><span class="kw">let </span>seed = [<span class="number">0</span>; <span class="number">32</span>];
+<a href=#1012 id=1012 data-nosnippet>1012</a>            <span class="kw">let </span>(pub_keys, priv_keys): (Vec&lt;<span class="kw">_</span>&gt;, Vec&lt;<span class="kw">_</span>&gt;) = (<span class="number">0</span>..num_nodes)
+<a href=#1013 id=1013 data-nosnippet>1013</a>                .map(|i| &lt;PubKey <span class="kw">as </span>SignatureKey&gt;::generated_from_seed_indexed(seed, i <span class="kw">as </span>u64))
+<a href=#1014 id=1014 data-nosnippet>1014</a>                .unzip();
+<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="kw">let </span>state_key_pairs = (<span class="number">0</span>..num_nodes)
+<a href=#1016 id=1016 data-nosnippet>1016</a>                .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i <span class="kw">as </span>u64))
+<a href=#1017 id=1017 data-nosnippet>1017</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#1018 id=1018 data-nosnippet>1018</a>            <span class="kw">let </span>known_nodes_with_stake = pub_keys
+<a href=#1019 id=1019 data-nosnippet>1019</a>                .iter()
+<a href=#1020 id=1020 data-nosnippet>1020</a>                .zip(<span class="kw-2">&amp;</span>state_key_pairs)
+<a href=#1021 id=1021 data-nosnippet>1021</a>                .map(|(pub_key, state_key_pair)| PeerConfig::&lt;SeqTypes&gt; {
+<a href=#1022 id=1022 data-nosnippet>1022</a>                    stake_table_entry: pub_key.stake_table_entry(U256::from(<span class="number">1</span>)),
+<a href=#1023 id=1023 data-nosnippet>1023</a>                    state_ver_key: state_key_pair.ver_key(),
+<a href=#1024 id=1024 data-nosnippet>1024</a>                })
+<a href=#1025 id=1025 data-nosnippet>1025</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#1026 id=1026 data-nosnippet>1026</a>
+<a href=#1027 id=1027 data-nosnippet>1027</a>            <span class="kw">let </span>master_map = MasterMap::new();
+<a href=#1028 id=1028 data-nosnippet>1028</a>
+<a href=#1029 id=1029 data-nosnippet>1029</a>            <span class="kw">let </span>config: HotShotConfig&lt;SeqTypes&gt; = HotShotConfig {
+<a href=#1030 id=1030 data-nosnippet>1030</a>                fixed_leader_for_gpuvid: <span class="number">0</span>,
+<a href=#1031 id=1031 data-nosnippet>1031</a>                num_nodes_with_stake: num_nodes.try_into().unwrap(),
+<a href=#1032 id=1032 data-nosnippet>1032</a>                known_da_nodes: known_nodes_with_stake.clone(),
+<a href=#1033 id=1033 data-nosnippet>1033</a>                da_committees: Default::default(),
+<a href=#1034 id=1034 data-nosnippet>1034</a>                known_nodes_with_stake: known_nodes_with_stake.clone(),
+<a href=#1035 id=1035 data-nosnippet>1035</a>                next_view_timeout: Duration::from_secs(<span class="number">5</span>).as_millis() <span class="kw">as </span>u64,
+<a href=#1036 id=1036 data-nosnippet>1036</a>                num_bootstrap: <span class="number">1usize</span>,
+<a href=#1037 id=1037 data-nosnippet>1037</a>                da_staked_committee_size: num_nodes,
+<a href=#1038 id=1038 data-nosnippet>1038</a>                view_sync_timeout: Duration::from_secs(<span class="number">1</span>),
+<a href=#1039 id=1039 data-nosnippet>1039</a>                data_request_delay: Duration::from_secs(<span class="number">1</span>),
+<a href=#1040 id=1040 data-nosnippet>1040</a>                builder_urls: <span class="macro">vec1::vec1!</span>[Url::parse(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#1041 id=1041 data-nosnippet>1041</a>                    <span class="string">"http://127.0.0.1:{}"</span>,
+<a href=#1042 id=1042 data-nosnippet>1042</a>                    pick_unused_port().unwrap()
+<a href=#1043 id=1043 data-nosnippet>1043</a>                ))
+<a href=#1044 id=1044 data-nosnippet>1044</a>                .unwrap()],
+<a href=#1045 id=1045 data-nosnippet>1045</a>                builder_timeout: Duration::from_secs(<span class="number">1</span>),
+<a href=#1046 id=1046 data-nosnippet>1046</a>                start_threshold: (
 <a href=#1047 id=1047 data-nosnippet>1047</a>                    known_nodes_with_stake.clone().len() <span class="kw">as </span>u64,
-<a href=#1048 id=1048 data-nosnippet>1048</a>                ),
-<a href=#1049 id=1049 data-nosnippet>1049</a>                start_proposing_view: <span class="number">0</span>,
-<a href=#1050 id=1050 data-nosnippet>1050</a>                stop_proposing_view: <span class="number">0</span>,
-<a href=#1051 id=1051 data-nosnippet>1051</a>                start_voting_view: <span class="number">0</span>,
-<a href=#1052 id=1052 data-nosnippet>1052</a>                stop_voting_view: <span class="number">0</span>,
-<a href=#1053 id=1053 data-nosnippet>1053</a>                start_proposing_time: <span class="number">0</span>,
-<a href=#1054 id=1054 data-nosnippet>1054</a>                start_voting_time: <span class="number">0</span>,
-<a href=#1055 id=1055 data-nosnippet>1055</a>                stop_proposing_time: <span class="number">0</span>,
-<a href=#1056 id=1056 data-nosnippet>1056</a>                stop_voting_time: <span class="number">0</span>,
-<a href=#1057 id=1057 data-nosnippet>1057</a>                epoch_height: <span class="number">30</span>,
-<a href=#1058 id=1058 data-nosnippet>1058</a>                epoch_start_block: <span class="number">1</span>,
-<a href=#1059 id=1059 data-nosnippet>1059</a>                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
-<a href=#1060 id=1060 data-nosnippet>1060</a>                drb_difficulty: <span class="number">10</span>,
-<a href=#1061 id=1061 data-nosnippet>1061</a>                drb_upgrade_difficulty: <span class="number">20</span>,
-<a href=#1062 id=1062 data-nosnippet>1062</a>            };
-<a href=#1063 id=1063 data-nosnippet>1063</a>
-<a href=#1064 id=1064 data-nosnippet>1064</a>            <span class="kw">let </span>anvil = Anvil::new()
-<a href=#1065 id=1065 data-nosnippet>1065</a>                .args([<span class="string">"--slots-in-an-epoch"</span>, <span class="string">"0"</span>, <span class="string">"--balance"</span>, <span class="string">"1000000"</span>])
-<a href=#1066 id=1066 data-nosnippet>1066</a>                .spawn();
-<a href=#1067 id=1067 data-nosnippet>1067</a>
-<a href=#1068 id=1068 data-nosnippet>1068</a>            <span class="kw">let </span>l1_client = L1Client::anvil(<span class="kw-2">&amp;</span>anvil).expect(<span class="string">"failed to create l1 client"</span>);
-<a href=#1069 id=1069 data-nosnippet>1069</a>            <span class="kw">let </span>anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
-<a href=#1070 id=1070 data-nosnippet>1070</a>
-<a href=#1071 id=1071 data-nosnippet>1071</a>            <span class="kw">let </span>l1_signer_key = anvil_provider.anvil().keys()[<span class="number">0</span>].clone();
-<a href=#1072 id=1072 data-nosnippet>1072</a>            <span class="kw">let </span>signer = LocalSigner::from(l1_signer_key);
-<a href=#1073 id=1073 data-nosnippet>1073</a>
-<a href=#1074 id=1074 data-nosnippet>1074</a>            <span class="self">Self </span>{
-<a href=#1075 id=1075 data-nosnippet>1075</a>                config,
-<a href=#1076 id=1076 data-nosnippet>1076</a>                priv_keys,
-<a href=#1077 id=1077 data-nosnippet>1077</a>                state_key_pairs,
-<a href=#1078 id=1078 data-nosnippet>1078</a>                master_map,
-<a href=#1079 id=1079 data-nosnippet>1079</a>                l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
-<a href=#1080 id=1080 data-nosnippet>1080</a>                l1_opt: L1ClientOptions {
-<a href=#1081 id=1081 data-nosnippet>1081</a>                    stake_table_update_interval: Duration::from_secs(<span class="number">5</span>),
-<a href=#1082 id=1082 data-nosnippet>1082</a>                    l1_events_max_block_range: <span class="number">1000</span>,
-<a href=#1083 id=1083 data-nosnippet>1083</a>                    l1_polling_interval: Duration::from_secs(<span class="number">1</span>),
-<a href=#1084 id=1084 data-nosnippet>1084</a>                    subscription_timeout: Duration::from_secs(<span class="number">5</span>),
-<a href=#1085 id=1085 data-nosnippet>1085</a>                    ..Default::default()
-<a href=#1086 id=1086 data-nosnippet>1086</a>                },
-<a href=#1087 id=1087 data-nosnippet>1087</a>                anvil_provider: <span class="prelude-val">Some</span>(anvil_provider),
-<a href=#1088 id=1088 data-nosnippet>1088</a>                signer,
-<a href=#1089 id=1089 data-nosnippet>1089</a>                state_relay_url: <span class="prelude-val">None</span>,
-<a href=#1090 id=1090 data-nosnippet>1090</a>                builder_port: <span class="prelude-val">None</span>,
-<a href=#1091 id=1091 data-nosnippet>1091</a>                upgrades: Default::default(),
-<a href=#1092 id=1092 data-nosnippet>1092</a>            }
-<a href=#1093 id=1093 data-nosnippet>1093</a>        }
-<a href=#1094 id=1094 data-nosnippet>1094</a>    }
-<a href=#1095 id=1095 data-nosnippet>1095</a>
-<a href=#1096 id=1096 data-nosnippet>1096</a>    <span class="attr">#[derive(Clone)]
-<a href=#1097 id=1097 data-nosnippet>1097</a>    </span><span class="kw">pub struct </span>TestConfig&lt;<span class="kw">const </span>NUM_NODES: usize&gt; {
-<a href=#1098 id=1098 data-nosnippet>1098</a>        config: HotShotConfig&lt;SeqTypes&gt;,
-<a href=#1099 id=1099 data-nosnippet>1099</a>        priv_keys: Vec&lt;BLSPrivKey&gt;,
-<a href=#1100 id=1100 data-nosnippet>1100</a>        state_key_pairs: Vec&lt;StateKeyPair&gt;,
-<a href=#1101 id=1101 data-nosnippet>1101</a>        master_map: Arc&lt;MasterMap&lt;PubKey&gt;&gt;,
-<a href=#1102 id=1102 data-nosnippet>1102</a>        l1_url: Url,
-<a href=#1103 id=1103 data-nosnippet>1103</a>        l1_opt: L1ClientOptions,
-<a href=#1104 id=1104 data-nosnippet>1104</a>        anvil_provider: <span class="prelude-ty">Option</span>&lt;AnvilFillProvider&gt;,
-<a href=#1105 id=1105 data-nosnippet>1105</a>        signer: LocalSigner&lt;SigningKey&gt;,
-<a href=#1106 id=1106 data-nosnippet>1106</a>        state_relay_url: <span class="prelude-ty">Option</span>&lt;Url&gt;,
-<a href=#1107 id=1107 data-nosnippet>1107</a>        builder_port: <span class="prelude-ty">Option</span>&lt;u16&gt;,
-<a href=#1108 id=1108 data-nosnippet>1108</a>        upgrades: BTreeMap&lt;Version, Upgrade&gt;,
-<a href=#1109 id=1109 data-nosnippet>1109</a>    }
-<a href=#1110 id=1110 data-nosnippet>1110</a>
-<a href=#1111 id=1111 data-nosnippet>1111</a>    <span class="kw">impl</span>&lt;<span class="kw">const </span>NUM_NODES: usize&gt; TestConfig&lt;NUM_NODES&gt; {
-<a href=#1112 id=1112 data-nosnippet>1112</a>        <span class="kw">pub fn </span>num_nodes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#1113 id=1113 data-nosnippet>1113</a>            <span class="self">self</span>.priv_keys.len()
-<a href=#1114 id=1114 data-nosnippet>1114</a>        }
-<a href=#1115 id=1115 data-nosnippet>1115</a>
-<a href=#1116 id=1116 data-nosnippet>1116</a>        <span class="kw">pub fn </span>hotshot_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HotShotConfig&lt;SeqTypes&gt; {
-<a href=#1117 id=1117 data-nosnippet>1117</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.config
-<a href=#1118 id=1118 data-nosnippet>1118</a>        }
-<a href=#1119 id=1119 data-nosnippet>1119</a>
-<a href=#1120 id=1120 data-nosnippet>1120</a>        <span class="kw">pub fn </span>set_builder_urls(<span class="kw-2">&amp;mut </span><span class="self">self</span>, builder_urls: vec1::Vec1&lt;Url&gt;) {
-<a href=#1121 id=1121 data-nosnippet>1121</a>            <span class="self">self</span>.config.builder_urls = builder_urls;
-<a href=#1122 id=1122 data-nosnippet>1122</a>        }
-<a href=#1123 id=1123 data-nosnippet>1123</a>
-<a href=#1124 id=1124 data-nosnippet>1124</a>        <span class="kw">pub fn </span>builder_port(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u16&gt; {
-<a href=#1125 id=1125 data-nosnippet>1125</a>            <span class="self">self</span>.builder_port
-<a href=#1126 id=1126 data-nosnippet>1126</a>        }
-<a href=#1127 id=1127 data-nosnippet>1127</a>
-<a href=#1128 id=1128 data-nosnippet>1128</a>        <span class="kw">pub fn </span>signer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; LocalSigner&lt;SigningKey&gt; {
-<a href=#1129 id=1129 data-nosnippet>1129</a>            <span class="self">self</span>.signer.clone()
-<a href=#1130 id=1130 data-nosnippet>1130</a>        }
-<a href=#1131 id=1131 data-nosnippet>1131</a>
-<a href=#1132 id=1132 data-nosnippet>1132</a>        <span class="kw">pub fn </span>l1_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Url {
-<a href=#1133 id=1133 data-nosnippet>1133</a>            <span class="self">self</span>.l1_url.clone()
-<a href=#1134 id=1134 data-nosnippet>1134</a>        }
-<a href=#1135 id=1135 data-nosnippet>1135</a>
-<a href=#1136 id=1136 data-nosnippet>1136</a>        <span class="kw">pub fn </span>anvil(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>AnvilFillProvider&gt; {
-<a href=#1137 id=1137 data-nosnippet>1137</a>            <span class="self">self</span>.anvil_provider.as_ref()
-<a href=#1138 id=1138 data-nosnippet>1138</a>        }
-<a href=#1139 id=1139 data-nosnippet>1139</a>
-<a href=#1140 id=1140 data-nosnippet>1140</a>        <span class="kw">pub fn </span>get_upgrade_map(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; UpgradeMap {
-<a href=#1141 id=1141 data-nosnippet>1141</a>            <span class="self">self</span>.upgrades.clone().into()
-<a href=#1142 id=1142 data-nosnippet>1142</a>        }
-<a href=#1143 id=1143 data-nosnippet>1143</a>
-<a href=#1144 id=1144 data-nosnippet>1144</a>        <span class="kw">pub fn </span>upgrades(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BTreeMap&lt;Version, Upgrade&gt; {
-<a href=#1145 id=1145 data-nosnippet>1145</a>            <span class="self">self</span>.upgrades.clone()
-<a href=#1146 id=1146 data-nosnippet>1146</a>        }
-<a href=#1147 id=1147 data-nosnippet>1147</a>
-<a href=#1148 id=1148 data-nosnippet>1148</a>        <span class="kw">pub fn </span>staking_priv_keys(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(PrivateKeySigner, BLSKeyPair, StateKeyPair)&gt; {
-<a href=#1149 id=1149 data-nosnippet>1149</a>            staking_priv_keys(<span class="kw-2">&amp;</span><span class="self">self</span>.priv_keys, <span class="kw-2">&amp;</span><span class="self">self</span>.state_key_pairs, <span class="self">self</span>.num_nodes())
-<a href=#1150 id=1150 data-nosnippet>1150</a>        }
-<a href=#1151 id=1151 data-nosnippet>1151</a>
-<a href=#1152 id=1152 data-nosnippet>1152</a>        <span class="kw">pub fn </span>validator_providers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(Address, <span class="kw">impl </span>Provider + Clone)&gt; {
-<a href=#1153 id=1153 data-nosnippet>1153</a>            <span class="self">self</span>.staking_priv_keys()
-<a href=#1154 id=1154 data-nosnippet>1154</a>                .into_iter()
-<a href=#1155 id=1155 data-nosnippet>1155</a>                .map(|(signer, ..)| {
-<a href=#1156 id=1156 data-nosnippet>1156</a>                    (
-<a href=#1157 id=1157 data-nosnippet>1157</a>                        signer.address(),
-<a href=#1158 id=1158 data-nosnippet>1158</a>                        ProviderBuilder::new()
-<a href=#1159 id=1159 data-nosnippet>1159</a>                            .wallet(EthereumWallet::from(signer))
-<a href=#1160 id=1160 data-nosnippet>1160</a>                            .connect_http(<span class="self">self</span>.l1_url.clone()),
-<a href=#1161 id=1161 data-nosnippet>1161</a>                    )
-<a href=#1162 id=1162 data-nosnippet>1162</a>                })
-<a href=#1163 id=1163 data-nosnippet>1163</a>                .collect()
-<a href=#1164 id=1164 data-nosnippet>1164</a>        }
-<a href=#1165 id=1165 data-nosnippet>1165</a>
-<a href=#1166 id=1166 data-nosnippet>1166</a>        <span class="kw">pub async fn </span>init_nodes&lt;V: Versions&gt;(
-<a href=#1167 id=1167 data-nosnippet>1167</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1168 id=1168 data-nosnippet>1168</a>            bind_version: V,
-<a href=#1169 id=1169 data-nosnippet>1169</a>        ) -&gt; Vec&lt;SequencerContext&lt;network::Memory, NoStorage, V&gt;&gt; {
-<a href=#1170 id=1170 data-nosnippet>1170</a>            join_all((<span class="number">0</span>..<span class="self">self</span>.num_nodes()).map(|i| <span class="kw">async move </span>{
-<a href=#1171 id=1171 data-nosnippet>1171</a>                <span class="self">self</span>.init_node(
-<a href=#1172 id=1172 data-nosnippet>1172</a>                    i,
-<a href=#1173 id=1173 data-nosnippet>1173</a>                    ValidatedState::default(),
-<a href=#1174 id=1174 data-nosnippet>1174</a>                    no_storage::Options,
-<a href=#1175 id=1175 data-nosnippet>1175</a>                    <span class="prelude-val">Some</span>(NullStateCatchup::default()),
-<a href=#1176 id=1176 data-nosnippet>1176</a>                    <span class="prelude-val">None</span>,
-<a href=#1177 id=1177 data-nosnippet>1177</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#1178 id=1178 data-nosnippet>1178</a>                    STAKE_TABLE_CAPACITY_FOR_TEST,
-<a href=#1179 id=1179 data-nosnippet>1179</a>                    NullEventConsumer,
-<a href=#1180 id=1180 data-nosnippet>1180</a>                    bind_version,
-<a href=#1181 id=1181 data-nosnippet>1181</a>                    Default::default(),
-<a href=#1182 id=1182 data-nosnippet>1182</a>                )
-<a href=#1183 id=1183 data-nosnippet>1183</a>                .<span class="kw">await
-<a href=#1184 id=1184 data-nosnippet>1184</a>            </span>}))
-<a href=#1185 id=1185 data-nosnippet>1185</a>            .<span class="kw">await
-<a href=#1186 id=1186 data-nosnippet>1186</a>        </span>}
-<a href=#1187 id=1187 data-nosnippet>1187</a>
-<a href=#1188 id=1188 data-nosnippet>1188</a>        <span class="kw">pub fn </span>known_nodes_with_stake(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PeerConfig&lt;SeqTypes&gt;] {
-<a href=#1189 id=1189 data-nosnippet>1189</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.config.known_nodes_with_stake
-<a href=#1190 id=1190 data-nosnippet>1190</a>        }
-<a href=#1191 id=1191 data-nosnippet>1191</a>
-<a href=#1192 id=1192 data-nosnippet>1192</a>        <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#1193 id=1193 data-nosnippet>1193</a>        </span><span class="kw">pub async fn </span>init_node&lt;V: Versions, P: PersistenceOptions&gt;(
-<a href=#1194 id=1194 data-nosnippet>1194</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1195 id=1195 data-nosnippet>1195</a>            i: usize,
-<a href=#1196 id=1196 data-nosnippet>1196</a>            <span class="kw-2">mut </span>state: ValidatedState,
-<a href=#1197 id=1197 data-nosnippet>1197</a>            <span class="kw-2">mut </span>persistence_opt: P,
-<a href=#1198 id=1198 data-nosnippet>1198</a>            state_peers: <span class="prelude-ty">Option</span>&lt;<span class="kw">impl </span>StateCatchup + <span class="lifetime">'static</span>&gt;,
-<a href=#1199 id=1199 data-nosnippet>1199</a>            storage: <span class="prelude-ty">Option</span>&lt;RequestResponseStorage&gt;,
-<a href=#1200 id=1200 data-nosnippet>1200</a>            metrics: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Metrics,
-<a href=#1201 id=1201 data-nosnippet>1201</a>            stake_table_capacity: usize,
-<a href=#1202 id=1202 data-nosnippet>1202</a>            event_consumer: <span class="kw">impl </span>EventConsumer + <span class="lifetime">'static</span>,
-<a href=#1203 id=1203 data-nosnippet>1203</a>            bind_version: V,
-<a href=#1204 id=1204 data-nosnippet>1204</a>            upgrades: BTreeMap&lt;Version, Upgrade&gt;,
-<a href=#1205 id=1205 data-nosnippet>1205</a>        ) -&gt; SequencerContext&lt;network::Memory, P::Persistence, V&gt; {
-<a href=#1206 id=1206 data-nosnippet>1206</a>            <span class="kw">let </span>config = <span class="self">self</span>.config.clone();
-<a href=#1207 id=1207 data-nosnippet>1207</a>            <span class="kw">let </span>my_peer_config = <span class="kw-2">&amp;</span>config.known_nodes_with_stake[i];
-<a href=#1208 id=1208 data-nosnippet>1208</a>            <span class="kw">let </span>is_da = config.known_da_nodes.contains(my_peer_config);
-<a href=#1209 id=1209 data-nosnippet>1209</a>
-<a href=#1210 id=1210 data-nosnippet>1210</a>            <span class="comment">// Create our own (private, local) validator config
-<a href=#1211 id=1211 data-nosnippet>1211</a>            </span><span class="kw">let </span>validator_config = ValidatorConfig {
-<a href=#1212 id=1212 data-nosnippet>1212</a>                public_key: my_peer_config.stake_table_entry.stake_key,
-<a href=#1213 id=1213 data-nosnippet>1213</a>                private_key: <span class="self">self</span>.priv_keys[i].clone(),
-<a href=#1214 id=1214 data-nosnippet>1214</a>                stake_value: my_peer_config.stake_table_entry.stake_amount,
-<a href=#1215 id=1215 data-nosnippet>1215</a>                state_public_key: <span class="self">self</span>.state_key_pairs[i].ver_key(),
-<a href=#1216 id=1216 data-nosnippet>1216</a>                state_private_key: <span class="self">self</span>.state_key_pairs[i].sign_key(),
-<a href=#1217 id=1217 data-nosnippet>1217</a>                is_da,
-<a href=#1218 id=1218 data-nosnippet>1218</a>            };
-<a href=#1219 id=1219 data-nosnippet>1219</a>
-<a href=#1220 id=1220 data-nosnippet>1220</a>            <span class="kw">let </span>topics = <span class="kw">if </span>is_da {
-<a href=#1221 id=1221 data-nosnippet>1221</a>                <span class="macro">vec!</span>[Topic::Global, Topic::Da]
-<a href=#1222 id=1222 data-nosnippet>1222</a>            } <span class="kw">else </span>{
-<a href=#1223 id=1223 data-nosnippet>1223</a>                <span class="macro">vec!</span>[Topic::Global]
-<a href=#1224 id=1224 data-nosnippet>1224</a>            };
-<a href=#1225 id=1225 data-nosnippet>1225</a>
-<a href=#1226 id=1226 data-nosnippet>1226</a>            <span class="kw">let </span>network = Arc::new(MemoryNetwork::new(
-<a href=#1227 id=1227 data-nosnippet>1227</a>                <span class="kw-2">&amp;</span>my_peer_config.stake_table_entry.stake_key,
-<a href=#1228 id=1228 data-nosnippet>1228</a>                <span class="kw-2">&amp;</span><span class="self">self</span>.master_map,
-<a href=#1229 id=1229 data-nosnippet>1229</a>                <span class="kw-2">&amp;</span>topics,
-<a href=#1230 id=1230 data-nosnippet>1230</a>                <span class="prelude-val">None</span>,
-<a href=#1231 id=1231 data-nosnippet>1231</a>            ));
-<a href=#1232 id=1232 data-nosnippet>1232</a>
-<a href=#1233 id=1233 data-nosnippet>1233</a>            <span class="comment">// Make sure the builder account is funded.
-<a href=#1234 id=1234 data-nosnippet>1234</a>            </span><span class="kw">let </span>builder_account = <span class="self">Self</span>::builder_key().fee_account();
-<a href=#1235 id=1235 data-nosnippet>1235</a>            <span class="macro">tracing::info!</span>(%builder_account, <span class="string">"prefunding builder account"</span>);
-<a href=#1236 id=1236 data-nosnippet>1236</a>            state.prefund_account(builder_account, U256::MAX.into());
-<a href=#1237 id=1237 data-nosnippet>1237</a>
-<a href=#1238 id=1238 data-nosnippet>1238</a>            <span class="kw">let </span>persistence = persistence_opt.create().<span class="kw">await</span>.unwrap();
-<a href=#1239 id=1239 data-nosnippet>1239</a>
-<a href=#1240 id=1240 data-nosnippet>1240</a>            <span class="kw">let </span>chain_config = state.chain_config.resolve().unwrap_or_default();
-<a href=#1241 id=1241 data-nosnippet>1241</a>
-<a href=#1242 id=1242 data-nosnippet>1242</a>            <span class="comment">// Create an empty list of catchup providers
-<a href=#1243 id=1243 data-nosnippet>1243</a>            </span><span class="kw">let </span>catchup_providers = ParallelStateCatchup::new(<span class="kw-2">&amp;</span>[]);
-<a href=#1244 id=1244 data-nosnippet>1244</a>
-<a href=#1245 id=1245 data-nosnippet>1245</a>            <span class="comment">// If we have the state peers, add them
-<a href=#1246 id=1246 data-nosnippet>1246</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(state_peers) = state_peers {
-<a href=#1247 id=1247 data-nosnippet>1247</a>                catchup_providers.add_provider(Arc::new(state_peers));
-<a href=#1248 id=1248 data-nosnippet>1248</a>            }
-<a href=#1249 id=1249 data-nosnippet>1249</a>
-<a href=#1250 id=1250 data-nosnippet>1250</a>            <span class="comment">// If we have a working local catchup provider, add it
-<a href=#1251 id=1251 data-nosnippet>1251</a>            </span><span class="kw">match </span>persistence
-<a href=#1252 id=1252 data-nosnippet>1252</a>                .clone()
-<a href=#1253 id=1253 data-nosnippet>1253</a>                .into_catchup_provider(BackoffParams::default())
-<a href=#1254 id=1254 data-nosnippet>1254</a>            {
-<a href=#1255 id=1255 data-nosnippet>1255</a>                <span class="prelude-val">Ok</span>(local_catchup) =&gt; {
-<a href=#1256 id=1256 data-nosnippet>1256</a>                    catchup_providers.add_provider(local_catchup);
-<a href=#1257 id=1257 data-nosnippet>1257</a>                },
-<a href=#1258 id=1258 data-nosnippet>1258</a>                <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#1259 id=1259 data-nosnippet>1259</a>                    <span class="macro">tracing::warn!</span>(
-<a href=#1260 id=1260 data-nosnippet>1260</a>                        <span class="string">"Failed to create local catchup provider: {e:#}. Only using remote \
-<a href=#1261 id=1261 data-nosnippet>1261</a>                         catchup."
-<a href=#1262 id=1262 data-nosnippet>1262</a>                    </span>);
-<a href=#1263 id=1263 data-nosnippet>1263</a>                },
-<a href=#1264 id=1264 data-nosnippet>1264</a>            };
-<a href=#1265 id=1265 data-nosnippet>1265</a>
-<a href=#1266 id=1266 data-nosnippet>1266</a>            <span class="kw">let </span>l1_client = <span class="self">self
-<a href=#1267 id=1267 data-nosnippet>1267</a>                </span>.l1_opt
-<a href=#1268 id=1268 data-nosnippet>1268</a>                .clone()
-<a href=#1269 id=1269 data-nosnippet>1269</a>                .connect(<span class="macro">vec!</span>[<span class="self">self</span>.l1_url.clone()])
-<a href=#1270 id=1270 data-nosnippet>1270</a>                .expect(<span class="string">"failed to create L1 client"</span>);
-<a href=#1271 id=1271 data-nosnippet>1271</a>            l1_client.spawn_tasks().<span class="kw">await</span>;
-<a href=#1272 id=1272 data-nosnippet>1272</a>
-<a href=#1273 id=1273 data-nosnippet>1273</a>            <span class="kw">let </span>fetcher = Fetcher::new(
-<a href=#1274 id=1274 data-nosnippet>1274</a>                Arc::new(catchup_providers.clone()),
-<a href=#1275 id=1275 data-nosnippet>1275</a>                Arc::new(Mutex::new(persistence.clone())),
-<a href=#1276 id=1276 data-nosnippet>1276</a>                l1_client.clone(),
-<a href=#1277 id=1277 data-nosnippet>1277</a>                chain_config,
-<a href=#1278 id=1278 data-nosnippet>1278</a>            );
-<a href=#1279 id=1279 data-nosnippet>1279</a>            fetcher.spawn_update_loop().<span class="kw">await</span>;
-<a href=#1280 id=1280 data-nosnippet>1280</a>
-<a href=#1281 id=1281 data-nosnippet>1281</a>            <span class="kw">let </span>block_reward = fetcher.fetch_fixed_block_reward().<span class="kw">await</span>.ok();
-<a href=#1282 id=1282 data-nosnippet>1282</a>            <span class="kw">let </span><span class="kw-2">mut </span>membership = EpochCommittees::new_stake(
-<a href=#1283 id=1283 data-nosnippet>1283</a>                config.known_nodes_with_stake.clone(),
-<a href=#1284 id=1284 data-nosnippet>1284</a>                config.known_da_nodes.clone(),
-<a href=#1285 id=1285 data-nosnippet>1285</a>                block_reward,
-<a href=#1286 id=1286 data-nosnippet>1286</a>                fetcher,
-<a href=#1287 id=1287 data-nosnippet>1287</a>                config.epoch_height,
-<a href=#1288 id=1288 data-nosnippet>1288</a>            );
-<a href=#1289 id=1289 data-nosnippet>1289</a>            membership.reload_stake(<span class="number">50</span>).<span class="kw">await</span>;
-<a href=#1290 id=1290 data-nosnippet>1290</a>
-<a href=#1291 id=1291 data-nosnippet>1291</a>            <span class="kw">let </span>membership = Arc::new(RwLock::new(membership));
-<a href=#1292 id=1292 data-nosnippet>1292</a>            <span class="kw">let </span>persistence = Arc::new(persistence);
-<a href=#1293 id=1293 data-nosnippet>1293</a>
-<a href=#1294 id=1294 data-nosnippet>1294</a>            <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(
-<a href=#1295 id=1295 data-nosnippet>1295</a>                membership,
-<a href=#1296 id=1296 data-nosnippet>1296</a>                config.epoch_height,
-<a href=#1297 id=1297 data-nosnippet>1297</a>                <span class="kw-2">&amp;</span>persistence.clone(),
-<a href=#1298 id=1298 data-nosnippet>1298</a>            );
-<a href=#1299 id=1299 data-nosnippet>1299</a>
-<a href=#1300 id=1300 data-nosnippet>1300</a>            <span class="kw">let </span>node_state = NodeState::new(
-<a href=#1301 id=1301 data-nosnippet>1301</a>                i <span class="kw">as </span>u64,
-<a href=#1302 id=1302 data-nosnippet>1302</a>                chain_config,
-<a href=#1303 id=1303 data-nosnippet>1303</a>                l1_client,
-<a href=#1304 id=1304 data-nosnippet>1304</a>                Arc::new(catchup_providers.clone()),
-<a href=#1305 id=1305 data-nosnippet>1305</a>                V::Base::VERSION,
-<a href=#1306 id=1306 data-nosnippet>1306</a>                coordinator.clone(),
-<a href=#1307 id=1307 data-nosnippet>1307</a>                V::Base::VERSION,
-<a href=#1308 id=1308 data-nosnippet>1308</a>            )
-<a href=#1309 id=1309 data-nosnippet>1309</a>            .with_current_version(V::Base::version())
-<a href=#1310 id=1310 data-nosnippet>1310</a>            .with_genesis(state)
-<a href=#1311 id=1311 data-nosnippet>1311</a>            .with_epoch_height(config.epoch_height)
-<a href=#1312 id=1312 data-nosnippet>1312</a>            .with_upgrades(upgrades)
-<a href=#1313 id=1313 data-nosnippet>1313</a>            .with_epoch_start_block(config.epoch_start_block);
-<a href=#1314 id=1314 data-nosnippet>1314</a>
-<a href=#1315 id=1315 data-nosnippet>1315</a>            <span class="macro">tracing::info!</span>(
-<a href=#1316 id=1316 data-nosnippet>1316</a>                i,
-<a href=#1317 id=1317 data-nosnippet>1317</a>                key = %my_peer_config.stake_table_entry.stake_key,
-<a href=#1318 id=1318 data-nosnippet>1318</a>                state_key = %my_peer_config.state_ver_key,
-<a href=#1319 id=1319 data-nosnippet>1319</a>                <span class="string">"starting node"</span>,
-<a href=#1320 id=1320 data-nosnippet>1320</a>            );
-<a href=#1321 id=1321 data-nosnippet>1321</a>
-<a href=#1322 id=1322 data-nosnippet>1322</a>            SequencerContext::init(
-<a href=#1323 id=1323 data-nosnippet>1323</a>                NetworkConfig {
-<a href=#1324 id=1324 data-nosnippet>1324</a>                    config,
-<a href=#1325 id=1325 data-nosnippet>1325</a>                    <span class="comment">// For testing, we use a fake network, so the rest of the network config beyond
-<a href=#1326 id=1326 data-nosnippet>1326</a>                    // the base consensus config does not matter.
-<a href=#1327 id=1327 data-nosnippet>1327</a>                    </span>..Default::default()
-<a href=#1328 id=1328 data-nosnippet>1328</a>                },
-<a href=#1329 id=1329 data-nosnippet>1329</a>                validator_config,
-<a href=#1330 id=1330 data-nosnippet>1330</a>                coordinator,
-<a href=#1331 id=1331 data-nosnippet>1331</a>                node_state,
-<a href=#1332 id=1332 data-nosnippet>1332</a>                storage,
-<a href=#1333 id=1333 data-nosnippet>1333</a>                catchup_providers,
-<a href=#1334 id=1334 data-nosnippet>1334</a>                persistence,
-<a href=#1335 id=1335 data-nosnippet>1335</a>                network,
-<a href=#1336 id=1336 data-nosnippet>1336</a>                <span class="self">self</span>.state_relay_url.clone(),
-<a href=#1337 id=1337 data-nosnippet>1337</a>                metrics,
-<a href=#1338 id=1338 data-nosnippet>1338</a>                stake_table_capacity,
-<a href=#1339 id=1339 data-nosnippet>1339</a>                event_consumer,
-<a href=#1340 id=1340 data-nosnippet>1340</a>                bind_version,
-<a href=#1341 id=1341 data-nosnippet>1341</a>                Default::default(),
-<a href=#1342 id=1342 data-nosnippet>1342</a>            )
-<a href=#1343 id=1343 data-nosnippet>1343</a>            .<span class="kw">await
-<a href=#1344 id=1344 data-nosnippet>1344</a>            </span>.unwrap()
-<a href=#1345 id=1345 data-nosnippet>1345</a>        }
-<a href=#1346 id=1346 data-nosnippet>1346</a>
-<a href=#1347 id=1347 data-nosnippet>1347</a>        <span class="kw">pub fn </span>builder_key() -&gt; EthKeyPair {
-<a href=#1348 id=1348 data-nosnippet>1348</a>            FeeAccount::generated_from_seed_indexed([<span class="number">1</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">1
-<a href=#1349 id=1349 data-nosnippet>1349</a>        </span>}
-<a href=#1350 id=1350 data-nosnippet>1350</a>    }
-<a href=#1351 id=1351 data-nosnippet>1351</a>
-<a href=#1352 id=1352 data-nosnippet>1352</a>    <span class="comment">// Wait for decide event, make sure it matches submitted transaction. Return the block number
-<a href=#1353 id=1353 data-nosnippet>1353</a>    // containing the transaction and the block payload size
-<a href=#1354 id=1354 data-nosnippet>1354</a>    </span><span class="kw">pub async fn </span>wait_for_decide_on_handle(
-<a href=#1355 id=1355 data-nosnippet>1355</a>        events: <span class="kw-2">&amp;mut </span>(<span class="kw">impl </span>Stream&lt;Item = Event&gt; + Unpin),
-<a href=#1356 id=1356 data-nosnippet>1356</a>        submitted_txn: <span class="kw-2">&amp;</span>Transaction,
-<a href=#1357 id=1357 data-nosnippet>1357</a>    ) -&gt; (u64, usize) {
-<a href=#1358 id=1358 data-nosnippet>1358</a>        <span class="kw">let </span>commitment = submitted_txn.commit();
-<a href=#1359 id=1359 data-nosnippet>1359</a>
-<a href=#1360 id=1360 data-nosnippet>1360</a>        <span class="comment">// Keep getting events until we see a Decide event
-<a href=#1361 id=1361 data-nosnippet>1361</a>        </span><span class="kw">loop </span>{
-<a href=#1362 id=1362 data-nosnippet>1362</a>            <span class="kw">let </span>event = events.next().<span class="kw">await</span>.unwrap();
-<a href=#1363 id=1363 data-nosnippet>1363</a>            <span class="macro">tracing::info!</span>(<span class="string">"Received event from handle: {event:?}"</span>);
-<a href=#1364 id=1364 data-nosnippet>1364</a>
-<a href=#1365 id=1365 data-nosnippet>1365</a>            <span class="kw">if let </span>Decide { leaf_chain, .. } = event.event {
-<a href=#1366 id=1366 data-nosnippet>1366</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>((height, size)) =
-<a href=#1367 id=1367 data-nosnippet>1367</a>                    leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
-<a href=#1368 id=1368 data-nosnippet>1368</a>                        <span class="kw">if </span>leaf
-<a href=#1369 id=1369 data-nosnippet>1369</a>                            .block_payload()
-<a href=#1370 id=1370 data-nosnippet>1370</a>                            .as_ref()<span class="question-mark">?
-<a href=#1371 id=1371 data-nosnippet>1371</a>                            </span>.transaction_commitments(leaf.block_header().metadata())
-<a href=#1372 id=1372 data-nosnippet>1372</a>                            .contains(<span class="kw-2">&amp;</span>commitment)
-<a href=#1373 id=1373 data-nosnippet>1373</a>                        {
-<a href=#1374 id=1374 data-nosnippet>1374</a>                            <span class="kw">let </span>size = leaf.block_payload().unwrap().encode().len();
-<a href=#1375 id=1375 data-nosnippet>1375</a>                            <span class="prelude-val">Some</span>((leaf.block_header().block_number(), size))
-<a href=#1376 id=1376 data-nosnippet>1376</a>                        } <span class="kw">else </span>{
-<a href=#1377 id=1377 data-nosnippet>1377</a>                            <span class="prelude-val">None
-<a href=#1378 id=1378 data-nosnippet>1378</a>                        </span>}
-<a href=#1379 id=1379 data-nosnippet>1379</a>                    })
-<a href=#1380 id=1380 data-nosnippet>1380</a>                {
-<a href=#1381 id=1381 data-nosnippet>1381</a>                    <span class="macro">tracing::info!</span>(height, <span class="string">"transaction {commitment} sequenced"</span>);
-<a href=#1382 id=1382 data-nosnippet>1382</a>                    <span class="kw">return </span>(height, size);
-<a href=#1383 id=1383 data-nosnippet>1383</a>                }
-<a href=#1384 id=1384 data-nosnippet>1384</a>            } <span class="kw">else </span>{
-<a href=#1385 id=1385 data-nosnippet>1385</a>                <span class="comment">// Keep waiting
-<a href=#1386 id=1386 data-nosnippet>1386</a>            </span>}
-<a href=#1387 id=1387 data-nosnippet>1387</a>        }
-<a href=#1388 id=1388 data-nosnippet>1388</a>    }
-<a href=#1389 id=1389 data-nosnippet>1389</a>
-<a href=#1390 id=1390 data-nosnippet>1390</a>    <span class="doccomment">/// Waits until a node has reached the given target epoch (exclusive).
-<a href=#1391 id=1391 data-nosnippet>1391</a>    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
-<a href=#1392 id=1392 data-nosnippet>1392</a>    </span><span class="kw">pub async fn </span>wait_for_epochs(
-<a href=#1393 id=1393 data-nosnippet>1393</a>        events: <span class="kw-2">&amp;mut </span>(<span class="kw">impl </span>futures::Stream&lt;Item = hotshot_types::event::Event&lt;SeqTypes&gt;&gt;
-<a href=#1394 id=1394 data-nosnippet>1394</a>                  + std::marker::Unpin),
-<a href=#1395 id=1395 data-nosnippet>1395</a>        epoch_height: u64,
-<a href=#1396 id=1396 data-nosnippet>1396</a>        target_epoch: u64,
-<a href=#1397 id=1397 data-nosnippet>1397</a>    ) {
-<a href=#1398 id=1398 data-nosnippet>1398</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
-<a href=#1399 id=1399 data-nosnippet>1399</a>            <span class="kw">if let </span>EventType::Decide { leaf_chain, .. } = event.event {
-<a href=#1400 id=1400 data-nosnippet>1400</a>                <span class="kw">let </span>leaf = leaf_chain[<span class="number">0</span>].leaf.clone();
-<a href=#1401 id=1401 data-nosnippet>1401</a>                <span class="kw">let </span>epoch = leaf.epoch(epoch_height);
-<a href=#1402 id=1402 data-nosnippet>1402</a>                <span class="macro">println!</span>(
-<a href=#1403 id=1403 data-nosnippet>1403</a>                    <span class="string">"Node decided at height: {}, epoch: {epoch:?}"</span>,
-<a href=#1404 id=1404 data-nosnippet>1404</a>                    leaf.height(),
-<a href=#1405 id=1405 data-nosnippet>1405</a>                );
-<a href=#1406 id=1406 data-nosnippet>1406</a>
-<a href=#1407 id=1407 data-nosnippet>1407</a>                <span class="kw">if </span>epoch &gt; <span class="prelude-val">Some</span>(EpochNumber::new(target_epoch)) {
-<a href=#1408 id=1408 data-nosnippet>1408</a>                    <span class="kw">break</span>;
-<a href=#1409 id=1409 data-nosnippet>1409</a>                }
-<a href=#1410 id=1410 data-nosnippet>1410</a>            }
-<a href=#1411 id=1411 data-nosnippet>1411</a>        }
-<a href=#1412 id=1412 data-nosnippet>1412</a>    }
-<a href=#1413 id=1413 data-nosnippet>1413</a>}
-<a href=#1414 id=1414 data-nosnippet>1414</a>
-<a href=#1415 id=1415 data-nosnippet>1415</a><span class="attr">#[cfg(test)]
-<a href=#1416 id=1416 data-nosnippet>1416</a></span><span class="kw">mod </span>test {
-<a href=#1417 id=1417 data-nosnippet>1417</a>
-<a href=#1418 id=1418 data-nosnippet>1418</a>    <span class="kw">use </span>alloy::node_bindings::Anvil;
-<a href=#1419 id=1419 data-nosnippet>1419</a>    <span class="kw">use </span>espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
-<a href=#1420 id=1420 data-nosnippet>1420</a>    <span class="kw">use </span>futures::StreamExt;
-<a href=#1421 id=1421 data-nosnippet>1421</a>    <span class="kw">use </span>hotshot::types::EventType::Decide;
-<a href=#1422 id=1422 data-nosnippet>1422</a>    <span class="kw">use </span>hotshot_example_types::node_types::TestVersions;
-<a href=#1423 id=1423 data-nosnippet>1423</a>    <span class="kw">use </span>hotshot_types::{
-<a href=#1424 id=1424 data-nosnippet>1424</a>        event::LeafInfo,
-<a href=#1425 id=1425 data-nosnippet>1425</a>        traits::block_contents::{BlockHeader, BlockPayload},
-<a href=#1426 id=1426 data-nosnippet>1426</a>    };
-<a href=#1427 id=1427 data-nosnippet>1427</a>    <span class="kw">use </span>testing::{wait_for_decide_on_handle, TestConfigBuilder};
-<a href=#1428 id=1428 data-nosnippet>1428</a>
-<a href=#1429 id=1429 data-nosnippet>1429</a>    <span class="kw">use </span><span class="self">self</span>::testing::run_test_builder;
-<a href=#1430 id=1430 data-nosnippet>1430</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#1431 id=1431 data-nosnippet>1431</a>
-<a href=#1432 id=1432 data-nosnippet>1432</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#1433 id=1433 data-nosnippet>1433</a>    </span><span class="kw">async fn </span>test_skeleton_instantiation() {
-<a href=#1434 id=1434 data-nosnippet>1434</a>        <span class="comment">// Assign `config` so it isn't dropped early.
-<a href=#1435 id=1435 data-nosnippet>1435</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
-<a href=#1436 id=1436 data-nosnippet>1436</a>        <span class="kw">let </span>url = anvil.endpoint_url();
-<a href=#1437 id=1437 data-nosnippet>1437</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#1438 id=1438 data-nosnippet>1438</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
-<a href=#1439 id=1439 data-nosnippet>1439</a>            .l1_url(url)
-<a href=#1440 id=1440 data-nosnippet>1440</a>            .build();
-<a href=#1441 id=1441 data-nosnippet>1441</a>
-<a href=#1442 id=1442 data-nosnippet>1442</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-<a href=#1443 id=1443 data-nosnippet>1443</a>
-<a href=#1444 id=1444 data-nosnippet>1444</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
-<a href=#1445 id=1445 data-nosnippet>1445</a>
-<a href=#1446 id=1446 data-nosnippet>1446</a>        <span class="kw">let </span>handles = config.init_nodes(MockSequencerVersions::new()).<span class="kw">await</span>;
-<a href=#1447 id=1447 data-nosnippet>1447</a>
-<a href=#1448 id=1448 data-nosnippet>1448</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
-<a href=#1449 id=1449 data-nosnippet>1449</a>
-<a href=#1450 id=1450 data-nosnippet>1450</a>        <span class="comment">// Hook the builder up to the event stream from the first node
-<a href=#1451 id=1451 data-nosnippet>1451</a>        </span>builder_task.start(Box::new(handle_0.event_stream().<span class="kw">await</span>));
-<a href=#1452 id=1452 data-nosnippet>1452</a>
-<a href=#1453 id=1453 data-nosnippet>1453</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream().<span class="kw">await</span>;
-<a href=#1454 id=1454 data-nosnippet>1454</a>
-<a href=#1455 id=1455 data-nosnippet>1455</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
-<a href=#1456 id=1456 data-nosnippet>1456</a>            handle.start_consensus().<span class="kw">await</span>;
-<a href=#1457 id=1457 data-nosnippet>1457</a>        }
-<a href=#1458 id=1458 data-nosnippet>1458</a>
-<a href=#1459 id=1459 data-nosnippet>1459</a>        <span class="comment">// Submit target transaction to handle
-<a href=#1460 id=1460 data-nosnippet>1460</a>        </span><span class="kw">let </span>txn = Transaction::new(NamespaceId::from(<span class="number">1_u32</span>), <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
-<a href=#1461 id=1461 data-nosnippet>1461</a>        handles[<span class="number">0</span>]
-<a href=#1462 id=1462 data-nosnippet>1462</a>            .submit_transaction(txn.clone())
-<a href=#1463 id=1463 data-nosnippet>1463</a>            .<span class="kw">await
-<a href=#1464 id=1464 data-nosnippet>1464</a>            </span>.expect(<span class="string">"Failed to submit transaction"</span>);
-<a href=#1465 id=1465 data-nosnippet>1465</a>        <span class="macro">tracing::info!</span>(<span class="string">"Submitted transaction to handle: {txn:?}"</span>);
-<a href=#1466 id=1466 data-nosnippet>1466</a>
-<a href=#1467 id=1467 data-nosnippet>1467</a>        wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>txn).<span class="kw">await</span>;
-<a href=#1468 id=1468 data-nosnippet>1468</a>    }
-<a href=#1469 id=1469 data-nosnippet>1469</a>
-<a href=#1470 id=1470 data-nosnippet>1470</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#1471 id=1471 data-nosnippet>1471</a>    </span><span class="kw">async fn </span>test_header_invariants() {
-<a href=#1472 id=1472 data-nosnippet>1472</a>        <span class="kw">let </span>success_height = <span class="number">30</span>;
-<a href=#1473 id=1473 data-nosnippet>1473</a>        <span class="comment">// Assign `config` so it isn't dropped early.
-<a href=#1474 id=1474 data-nosnippet>1474</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
-<a href=#1475 id=1475 data-nosnippet>1475</a>        <span class="kw">let </span>url = anvil.endpoint_url();
-<a href=#1476 id=1476 data-nosnippet>1476</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#1477 id=1477 data-nosnippet>1477</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
-<a href=#1478 id=1478 data-nosnippet>1478</a>            .l1_url(url)
-<a href=#1479 id=1479 data-nosnippet>1479</a>            .build();
-<a href=#1480 id=1480 data-nosnippet>1480</a>
-<a href=#1481 id=1481 data-nosnippet>1481</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-<a href=#1482 id=1482 data-nosnippet>1482</a>
-<a href=#1483 id=1483 data-nosnippet>1483</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
-<a href=#1484 id=1484 data-nosnippet>1484</a>        <span class="kw">let </span>handles = config.init_nodes(MockSequencerVersions::new()).<span class="kw">await</span>;
-<a href=#1485 id=1485 data-nosnippet>1485</a>
-<a href=#1486 id=1486 data-nosnippet>1486</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
-<a href=#1487 id=1487 data-nosnippet>1487</a>
-<a href=#1488 id=1488 data-nosnippet>1488</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream().<span class="kw">await</span>;
-<a href=#1489 id=1489 data-nosnippet>1489</a>
-<a href=#1490 id=1490 data-nosnippet>1490</a>        <span class="comment">// Hook the builder up to the event stream from the first node
-<a href=#1491 id=1491 data-nosnippet>1491</a>        </span>builder_task.start(Box::new(handle_0.event_stream().<span class="kw">await</span>));
-<a href=#1492 id=1492 data-nosnippet>1492</a>
-<a href=#1493 id=1493 data-nosnippet>1493</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
-<a href=#1494 id=1494 data-nosnippet>1494</a>            handle.start_consensus().<span class="kw">await</span>;
-<a href=#1495 id=1495 data-nosnippet>1495</a>        }
-<a href=#1496 id=1496 data-nosnippet>1496</a>
-<a href=#1497 id=1497 data-nosnippet>1497</a>        <span class="kw">let </span><span class="kw-2">mut </span>parent = {
-<a href=#1498 id=1498 data-nosnippet>1498</a>            <span class="comment">// TODO refactor repeated code from other tests
-<a href=#1499 id=1499 data-nosnippet>1499</a>            </span><span class="kw">let </span>(genesis_payload, genesis_ns_table) =
-<a href=#1500 id=1500 data-nosnippet>1500</a>                Payload::from_transactions([], <span class="kw-2">&amp;</span>ValidatedState::default(), <span class="kw-2">&amp;</span>NodeState::mock())
-<a href=#1501 id=1501 data-nosnippet>1501</a>                    .<span class="kw">await
-<a href=#1502 id=1502 data-nosnippet>1502</a>                    </span>.unwrap();
-<a href=#1503 id=1503 data-nosnippet>1503</a>
-<a href=#1504 id=1504 data-nosnippet>1504</a>            <span class="kw">let </span>genesis_state = NodeState::mock();
-<a href=#1505 id=1505 data-nosnippet>1505</a>            Header::genesis::&lt;TestVersions&gt;(<span class="kw-2">&amp;</span>genesis_state, genesis_payload, <span class="kw-2">&amp;</span>genesis_ns_table)
-<a href=#1506 id=1506 data-nosnippet>1506</a>        };
-<a href=#1507 id=1507 data-nosnippet>1507</a>
-<a href=#1508 id=1508 data-nosnippet>1508</a>        <span class="kw">loop </span>{
-<a href=#1509 id=1509 data-nosnippet>1509</a>            <span class="kw">let </span>event = events.next().<span class="kw">await</span>.unwrap();
-<a href=#1510 id=1510 data-nosnippet>1510</a>            <span class="macro">tracing::info!</span>(<span class="string">"Received event from handle: {event:?}"</span>);
-<a href=#1511 id=1511 data-nosnippet>1511</a>            <span class="kw">let </span>Decide { leaf_chain, .. } = event.event <span class="kw">else </span>{
-<a href=#1512 id=1512 data-nosnippet>1512</a>                <span class="kw">continue</span>;
-<a href=#1513 id=1513 data-nosnippet>1513</a>            };
-<a href=#1514 id=1514 data-nosnippet>1514</a>            <span class="macro">tracing::info!</span>(<span class="string">"Got decide {leaf_chain:?}"</span>);
-<a href=#1515 id=1515 data-nosnippet>1515</a>
-<a href=#1516 id=1516 data-nosnippet>1516</a>            <span class="comment">// Check that each successive header satisfies invariants relative to its parent: all
-<a href=#1517 id=1517 data-nosnippet>1517</a>            // the fields which should be monotonic are.
-<a href=#1518 id=1518 data-nosnippet>1518</a>            </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter().rev() {
-<a href=#1519 id=1519 data-nosnippet>1519</a>                <span class="kw">let </span>header = leaf.block_header().clone();
-<a href=#1520 id=1520 data-nosnippet>1520</a>                <span class="kw">if </span>header.height() == <span class="number">0 </span>{
-<a href=#1521 id=1521 data-nosnippet>1521</a>                    parent = header;
-<a href=#1522 id=1522 data-nosnippet>1522</a>                    <span class="kw">continue</span>;
-<a href=#1523 id=1523 data-nosnippet>1523</a>                }
-<a href=#1524 id=1524 data-nosnippet>1524</a>                <span class="macro">assert_eq!</span>(header.height(), parent.height() + <span class="number">1</span>);
-<a href=#1525 id=1525 data-nosnippet>1525</a>                <span class="macro">assert!</span>(header.timestamp() &gt;= parent.timestamp());
-<a href=#1526 id=1526 data-nosnippet>1526</a>                <span class="macro">assert!</span>(header.l1_head() &gt;= parent.l1_head());
-<a href=#1527 id=1527 data-nosnippet>1527</a>                <span class="macro">assert!</span>(header.l1_finalized() &gt;= parent.l1_finalized());
-<a href=#1528 id=1528 data-nosnippet>1528</a>                parent = header;
-<a href=#1529 id=1529 data-nosnippet>1529</a>            }
-<a href=#1530 id=1530 data-nosnippet>1530</a>
-<a href=#1531 id=1531 data-nosnippet>1531</a>            <span class="kw">if </span>parent.height() &gt;= success_height {
-<a href=#1532 id=1532 data-nosnippet>1532</a>                <span class="kw">break</span>;
-<a href=#1533 id=1533 data-nosnippet>1533</a>            }
-<a href=#1534 id=1534 data-nosnippet>1534</a>        }
-<a href=#1535 id=1535 data-nosnippet>1535</a>    }
-<a href=#1536 id=1536 data-nosnippet>1536</a>}</code></pre></div></section></main></body></html>
+<a href=#1048 id=1048 data-nosnippet>1048</a>                    known_nodes_with_stake.clone().len() <span class="kw">as </span>u64,
+<a href=#1049 id=1049 data-nosnippet>1049</a>                ),
+<a href=#1050 id=1050 data-nosnippet>1050</a>                start_proposing_view: <span class="number">0</span>,
+<a href=#1051 id=1051 data-nosnippet>1051</a>                stop_proposing_view: <span class="number">0</span>,
+<a href=#1052 id=1052 data-nosnippet>1052</a>                start_voting_view: <span class="number">0</span>,
+<a href=#1053 id=1053 data-nosnippet>1053</a>                stop_voting_view: <span class="number">0</span>,
+<a href=#1054 id=1054 data-nosnippet>1054</a>                start_proposing_time: <span class="number">0</span>,
+<a href=#1055 id=1055 data-nosnippet>1055</a>                start_voting_time: <span class="number">0</span>,
+<a href=#1056 id=1056 data-nosnippet>1056</a>                stop_proposing_time: <span class="number">0</span>,
+<a href=#1057 id=1057 data-nosnippet>1057</a>                stop_voting_time: <span class="number">0</span>,
+<a href=#1058 id=1058 data-nosnippet>1058</a>                epoch_height: <span class="number">30</span>,
+<a href=#1059 id=1059 data-nosnippet>1059</a>                epoch_start_block: <span class="number">1</span>,
+<a href=#1060 id=1060 data-nosnippet>1060</a>                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+<a href=#1061 id=1061 data-nosnippet>1061</a>                drb_difficulty: <span class="number">10</span>,
+<a href=#1062 id=1062 data-nosnippet>1062</a>                drb_upgrade_difficulty: <span class="number">20</span>,
+<a href=#1063 id=1063 data-nosnippet>1063</a>            };
+<a href=#1064 id=1064 data-nosnippet>1064</a>
+<a href=#1065 id=1065 data-nosnippet>1065</a>            <span class="kw">let </span>anvil = Anvil::new()
+<a href=#1066 id=1066 data-nosnippet>1066</a>                .args([<span class="string">"--slots-in-an-epoch"</span>, <span class="string">"0"</span>, <span class="string">"--balance"</span>, <span class="string">"1000000"</span>])
+<a href=#1067 id=1067 data-nosnippet>1067</a>                .spawn();
+<a href=#1068 id=1068 data-nosnippet>1068</a>
+<a href=#1069 id=1069 data-nosnippet>1069</a>            <span class="kw">let </span>l1_client = L1Client::anvil(<span class="kw-2">&amp;</span>anvil).expect(<span class="string">"failed to create l1 client"</span>);
+<a href=#1070 id=1070 data-nosnippet>1070</a>            <span class="kw">let </span>anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
+<a href=#1071 id=1071 data-nosnippet>1071</a>
+<a href=#1072 id=1072 data-nosnippet>1072</a>            <span class="kw">let </span>l1_signer_key = anvil_provider.anvil().keys()[<span class="number">0</span>].clone();
+<a href=#1073 id=1073 data-nosnippet>1073</a>            <span class="kw">let </span>signer = LocalSigner::from(l1_signer_key);
+<a href=#1074 id=1074 data-nosnippet>1074</a>
+<a href=#1075 id=1075 data-nosnippet>1075</a>            <span class="self">Self </span>{
+<a href=#1076 id=1076 data-nosnippet>1076</a>                config,
+<a href=#1077 id=1077 data-nosnippet>1077</a>                priv_keys,
+<a href=#1078 id=1078 data-nosnippet>1078</a>                state_key_pairs,
+<a href=#1079 id=1079 data-nosnippet>1079</a>                master_map,
+<a href=#1080 id=1080 data-nosnippet>1080</a>                l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
+<a href=#1081 id=1081 data-nosnippet>1081</a>                l1_opt: L1ClientOptions {
+<a href=#1082 id=1082 data-nosnippet>1082</a>                    stake_table_update_interval: Duration::from_secs(<span class="number">5</span>),
+<a href=#1083 id=1083 data-nosnippet>1083</a>                    l1_events_max_block_range: <span class="number">1000</span>,
+<a href=#1084 id=1084 data-nosnippet>1084</a>                    l1_polling_interval: Duration::from_secs(<span class="number">1</span>),
+<a href=#1085 id=1085 data-nosnippet>1085</a>                    subscription_timeout: Duration::from_secs(<span class="number">5</span>),
+<a href=#1086 id=1086 data-nosnippet>1086</a>                    ..Default::default()
+<a href=#1087 id=1087 data-nosnippet>1087</a>                },
+<a href=#1088 id=1088 data-nosnippet>1088</a>                anvil_provider: <span class="prelude-val">Some</span>(anvil_provider),
+<a href=#1089 id=1089 data-nosnippet>1089</a>                signer,
+<a href=#1090 id=1090 data-nosnippet>1090</a>                state_relay_url: <span class="prelude-val">None</span>,
+<a href=#1091 id=1091 data-nosnippet>1091</a>                builder_port: <span class="prelude-val">None</span>,
+<a href=#1092 id=1092 data-nosnippet>1092</a>                upgrades: Default::default(),
+<a href=#1093 id=1093 data-nosnippet>1093</a>            }
+<a href=#1094 id=1094 data-nosnippet>1094</a>        }
+<a href=#1095 id=1095 data-nosnippet>1095</a>    }
+<a href=#1096 id=1096 data-nosnippet>1096</a>
+<a href=#1097 id=1097 data-nosnippet>1097</a>    <span class="attr">#[derive(Clone)]
+<a href=#1098 id=1098 data-nosnippet>1098</a>    </span><span class="kw">pub struct </span>TestConfig&lt;<span class="kw">const </span>NUM_NODES: usize&gt; {
+<a href=#1099 id=1099 data-nosnippet>1099</a>        config: HotShotConfig&lt;SeqTypes&gt;,
+<a href=#1100 id=1100 data-nosnippet>1100</a>        priv_keys: Vec&lt;BLSPrivKey&gt;,
+<a href=#1101 id=1101 data-nosnippet>1101</a>        state_key_pairs: Vec&lt;StateKeyPair&gt;,
+<a href=#1102 id=1102 data-nosnippet>1102</a>        master_map: Arc&lt;MasterMap&lt;PubKey&gt;&gt;,
+<a href=#1103 id=1103 data-nosnippet>1103</a>        l1_url: Url,
+<a href=#1104 id=1104 data-nosnippet>1104</a>        l1_opt: L1ClientOptions,
+<a href=#1105 id=1105 data-nosnippet>1105</a>        anvil_provider: <span class="prelude-ty">Option</span>&lt;AnvilFillProvider&gt;,
+<a href=#1106 id=1106 data-nosnippet>1106</a>        signer: LocalSigner&lt;SigningKey&gt;,
+<a href=#1107 id=1107 data-nosnippet>1107</a>        state_relay_url: <span class="prelude-ty">Option</span>&lt;Url&gt;,
+<a href=#1108 id=1108 data-nosnippet>1108</a>        builder_port: <span class="prelude-ty">Option</span>&lt;u16&gt;,
+<a href=#1109 id=1109 data-nosnippet>1109</a>        upgrades: BTreeMap&lt;Version, Upgrade&gt;,
+<a href=#1110 id=1110 data-nosnippet>1110</a>    }
+<a href=#1111 id=1111 data-nosnippet>1111</a>
+<a href=#1112 id=1112 data-nosnippet>1112</a>    <span class="kw">impl</span>&lt;<span class="kw">const </span>NUM_NODES: usize&gt; TestConfig&lt;NUM_NODES&gt; {
+<a href=#1113 id=1113 data-nosnippet>1113</a>        <span class="kw">pub fn </span>num_nodes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#1114 id=1114 data-nosnippet>1114</a>            <span class="self">self</span>.priv_keys.len()
+<a href=#1115 id=1115 data-nosnippet>1115</a>        }
+<a href=#1116 id=1116 data-nosnippet>1116</a>
+<a href=#1117 id=1117 data-nosnippet>1117</a>        <span class="kw">pub fn </span>hotshot_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HotShotConfig&lt;SeqTypes&gt; {
+<a href=#1118 id=1118 data-nosnippet>1118</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.config
+<a href=#1119 id=1119 data-nosnippet>1119</a>        }
+<a href=#1120 id=1120 data-nosnippet>1120</a>
+<a href=#1121 id=1121 data-nosnippet>1121</a>        <span class="kw">pub fn </span>set_builder_urls(<span class="kw-2">&amp;mut </span><span class="self">self</span>, builder_urls: vec1::Vec1&lt;Url&gt;) {
+<a href=#1122 id=1122 data-nosnippet>1122</a>            <span class="self">self</span>.config.builder_urls = builder_urls;
+<a href=#1123 id=1123 data-nosnippet>1123</a>        }
+<a href=#1124 id=1124 data-nosnippet>1124</a>
+<a href=#1125 id=1125 data-nosnippet>1125</a>        <span class="kw">pub fn </span>builder_port(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u16&gt; {
+<a href=#1126 id=1126 data-nosnippet>1126</a>            <span class="self">self</span>.builder_port
+<a href=#1127 id=1127 data-nosnippet>1127</a>        }
+<a href=#1128 id=1128 data-nosnippet>1128</a>
+<a href=#1129 id=1129 data-nosnippet>1129</a>        <span class="kw">pub fn </span>signer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; LocalSigner&lt;SigningKey&gt; {
+<a href=#1130 id=1130 data-nosnippet>1130</a>            <span class="self">self</span>.signer.clone()
+<a href=#1131 id=1131 data-nosnippet>1131</a>        }
+<a href=#1132 id=1132 data-nosnippet>1132</a>
+<a href=#1133 id=1133 data-nosnippet>1133</a>        <span class="kw">pub fn </span>l1_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Url {
+<a href=#1134 id=1134 data-nosnippet>1134</a>            <span class="self">self</span>.l1_url.clone()
+<a href=#1135 id=1135 data-nosnippet>1135</a>        }
+<a href=#1136 id=1136 data-nosnippet>1136</a>
+<a href=#1137 id=1137 data-nosnippet>1137</a>        <span class="kw">pub fn </span>anvil(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>AnvilFillProvider&gt; {
+<a href=#1138 id=1138 data-nosnippet>1138</a>            <span class="self">self</span>.anvil_provider.as_ref()
+<a href=#1139 id=1139 data-nosnippet>1139</a>        }
+<a href=#1140 id=1140 data-nosnippet>1140</a>
+<a href=#1141 id=1141 data-nosnippet>1141</a>        <span class="kw">pub fn </span>get_upgrade_map(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; UpgradeMap {
+<a href=#1142 id=1142 data-nosnippet>1142</a>            <span class="self">self</span>.upgrades.clone().into()
+<a href=#1143 id=1143 data-nosnippet>1143</a>        }
+<a href=#1144 id=1144 data-nosnippet>1144</a>
+<a href=#1145 id=1145 data-nosnippet>1145</a>        <span class="kw">pub fn </span>upgrades(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BTreeMap&lt;Version, Upgrade&gt; {
+<a href=#1146 id=1146 data-nosnippet>1146</a>            <span class="self">self</span>.upgrades.clone()
+<a href=#1147 id=1147 data-nosnippet>1147</a>        }
+<a href=#1148 id=1148 data-nosnippet>1148</a>
+<a href=#1149 id=1149 data-nosnippet>1149</a>        <span class="kw">pub fn </span>staking_priv_keys(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(PrivateKeySigner, BLSKeyPair, StateKeyPair)&gt; {
+<a href=#1150 id=1150 data-nosnippet>1150</a>            staking_priv_keys(<span class="kw-2">&amp;</span><span class="self">self</span>.priv_keys, <span class="kw-2">&amp;</span><span class="self">self</span>.state_key_pairs, <span class="self">self</span>.num_nodes())
+<a href=#1151 id=1151 data-nosnippet>1151</a>        }
+<a href=#1152 id=1152 data-nosnippet>1152</a>
+<a href=#1153 id=1153 data-nosnippet>1153</a>        <span class="kw">pub fn </span>validator_providers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(Address, <span class="kw">impl </span>Provider + Clone)&gt; {
+<a href=#1154 id=1154 data-nosnippet>1154</a>            <span class="self">self</span>.staking_priv_keys()
+<a href=#1155 id=1155 data-nosnippet>1155</a>                .into_iter()
+<a href=#1156 id=1156 data-nosnippet>1156</a>                .map(|(signer, ..)| {
+<a href=#1157 id=1157 data-nosnippet>1157</a>                    (
+<a href=#1158 id=1158 data-nosnippet>1158</a>                        signer.address(),
+<a href=#1159 id=1159 data-nosnippet>1159</a>                        ProviderBuilder::new()
+<a href=#1160 id=1160 data-nosnippet>1160</a>                            .wallet(EthereumWallet::from(signer))
+<a href=#1161 id=1161 data-nosnippet>1161</a>                            .connect_http(<span class="self">self</span>.l1_url.clone()),
+<a href=#1162 id=1162 data-nosnippet>1162</a>                    )
+<a href=#1163 id=1163 data-nosnippet>1163</a>                })
+<a href=#1164 id=1164 data-nosnippet>1164</a>                .collect()
+<a href=#1165 id=1165 data-nosnippet>1165</a>        }
+<a href=#1166 id=1166 data-nosnippet>1166</a>
+<a href=#1167 id=1167 data-nosnippet>1167</a>        <span class="kw">pub async fn </span>init_nodes&lt;V: Versions&gt;(
+<a href=#1168 id=1168 data-nosnippet>1168</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1169 id=1169 data-nosnippet>1169</a>            bind_version: V,
+<a href=#1170 id=1170 data-nosnippet>1170</a>        ) -&gt; Vec&lt;SequencerContext&lt;network::Memory, NoStorage, V&gt;&gt; {
+<a href=#1171 id=1171 data-nosnippet>1171</a>            join_all((<span class="number">0</span>..<span class="self">self</span>.num_nodes()).map(|i| <span class="kw">async move </span>{
+<a href=#1172 id=1172 data-nosnippet>1172</a>                <span class="self">self</span>.init_node(
+<a href=#1173 id=1173 data-nosnippet>1173</a>                    i,
+<a href=#1174 id=1174 data-nosnippet>1174</a>                    ValidatedState::default(),
+<a href=#1175 id=1175 data-nosnippet>1175</a>                    no_storage::Options,
+<a href=#1176 id=1176 data-nosnippet>1176</a>                    <span class="prelude-val">Some</span>(NullStateCatchup::default()),
+<a href=#1177 id=1177 data-nosnippet>1177</a>                    <span class="prelude-val">None</span>,
+<a href=#1178 id=1178 data-nosnippet>1178</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#1179 id=1179 data-nosnippet>1179</a>                    STAKE_TABLE_CAPACITY_FOR_TEST,
+<a href=#1180 id=1180 data-nosnippet>1180</a>                    NullEventConsumer,
+<a href=#1181 id=1181 data-nosnippet>1181</a>                    bind_version,
+<a href=#1182 id=1182 data-nosnippet>1182</a>                    Default::default(),
+<a href=#1183 id=1183 data-nosnippet>1183</a>                )
+<a href=#1184 id=1184 data-nosnippet>1184</a>                .<span class="kw">await
+<a href=#1185 id=1185 data-nosnippet>1185</a>            </span>}))
+<a href=#1186 id=1186 data-nosnippet>1186</a>            .<span class="kw">await
+<a href=#1187 id=1187 data-nosnippet>1187</a>        </span>}
+<a href=#1188 id=1188 data-nosnippet>1188</a>
+<a href=#1189 id=1189 data-nosnippet>1189</a>        <span class="kw">pub fn </span>known_nodes_with_stake(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PeerConfig&lt;SeqTypes&gt;] {
+<a href=#1190 id=1190 data-nosnippet>1190</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.config.known_nodes_with_stake
+<a href=#1191 id=1191 data-nosnippet>1191</a>        }
+<a href=#1192 id=1192 data-nosnippet>1192</a>
+<a href=#1193 id=1193 data-nosnippet>1193</a>        <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#1194 id=1194 data-nosnippet>1194</a>        </span><span class="kw">pub async fn </span>init_node&lt;V: Versions, P: PersistenceOptions&gt;(
+<a href=#1195 id=1195 data-nosnippet>1195</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1196 id=1196 data-nosnippet>1196</a>            i: usize,
+<a href=#1197 id=1197 data-nosnippet>1197</a>            <span class="kw-2">mut </span>state: ValidatedState,
+<a href=#1198 id=1198 data-nosnippet>1198</a>            <span class="kw-2">mut </span>persistence_opt: P,
+<a href=#1199 id=1199 data-nosnippet>1199</a>            state_peers: <span class="prelude-ty">Option</span>&lt;<span class="kw">impl </span>StateCatchup + <span class="lifetime">'static</span>&gt;,
+<a href=#1200 id=1200 data-nosnippet>1200</a>            storage: <span class="prelude-ty">Option</span>&lt;RequestResponseStorage&gt;,
+<a href=#1201 id=1201 data-nosnippet>1201</a>            metrics: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Metrics,
+<a href=#1202 id=1202 data-nosnippet>1202</a>            stake_table_capacity: usize,
+<a href=#1203 id=1203 data-nosnippet>1203</a>            event_consumer: <span class="kw">impl </span>EventConsumer + <span class="lifetime">'static</span>,
+<a href=#1204 id=1204 data-nosnippet>1204</a>            bind_version: V,
+<a href=#1205 id=1205 data-nosnippet>1205</a>            upgrades: BTreeMap&lt;Version, Upgrade&gt;,
+<a href=#1206 id=1206 data-nosnippet>1206</a>        ) -&gt; SequencerContext&lt;network::Memory, P::Persistence, V&gt; {
+<a href=#1207 id=1207 data-nosnippet>1207</a>            <span class="kw">let </span>config = <span class="self">self</span>.config.clone();
+<a href=#1208 id=1208 data-nosnippet>1208</a>            <span class="kw">let </span>my_peer_config = <span class="kw-2">&amp;</span>config.known_nodes_with_stake[i];
+<a href=#1209 id=1209 data-nosnippet>1209</a>            <span class="kw">let </span>is_da = config.known_da_nodes.contains(my_peer_config);
+<a href=#1210 id=1210 data-nosnippet>1210</a>
+<a href=#1211 id=1211 data-nosnippet>1211</a>            <span class="comment">// Create our own (private, local) validator config
+<a href=#1212 id=1212 data-nosnippet>1212</a>            </span><span class="kw">let </span>validator_config = ValidatorConfig {
+<a href=#1213 id=1213 data-nosnippet>1213</a>                public_key: my_peer_config.stake_table_entry.stake_key,
+<a href=#1214 id=1214 data-nosnippet>1214</a>                private_key: <span class="self">self</span>.priv_keys[i].clone(),
+<a href=#1215 id=1215 data-nosnippet>1215</a>                stake_value: my_peer_config.stake_table_entry.stake_amount,
+<a href=#1216 id=1216 data-nosnippet>1216</a>                state_public_key: <span class="self">self</span>.state_key_pairs[i].ver_key(),
+<a href=#1217 id=1217 data-nosnippet>1217</a>                state_private_key: <span class="self">self</span>.state_key_pairs[i].sign_key(),
+<a href=#1218 id=1218 data-nosnippet>1218</a>                is_da,
+<a href=#1219 id=1219 data-nosnippet>1219</a>            };
+<a href=#1220 id=1220 data-nosnippet>1220</a>
+<a href=#1221 id=1221 data-nosnippet>1221</a>            <span class="kw">let </span>topics = <span class="kw">if </span>is_da {
+<a href=#1222 id=1222 data-nosnippet>1222</a>                <span class="macro">vec!</span>[Topic::Global, Topic::Da]
+<a href=#1223 id=1223 data-nosnippet>1223</a>            } <span class="kw">else </span>{
+<a href=#1224 id=1224 data-nosnippet>1224</a>                <span class="macro">vec!</span>[Topic::Global]
+<a href=#1225 id=1225 data-nosnippet>1225</a>            };
+<a href=#1226 id=1226 data-nosnippet>1226</a>
+<a href=#1227 id=1227 data-nosnippet>1227</a>            <span class="kw">let </span>network = Arc::new(MemoryNetwork::new(
+<a href=#1228 id=1228 data-nosnippet>1228</a>                <span class="kw-2">&amp;</span>my_peer_config.stake_table_entry.stake_key,
+<a href=#1229 id=1229 data-nosnippet>1229</a>                <span class="kw-2">&amp;</span><span class="self">self</span>.master_map,
+<a href=#1230 id=1230 data-nosnippet>1230</a>                <span class="kw-2">&amp;</span>topics,
+<a href=#1231 id=1231 data-nosnippet>1231</a>                <span class="prelude-val">None</span>,
+<a href=#1232 id=1232 data-nosnippet>1232</a>            ));
+<a href=#1233 id=1233 data-nosnippet>1233</a>
+<a href=#1234 id=1234 data-nosnippet>1234</a>            <span class="comment">// Make sure the builder account is funded.
+<a href=#1235 id=1235 data-nosnippet>1235</a>            </span><span class="kw">let </span>builder_account = <span class="self">Self</span>::builder_key().fee_account();
+<a href=#1236 id=1236 data-nosnippet>1236</a>            <span class="macro">tracing::info!</span>(%builder_account, <span class="string">"prefunding builder account"</span>);
+<a href=#1237 id=1237 data-nosnippet>1237</a>            state.prefund_account(builder_account, U256::MAX.into());
+<a href=#1238 id=1238 data-nosnippet>1238</a>
+<a href=#1239 id=1239 data-nosnippet>1239</a>            <span class="kw">let </span>persistence = persistence_opt.create().<span class="kw">await</span>.unwrap();
+<a href=#1240 id=1240 data-nosnippet>1240</a>
+<a href=#1241 id=1241 data-nosnippet>1241</a>            <span class="kw">let </span>chain_config = state.chain_config.resolve().unwrap_or_default();
+<a href=#1242 id=1242 data-nosnippet>1242</a>
+<a href=#1243 id=1243 data-nosnippet>1243</a>            <span class="comment">// Create an empty list of catchup providers
+<a href=#1244 id=1244 data-nosnippet>1244</a>            </span><span class="kw">let </span>catchup_providers = ParallelStateCatchup::new(<span class="kw-2">&amp;</span>[]);
+<a href=#1245 id=1245 data-nosnippet>1245</a>
+<a href=#1246 id=1246 data-nosnippet>1246</a>            <span class="comment">// If we have the state peers, add them
+<a href=#1247 id=1247 data-nosnippet>1247</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(state_peers) = state_peers {
+<a href=#1248 id=1248 data-nosnippet>1248</a>                catchup_providers.add_provider(Arc::new(state_peers));
+<a href=#1249 id=1249 data-nosnippet>1249</a>            }
+<a href=#1250 id=1250 data-nosnippet>1250</a>
+<a href=#1251 id=1251 data-nosnippet>1251</a>            <span class="comment">// If we have a working local catchup provider, add it
+<a href=#1252 id=1252 data-nosnippet>1252</a>            </span><span class="kw">match </span>persistence
+<a href=#1253 id=1253 data-nosnippet>1253</a>                .clone()
+<a href=#1254 id=1254 data-nosnippet>1254</a>                .into_catchup_provider(BackoffParams::default())
+<a href=#1255 id=1255 data-nosnippet>1255</a>            {
+<a href=#1256 id=1256 data-nosnippet>1256</a>                <span class="prelude-val">Ok</span>(local_catchup) =&gt; {
+<a href=#1257 id=1257 data-nosnippet>1257</a>                    catchup_providers.add_provider(local_catchup);
+<a href=#1258 id=1258 data-nosnippet>1258</a>                },
+<a href=#1259 id=1259 data-nosnippet>1259</a>                <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#1260 id=1260 data-nosnippet>1260</a>                    <span class="macro">tracing::warn!</span>(
+<a href=#1261 id=1261 data-nosnippet>1261</a>                        <span class="string">"Failed to create local catchup provider: {e:#}. Only using remote \
+<a href=#1262 id=1262 data-nosnippet>1262</a>                         catchup."
+<a href=#1263 id=1263 data-nosnippet>1263</a>                    </span>);
+<a href=#1264 id=1264 data-nosnippet>1264</a>                },
+<a href=#1265 id=1265 data-nosnippet>1265</a>            };
+<a href=#1266 id=1266 data-nosnippet>1266</a>
+<a href=#1267 id=1267 data-nosnippet>1267</a>            <span class="kw">let </span>l1_client = <span class="self">self
+<a href=#1268 id=1268 data-nosnippet>1268</a>                </span>.l1_opt
+<a href=#1269 id=1269 data-nosnippet>1269</a>                .clone()
+<a href=#1270 id=1270 data-nosnippet>1270</a>                .connect(<span class="macro">vec!</span>[<span class="self">self</span>.l1_url.clone()])
+<a href=#1271 id=1271 data-nosnippet>1271</a>                .expect(<span class="string">"failed to create L1 client"</span>);
+<a href=#1272 id=1272 data-nosnippet>1272</a>            l1_client.spawn_tasks().<span class="kw">await</span>;
+<a href=#1273 id=1273 data-nosnippet>1273</a>
+<a href=#1274 id=1274 data-nosnippet>1274</a>            <span class="kw">let </span>fetcher = Fetcher::new(
+<a href=#1275 id=1275 data-nosnippet>1275</a>                Arc::new(catchup_providers.clone()),
+<a href=#1276 id=1276 data-nosnippet>1276</a>                Arc::new(Mutex::new(persistence.clone())),
+<a href=#1277 id=1277 data-nosnippet>1277</a>                l1_client.clone(),
+<a href=#1278 id=1278 data-nosnippet>1278</a>                chain_config,
+<a href=#1279 id=1279 data-nosnippet>1279</a>            );
+<a href=#1280 id=1280 data-nosnippet>1280</a>            fetcher.spawn_update_loop().<span class="kw">await</span>;
+<a href=#1281 id=1281 data-nosnippet>1281</a>
+<a href=#1282 id=1282 data-nosnippet>1282</a>            <span class="kw">let </span>block_reward = fetcher.fetch_fixed_block_reward().<span class="kw">await</span>.ok();
+<a href=#1283 id=1283 data-nosnippet>1283</a>            <span class="kw">let </span><span class="kw-2">mut </span>membership = EpochCommittees::new_stake(
+<a href=#1284 id=1284 data-nosnippet>1284</a>                config.known_nodes_with_stake.clone(),
+<a href=#1285 id=1285 data-nosnippet>1285</a>                config.known_da_nodes.clone(),
+<a href=#1286 id=1286 data-nosnippet>1286</a>                block_reward,
+<a href=#1287 id=1287 data-nosnippet>1287</a>                fetcher,
+<a href=#1288 id=1288 data-nosnippet>1288</a>                config.epoch_height,
+<a href=#1289 id=1289 data-nosnippet>1289</a>            );
+<a href=#1290 id=1290 data-nosnippet>1290</a>            membership.reload_stake(<span class="number">50</span>).<span class="kw">await</span>;
+<a href=#1291 id=1291 data-nosnippet>1291</a>
+<a href=#1292 id=1292 data-nosnippet>1292</a>            <span class="kw">let </span>membership = Arc::new(RwLock::new(membership));
+<a href=#1293 id=1293 data-nosnippet>1293</a>            <span class="kw">let </span>persistence = Arc::new(persistence);
+<a href=#1294 id=1294 data-nosnippet>1294</a>
+<a href=#1295 id=1295 data-nosnippet>1295</a>            <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(
+<a href=#1296 id=1296 data-nosnippet>1296</a>                membership,
+<a href=#1297 id=1297 data-nosnippet>1297</a>                config.epoch_height,
+<a href=#1298 id=1298 data-nosnippet>1298</a>                <span class="kw-2">&amp;</span>persistence.clone(),
+<a href=#1299 id=1299 data-nosnippet>1299</a>            );
+<a href=#1300 id=1300 data-nosnippet>1300</a>
+<a href=#1301 id=1301 data-nosnippet>1301</a>            <span class="kw">let </span>node_state = NodeState::new(
+<a href=#1302 id=1302 data-nosnippet>1302</a>                i <span class="kw">as </span>u64,
+<a href=#1303 id=1303 data-nosnippet>1303</a>                chain_config,
+<a href=#1304 id=1304 data-nosnippet>1304</a>                l1_client,
+<a href=#1305 id=1305 data-nosnippet>1305</a>                Arc::new(catchup_providers.clone()),
+<a href=#1306 id=1306 data-nosnippet>1306</a>                V::Base::VERSION,
+<a href=#1307 id=1307 data-nosnippet>1307</a>                coordinator.clone(),
+<a href=#1308 id=1308 data-nosnippet>1308</a>                V::Base::VERSION,
+<a href=#1309 id=1309 data-nosnippet>1309</a>            )
+<a href=#1310 id=1310 data-nosnippet>1310</a>            .with_current_version(V::Base::version())
+<a href=#1311 id=1311 data-nosnippet>1311</a>            .with_genesis(state)
+<a href=#1312 id=1312 data-nosnippet>1312</a>            .with_epoch_height(config.epoch_height)
+<a href=#1313 id=1313 data-nosnippet>1313</a>            .with_upgrades(upgrades)
+<a href=#1314 id=1314 data-nosnippet>1314</a>            .with_epoch_start_block(config.epoch_start_block);
+<a href=#1315 id=1315 data-nosnippet>1315</a>
+<a href=#1316 id=1316 data-nosnippet>1316</a>            <span class="macro">tracing::info!</span>(
+<a href=#1317 id=1317 data-nosnippet>1317</a>                i,
+<a href=#1318 id=1318 data-nosnippet>1318</a>                key = %my_peer_config.stake_table_entry.stake_key,
+<a href=#1319 id=1319 data-nosnippet>1319</a>                state_key = %my_peer_config.state_ver_key,
+<a href=#1320 id=1320 data-nosnippet>1320</a>                <span class="string">"starting node"</span>,
+<a href=#1321 id=1321 data-nosnippet>1321</a>            );
+<a href=#1322 id=1322 data-nosnippet>1322</a>
+<a href=#1323 id=1323 data-nosnippet>1323</a>            SequencerContext::init(
+<a href=#1324 id=1324 data-nosnippet>1324</a>                NetworkConfig {
+<a href=#1325 id=1325 data-nosnippet>1325</a>                    config,
+<a href=#1326 id=1326 data-nosnippet>1326</a>                    <span class="comment">// For testing, we use a fake network, so the rest of the network config beyond
+<a href=#1327 id=1327 data-nosnippet>1327</a>                    // the base consensus config does not matter.
+<a href=#1328 id=1328 data-nosnippet>1328</a>                    </span>..Default::default()
+<a href=#1329 id=1329 data-nosnippet>1329</a>                },
+<a href=#1330 id=1330 data-nosnippet>1330</a>                validator_config,
+<a href=#1331 id=1331 data-nosnippet>1331</a>                coordinator,
+<a href=#1332 id=1332 data-nosnippet>1332</a>                node_state,
+<a href=#1333 id=1333 data-nosnippet>1333</a>                storage,
+<a href=#1334 id=1334 data-nosnippet>1334</a>                catchup_providers,
+<a href=#1335 id=1335 data-nosnippet>1335</a>                persistence,
+<a href=#1336 id=1336 data-nosnippet>1336</a>                network,
+<a href=#1337 id=1337 data-nosnippet>1337</a>                <span class="self">self</span>.state_relay_url.clone(),
+<a href=#1338 id=1338 data-nosnippet>1338</a>                metrics,
+<a href=#1339 id=1339 data-nosnippet>1339</a>                stake_table_capacity,
+<a href=#1340 id=1340 data-nosnippet>1340</a>                event_consumer,
+<a href=#1341 id=1341 data-nosnippet>1341</a>                bind_version,
+<a href=#1342 id=1342 data-nosnippet>1342</a>                Default::default(),
+<a href=#1343 id=1343 data-nosnippet>1343</a>            )
+<a href=#1344 id=1344 data-nosnippet>1344</a>            .<span class="kw">await
+<a href=#1345 id=1345 data-nosnippet>1345</a>            </span>.unwrap()
+<a href=#1346 id=1346 data-nosnippet>1346</a>        }
+<a href=#1347 id=1347 data-nosnippet>1347</a>
+<a href=#1348 id=1348 data-nosnippet>1348</a>        <span class="kw">pub fn </span>builder_key() -&gt; EthKeyPair {
+<a href=#1349 id=1349 data-nosnippet>1349</a>            FeeAccount::generated_from_seed_indexed([<span class="number">1</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">1
+<a href=#1350 id=1350 data-nosnippet>1350</a>        </span>}
+<a href=#1351 id=1351 data-nosnippet>1351</a>    }
+<a href=#1352 id=1352 data-nosnippet>1352</a>
+<a href=#1353 id=1353 data-nosnippet>1353</a>    <span class="comment">// Wait for decide event, make sure it matches submitted transaction. Return the block number
+<a href=#1354 id=1354 data-nosnippet>1354</a>    // containing the transaction and the block payload size
+<a href=#1355 id=1355 data-nosnippet>1355</a>    </span><span class="kw">pub async fn </span>wait_for_decide_on_handle(
+<a href=#1356 id=1356 data-nosnippet>1356</a>        events: <span class="kw-2">&amp;mut </span>(<span class="kw">impl </span>Stream&lt;Item = Event&gt; + Unpin),
+<a href=#1357 id=1357 data-nosnippet>1357</a>        submitted_txn: <span class="kw-2">&amp;</span>Transaction,
+<a href=#1358 id=1358 data-nosnippet>1358</a>    ) -&gt; (u64, usize) {
+<a href=#1359 id=1359 data-nosnippet>1359</a>        <span class="kw">let </span>commitment = submitted_txn.commit();
+<a href=#1360 id=1360 data-nosnippet>1360</a>
+<a href=#1361 id=1361 data-nosnippet>1361</a>        <span class="comment">// Keep getting events until we see a Decide event
+<a href=#1362 id=1362 data-nosnippet>1362</a>        </span><span class="kw">loop </span>{
+<a href=#1363 id=1363 data-nosnippet>1363</a>            <span class="kw">let </span>event = events.next().<span class="kw">await</span>.unwrap();
+<a href=#1364 id=1364 data-nosnippet>1364</a>            <span class="macro">tracing::info!</span>(<span class="string">"Received event from handle: {event:?}"</span>);
+<a href=#1365 id=1365 data-nosnippet>1365</a>
+<a href=#1366 id=1366 data-nosnippet>1366</a>            <span class="kw">if let </span>Decide { leaf_chain, .. } = event.event {
+<a href=#1367 id=1367 data-nosnippet>1367</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>((height, size)) =
+<a href=#1368 id=1368 data-nosnippet>1368</a>                    leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
+<a href=#1369 id=1369 data-nosnippet>1369</a>                        <span class="kw">if </span>leaf
+<a href=#1370 id=1370 data-nosnippet>1370</a>                            .block_payload()
+<a href=#1371 id=1371 data-nosnippet>1371</a>                            .as_ref()<span class="question-mark">?
+<a href=#1372 id=1372 data-nosnippet>1372</a>                            </span>.transaction_commitments(leaf.block_header().metadata())
+<a href=#1373 id=1373 data-nosnippet>1373</a>                            .contains(<span class="kw-2">&amp;</span>commitment)
+<a href=#1374 id=1374 data-nosnippet>1374</a>                        {
+<a href=#1375 id=1375 data-nosnippet>1375</a>                            <span class="kw">let </span>size = leaf.block_payload().unwrap().encode().len();
+<a href=#1376 id=1376 data-nosnippet>1376</a>                            <span class="prelude-val">Some</span>((leaf.block_header().block_number(), size))
+<a href=#1377 id=1377 data-nosnippet>1377</a>                        } <span class="kw">else </span>{
+<a href=#1378 id=1378 data-nosnippet>1378</a>                            <span class="prelude-val">None
+<a href=#1379 id=1379 data-nosnippet>1379</a>                        </span>}
+<a href=#1380 id=1380 data-nosnippet>1380</a>                    })
+<a href=#1381 id=1381 data-nosnippet>1381</a>                {
+<a href=#1382 id=1382 data-nosnippet>1382</a>                    <span class="macro">tracing::info!</span>(height, <span class="string">"transaction {commitment} sequenced"</span>);
+<a href=#1383 id=1383 data-nosnippet>1383</a>                    <span class="kw">return </span>(height, size);
+<a href=#1384 id=1384 data-nosnippet>1384</a>                }
+<a href=#1385 id=1385 data-nosnippet>1385</a>            } <span class="kw">else </span>{
+<a href=#1386 id=1386 data-nosnippet>1386</a>                <span class="comment">// Keep waiting
+<a href=#1387 id=1387 data-nosnippet>1387</a>            </span>}
+<a href=#1388 id=1388 data-nosnippet>1388</a>        }
+<a href=#1389 id=1389 data-nosnippet>1389</a>    }
+<a href=#1390 id=1390 data-nosnippet>1390</a>
+<a href=#1391 id=1391 data-nosnippet>1391</a>    <span class="doccomment">/// Waits until a node has reached the given target epoch (exclusive).
+<a href=#1392 id=1392 data-nosnippet>1392</a>    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+<a href=#1393 id=1393 data-nosnippet>1393</a>    </span><span class="kw">pub async fn </span>wait_for_epochs(
+<a href=#1394 id=1394 data-nosnippet>1394</a>        events: <span class="kw-2">&amp;mut </span>(<span class="kw">impl </span>futures::Stream&lt;Item = hotshot_types::event::Event&lt;SeqTypes&gt;&gt;
+<a href=#1395 id=1395 data-nosnippet>1395</a>                  + std::marker::Unpin),
+<a href=#1396 id=1396 data-nosnippet>1396</a>        epoch_height: u64,
+<a href=#1397 id=1397 data-nosnippet>1397</a>        target_epoch: u64,
+<a href=#1398 id=1398 data-nosnippet>1398</a>    ) {
+<a href=#1399 id=1399 data-nosnippet>1399</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
+<a href=#1400 id=1400 data-nosnippet>1400</a>            <span class="kw">if let </span>EventType::Decide { leaf_chain, .. } = event.event {
+<a href=#1401 id=1401 data-nosnippet>1401</a>                <span class="kw">let </span>leaf = leaf_chain[<span class="number">0</span>].leaf.clone();
+<a href=#1402 id=1402 data-nosnippet>1402</a>                <span class="kw">let </span>epoch = leaf.epoch(epoch_height);
+<a href=#1403 id=1403 data-nosnippet>1403</a>                <span class="macro">println!</span>(
+<a href=#1404 id=1404 data-nosnippet>1404</a>                    <span class="string">"Node decided at height: {}, epoch: {epoch:?}"</span>,
+<a href=#1405 id=1405 data-nosnippet>1405</a>                    leaf.height(),
+<a href=#1406 id=1406 data-nosnippet>1406</a>                );
+<a href=#1407 id=1407 data-nosnippet>1407</a>
+<a href=#1408 id=1408 data-nosnippet>1408</a>                <span class="kw">if </span>epoch &gt; <span class="prelude-val">Some</span>(EpochNumber::new(target_epoch)) {
+<a href=#1409 id=1409 data-nosnippet>1409</a>                    <span class="kw">break</span>;
+<a href=#1410 id=1410 data-nosnippet>1410</a>                }
+<a href=#1411 id=1411 data-nosnippet>1411</a>            }
+<a href=#1412 id=1412 data-nosnippet>1412</a>        }
+<a href=#1413 id=1413 data-nosnippet>1413</a>    }
+<a href=#1414 id=1414 data-nosnippet>1414</a>}
+<a href=#1415 id=1415 data-nosnippet>1415</a>
+<a href=#1416 id=1416 data-nosnippet>1416</a><span class="attr">#[cfg(test)]
+<a href=#1417 id=1417 data-nosnippet>1417</a></span><span class="kw">mod </span>test {
+<a href=#1418 id=1418 data-nosnippet>1418</a>
+<a href=#1419 id=1419 data-nosnippet>1419</a>    <span class="kw">use </span>alloy::node_bindings::Anvil;
+<a href=#1420 id=1420 data-nosnippet>1420</a>    <span class="kw">use </span>espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
+<a href=#1421 id=1421 data-nosnippet>1421</a>    <span class="kw">use </span>futures::StreamExt;
+<a href=#1422 id=1422 data-nosnippet>1422</a>    <span class="kw">use </span>hotshot::types::EventType::Decide;
+<a href=#1423 id=1423 data-nosnippet>1423</a>    <span class="kw">use </span>hotshot_example_types::node_types::TestVersions;
+<a href=#1424 id=1424 data-nosnippet>1424</a>    <span class="kw">use </span>hotshot_types::{
+<a href=#1425 id=1425 data-nosnippet>1425</a>        event::LeafInfo,
+<a href=#1426 id=1426 data-nosnippet>1426</a>        traits::block_contents::{BlockHeader, BlockPayload},
+<a href=#1427 id=1427 data-nosnippet>1427</a>    };
+<a href=#1428 id=1428 data-nosnippet>1428</a>    <span class="kw">use </span>testing::{wait_for_decide_on_handle, TestConfigBuilder};
+<a href=#1429 id=1429 data-nosnippet>1429</a>
+<a href=#1430 id=1430 data-nosnippet>1430</a>    <span class="kw">use </span><span class="self">self</span>::testing::run_test_builder;
+<a href=#1431 id=1431 data-nosnippet>1431</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#1432 id=1432 data-nosnippet>1432</a>
+<a href=#1433 id=1433 data-nosnippet>1433</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#1434 id=1434 data-nosnippet>1434</a>    </span><span class="kw">async fn </span>test_skeleton_instantiation() {
+<a href=#1435 id=1435 data-nosnippet>1435</a>        <span class="comment">// Assign `config` so it isn't dropped early.
+<a href=#1436 id=1436 data-nosnippet>1436</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
+<a href=#1437 id=1437 data-nosnippet>1437</a>        <span class="kw">let </span>url = anvil.endpoint_url();
+<a href=#1438 id=1438 data-nosnippet>1438</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#1439 id=1439 data-nosnippet>1439</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
+<a href=#1440 id=1440 data-nosnippet>1440</a>            .l1_url(url)
+<a href=#1441 id=1441 data-nosnippet>1441</a>            .build();
+<a href=#1442 id=1442 data-nosnippet>1442</a>
+<a href=#1443 id=1443 data-nosnippet>1443</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#1444 id=1444 data-nosnippet>1444</a>
+<a href=#1445 id=1445 data-nosnippet>1445</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
+<a href=#1446 id=1446 data-nosnippet>1446</a>
+<a href=#1447 id=1447 data-nosnippet>1447</a>        <span class="kw">let </span>handles = config.init_nodes(MockSequencerVersions::new()).<span class="kw">await</span>;
+<a href=#1448 id=1448 data-nosnippet>1448</a>
+<a href=#1449 id=1449 data-nosnippet>1449</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
+<a href=#1450 id=1450 data-nosnippet>1450</a>
+<a href=#1451 id=1451 data-nosnippet>1451</a>        <span class="comment">// Hook the builder up to the event stream from the first node
+<a href=#1452 id=1452 data-nosnippet>1452</a>        </span>builder_task.start(Box::new(handle_0.event_stream().<span class="kw">await</span>));
+<a href=#1453 id=1453 data-nosnippet>1453</a>
+<a href=#1454 id=1454 data-nosnippet>1454</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream().<span class="kw">await</span>;
+<a href=#1455 id=1455 data-nosnippet>1455</a>
+<a href=#1456 id=1456 data-nosnippet>1456</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
+<a href=#1457 id=1457 data-nosnippet>1457</a>            handle.start_consensus().<span class="kw">await</span>;
+<a href=#1458 id=1458 data-nosnippet>1458</a>        }
+<a href=#1459 id=1459 data-nosnippet>1459</a>
+<a href=#1460 id=1460 data-nosnippet>1460</a>        <span class="comment">// Submit target transaction to handle
+<a href=#1461 id=1461 data-nosnippet>1461</a>        </span><span class="kw">let </span>txn = Transaction::new(NamespaceId::from(<span class="number">1_u32</span>), <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<a href=#1462 id=1462 data-nosnippet>1462</a>        handles[<span class="number">0</span>]
+<a href=#1463 id=1463 data-nosnippet>1463</a>            .submit_transaction(txn.clone())
+<a href=#1464 id=1464 data-nosnippet>1464</a>            .<span class="kw">await
+<a href=#1465 id=1465 data-nosnippet>1465</a>            </span>.expect(<span class="string">"Failed to submit transaction"</span>);
+<a href=#1466 id=1466 data-nosnippet>1466</a>        <span class="macro">tracing::info!</span>(<span class="string">"Submitted transaction to handle: {txn:?}"</span>);
+<a href=#1467 id=1467 data-nosnippet>1467</a>
+<a href=#1468 id=1468 data-nosnippet>1468</a>        wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>txn).<span class="kw">await</span>;
+<a href=#1469 id=1469 data-nosnippet>1469</a>    }
+<a href=#1470 id=1470 data-nosnippet>1470</a>
+<a href=#1471 id=1471 data-nosnippet>1471</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#1472 id=1472 data-nosnippet>1472</a>    </span><span class="kw">async fn </span>test_header_invariants() {
+<a href=#1473 id=1473 data-nosnippet>1473</a>        <span class="kw">let </span>success_height = <span class="number">30</span>;
+<a href=#1474 id=1474 data-nosnippet>1474</a>        <span class="comment">// Assign `config` so it isn't dropped early.
+<a href=#1475 id=1475 data-nosnippet>1475</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
+<a href=#1476 id=1476 data-nosnippet>1476</a>        <span class="kw">let </span>url = anvil.endpoint_url();
+<a href=#1477 id=1477 data-nosnippet>1477</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#1478 id=1478 data-nosnippet>1478</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
+<a href=#1479 id=1479 data-nosnippet>1479</a>            .l1_url(url)
+<a href=#1480 id=1480 data-nosnippet>1480</a>            .build();
+<a href=#1481 id=1481 data-nosnippet>1481</a>
+<a href=#1482 id=1482 data-nosnippet>1482</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#1483 id=1483 data-nosnippet>1483</a>
+<a href=#1484 id=1484 data-nosnippet>1484</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
+<a href=#1485 id=1485 data-nosnippet>1485</a>        <span class="kw">let </span>handles = config.init_nodes(MockSequencerVersions::new()).<span class="kw">await</span>;
+<a href=#1486 id=1486 data-nosnippet>1486</a>
+<a href=#1487 id=1487 data-nosnippet>1487</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
+<a href=#1488 id=1488 data-nosnippet>1488</a>
+<a href=#1489 id=1489 data-nosnippet>1489</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream().<span class="kw">await</span>;
+<a href=#1490 id=1490 data-nosnippet>1490</a>
+<a href=#1491 id=1491 data-nosnippet>1491</a>        <span class="comment">// Hook the builder up to the event stream from the first node
+<a href=#1492 id=1492 data-nosnippet>1492</a>        </span>builder_task.start(Box::new(handle_0.event_stream().<span class="kw">await</span>));
+<a href=#1493 id=1493 data-nosnippet>1493</a>
+<a href=#1494 id=1494 data-nosnippet>1494</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
+<a href=#1495 id=1495 data-nosnippet>1495</a>            handle.start_consensus().<span class="kw">await</span>;
+<a href=#1496 id=1496 data-nosnippet>1496</a>        }
+<a href=#1497 id=1497 data-nosnippet>1497</a>
+<a href=#1498 id=1498 data-nosnippet>1498</a>        <span class="kw">let </span><span class="kw-2">mut </span>parent = {
+<a href=#1499 id=1499 data-nosnippet>1499</a>            <span class="comment">// TODO refactor repeated code from other tests
+<a href=#1500 id=1500 data-nosnippet>1500</a>            </span><span class="kw">let </span>(genesis_payload, genesis_ns_table) =
+<a href=#1501 id=1501 data-nosnippet>1501</a>                Payload::from_transactions([], <span class="kw-2">&amp;</span>ValidatedState::default(), <span class="kw-2">&amp;</span>NodeState::mock())
+<a href=#1502 id=1502 data-nosnippet>1502</a>                    .<span class="kw">await
+<a href=#1503 id=1503 data-nosnippet>1503</a>                    </span>.unwrap();
+<a href=#1504 id=1504 data-nosnippet>1504</a>
+<a href=#1505 id=1505 data-nosnippet>1505</a>            <span class="kw">let </span>genesis_state = NodeState::mock();
+<a href=#1506 id=1506 data-nosnippet>1506</a>            Header::genesis::&lt;TestVersions&gt;(<span class="kw-2">&amp;</span>genesis_state, genesis_payload, <span class="kw-2">&amp;</span>genesis_ns_table)
+<a href=#1507 id=1507 data-nosnippet>1507</a>        };
+<a href=#1508 id=1508 data-nosnippet>1508</a>
+<a href=#1509 id=1509 data-nosnippet>1509</a>        <span class="kw">loop </span>{
+<a href=#1510 id=1510 data-nosnippet>1510</a>            <span class="kw">let </span>event = events.next().<span class="kw">await</span>.unwrap();
+<a href=#1511 id=1511 data-nosnippet>1511</a>            <span class="macro">tracing::info!</span>(<span class="string">"Received event from handle: {event:?}"</span>);
+<a href=#1512 id=1512 data-nosnippet>1512</a>            <span class="kw">let </span>Decide { leaf_chain, .. } = event.event <span class="kw">else </span>{
+<a href=#1513 id=1513 data-nosnippet>1513</a>                <span class="kw">continue</span>;
+<a href=#1514 id=1514 data-nosnippet>1514</a>            };
+<a href=#1515 id=1515 data-nosnippet>1515</a>            <span class="macro">tracing::info!</span>(<span class="string">"Got decide {leaf_chain:?}"</span>);
+<a href=#1516 id=1516 data-nosnippet>1516</a>
+<a href=#1517 id=1517 data-nosnippet>1517</a>            <span class="comment">// Check that each successive header satisfies invariants relative to its parent: all
+<a href=#1518 id=1518 data-nosnippet>1518</a>            // the fields which should be monotonic are.
+<a href=#1519 id=1519 data-nosnippet>1519</a>            </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter().rev() {
+<a href=#1520 id=1520 data-nosnippet>1520</a>                <span class="kw">let </span>header = leaf.block_header().clone();
+<a href=#1521 id=1521 data-nosnippet>1521</a>                <span class="kw">if </span>header.height() == <span class="number">0 </span>{
+<a href=#1522 id=1522 data-nosnippet>1522</a>                    parent = header;
+<a href=#1523 id=1523 data-nosnippet>1523</a>                    <span class="kw">continue</span>;
+<a href=#1524 id=1524 data-nosnippet>1524</a>                }
+<a href=#1525 id=1525 data-nosnippet>1525</a>                <span class="macro">assert_eq!</span>(header.height(), parent.height() + <span class="number">1</span>);
+<a href=#1526 id=1526 data-nosnippet>1526</a>                <span class="macro">assert!</span>(header.timestamp() &gt;= parent.timestamp());
+<a href=#1527 id=1527 data-nosnippet>1527</a>                <span class="macro">assert!</span>(header.l1_head() &gt;= parent.l1_head());
+<a href=#1528 id=1528 data-nosnippet>1528</a>                <span class="macro">assert!</span>(header.l1_finalized() &gt;= parent.l1_finalized());
+<a href=#1529 id=1529 data-nosnippet>1529</a>                parent = header;
+<a href=#1530 id=1530 data-nosnippet>1530</a>            }
+<a href=#1531 id=1531 data-nosnippet>1531</a>
+<a href=#1532 id=1532 data-nosnippet>1532</a>            <span class="kw">if </span>parent.height() &gt;= success_height {
+<a href=#1533 id=1533 data-nosnippet>1533</a>                <span class="kw">break</span>;
+<a href=#1534 id=1534 data-nosnippet>1534</a>            }
+<a href=#1535 id=1535 data-nosnippet>1535</a>        }
+<a href=#1536 id=1536 data-nosnippet>1536</a>    }
+<a href=#1537 id=1537 data-nosnippet>1537</a>}</code></pre></div></section></main></body></html>

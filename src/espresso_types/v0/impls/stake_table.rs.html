@@ -2409,7 +2409,7 @@
 <a href=#2409 id=2409 data-nosnippet>2409</a>            <span class="self">Self</span>::random_update_keys(<span class="self">self</span>.account, <span class="self">self</span>.commission)
 <a href=#2410 id=2410 data-nosnippet>2410</a>        }
 <a href=#2411 id=2411 data-nosnippet>2411</a>
-<a href=#2412 id=2412 data-nosnippet>2412</a>        <span class="kw">fn </span>random_update_keys(account: Address, commission: u16) -&gt; <span class="self">Self </span>{
+<a href=#2412 id=2412 data-nosnippet>2412</a>        <span class="kw">pub fn </span>random_update_keys(account: Address, commission: u16) -&gt; <span class="self">Self </span>{
 <a href=#2413 id=2413 data-nosnippet>2413</a>            <span class="kw">let </span><span class="kw-2">mut </span>rng = <span class="kw-2">&amp;mut </span>rand::thread_rng();
 <a href=#2414 id=2414 data-nosnippet>2414</a>            <span class="kw">let </span><span class="kw-2">mut </span>seed = [<span class="number">0u8</span>; <span class="number">32</span>];
 <a href=#2415 id=2415 data-nosnippet>2415</a>            rng.fill_bytes(<span class="kw-2">&amp;mut </span>seed);

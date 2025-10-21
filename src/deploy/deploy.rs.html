@@ -433,7 +433,7 @@
 <a href=#433 id=433 data-nosnippet>433</a>        .mock_light_client(opt.use_mock)
 <a href=#434 id=434 data-nosnippet>434</a>        .use_multisig(opt.use_multisig)
 <a href=#435 id=435 data-nosnippet>435</a>        .dry_run(opt.dry_run)
-<a href=#436 id=436 data-nosnippet>436</a>        .rpc_url(opt.rpc_url.to_string());
+<a href=#436 id=436 data-nosnippet>436</a>        .rpc_url(opt.rpc_url.clone());
 <a href=#437 id=437 data-nosnippet>437</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(multisig) = opt.multisig_address {
 <a href=#438 id=438 data-nosnippet>438</a>        args_builder.multisig(multisig);
 <a href=#439 id=439 data-nosnippet>439</a>    }
