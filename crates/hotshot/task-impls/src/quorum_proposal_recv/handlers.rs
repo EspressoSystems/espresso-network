@@ -340,6 +340,13 @@ async fn view_change_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>
                 )
                 .await
                 .is_ok()
+                // We skip the view change if the justify qc is signing the last block of an epoch, 
+                // since we must have come out of a transition. If the block number is `None`, we unwrap to `0`
+                // which is never the last block and so we always pass this check.
+                && !is_last_block(
+                    justify_qc.data.block_number.unwrap_or(0).saturating_sub(1),
+                    validation_info.epoch_height,
+                )
             {
                 network_epoch = max(network_epoch, justify_qc.epoch());
                 network_view = max(network_view, justify_qc.view_number()) + 1;
