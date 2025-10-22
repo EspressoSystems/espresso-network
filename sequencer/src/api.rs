@@ -6339,7 +6339,7 @@ mod test {
             let ns_proof: NamespaceProofQueryData = client
                 .get(&format!(
                     "{api_ver}/availability/block/{}/namespace/{ns}",
-                    block + 1
+                    block - 1
                 ))
                 .send()
                 .await
@@ -6412,7 +6412,7 @@ mod test {
         let ns_proof: ADVZNamespaceProofQueryData = client
             .get(&format!(
                 "v0/availability/block/{}/namespace/{ns}",
-                block + 1
+                block - 1
             ))
             .send()
             .await
