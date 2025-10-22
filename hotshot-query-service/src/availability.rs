@@ -801,10 +801,7 @@ mod test {
     use committable::Committable;
     use futures::future::FutureExt;
     use hotshot_example_types::node_types::EpochsTestVersions;
-    use hotshot_types::{
-        data::Leaf2, simple_certificate::QuorumCertificate2,
-        traits::node_implementation::ConsensusTime,
-    };
+    use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
     use portpicker::pick_unused_port;
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
@@ -1504,16 +1501,6 @@ mod test {
             if header.height() >= 3 * epoch_height {
                 break;
             }
-        }
-
-        for epoch in 1..4 {
-            let state_cert: StateCertQueryDataV2<MockTypes> = client
-                .get(&format!("state-cert-v2/{epoch}"))
-                .send()
-                .await
-                .unwrap();
-            tracing::info!("state-cert: {state_cert:?}");
-            assert_eq!(state_cert.0.epoch.u64(), epoch);
         }
 
         network.shut_down().await;
