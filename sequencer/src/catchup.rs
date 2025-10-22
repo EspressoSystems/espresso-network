@@ -457,7 +457,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch(retry, |client| async move {
             client
                 .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&format!(
-                    "state-cert-v2/{epoch}"
+                    "catchup/state-cert-v2/{epoch}"
                 ))
                 .send()
                 .await

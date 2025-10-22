@@ -299,6 +299,11 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV1>>;
+
+    fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<LightClientStateUpdateCertificateV2<crate::SeqTypes>>>;
 }
 
 #[async_trait]

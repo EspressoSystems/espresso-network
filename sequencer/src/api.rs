@@ -841,6 +841,21 @@ impl<
 
         Ok(tree)
     }
+
+    #[tracing::instrument(skip(self))]
+    async fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        let consensus = self.as_ref().consensus().await;
+        let consensus_lock = consensus.read().await;
+        let persistence = consensus_lock.storage();
+
+        persistence
+            .get_state_cert_by_epoch(epoch)
+            .await?
+            .context(format!("state cert for epoch {epoch} not found"))
+    }
 }
 
 impl<N, V, P> NodeStateDataSource for ApiState<N, P, V>
@@ -998,6 +1013,18 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             ))?;
 
         retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
+    }
+
+    async fn get_state_cert(
+        &self,
+        _epoch: u64,
+    ) -> anyhow::Result<
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    > {
+        bail!(
+            "state certificates are not available in consensus memory, must be fetched from \
+             storage"
+        )
     }
 }
 

@@ -1141,6 +1141,18 @@ where
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
         .boxed()
+    })?
+    .get("state_cert", |req, state| {
+        async move {
+            let epoch = req
+                .integer_param("epoch")
+                .map_err(Error::from_request_error)?;
+            state
+                .get_state_cert(epoch)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
     })?;
 
     Ok(api)
