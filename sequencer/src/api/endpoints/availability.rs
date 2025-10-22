@@ -46,14 +46,16 @@ type AvailabilityApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, Error, Ap
 ///
 /// Returns no proof (`Ok(None)`) if the requested namespace is not present at all in the given
 /// block.
-async fn get_namespace_proof(
+async fn get_namespace_proof<S>(
     block: &BlockQueryData<SeqTypes>,
     common: &VidCommonQueryData<SeqTypes>,
     ns_id: NamespaceId,
-    state: &(impl AvailabilityDataSource<SeqTypes>
-          + NodeDataSource<SeqTypes>
-          + RequestResponseDataSource<SeqTypes>),
-) -> Result<Option<NsProof>, Error> {
+    state: &S,
+) -> Result<Option<NsProof>, Error>
+where
+    S: ReadState,
+    S::State: NodeDataSource<SeqTypes> + RequestResponseDataSource<SeqTypes> + Sync,
+{
     let ns_table = block.payload().ns_table();
     let Some(ns_index) = ns_table.find_ns_id(&ns_id) else {
         return Ok(None);
@@ -72,17 +74,23 @@ async fn get_namespace_proof(
         ?ns_id,
         "Failed to generate namespace proof, trying to generate incorrect encoding proof"
     );
-    let mut vid_shares = state
-        .request_vid_shares(block.height(), common.clone(), Duration::from_secs(40))
-        .await
-        .map_err(|err| {
-            warn!("Failed to request VID shares from network: {err:#}");
-            hotshot_query_service::availability::Error::Custom {
-                message: "Failed to request VID shares from network".to_string(),
-                status: StatusCode::NOT_FOUND,
-            }
-        })?;
-    let vid_share = state.vid_share(block.height() as usize).await;
+    let vid_shares_req = state
+        .read(move |state| {
+            state
+                .request_vid_shares(block.height(), common.clone(), Duration::from_secs(40))
+                .boxed()
+        })
+        .await;
+    let mut vid_shares = vid_shares_req.await.map_err(|err| {
+        warn!("Failed to request VID shares from network: {err:#}");
+        hotshot_query_service::availability::Error::Custom {
+            message: "Failed to request VID shares from network".to_string(),
+            status: StatusCode::NOT_FOUND,
+        }
+    })?;
+    let vid_share = state
+        .read(|state| state.vid_share(block.height() as usize).boxed())
+        .await;
     if let Ok(vid_share) = vid_share {
         vid_shares.push(vid_share);
     };
@@ -153,11 +161,15 @@ fn extract_ns_proof_v0(
     })
 }
 
-async fn get_block_for_ns_proof(
+async fn get_block_for_ns_proof<S>(
     req: &RequestParams,
-    state: &impl AvailabilityDataSource<SeqTypes>,
+    state: &S,
     timeout: Duration,
-) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>), Error> {
+) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>), Error>
+where
+    S: ReadState,
+    S::State: AvailabilityDataSource<SeqTypes> + Sync,
+{
     let id = if let Some(height) = req.opt_integer_param("height")? {
         BlockId::Number(height)
     } else if let Some(hash) = req.opt_blob_param("hash")? {
@@ -165,11 +177,12 @@ async fn get_block_for_ns_proof(
     } else {
         BlockId::PayloadHash(req.blob_param("payload-hash")?)
     };
+    let (fetch_block, fetch_vid) = state
+        .read(|state| async move { join!(state.get_block(id), state.get_vid_common(id)) }.boxed())
+        .await;
     try_join!(
         async move {
-            state
-                .get_block(id)
-                .await
+            fetch_block
                 .with_timeout(timeout)
                 .await
                 .context(FetchBlockSnafu {
@@ -177,9 +190,7 @@ async fn get_block_for_ns_proof(
                 })
         },
         async move {
-            state
-                .get_vid_common(id)
-                .await
+            fetch_vid
                 .with_timeout(timeout)
                 .await
                 .context(FetchBlockSnafu {
@@ -189,20 +200,33 @@ async fn get_block_for_ns_proof(
     )
 }
 
-async fn get_block_range_for_ns_proof(
+async fn get_block_range_for_ns_proof<S>(
     req: &RequestParams,
-    state: &impl AvailabilityDataSource<SeqTypes>,
+    state: &S,
     limit: usize,
     timeout: Duration,
-) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>, Error> {
+) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>, Error>
+where
+    S: ReadState,
+    S::State: AvailabilityDataSource<SeqTypes> + Sync,
+{
     let from: usize = req.integer_param("from")?;
     let until: usize = req.integer_param("until")?;
     if until.saturating_sub(from) > limit {
         return Err(Error::RangeLimit { from, until, limit });
     }
 
-    let blocks = state.get_block_range(from..until).await;
-    let vids = state.get_vid_common_range(from..until).await;
+    let (blocks, vids) = state
+        .read(|state| {
+            async move {
+                join!(
+                    state.get_block_range(from..until),
+                    state.get_vid_common_range(from..until)
+                )
+            }
+            .boxed()
+        })
+        .await;
     blocks
         .zip(vids)
         .enumerate()
@@ -282,7 +306,7 @@ where
     )?;
 
     if api_ver.major == 1 {
-        api.get("getnamespaceproof", move |req, state| {
+        api.at("getnamespaceproof", move |req, state| {
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let (block, common) = get_block_for_ns_proof(&req, state, timeout).await?;
@@ -291,7 +315,7 @@ where
             }
             .boxed()
         })?
-        .get("getnamespaceproof_range", move |req, state| {
+        .at("getnamespaceproof_range", move |req, state| {
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let blocks = get_block_range_for_ns_proof(&req, state, limit, timeout).await?;
@@ -306,18 +330,13 @@ where
         .stream("stream_namespace_proofs", move |req, state| {
             get_block_stream_for_ns_proof(req, state)
                 .and_then(move |(ns_id, block, vid)| async move {
-                    let proof = state
-                        .read(move |state| {
-                            async move { get_namespace_proof(&block, &vid, ns_id, state).await }
-                                .boxed()
-                        })
-                        .await?;
+                    let proof = get_namespace_proof(&block, &vid, ns_id, state).await?;
                     extract_ns_proof_v1(proof, ns_id)
                 })
                 .boxed()
         })?;
     } else if api_ver.major == 0 {
-        api.get("getnamespaceproof", move |req, state| {
+        api.at("getnamespaceproof", move |req, state| {
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let (block, common) = get_block_for_ns_proof(&req, state, timeout).await?;
@@ -326,7 +345,7 @@ where
             }
             .boxed()
         })?
-        .get("getnamespaceproof_range", move |req, state| {
+        .at("getnamespaceproof_range", move |req, state| {
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let blocks = get_block_range_for_ns_proof(&req, state, limit, timeout).await?;
@@ -341,12 +360,7 @@ where
         .stream("stream_namespace_proofs", move |req, state| {
             get_block_stream_for_ns_proof(req, state)
                 .and_then(move |(ns_id, block, vid)| async move {
-                    let proof = state
-                        .read(move |state| {
-                            async move { get_namespace_proof(&block, &vid, ns_id, state).await }
-                                .boxed()
-                        })
-                        .await?;
+                    let proof = get_namespace_proof(&block, &vid, ns_id, state).await?;
                     extract_ns_proof_v0(proof, ns_id)
                 })
                 .boxed()
@@ -354,7 +368,7 @@ where
     }
 
     if api_ver.major >= 1 {
-        api.get("incorrect_encoding_proof", move |req, state| {
+        api.at("incorrect_encoding_proof", move |req, state| {
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let (block, common) = get_block_for_ns_proof(&req, state, timeout).await?;

@@ -354,7 +354,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 }
 
-#[async_trait]
 impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     RequestResponseDataSource<SeqTypes> for StorageState<N, P, D, V>
 {
@@ -363,14 +362,13 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         block_number: u64,
         vid_common_data: VidCommonQueryData<SeqTypes>,
         timeout_duration: Duration,
-    ) -> anyhow::Result<Vec<VidShare>> {
+    ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
         self.as_ref()
             .request_vid_shares(block_number, vid_common_data, timeout_duration)
             .await
     }
 }
 
-#[async_trait]
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
 {
@@ -379,7 +377,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         block_number: u64,
         vid_common_data: VidCommonQueryData<SeqTypes>,
         duration: Duration,
-    ) -> anyhow::Result<Vec<VidShare>> {
+    ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
         // Get a handle to the request response protocol
         let request_response_protocol = self
             .sequencer_context
@@ -389,86 +387,89 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .request_response_protocol
             .clone();
 
-        // Get the total VID weight based on the VID common data
-        let total_weight = match vid_common_data.common() {
-            VidCommon::V0(_) => {
-                // TODO: This needs to be done via the stake table
-                return Err(anyhow::anyhow!(
-                    "V0 total weight calculation not supported yet"
-                ));
-            },
-            VidCommon::V1(v1) => v1.total_weights,
-        };
-
-        // Create the AvidM parameters from the total weight
-        let avidm_param =
-            init_avidm_param(total_weight).with_context(|| "failed to initialize avidm param")?;
-
-        // Get the payload hash for verification
-        let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
-            bail!("V0 share verification not supported yet");
-        };
-
-        // Create a random request id
-        let request_id = rand::thread_rng().gen();
-
-        // Request and verify the shares from all other nodes, timing out after `duration` seconds
-        let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let received_shares_clone = received_shares.clone();
-        let request_result: anyhow::Result<_, _> = timeout(
-            duration,
-            request_response_protocol.request_indefinitely::<_, _, _>(
-                Request::VidShare(block_number, request_id),
-                RequestType::Broadcast,
-                move |_request, response| {
-                    let avidm_param = avidm_param.clone();
-                    let received_shares = received_shares_clone.clone();
-                    async move {
-                        // Make sure the response was a V1 share
-                        let Response::VidShare(VidShare::V1(received_share)) = response else {
-                            bail!("V0 share verification not supported yet");
-                        };
-
-                        // Verify the share
-                        let Ok(Ok(_)) = AvidMScheme::verify_share(
-                            &avidm_param,
-                            &local_payload_hash,
-                            &received_share,
-                        ) else {
-                            bail!("share verification failed");
-                        };
-
-                        // Add the share to the list of received shares
-                        received_shares.lock().push(received_share);
-
-                        bail!("waiting for more shares");
-
-                        #[allow(unreachable_code)]
-                        Ok(())
-                    }
+        async move {
+            // Get the total VID weight based on the VID common data
+            let total_weight = match vid_common_data.common() {
+                VidCommon::V0(_) => {
+                    // TODO: This needs to be done via the stake table
+                    return Err(anyhow::anyhow!(
+                        "V0 total weight calculation not supported yet"
+                    ));
                 },
-            ),
-        )
-        .await;
+                VidCommon::V1(v1) => v1.total_weights,
+            };
 
-        // If the request timed out, return the shares we have collected so far
-        match request_result {
-            Err(_) => {
-                // If it timed out, this was successful. Return the shares we have collected so far
-                Ok(received_shares
-                    .lock()
-                    .clone()
-                    .into_iter()
-                    .map(VidShare::V1)
-                    .collect())
-            },
+            // Create the AvidM parameters from the total weight
+            let avidm_param = init_avidm_param(total_weight)
+                .with_context(|| "failed to initialize avidm param")?;
 
-            // If it was an error from the inner request, return that error
-            Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+            // Get the payload hash for verification
+            let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
+                bail!("V0 share verification not supported yet");
+            };
 
-            // If it was successful, this was unexpected.
-            Ok(Ok(_)) => bail!("this should not be possible"),
+            // Create a random request id
+            let request_id = rand::thread_rng().gen();
+
+            // Request and verify the shares from all other nodes, timing out after `duration` seconds
+            let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let received_shares_clone = received_shares.clone();
+            let request_result: anyhow::Result<_, _> = timeout(
+                duration,
+                request_response_protocol.request_indefinitely::<_, _, _>(
+                    Request::VidShare(block_number, request_id),
+                    RequestType::Broadcast,
+                    move |_request, response| {
+                        let avidm_param = avidm_param.clone();
+                        let received_shares = received_shares_clone.clone();
+                        async move {
+                            // Make sure the response was a V1 share
+                            let Response::VidShare(VidShare::V1(received_share)) = response else {
+                                bail!("V0 share verification not supported yet");
+                            };
+
+                            // Verify the share
+                            let Ok(Ok(_)) = AvidMScheme::verify_share(
+                                &avidm_param,
+                                &local_payload_hash,
+                                &received_share,
+                            ) else {
+                                bail!("share verification failed");
+                            };
+
+                            // Add the share to the list of received shares
+                            received_shares.lock().push(received_share);
+
+                            bail!("waiting for more shares");
+
+                            #[allow(unreachable_code)]
+                            Ok(())
+                        }
+                    },
+                ),
+            )
+            .await;
+
+            // If the request timed out, return the shares we have collected so far
+            match request_result {
+                Err(_) => {
+                    // If it timed out, this was successful. Return the shares we have collected so far
+                    Ok(received_shares
+                        .lock()
+                        .clone()
+                        .into_iter()
+                        .map(VidShare::V1)
+                        .collect())
+                },
+
+                // If it was an error from the inner request, return that error
+                Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+
+                // If it was successful, this was unexpected.
+                Ok(Ok(_)) => bail!("this should not be possible"),
+            }
         }
+        .boxed()
     }
 }
 
@@ -6428,13 +6429,13 @@ mod test {
             .unwrap();
         for i in 0.. {
             tracing::info!(i, "stream proof");
-            let proof: ADVZNamespaceProofQueryData = match proofs.next().await.unwrap() {
-                Ok(proof) => proof,
-                Err(err) => {
-                    // Error not expected on legacy consensus version.
+            let proof: ADVZNamespaceProofQueryData = match proofs.next().await {
+                Some(proof) => proof.unwrap(),
+                None => {
+                    // Steam not expected to end on legacy consensus version.
                     assert!(
                         version >= EpochVersion::version(),
-                        "legacy API failed even on legacy consensus: {err}"
+                        "legacy steam ended while still on legacy consensus"
                     );
                     break;
                 },
