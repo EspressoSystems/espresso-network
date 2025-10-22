@@ -153,7 +153,7 @@ impl<K: SignatureKey + 'static> RunDef for ProductionDef<K> {
 pub struct UserDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> ConnectionDef for UserDef<K> {
     type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -173,7 +173,7 @@ impl<K: SignatureKey> ConnectionDef for BrokerDef<K> {
 pub struct ClientDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey> ConnectionDef for ClientDef<K> {
     type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
