@@ -74,6 +74,7 @@ pub mod options;
 pub mod sql;
 mod update;
 
+pub use hotshot_query_service::availability::{StateCertQueryDataV1, StateCertQueryDataV2};
 pub use options::Options;
 
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;

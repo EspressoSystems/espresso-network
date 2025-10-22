@@ -23,7 +23,10 @@ pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
-    availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
+    availability::{
+        self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu, StateCertQueryDataV1,
+        StateCertQueryDataV2,
+    },
     explorer::{self, ExplorerDataSource},
     merklized_state::{
         self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
@@ -665,11 +668,7 @@ where
                 },
             };
 
-            // Convert V2 to V1 for this endpoint
-            let cert_v1: hotshot_types::simple_certificate::LightClientStateUpdateCertificateV1<
-                SeqTypes,
-            > = cert_v2.into();
-            Ok(cert_v1)
+            Ok(StateCertQueryDataV1::from(StateCertQueryDataV2(cert_v2)))
         }
         .boxed()
     })?;
@@ -688,7 +687,7 @@ where
                 })?;
 
             match state_cert {
-                Some(cert) => Ok(cert),
+                Some(cert) => Ok(StateCertQueryDataV2(cert)),
                 None => {
                     // Not found locally, try to fetch from peers
                     let cert = state
@@ -712,7 +711,7 @@ where
                             status: StatusCode::INTERNAL_SERVER_ERROR,
                         })?;
 
-                    Ok(cert)
+                    Ok(StateCertQueryDataV2(cert))
                 },
             }
         }

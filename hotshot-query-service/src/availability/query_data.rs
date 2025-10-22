@@ -13,9 +13,13 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use committable::{Commitment, Committable};
+use derive_more::From;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidShare},
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        QuorumCertificate2,
+    },
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
@@ -1079,6 +1083,34 @@ where
             block_hash: common.block_hash(),
             payload_hash: common.payload_hash(),
         }
+    }
+}
+
+/// A wrapper around `LightClientStateUpdateCertificateV1`.
+///
+/// This struct is returned by the `state-cert` API endpoint for backward compatibility.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
+#[serde(bound = "")]
+pub struct StateCertQueryDataV1<Types: NodeType>(pub LightClientStateUpdateCertificateV1<Types>);
+
+/// A wrapper around `LightClientStateUpdateCertificateV2`.
+///
+/// The V2 certificate includes additional fields compared to earlier versions:
+/// - Light client v3 signatures
+/// - `auth_root` — used by the reward claim contract to verify that its
+///   calculated `auth_root` matches the one in the Light Client contract.
+///
+/// This struct is returned by the `state-cert-v2` API endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
+#[serde(bound = "")]
+pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
+
+impl<Types> From<StateCertQueryDataV2<Types>> for StateCertQueryDataV1<Types>
+where
+    Types: NodeType,
+{
+    fn from(cert: StateCertQueryDataV2<Types>) -> Self {
+        Self(cert.0.into())
     }
 }
 
