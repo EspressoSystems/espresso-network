@@ -20,14 +20,13 @@ use futures::{
 use hotshot_task::task::Task;
 #[cfg(feature = "rewind")]
 use hotshot_task_impls::rewind::RewindTaskState;
-#[cfg(feature = "stats")]
-use hotshot_task_impls::stats::StatsTaskState;
 use hotshot_task_impls::{
     da::DaTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
+    stats::StatsTaskState,
     transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
     vid::VidTaskState,
@@ -269,8 +268,9 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
         handle.add_task(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(ConsensusTaskState::<TYPES, I, V>::create_from(handle).await);
-        #[cfg(feature = "stats")]
-        handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
+        if cfg!(feature = "stats") {
+            handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
+        }
     }
     add_queue_len_task(handle);
     #[cfg(feature = "rewind")]
