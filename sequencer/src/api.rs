@@ -1806,9 +1806,21 @@ mod api_tests {
         let block_height = wait_for_decide_on_handle(&mut events, &txn).await.0 as usize;
         tracing::info!(block_height, "transaction sequenced");
 
+        // Submit a second transaction for range queries.
+        let txn2 = Transaction::new(ns_id, vec![5, 6, 7, 8]);
+        client
+            .post::<Commitment<Transaction>>("submit/submit")
+            .body_json(&txn2)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let block_height2 = wait_for_decide_on_handle(&mut events, &txn2).await.0 as usize;
+        tracing::info!(block_height2, "transaction sequenced");
+
         // Wait for the query service to update to this block height.
         client
-            .socket(&format!("availability/stream/blocks/{block_height}"))
+            .socket(&format!("availability/stream/blocks/{block_height2}"))
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -1862,6 +1874,25 @@ mod api_tests {
         }
         assert!(found_txn);
         assert!(found_empty_block);
+
+        // Test range query.
+        let ns_proofs: Vec<NamespaceProofQueryData> = client
+            .get(&format!(
+                "availability/block/{block_height}/{}/namespace/{ns_id}",
+                block_height2 + 1
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ns_proofs.len(), block_height2 + 1 - block_height);
+        assert_eq!(&ns_proofs[0].transactions, std::slice::from_ref(&txn));
+        assert_eq!(
+            &ns_proofs[ns_proofs.len() - 1].transactions,
+            std::slice::from_ref(&txn2)
+        );
+        for proof in &ns_proofs[1..ns_proofs.len() - 1] {
+            assert_eq!(proof.transactions, &[]);
+        }
     }
 
     #[rstest_reuse::apply(testable_sequencer_data_source)]
@@ -6250,7 +6281,7 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            let proof = ns_proof.proof.unwrap();
+            let proof = ns_proof.proof.as_ref().unwrap();
             if version < EpochVersion::version() {
                 assert!(matches!(proof, NsProof::V0(..)));
             } else {
@@ -6266,6 +6297,18 @@ mod test {
             assert_eq!(ns_from_proof, ns);
             assert_eq!(txs, ns_proof.transactions);
             assert_eq!(txs, std::slice::from_ref(&tx));
+
+            // Test range endpoint.
+            let ns_proofs: Vec<NamespaceProofQueryData> = client
+                .get(&format!(
+                    "{api_ver}/availability/block/{}/{}/namespace/{ns}",
+                    block,
+                    block + 1
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
 
             // Any API version can correctly tell us that the namespace does not exist.
             let ns_proof: NamespaceProofQueryData = client
@@ -6288,7 +6331,7 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            let proof = ns_proof.proof.unwrap();
+            let proof = ns_proof.proof.as_ref().unwrap();
             let VidCommon::V0(common) = common.common() else {
                 panic!("wrong VID common version");
             };
@@ -6298,6 +6341,18 @@ mod test {
             assert_eq!(ns_from_proof, ns);
             assert_eq!(txs, ns_proof.transactions);
             assert_eq!(txs, [tx]);
+
+            // Test range endpoint.
+            let ns_proofs: Vec<ADVZNamespaceProofQueryData> = client
+                .get(&format!(
+                    "v0/availability/block/{}/{}/namespace/{ns}",
+                    block,
+                    block + 1
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
         } else {
             // It will fail if we ask for a proof for a block using new VID.
             client

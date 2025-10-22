@@ -1,7 +1,12 @@
 use std::time::Duration;
 
 use espresso_types::{NamespaceId, NsProof, PubKey};
-use futures::{try_join, FutureExt};
+use futures::{
+    future::{try_join_all, FutureExt},
+    join,
+    stream::{StreamExt, TryStreamExt},
+    try_join,
+};
 use hotshot_query_service::{
     availability::{
         self, AvailabilityDataSource, BlockQueryData, Error, FetchBlockSnafu, VidCommonQueryData,
@@ -187,6 +192,37 @@ async fn get_block_for_ns_proof(
     )
 }
 
+async fn get_block_range_for_ns_proof(
+    req: &RequestParams,
+    state: &impl AvailabilityDataSource<SeqTypes>,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>, Error> {
+    let from: usize = req.integer_param("from")?;
+    let until: usize = req.integer_param("until")?;
+    if until.saturating_sub(from) > limit {
+        return Err(Error::RangeLimit { from, until, limit });
+    }
+
+    let blocks = state.get_block_range(from..until).await;
+    let vids = state.get_vid_common_range(from..until).await;
+    blocks
+        .zip(vids)
+        .enumerate()
+        .then(|(i, (block, vid))| async move {
+            let (Some(block), Some(vid)) =
+                join!(block.with_timeout(timeout), vid.with_timeout(timeout),)
+            else {
+                return Err(Error::FetchBlock {
+                    resource: (from + i).to_string(),
+                });
+            };
+            Ok((block, vid))
+        })
+        .try_collect()
+        .await
+}
+
 // TODO (abdul): replace snafu with `this_error` in  hotshot query service
 // Snafu has been replaced by `this_error` everywhere.
 // However, the query service still uses snafu
@@ -202,6 +238,7 @@ where
     let extension = toml::from_str(include_str!("../../../api/availability.toml"))?;
     options.extensions.push(extension);
     let timeout = options.fetch_timeout;
+    let limit = options.large_object_range_limit;
 
     let mut api = availability::define_api::<AvailState<N, P, D, _>, SeqTypes, _>(
         &options,
@@ -217,6 +254,19 @@ where
                 get_ns_proof_v1(&block, &common, ns_id, state).await
             }
             .boxed()
+        })?
+        .get("getnamespaceproof_range", move |req, state| {
+            async move {
+                let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
+                let blocks = get_block_range_for_ns_proof(&req, state, limit, timeout).await?;
+                try_join_all(
+                    blocks
+                        .iter()
+                        .map(|(block, vid)| get_ns_proof_v1(block, vid, ns_id, state)),
+                )
+                .await
+            }
+            .boxed()
         })?;
     } else if api_ver.major == 0 {
         api.get("getnamespaceproof", move |req, state| {
@@ -224,6 +274,19 @@ where
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let (block, common) = get_block_for_ns_proof(&req, state, timeout).await?;
                 get_ns_proof_v0(&block, &common, ns_id, state).await
+            }
+            .boxed()
+        })?
+        .get("getnamespaceproof_range", move |req, state| {
+            async move {
+                let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
+                let blocks = get_block_range_for_ns_proof(&req, state, limit, timeout).await?;
+                try_join_all(
+                    blocks
+                        .iter()
+                        .map(|(block, vid)| get_ns_proof_v0(block, vid, ns_id, state)),
+                )
+                .await
             }
             .boxed()
         })?;
