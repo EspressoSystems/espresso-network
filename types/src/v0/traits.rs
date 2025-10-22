@@ -268,6 +268,28 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch the state certificate for a given epoch without retrying on transient errors.
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>;
+
+    /// Fetch the state certificate for a given epoch, retrying on transient errors.
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                provider
+                    .try_fetch_state_cert(retry, epoch)
+                    .map_err(|err| err.context(format!("fetching state cert for epoch {epoch}")))
+                    .boxed()
+            })
+            .await
+    }
+
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
     fn is_local(&self) -> bool;
 
@@ -444,6 +466,21 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        (**self).try_fetch_state_cert(retry, epoch).await
+    }
+
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        (**self).fetch_state_cert(epoch).await
+    }
+
     fn backoff(&self) -> &BackoffParams {
         (**self).backoff()
     }
@@ -574,6 +611,19 @@ pub trait SequencerPersistence:
     async fn load_state_cert(
         &self,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    /// Get a state certificate for an epoch.
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    /// Insert a state certificate for a given epoch.
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
 
     /// Load the latest known consensus state.
     ///

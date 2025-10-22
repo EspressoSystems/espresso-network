@@ -1710,6 +1710,68 @@ impl SequencerPersistence for Persistence {
         Ok(result)
     }
 
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.finalized_state_cert_dir_path();
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        if !file_path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&file_path).context(format!(
+            "reading light client state update certificate {}",
+            file_path.display()
+        ))?;
+
+        let cert = bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(&bytes)
+            .or_else(|error| {
+                tracing::info!(
+                    %error,
+                    path = %file_path.display(),
+                    "Failed to deserialize LightClientStateUpdateCertificateV2"
+                );
+
+                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
+                    .map(Into::into)
+                    .with_context(|| {
+                        format!(
+                            "Failed to deserialize with v1 and v2. path='{}'. error: {error}",
+                            file_path.display()
+                        )
+                    })
+            })?;
+
+        Ok(Some(cert))
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.finalized_state_cert_dir_path();
+
+        fs::create_dir_all(&dir_path)
+            .context(format!("creating state cert dir {}", dir_path.display()))?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let bytes = bincode::serialize(&cert)
+            .context("serializing light client state update certificate")?;
+
+        fs::write(&file_path, bytes).context(format!(
+            "writing light client state update certificate {}",
+            file_path.display()
+        ))?;
+
+        Ok(())
+    }
+
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
         // todo!()
     }

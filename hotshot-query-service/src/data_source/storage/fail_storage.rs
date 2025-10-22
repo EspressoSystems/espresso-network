@@ -30,8 +30,7 @@ use super::{
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
-        VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::{
         storage::{PayloadMetadata, VidCommonMetadata},
@@ -465,11 +464,6 @@ where
             .await?;
         self.inner.first_available_leaf(from).await
     }
-
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
-        self.maybe_fail_read(FailableAction::GetStateCert).await?;
-        self.inner.get_state_cert(epoch).await
-    }
 }
 
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
@@ -500,14 +494,6 @@ where
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_vid(common, share).await
-    }
-
-    async fn insert_state_cert(
-        &mut self,
-        state_cert: StateCertQueryDataV2<Types>,
-    ) -> anyhow::Result<()> {
-        self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_state_cert(state_cert).await
     }
 }
 

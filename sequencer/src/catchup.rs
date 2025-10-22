@@ -33,6 +33,7 @@ use hotshot_types::{
     data::ViewNumber,
     message::UpgradeLock,
     network::NetworkConfig,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
@@ -448,6 +449,22 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.fetch(retry, |client| async move {
+            client
+                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&format!(
+                    "state-cert-v2/{epoch}"
+                ))
+                .send()
+                .await
+        })
+        .await
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -557,7 +574,13 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 }
+
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
+
+impl CatchupStorage
+    for hotshot_query_service::data_source::storage::FileSystemStorage<crate::SeqTypes>
+{
+}
 
 impl<T, S> CatchupStorage for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
@@ -805,6 +828,19 @@ where
         Ok(proofs)
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        _epoch: u64,
+    ) -> anyhow::Result<
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    > {
+        bail!(
+            "state cert catchup not supported for SqlStateCatchup, use state_catchup from \
+             NodeState instead"
+        );
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -916,6 +952,16 @@ impl StateCatchup for NullStateCatchup {
         _fee_merkle_tree_root: RewardMerkleCommitmentV1,
         _account: &[RewardAccountV1],
     ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        bail!("state catchup is disabled");
+    }
+
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        _epoch: u64,
+    ) -> anyhow::Result<
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    > {
         bail!("state catchup is disabled");
     }
 
@@ -1312,6 +1358,32 @@ impl StateCatchup for ParallelStateCatchup {
                 ).await
             }}
         }})
+        .await
+    }
+
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    > {
+        // Try fetching the state cert on the local providers first
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_state_cert(retry, epoch).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(move |provider| async move {
+            provider.try_fetch_state_cert(retry, epoch).await
+        })
         .await
     }
 

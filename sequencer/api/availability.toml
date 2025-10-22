@@ -8,3 +8,26 @@ DOC = "Get the transactions in a namespace of the given block, along with a proo
 PATH = ["incorrect-encoding-proof/:block_number"]
 ":block_number" = "Integer"
 DOC = "Generate a proof of incorrect encoding for the given block number."
+
+[route.get_state_cert]
+PATH = ["state-cert/:epoch"]
+":epoch" = "Integer"
+DOC = """
+Get the light client state update certificate (V1) for the given epoch.
+
+The light client state update certificate consists of the list of Schnorr signatures of the light
+client state at the end of the epoch. This is used to update light client state in the contract so
+that it have the new stake table information for the next epoch.
+"""
+
+[route.get_state_cert_v2]
+PATH = ["state-cert-v2/:epoch"]
+":epoch" = "Integer"
+DOC = """
+Get the light client state update certificate (V2) for the given epoch.
+
+The light client state update certificate consists of the list of Schnorr signatures of the light
+client state at the end of the epoch. This is used to update light client state in the contract so
+that it have the new stake table information for the next epoch. This also contains the auth_root field,
+which is calculated based on the Keccak-256 hash of the reward Merkle tree roots.
+"""

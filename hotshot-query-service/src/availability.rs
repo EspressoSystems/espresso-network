@@ -734,33 +734,6 @@ where
             })
         }
         .boxed()
-    })?
-    .at("get_state_cert", move |req, state| {
-        async move {
-            let epoch = req.integer_param("epoch")?;
-            let fetch = state
-                .read(|state| state.get_state_cert(epoch).boxed())
-                .await;
-            fetch
-                .with_timeout(timeout)
-                .await
-                .context(FetchStateCertSnafu { epoch })
-                .map(StateCertQueryDataV1::from)
-        }
-        .boxed()
-    })?
-    .at("get_state_cert_v2", move |req, state| {
-        async move {
-            let epoch = req.integer_param("epoch")?;
-            let fetch = state
-                .read(|state| state.get_state_cert(epoch).boxed())
-                .await;
-            fetch
-                .with_timeout(timeout)
-                .await
-                .context(FetchStateCertSnafu { epoch })
-        }
-        .boxed()
     })?;
     Ok(api)
 }
@@ -1663,7 +1636,7 @@ mod test {
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         data_source
-            .append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
+            .append(BlockInfo::new(leaf, Some(block.clone()), None, None))
             .await
             .unwrap();
 

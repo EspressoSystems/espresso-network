@@ -26,6 +26,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
@@ -164,6 +165,25 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
 }
 
+// Thin wrapper trait to access persistence methods from API handlers
+#[async_trait]
+pub(crate) trait StateCertDataSource {
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<
+        Option<
+            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<crate::SeqTypes>,
+        >,
+    >;
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<crate::SeqTypes>,
+    ) -> anyhow::Result<()>;
+}
+
 pub(crate) trait CatchupDataSource: Sync {
     /// Get the state of the requested `account`.
     ///
@@ -293,6 +313,15 @@ pub trait RequestResponseDataSource<Types: NodeType> {
         vid_common_data: VidCommonQueryData<Types>,
         duration: Duration,
     ) -> anyhow::Result<Vec<VidShare>>;
+}
+
+#[async_trait]
+pub trait StateCertFetchingDataSource<Types: NodeType> {
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<Types>>;
 }
 
 #[cfg(any(test, feature = "testing"))]

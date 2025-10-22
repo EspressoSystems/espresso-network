@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use committable::Commitment;
 use data_source::{
     CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
-    SubmitDataSource,
+    StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
 use espresso_types::{
@@ -37,9 +37,10 @@ use hotshot_types::{
     event::{Event, LegacyEvent},
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType, Versions},
     },
     vid::avidm::{init_avidm_param, AvidMScheme},
     vote::HasViewNumber,
@@ -371,6 +372,19 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
+impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
+    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D, V>
+{
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.as_ref().request_state_cert(epoch, timeout).await
+    }
+}
+
+#[async_trait]
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
 {
@@ -469,6 +483,121 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             // If it was successful, this was unexpected.
             Ok(Ok(_)) => bail!("this should not be possible"),
         }
+    }
+}
+
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
+    StateCertFetchingDataSource<SeqTypes> for ApiState<N, P, V>
+{
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> anyhow::Result<
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    > {
+        use espresso_types::v0::traits::StateCatchup;
+
+        let consensus = self.consensus().await;
+        let consensus_read = consensus.read().await;
+
+        let current_epoch = consensus_read.cur_epoch().await;
+
+        // The highest epoch we can have a state certificate for is current_epoch + 1
+        // Check if requested epoch is beyond the highest possible epoch
+        let highest_epoch = current_epoch.map(|e| e.u64() + 1);
+
+        if Some(epoch) > highest_epoch {
+            bail!(
+                "requested state certificate for epoch {epoch} is beyond the highest possible \
+                 epoch {highest_epoch:?}"
+            );
+        }
+
+        // Get the stake table for the requested epoch from membership
+        // to validate state cert
+        let _stake_table = consensus_read
+            .membership_coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
+            .await?;
+
+        drop(consensus_read);
+        drop(consensus);
+
+        let state_catchup = self
+            .sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .node_state()
+            .state_catchup
+            .clone();
+
+        let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(epoch)).await;
+
+        match result {
+            Err(_) => bail!("timeout while fetching state cert for epoch {epoch}"),
+            // Got a response
+            Ok(Ok(cert)) => Ok(cert),
+            // Fetch failed
+            Ok(Err(e)) => {
+                Err(e).with_context(|| format!("failed to fetch state cert for epoch {epoch}"))
+            },
+        }
+    }
+}
+
+// Thin wrapper implementations that delegate to persistence
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence> StateCertDataSource
+    for StorageState<N, P, D, V>
+{
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<
+        Option<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>,
+    > {
+        self.as_ref().get_state_cert_by_epoch(epoch).await
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        self.as_ref().insert_state_cert(epoch, cert).await
+    }
+}
+
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCertDataSource
+    for ApiState<N, P, V>
+{
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<
+        Option<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>,
+    > {
+        let consensus = self.consensus().await;
+        let consensus_lock = consensus.read().await;
+        let persistence = consensus_lock.storage();
+
+        persistence.get_state_cert_by_epoch(epoch).await
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let consensus = self.consensus().await;
+        let consensus_lock = consensus.read().await;
+        let persistence = consensus_lock.storage();
+
+        persistence.insert_state_cert(epoch, cert).await
     }
 }
 
