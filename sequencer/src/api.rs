@@ -2203,13 +2203,15 @@ mod test {
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
         v0_4::RewardMerkleProofV2,
-        validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
-        Header, L1Client, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
+        validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
+        EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
+        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
         SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
+        try_join,
     };
     use hotshot::types::EventType;
     use hotshot_contract_adapter::{
@@ -2251,7 +2253,9 @@ mod test {
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
         TestNetwork, TestNetworkConfigBuilder,
     };
-    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode};
+    use tide_disco::{
+        app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode, Url,
+    };
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -6175,5 +6179,148 @@ mod test {
         assert!(!validators.is_empty());
 
         Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_namespace_query_compat_v0_2() {
+        test_namespace_query_compat_helper(SequencerVersions::<FeeVersion, FeeVersion>::new())
+            .await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_namespace_query_compat_v0_3() {
+        test_namespace_query_compat_helper(SequencerVersions::<EpochVersion, EpochVersion>::new())
+            .await;
+    }
+
+    async fn test_namespace_query_compat_helper<V: Versions>(v: V) {
+        // Number of nodes running in the test network.
+        const NUM_NODES: usize = 5;
+
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::from(options::Http {
+                port,
+                max_connections: None,
+            }))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let mut network = TestNetwork::new(config, v).await;
+        let mut events = network.server.event_stream().await;
+
+        // Submit a transaction.
+        let ns = NamespaceId::from(10_000u64);
+        let tx = Transaction::new(ns, vec![1, 2, 3]);
+        network.server.submit_transaction(tx.clone()).await.unwrap();
+        let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
+
+        // Check namespace proof queries.
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        let (header, common): (Header, VidCommonQueryData<SeqTypes>) = try_join!(
+            client.get(&format!("availability/header/{block}")).send(),
+            client
+                .get(&format!("availability/vid/common/{block}"))
+                .send()
+        )
+        .unwrap();
+        let version = header.version();
+
+        // The latest version of the API (whether we specifically ask for v1 or let the redirect
+        // occur) will give us a namespace proof no matter which VID version is in use.
+        for api_ver in ["/v1", ""] {
+            tracing::info!("test namespace API version: {api_ver}");
+
+            let ns_proof: NamespaceProofQueryData = client
+                .get(&format!(
+                    "{api_ver}/availability/block/{block}/namespace/{ns}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            let proof = ns_proof.proof.unwrap();
+            if version < EpochVersion::version() {
+                assert!(matches!(proof, NsProof::V0(..)));
+            } else {
+                assert!(matches!(proof, NsProof::V1(..)));
+            }
+            let (txs, ns_from_proof) = proof
+                .verify(
+                    header.ns_table(),
+                    &header.payload_commitment(),
+                    common.common(),
+                )
+                .unwrap();
+            assert_eq!(ns_from_proof, ns);
+            assert_eq!(txs, ns_proof.transactions);
+            assert_eq!(txs, std::slice::from_ref(&tx));
+
+            // Any API version can correctly tell us that the namespace does not exist.
+            let ns_proof: NamespaceProofQueryData = client
+                .get(&format!(
+                    "{api_ver}/availability/block/{}/namespace/{ns}",
+                    block + 1
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(ns_proof.proof, None);
+            assert_eq!(ns_proof.transactions, vec![]);
+        }
+
+        // The legacy version of the API only works for old VID.
+        tracing::info!("test namespace API version: v0");
+        if version < EpochVersion::version() {
+            let ns_proof: ADVZNamespaceProofQueryData = client
+                .get(&format!("v0/availability/block/{block}/namespace/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            let proof = ns_proof.proof.unwrap();
+            let VidCommon::V0(common) = common.common() else {
+                panic!("wrong VID common version");
+            };
+            let (txs, ns_from_proof) = proof
+                .verify(header.ns_table(), &header.payload_commitment(), common)
+                .unwrap();
+            assert_eq!(ns_from_proof, ns);
+            assert_eq!(txs, ns_proof.transactions);
+            assert_eq!(txs, [tx]);
+        } else {
+            // It will fail if we ask for a proof for a block using new VID.
+            client
+                .get::<ADVZNamespaceProofQueryData>(&format!(
+                    "v0/availability/block/{block}/namespace/{ns}"
+                ))
+                .send()
+                .await
+                .unwrap_err();
+        }
+
+        // Any API version can correctly tell us that the namespace does not exist.
+        let ns_proof: ADVZNamespaceProofQueryData = client
+            .get(&format!(
+                "v0/availability/block/{}/namespace/{ns}",
+                block + 1
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ns_proof.proof, None);
+        assert_eq!(ns_proof.transactions, vec![]);
+
+        network.server.shut_down().await;
     }
 }
