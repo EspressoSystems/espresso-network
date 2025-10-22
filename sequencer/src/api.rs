@@ -1843,6 +1843,30 @@ mod api_tests {
                 .await
                 .unwrap();
 
+            // Check other means of querying the same proof.
+            assert_eq!(
+                ns_query_res,
+                client
+                    .get(&format!(
+                        "availability/block/hash/{}/namespace/{ns_id}",
+                        header.commit()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                ns_query_res,
+                client
+                    .get(&format!(
+                        "availability/block/payload-hash/{}/namespace/{ns_id}",
+                        header.payload_commitment()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+            );
+
             // Verify namespace proof if present
             if let Some(ns_proof) = ns_query_res.proof {
                 let vid_common: VidCommonQueryData<SeqTypes> = client

@@ -11,7 +11,7 @@ use hotshot_query_service::{
     availability::{
         self, AvailabilityDataSource, BlockQueryData, Error, FetchBlockSnafu, VidCommonQueryData,
     },
-    node::NodeDataSource,
+    node::{BlockId, NodeDataSource},
     types::HeightIndexed,
     ApiState,
 };
@@ -167,26 +167,32 @@ async fn get_block_for_ns_proof(
     state: &impl AvailabilityDataSource<SeqTypes>,
     timeout: Duration,
 ) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>), Error> {
-    let height: usize = req.integer_param("height")?;
+    let id = if let Some(height) = req.opt_integer_param("height")? {
+        BlockId::Number(height)
+    } else if let Some(hash) = req.opt_blob_param("hash")? {
+        BlockId::Hash(hash)
+    } else {
+        BlockId::PayloadHash(req.blob_param("payload-hash")?)
+    };
     try_join!(
         async move {
             state
-                .get_block(height)
+                .get_block(id)
                 .await
                 .with_timeout(timeout)
                 .await
                 .context(FetchBlockSnafu {
-                    resource: height.to_string(),
+                    resource: id.to_string(),
                 })
         },
         async move {
             state
-                .get_vid_common(height)
+                .get_vid_common(id)
                 .await
                 .with_timeout(timeout)
                 .await
                 .context(FetchBlockSnafu {
-                    resource: height.to_string(),
+                    resource: id.to_string(),
                 })
         }
     )
