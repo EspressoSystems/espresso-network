@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use espresso_types::{NamespaceId, NsProof, PubKey};
 use futures::{
-    future::{try_join_all, FutureExt},
+    future::{try_join_all, FutureExt, TryFutureExt},
     join,
-    stream::{StreamExt, TryStreamExt},
+    stream::{Stream, StreamExt, TryStreamExt},
     try_join,
 };
 use hotshot_query_service::{
@@ -21,7 +21,7 @@ use hotshot_types::{
     vid::avidm::AvidMShare,
 };
 use snafu::OptionExt;
-use tide_disco::{Api, RequestParams, StatusCode};
+use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
 use tracing::warn;
 use vbs::version::StaticVersionType;
 
@@ -115,15 +115,10 @@ async fn get_namespace_proof(
     })
 }
 
-async fn get_ns_proof_v1(
-    block: &BlockQueryData<SeqTypes>,
-    common: &VidCommonQueryData<SeqTypes>,
+fn extract_ns_proof_v1(
+    proof: Option<NsProof>,
     ns_id: NamespaceId,
-    state: &(impl AvailabilityDataSource<SeqTypes>
-          + NodeDataSource<SeqTypes>
-          + RequestResponseDataSource<SeqTypes>),
 ) -> Result<espresso_types::NamespaceProofQueryData, Error> {
-    let proof = get_namespace_proof(block, common, ns_id, state).await?;
     let transactions = proof
         .as_ref()
         .map(|proof| proof.export_all_txs(&ns_id))
@@ -134,15 +129,11 @@ async fn get_ns_proof_v1(
     })
 }
 
-async fn get_ns_proof_v0(
-    block: &BlockQueryData<SeqTypes>,
-    common: &VidCommonQueryData<SeqTypes>,
+fn extract_ns_proof_v0(
+    proof: Option<NsProof>,
     ns_id: NamespaceId,
-    state: &(impl AvailabilityDataSource<SeqTypes>
-          + NodeDataSource<SeqTypes>
-          + RequestResponseDataSource<SeqTypes>),
 ) -> Result<espresso_types::ADVZNamespaceProofQueryData, Error> {
-    let proof = match get_namespace_proof(block, common, ns_id, state).await? {
+    let proof = match proof {
         Some(NsProof::V0(proof)) => Some(proof),
         Some(_) => {
             return Err(Error::Custom {
@@ -229,6 +220,44 @@ async fn get_block_range_for_ns_proof(
         .await
 }
 
+fn get_block_stream_for_ns_proof<'a, S>(
+    req: RequestParams,
+    state: &'a S,
+) -> impl 'a
+       + Stream<
+    Item = Result<
+        (
+            NamespaceId,
+            BlockQueryData<SeqTypes>,
+            VidCommonQueryData<SeqTypes>,
+        ),
+        Error,
+    >,
+>
+where
+    S: ReadState,
+    S::State: AvailabilityDataSource<SeqTypes> + Sync,
+{
+    async move {
+        let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
+        let height = req.integer_param("height")?;
+        Ok(state
+            .read(|state| {
+                async move {
+                    state
+                        .subscribe_blocks(height)
+                        .await
+                        .zip(state.subscribe_vid_common(height).await)
+                        .map(move |(block, vid)| (ns_id, block, vid))
+                        .map(Ok)
+                }
+                .boxed()
+            })
+            .await)
+    }
+    .try_flatten_stream()
+}
+
 // TODO (abdul): replace snafu with `this_error` in  hotshot query service
 // Snafu has been replaced by `this_error` everywhere.
 // However, the query service still uses snafu
@@ -257,7 +286,8 @@ where
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let (block, common) = get_block_for_ns_proof(&req, state, timeout).await?;
-                get_ns_proof_v1(&block, &common, ns_id, state).await
+                let proof = get_namespace_proof(&block, &common, ns_id, state).await?;
+                extract_ns_proof_v1(proof, ns_id)
             }
             .boxed()
         })?
@@ -265,21 +295,34 @@ where
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let blocks = get_block_range_for_ns_proof(&req, state, limit, timeout).await?;
-                try_join_all(
-                    blocks
-                        .iter()
-                        .map(|(block, vid)| get_ns_proof_v1(block, vid, ns_id, state)),
-                )
+                try_join_all(blocks.iter().map(|(block, vid)| async move {
+                    let proof = get_namespace_proof(block, vid, ns_id, state).await?;
+                    extract_ns_proof_v1(proof, ns_id)
+                }))
                 .await
             }
             .boxed()
+        })?
+        .stream("stream_namespace_proofs", move |req, state| {
+            get_block_stream_for_ns_proof(req, state)
+                .and_then(move |(ns_id, block, vid)| async move {
+                    let proof = state
+                        .read(move |state| {
+                            async move { get_namespace_proof(&block, &vid, ns_id, state).await }
+                                .boxed()
+                        })
+                        .await?;
+                    extract_ns_proof_v1(proof, ns_id)
+                })
+                .boxed()
         })?;
     } else if api_ver.major == 0 {
         api.get("getnamespaceproof", move |req, state| {
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let (block, common) = get_block_for_ns_proof(&req, state, timeout).await?;
-                get_ns_proof_v0(&block, &common, ns_id, state).await
+                let proof = get_namespace_proof(&block, &common, ns_id, state).await?;
+                extract_ns_proof_v0(proof, ns_id)
             }
             .boxed()
         })?
@@ -287,14 +330,26 @@ where
             async move {
                 let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
                 let blocks = get_block_range_for_ns_proof(&req, state, limit, timeout).await?;
-                try_join_all(
-                    blocks
-                        .iter()
-                        .map(|(block, vid)| get_ns_proof_v0(block, vid, ns_id, state)),
-                )
+                try_join_all(blocks.iter().map(|(block, vid)| async move {
+                    let proof = get_namespace_proof(block, vid, ns_id, state).await?;
+                    extract_ns_proof_v0(proof, ns_id)
+                }))
                 .await
             }
             .boxed()
+        })?
+        .stream("stream_namespace_proofs", move |req, state| {
+            get_block_stream_for_ns_proof(req, state)
+                .and_then(move |(ns_id, block, vid)| async move {
+                    let proof = state
+                        .read(move |state| {
+                            async move { get_namespace_proof(&block, &vid, ns_id, state).await }
+                                .boxed()
+                        })
+                        .await?;
+                    extract_ns_proof_v0(proof, ns_id)
+                })
+                .boxed()
         })?;
     }
 

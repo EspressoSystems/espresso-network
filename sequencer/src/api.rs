@@ -6345,6 +6345,25 @@ mod test {
                 .unwrap();
             assert_eq!(ns_proof.proof, None);
             assert_eq!(ns_proof.transactions, vec![]);
+
+            // Test streaming.
+            let mut proofs = client
+                .socket(&format!(
+                    "{api_ver}/availability/stream/blocks/0/namespace/{ns}"
+                ))
+                .subscribe()
+                .await
+                .unwrap();
+            for i in 0.. {
+                tracing::info!(i, "stream proof");
+                let proof: NamespaceProofQueryData = proofs.next().await.unwrap().unwrap();
+                if proof.proof.is_none() {
+                    tracing::info!("waiting for non-trivial proof from stream");
+                    continue;
+                }
+                assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
+                break;
+            }
         }
 
         // The legacy version of the API only works for old VID.
@@ -6364,7 +6383,7 @@ mod test {
                 .unwrap();
             assert_eq!(ns_from_proof, ns);
             assert_eq!(txs, ns_proof.transactions);
-            assert_eq!(txs, [tx]);
+            assert_eq!(&txs, std::slice::from_ref(&tx));
 
             // Test range endpoint.
             let ns_proofs: Vec<ADVZNamespaceProofQueryData> = client
@@ -6399,6 +6418,34 @@ mod test {
             .unwrap();
         assert_eq!(ns_proof.proof, None);
         assert_eq!(ns_proof.transactions, vec![]);
+
+        // Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
+        // VID version we can't deal with.
+        let mut proofs = client
+            .socket(&format!("v0/availability/stream/blocks/0/namespace/{ns}"))
+            .subscribe()
+            .await
+            .unwrap();
+        for i in 0.. {
+            tracing::info!(i, "stream proof");
+            let proof: ADVZNamespaceProofQueryData = match proofs.next().await.unwrap() {
+                Ok(proof) => proof,
+                Err(err) => {
+                    // Error not expected on legacy consensus version.
+                    assert!(
+                        version >= EpochVersion::version(),
+                        "legacy API failed even on legacy consensus: {err}"
+                    );
+                    break;
+                },
+            };
+            if proof.proof.is_none() {
+                tracing::info!("waiting for non-trivial proof from stream");
+                continue;
+            }
+            assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
+            break;
+        }
 
         network.server.shut_down().await;
     }
