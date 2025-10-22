@@ -494,9 +494,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> anyhow::Result<
-        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
-    > {
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
         use espresso_types::v0::traits::StateCatchup;
 
         let consensus = self.consensus().await;
@@ -556,16 +554,14 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
-    ) -> anyhow::Result<
-        Option<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>,
-    > {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         self.as_ref().get_state_cert_by_epoch(epoch).await
     }
 
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         self.as_ref().insert_state_cert(epoch, cert).await
     }
@@ -578,9 +574,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCer
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
-    ) -> anyhow::Result<
-        Option<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>,
-    > {
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let consensus = self.consensus().await;
         let consensus_lock = consensus.read().await;
         let persistence = consensus_lock.storage();
@@ -591,7 +585,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCer
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         let consensus = self.consensus().await;
         let consensus_lock = consensus.read().await;

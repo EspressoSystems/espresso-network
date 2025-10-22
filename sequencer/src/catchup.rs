@@ -832,13 +832,8 @@ where
         &self,
         _retry: usize,
         _epoch: u64,
-    ) -> anyhow::Result<
-        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
-    > {
-        bail!(
-            "state cert catchup not supported for SqlStateCatchup, use state_catchup from \
-             NodeState instead"
-        );
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        bail!("state cert catchup not supported for SqlStateCatchup");
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -959,9 +954,7 @@ impl StateCatchup for NullStateCatchup {
         &self,
         _retry: usize,
         _epoch: u64,
-    ) -> anyhow::Result<
-        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
-    > {
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
         bail!("state catchup is disabled");
     }
 
@@ -1365,9 +1358,7 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         retry: usize,
         epoch: u64,
-    ) -> anyhow::Result<
-        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
-    > {
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
         // Try fetching the state cert on the local providers first
         let local_result = self
             .on_local_providers(move |provider| async move {

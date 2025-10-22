@@ -171,11 +171,7 @@ pub(crate) trait StateCertDataSource {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
-    ) -> anyhow::Result<
-        Option<
-            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<crate::SeqTypes>,
-        >,
-    >;
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 
     async fn insert_state_cert(
         &self,
