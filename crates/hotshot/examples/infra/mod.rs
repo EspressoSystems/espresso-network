@@ -346,6 +346,7 @@ pub trait RunDa<
 > where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
     TYPES: NodeType<Transaction = TestTransaction>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
@@ -355,18 +356,13 @@ pub trait RunDa<
         config: NetworkConfig<TYPES>,
         validator_config: ValidatorConfig<TYPES>,
         libp2p_advertise_address: Option<String>,
-        membership: &Arc<RwLock<<TYPES as NodeType>::Membership>>,
     ) -> Self;
 
     /// Initializes the genesis state and HotShot instance; does not start HotShot consensus
     /// # Panics if it cannot generate a genesis block, fails to initialize HotShot, or cannot
     /// get the anchored view
     /// Note: sequencing leaf does not have state, so does not return state
-    async fn initialize_state_and_hotshot(
-        &self,
-        membership: Arc<RwLock<<TYPES as NodeType>::Membership>>,
-        orchestrator_url: Option<Url>,
-    ) -> SystemContextHandle<TYPES, NODE, V> {
+    async fn initialize_state_and_hotshot(&self,         orchestrator_url: Option<Url>,    ) -> SystemContextHandle<TYPES, NODE, V> {
         let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis::<V>(
             TestInstanceState::default(),
             self.config().config.epoch_height,
@@ -384,10 +380,19 @@ pub trait RunDa<
         let sk = validator_config.private_key.clone();
         let state_sk = validator_config.state_private_key.clone();
 
-        let network = self.network();
+        let network: Arc<NETWORK> = self.network().into();
 
         let epoch_height = config.config.epoch_height;
         let storage = TestStorage::<TYPES>::default();
+
+        let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new::<NODE>(
+            config.config.known_nodes_with_stake.clone(),
+            config.config.known_da_nodes.clone(),
+            storage.clone(),
+            network.clone(),
+            pk.clone(),
+            config.config.epoch_height,
+        )));
 
         SystemContext::init(
             pk,
@@ -396,7 +401,7 @@ pub trait RunDa<
             config.node_index,
             config.config,
             EpochMembershipCoordinator::new(membership, epoch_height, &storage.clone()),
-            Arc::from(network),
+            network,
             initializer,
             ConsensusMetricsValue::default(),
             storage,
@@ -450,8 +455,8 @@ pub trait RunDa<
                         },
                         EventType::Decide {
                             leaf_chain,
-                            qc: _,
                             block_size,
+                            ..
                         } => {
                             let current_timestamp = Utc::now().timestamp();
                             // this might be a obob
@@ -604,6 +609,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -611,7 +617,6 @@ where
         config: NetworkConfig<TYPES>,
         validator_config: ValidatorConfig<TYPES>,
         _libp2p_advertise_address: Option<String>,
-        _membership: &Arc<RwLock<<TYPES as NodeType>::Membership>>,
     ) -> PushCdnDaRun<TYPES> {
         // Convert to the Push-CDN-compatible type
         let keypair = KeyPair {
@@ -686,6 +691,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -693,7 +699,6 @@ where
         config: NetworkConfig<TYPES>,
         validator_config: ValidatorConfig<TYPES>,
         libp2p_advertise_address: Option<String>,
-        membership: &Arc<RwLock<<TYPES as NodeType>::Membership>>,
     ) -> Libp2pDaRun<TYPES> {
         // Extrapolate keys for ease of use
         let public_key = &validator_config.public_key;
@@ -730,7 +735,6 @@ where
         let libp2p_network = Libp2pNetwork::from_config(
             config.clone(),
             DhtNoPersistence,
-            Arc::clone(membership),
             GossipConfig::default(),
             RequestResponseConfig::default(),
             bind_address,
@@ -790,6 +794,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -797,7 +802,6 @@ where
         config: NetworkConfig<TYPES>,
         validator_config: ValidatorConfig<TYPES>,
         libp2p_advertise_address: Option<String>,
-        membership: &Arc<RwLock<<TYPES as NodeType>::Membership>>,
     ) -> CombinedDaRun<TYPES> {
         // Initialize our Libp2p network
         let libp2p_network: Libp2pDaRun<TYPES> = <Libp2pDaRun<TYPES> as RunDa<
@@ -809,7 +813,6 @@ where
             config.clone(),
             validator_config.clone(),
             libp2p_advertise_address.clone(),
-            membership,
         )
         .await;
 
@@ -823,7 +826,6 @@ where
             config.clone(),
             validator_config.clone(),
             libp2p_advertise_address,
-            membership,
         )
         .await;
 
@@ -877,6 +879,7 @@ pub async fn main_entry_point<
 ) where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
     Leaf<TYPES>: TestableLeaf,
 {
     // Initialize logging
@@ -949,29 +952,12 @@ pub async fn main_entry_point<
             .join(",")
     );
 
-    let all_nodes = if cfg!(feature = "fixed-leader-election") {
-        let mut vec = run_config.config.known_nodes_with_stake.clone();
-        vec.truncate(run_config.config.fixed_leader_for_gpuvid);
-        vec
-    } else {
-        run_config.config.known_nodes_with_stake.clone()
-    };
-    let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
-        all_nodes,
-        run_config.config.known_da_nodes.clone(),
-    )));
-
     info!("Initializing networking");
-    let run = RUNDA::initialize_networking(
-        run_config.clone(),
-        validator_config,
-        args.advertise_address,
-        &membership,
-    )
-    .await;
-    let hotshot = run
-        .initialize_state_and_hotshot(membership, Some(args.url))
-        .await;
+    let run =
+        RUNDA::initialize_networking(run_config.clone(), validator_config, args.advertise_address)
+            .await;
+
+    let hotshot = run.initialize_state_and_hotshot(Some(args.url)).await;
 
     if let Some(task) = builder_task {
         task.start(Box::new(hotshot.event_stream()));

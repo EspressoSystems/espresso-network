@@ -1,6 +1,6 @@
 use std::fmt;
 
-use alloy::hex;
+use alloy::{hex, primitives::B256};
 use anyhow::Result;
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
@@ -19,6 +19,12 @@ impl fmt::Debug for KeccakNode {
         f.debug_tuple("KeccakNode")
             .field(&hex::encode(self.0))
             .finish()
+    }
+}
+
+impl From<KeccakNode> for B256 {
+    fn from(val: KeccakNode) -> Self {
+        val.0.into()
     }
 }
 

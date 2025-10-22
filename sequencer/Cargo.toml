@@ -16,6 +16,14 @@ path = "src/bin/espresso-dev-node.rs"
 required-features = ["testing", "embedded-db"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
+[profile.dev]
+# This profile should allow connecting debuggers. Compiles more slowly and
+# requires significantly more memory to compile.
+strip = "none"
+debug = "full"
+
+
 [features]
 default = ["fee", "pos", "drb-and-header"]
 testing = [
@@ -45,10 +53,8 @@ byteorder = "1"
 hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
 
 # CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.0", package = "cdn-broker", features = [
-    "global-permits",
-] }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.0", package = "cdn-marshal" }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = { workspace = true }

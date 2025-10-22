@@ -171,11 +171,6 @@ async fn init_consensus(
     // Get the number of nodes with stake
     let num_nodes_with_stake = NonZeroUsize::new(pub_keys.len()).unwrap();
 
-    let membership = MockMembership::new(
-        known_nodes_with_stake.clone(),
-        known_nodes_with_stake.clone(),
-    );
-
     // Pick a random, unused port for the builder server
     let builder_port = portpicker::pick_unused_port().expect("No ports available");
 
@@ -201,6 +196,7 @@ async fn init_consensus(
         next_view_timeout: 10000,
         num_bootstrap: 0,
         known_da_nodes: known_nodes_with_stake.clone(),
+        da_committees: Default::default(),
         da_staked_committee_size: pub_keys.len(),
         data_request_delay: Duration::from_millis(200),
         view_sync_timeout: Duration::from_millis(250),
@@ -234,7 +230,7 @@ async fn init_consensus(
                 .map(|kp| kp.sign_key())
                 .collect::<Vec<_>>();
 
-            let membership = membership.clone();
+            let known_nodes_with_stake_clone = known_nodes_with_stake.clone();
             async move {
                 let network = Arc::new(MemoryNetwork::new(
                     &pub_keys[node_id],
@@ -244,6 +240,16 @@ async fn init_consensus(
                 ));
 
                 let storage: TestStorage<MockTypes> = TestStorage::default();
+
+                let membership = MockMembership::new::<MockNodeImpl>(
+                    known_nodes_with_stake_clone.clone(),
+                    known_nodes_with_stake_clone,
+                    storage.clone(),
+                    network.clone(),
+                    pub_keys[node_id],
+                    config.epoch_height,
+                );
+
                 let coordinator = EpochMembershipCoordinator::new(
                     Arc::new(RwLock::new(membership)),
                     config.epoch_height,

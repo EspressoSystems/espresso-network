@@ -25,8 +25,8 @@ use crate::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
-    v0_3::RewardAmount,
-    EpochCommittees, ValidatorMap,
+    v0_3::{RewardAmount, Validator},
+    EpochCommittees, PubKey, ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -121,6 +121,23 @@ impl MembershipPersistence for NoStorage {
     )> {
         bail!("unimplemented")
     }
+
+    async fn store_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        bail!("unimplemented")
+    }
 }
 
 impl NodeState {
@@ -170,7 +187,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -202,7 +219,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -232,7 +249,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -327,7 +344,7 @@ impl Default for NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,

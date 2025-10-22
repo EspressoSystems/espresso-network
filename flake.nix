@@ -14,33 +14,36 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # See https://github.com/EspressoSystems/espresso-network/issues/3240
-  inputs.nixpkgs-legacy-process-compose.url = "github:NixOS/nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae";
-
-  inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
+  # Use ...foundry.nix/stable for latest stable release
+  # On 1.4 foundry's formatting is a bit strange, so we pin 1.3.6 for now
+  inputs.foundry-nix.url = "github:shazow/foundry.nix/e632b06dc759e381ef04f15ff9541f889eda6013";
+  inputs.foundry-nix.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
+  inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
-  inputs.nixpkgs-cross-overlay.url =
-    "github:alekseysidorov/nixpkgs-cross-overlay";
+  inputs.nixpkgs-cross-overlay.url = "github:alekseysidorov/nixpkgs-cross-overlay";
+  inputs.nixpkgs-cross-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
+  inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
+
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
 
-  inputs.pre-commit-hooks.url = "github:cachix/pre-commit-hooks.nix";
+  inputs.git-hooks.url = "github:cachix/git-hooks.nix";
+  inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
     { self
     , nixpkgs
-    , nixpkgs-legacy-process-compose
     , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
-    , pre-commit-hooks
+    , git-hooks
     , solc-bin
     , ...
     }:
@@ -84,10 +87,6 @@
           solhint =
             solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
         })
-        (final: prev: {
-          process-compose =
-            (import nixpkgs-legacy-process-compose { inherit system; }).process-compose;
-        })
 
         (final: prev: {
           golangci-lint = prev.golangci-lint.overrideAttrs (old: rec {
@@ -100,6 +99,13 @@
             };
             vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
           });
+        })
+
+        (final: prev: {
+          prek-as-pre-commit = final.runCommand "prek-as-pre-commit" { } ''
+            mkdir -p $out/bin
+            ln -s ${final.prek}/bin/prek $out/bin/pre-commit
+          '';
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
@@ -127,8 +133,14 @@
     in
     with pkgs; {
       checks = {
-        pre-commit-check = pre-commit-hooks.lib.${system}.run {
+        pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
+          # Use the rust pre-commit implementation `prek`
+          imports = [
+            ({ lib, ... }: {
+              config.package = lib.mkForce prek;
+            })
+          ];
           hooks = {
             doc = {
               enable = true;
@@ -205,9 +217,10 @@
             extensions = [ "rust-analyzer" "rustfmt" ];
           });
           solc = pkgs.solc-bin."0.8.28";
+          pre-commit = self.checks.${system}.pre-commit-check;
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -229,6 +242,8 @@
 
             # Tools
             nixpkgs-fmt
+            prek
+            prek-as-pre-commit # compat to allow running pre-commit
             entr
             process-compose
             lazydocker # a docker compose TUI
@@ -255,8 +270,10 @@
             # provides abigen
             go-ethereum
           ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
-          ;
-          shellHook = rustShellHook + ''
+          ++ pre-commit.enabledPackages;
+          shellHook = ''
+            ${rustShellHook}
+
             # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
 
@@ -266,7 +283,9 @@
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
-          '' + self.checks.${system}.pre-commit-check.shellHook;
+
+            ${pre-commit.shellHook}
+          '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
@@ -281,7 +300,7 @@
           };
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -296,7 +315,7 @@
           toolchain = pkgs.rust-bin.nightly.latest.minimal;
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -306,7 +325,8 @@
             grcov
           ];
           CARGO_INCREMENTAL = "0";
-          shellHook = rustShellHook + ''
+          shellHook = ''
+            ${rustShellHook}
             RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
           '';
           RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
@@ -319,7 +339,7 @@
           };
         in
         myShell (rustEnvVars // {
-          buildInputs = [
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -336,7 +356,7 @@
           solc = pkgs.solc-bin."0.8.28";
         in
         myShell {
-          buildInputs = [
+          packages = [
             # Foundry tools
             foundry-bin
             solc
