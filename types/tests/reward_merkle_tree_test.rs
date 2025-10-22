@@ -98,6 +98,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     let mut contracts = Contracts::new();
     let args = DeployerArgsBuilder::default()
         .deployer(provider.clone())
+        .rpc_url(anvil.endpoint_url())
         .mock_light_client(true)
         .genesis_lc_state(genesis_state)
         .genesis_st_state(genesis_stake)
