@@ -12,16 +12,15 @@
 
 //! Node storage implementation for a database query engine.
 
-use std::{
-    collections::HashMap,
-    ops::{Bound, RangeBounds},
-};
+use std::ops::{Bound, RangeBounds};
 
+use alloy::primitives::map::HashMap;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use hotshot_types::{
     data::VidShare,
+    simple_certificate::QuorumCertificate2,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use snafu::OptionExt;
@@ -302,6 +301,17 @@ where
 
         Ok(TimeWindowQueryData { window, prev, next })
     }
+
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>> {
+        let Some((json,)) = query_as("SELECT qcs FROM latest_qc_chain LIMIT 1")
+            .fetch_optional(self.as_mut())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let qcs = serde_json::from_value(json).decode_error("malformed QC")?;
+        Ok(qcs)
+    }
 }
 
 impl<Types, Mode: TransactionMode> AggregatesStorage<Types> for Transaction<Mode>
@@ -337,8 +347,8 @@ where
         .fetch_all(self.as_mut())
         .await?;
 
-        let mut num_transactions = HashMap::new();
-        let mut payload_size = HashMap::new();
+        let mut num_transactions = HashMap::default();
+        let mut payload_size = HashMap::default();
 
         for (namespace_id, num_tx, payload_sz) in rows {
             // Null namespace is represented as - 1 in database

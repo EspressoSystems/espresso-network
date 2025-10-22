@@ -8,15 +8,17 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf, Leaf2, NetworkConfig, Payload, SeqTypes, StakeTableHash, ValidatorMap,
+    v0_3::{
+        EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy, Validator,
+    },
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -371,6 +373,7 @@ impl Inner {
     async fn generate_decide_events(
         &self,
         view: ViewNumber,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -436,11 +439,21 @@ impl Inner {
         let mut current_interval = None;
         for (view, (leaf, qc)) in leaves {
             let height = leaf.leaf.block_header().block_number();
+
+            // Insert the deciding QC at the appropriate position, with the last decide event in the
+            // chain.
+            let qc2 = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
+            } else {
+                None
+            };
+
             consumer
                 .handle_event(&Event {
                     view_number: view,
                     event: EventType::Decide {
-                        qc: Arc::new(qc),
+                        committing_qc: Arc::new(qc),
+                        deciding_qc: qc2,
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,
                     },
@@ -653,6 +666,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -699,7 +713,10 @@ impl SequencerPersistence for Persistence {
             )?;
         }
 
-        match inner.generate_decide_events(view, consumer).await {
+        match inner
+            .generate_decide_events(view, deciding_qc, consumer)
+            .await
+        {
             Err(err) => {
                 // Event processing failure is not an error, since by this point we have at least
                 // managed to persist the decided leaves successfully, and the event processing will
@@ -1405,6 +1422,74 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+
+        if inner.migrated.contains("stake_table_events") {
+            tracing::info!("stake_table_events already migrated");
+            return Ok(());
+        }
+
+        let dir_path = &inner.stake_table_dir_path();
+        let events_dir = dir_path.join("events");
+        let old_events_dir = dir_path.join("old_events");
+
+        if !events_dir.exists() {
+            inner.migrated.insert("stake_table_events".to_string());
+            inner.update_migration()?;
+            return Ok(());
+        };
+
+        fs::rename(&events_dir, &old_events_dir)?;
+        tracing::info!("Renamed {:?} to {:?}", events_dir, old_events_dir);
+
+        fs::create_dir_all(&events_dir)?;
+
+        tracing::warn!("migrating stake table events..");
+
+        for entry in fs::read_dir(&old_events_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            // last_l1_finalized.bin is copied as-is
+            if path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s == "last_l1_finalized")
+                .unwrap_or(false)
+            {
+                let target = events_dir.join("last_l1_finalized").with_extension("bin");
+                fs::copy(&path, &target)?;
+                continue;
+            }
+
+            // Read legacy event
+            let file = File::open(&path).context("Failed to open legacy event file")?;
+            let reader = BufReader::new(file);
+            let legacy_event: StakeTableEventLegacy =
+                serde_json::from_reader(reader).context("Failed to deserialize legacy event")?;
+
+            let new_event: StakeTableEvent = legacy_event.into();
+
+            let target = events_dir.join(path.file_name().unwrap());
+            let file = File::create(&target).context("Failed to create new event file")?;
+            let writer = BufWriter::new(file);
+
+            serde_json::to_writer_pretty(writer, &new_event)
+                .context("Failed to serialize new event")?;
+        }
+
+        inner.migrated.insert("stake_table_events".to_string());
+        inner.update_migration()?;
+        tracing::warn!("successfully migrated stake table events");
+
+        Ok(())
+    }
+
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.iteration >= drb_input.iteration {
@@ -1416,7 +1501,7 @@ impl SequencerPersistence for Persistence {
             }
         }
 
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.drb_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create drb dir")?;
@@ -1427,10 +1512,20 @@ impl SequencerPersistence for Persistence {
         let file_path = dir_path
             .join(drb_input.epoch.to_string())
             .with_extension("bin");
-        fs::write(&file_path, drb_input_bytes).context(format!(
-            "writing epoch drb_input file for epoch {:?} at {:?}",
-            drb_input.epoch, file_path
-        ))
+
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                file.write_all(&drb_input_bytes).context(format!(
+                    "writing epoch drb_input file for epoch {:?} at {:?}",
+                    drb_input.epoch, file_path
+                ))
+            },
+        )
     }
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
@@ -1447,7 +1542,7 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.epoch_drb_result_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create epoch drb result dir")?;
@@ -1455,10 +1550,18 @@ impl SequencerPersistence for Persistence {
         let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        fs::write(file_path, drb_result_bytes)
-            .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
 
-        Ok(())
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                file.write_all(&drb_result_bytes)
+                    .context(format!("writing epoch drb result file for epoch {epoch:?}"))
+            },
+        )
     }
 
     async fn store_epoch_root(
@@ -1513,38 +1616,40 @@ impl SequencerPersistence for Persistence {
 
         let mut result = Vec::new();
 
-        if drb_dir_path.is_dir() {
-            for (epoch, path) in epoch_files(drb_dir_path)? {
-                let bytes = fs::read(&path)
-                    .context(format!("reading epoch drb result {}", path.display()))?;
-                let drb_result = bincode::deserialize::<DrbResult>(&bytes)
-                    .context(format!("parsing epoch drb result {}", path.display()))?;
+        if !drb_dir_path.is_dir() {
+            return Ok(Vec::new());
+        }
+        for (epoch, path) in epoch_files(drb_dir_path)? {
+            let bytes =
+                fs::read(&path).context(format!("reading epoch drb result {}", path.display()))?;
+            let drb_result = bincode::deserialize::<DrbResult>(&bytes)
+                .context(format!("parsing epoch drb result {}", path.display()))?;
 
-                let block_header_path = block_header_dir_path
-                    .join(epoch.to_string())
-                    .with_extension("txt");
-                let block_header = if block_header_path.is_file() {
-                    let bytes = fs::read(&block_header_path).context(format!(
-                        "reading epoch root block header {}",
-                        block_header_path.display()
-                    ))?;
-                    Some(
-                        bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes)
-                            .context(format!(
-                                "parsing epoch root block header {}",
-                                block_header_path.display()
-                            ))?,
-                    )
-                } else {
-                    None
-                };
+            let block_header_path = block_header_dir_path
+                .join(epoch.to_string())
+                .with_extension("txt");
+            let block_header = if block_header_path.is_file() {
+                let bytes = fs::read(&block_header_path).context(format!(
+                    "reading epoch root block header {}",
+                    block_header_path.display()
+                ))?;
+                Some(
+                    bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes).context(
+                        format!(
+                            "parsing epoch root block header {}",
+                            block_header_path.display()
+                        ),
+                    )?,
+                )
+            } else {
+                None
+            };
 
-                result.push(InitializerEpochInfo::<SeqTypes> {
-                    epoch,
-                    drb_result,
-                    block_header,
-                });
-            }
+            result.push(InitializerEpochInfo::<SeqTypes> {
+                epoch,
+                drb_result,
+                block_header,
+            });
         }
 
         result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
@@ -1895,6 +2000,68 @@ impl MembershipPersistence for Persistence {
             ))
         }
     }
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
+        let validators_dir = dir_path.join("validators");
+
+        // Ensure validators directory exists
+        fs::create_dir_all(&validators_dir)
+            .with_context(|| format!("Failed to create validators dir: {validators_dir:?}"))?;
+
+        // Path = validators/epoch_<number>.json
+        let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
+
+        let file = File::create(&file_path)
+            .with_context(|| format!("Failed to create validator file: {file_path:?}"))?;
+        let writer = BufWriter::new(file);
+
+        serde_json::to_writer_pretty(writer, &all_validators)
+            .with_context(|| format!("Failed to serialize validators for epoch {epoch}"))?;
+
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
+        let validators_dir = dir_path.join("validators");
+        let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
+
+        if !file_path.exists() {
+            bail!("Validator file not found for epoch {epoch}");
+        }
+
+        let file = File::open(&file_path)
+            .with_context(|| format!("Failed to open validator file: {file_path:?}"))?;
+        let reader = BufReader::new(file);
+
+        let map: ValidatorMap = serde_json::from_reader(reader).with_context(|| {
+            format!("Failed to deserialize validators at {file_path:?}. epoch = {epoch}")
+        })?;
+
+        let mut values: Vec<Validator<PubKey>> = map.into_values().collect();
+        values.sort_by_key(|v| v.account);
+
+        let start = offset as usize;
+        let end = (start + limit as usize).min(values.len());
+
+        if start >= values.len() {
+            return Ok(vec![]);
+        }
+
+        Ok(values[start..end].to_vec())
+    }
 }
 
 #[async_trait]
@@ -2079,9 +2246,16 @@ fn epoch_files(
 mod test {
     use std::marker::PhantomData;
 
+    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
+    use hotshot_contract_adapter::sol_types::{
+        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
+        StakeTableV2::{Delegated, Undelegated},
+        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
+        ValidatorRegisteredV2Legacy,
+    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{
@@ -2095,7 +2269,7 @@ mod test {
         },
         vid::advz::advz_scheme,
     };
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
     use serde_json::json;
     use tempfile::TempDir;
     use vbs::version::StaticVersionType;
@@ -2395,7 +2569,7 @@ mod test {
                 .unwrap();
         }
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
         let inner = storage.inner.read().await;
         let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
         let decided_leaves_count = decided_leaves
@@ -2448,7 +2622,7 @@ mod test {
         // re run the consensus migration.
         // No changes will occur, as the migration has already been completed.
         let storage = opt.create().await.unwrap();
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
 
         let inner = storage.inner.read().await;
         let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
@@ -2576,6 +2750,148 @@ mod test {
             [(ViewNumber::new(1), quorum_proposal)]
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_stake_table_events_fs_migration() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let inner = storage.inner.read().await;
+        let events_dir = inner.stake_table_dir_path().join("events");
+        drop(inner);
+        fs::create_dir_all(&events_dir).unwrap();
+        let validator = espresso_types::testing::TestValidator::random();
+        let delegator = Address::random();
+
+        let legacy_events: Vec<(u64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
+            (
+                1,
+                1,
+                StakeTableEventLegacy::Register(ValidatorRegisteredLegacy {
+                    account: validator.account,
+                    blsVk: validator.bls_vk.into(),
+                    schnorrVk: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                }),
+                StakeTableEvent::Register((&validator).into()),
+            ),
+            (
+                1,
+                2,
+                StakeTableEventLegacy::RegisterV2(ValidatorRegisteredV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                    blsSig: validator.bls_sig.into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::RegisterV2((&validator).into()),
+            ),
+            (
+                1,
+                3,
+                StakeTableEventLegacy::KeyUpdate(ConsensusKeysUpdatedLegacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                }),
+                StakeTableEvent::KeyUpdate((&validator).into()),
+            ),
+            (
+                1,
+                4,
+                StakeTableEventLegacy::KeyUpdateV2(ConsensusKeysUpdatedV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    blsSig: validator.bls_sig.into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::KeyUpdateV2((&validator).into()),
+            ),
+            (
+                1,
+                5,
+                StakeTableEventLegacy::Deregister(ValidatorExitLegacy {
+                    validator: validator.account,
+                }),
+                StakeTableEvent::Deregister((&validator).into()),
+            ),
+            (
+                1,
+                6,
+                StakeTableEventLegacy::Delegate(DelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Delegate(Delegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+            (
+                1,
+                7,
+                StakeTableEventLegacy::Undelegate(UndelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Undelegate(Undelegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+        ];
+
+        // Write legacy JSON files (simulate old filesystem storage)
+        for (block, log_index, legacy_event, _) in &legacy_events {
+            let filename = format!("{block}_{log_index}.json");
+            let path = events_dir.join(filename);
+            let mut file = fs::File::create(&path).unwrap();
+            let json = serde_json::to_string_pretty(legacy_event).unwrap();
+            file.write_all(json.as_bytes()).unwrap();
+        }
+
+        let last_block = 1_u64;
+        let mut f = fs::File::create(events_dir.join("last_l1_finalized.bin")).unwrap();
+        f.write_all(&last_block.to_le_bytes()).unwrap();
+
+        // Run migration
+        storage.migrate_stake_table_events().await.unwrap();
+
+        // Verify all events are migrated
+        for (block, log_index, _, expected_event) in legacy_events {
+            let filename = format!("{block}_{log_index}.json");
+            let path = events_dir.join(filename);
+
+            let contents = fs::read_to_string(&path).unwrap();
+            let migrated_event: StakeTableEvent = serde_json::from_str(&contents).unwrap();
+
+            assert_eq!(
+                migrated_event, expected_event,
+                "event migrated incorrectly from legacy"
+            );
+        }
+
+        let finalized_path = events_dir.join("last_l1_finalized.bin");
+        assert!(
+            finalized_path.exists(),
+            "last_l1_finalized.bin is missing after migration"
+        );
+
+        let bytes = fs::read(&finalized_path).unwrap();
+        let migrated_last_block = u64::from_le_bytes(bytes.try_into().unwrap());
+        assert_eq!(
+            migrated_last_block, last_block,
+            "last_l1_finalized.bin did not preserve last finalized block"
         );
     }
 }

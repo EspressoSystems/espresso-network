@@ -4,7 +4,7 @@ use hotshot_types::{
     traits::EncodeBytes,
     vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
 };
-use jf_vid::{
+use jf_advz::{
     payload_prover::{PayloadProver, Statement},
     VidScheme,
 };
@@ -119,27 +119,30 @@ impl ADVZTxProof {
         tx: &Transaction,
         commit: &VidCommitment,
         common: &VidCommon,
-    ) -> Option<bool> {
+    ) -> bool {
         let VidCommitment::V0(commit) = commit else {
             tracing::info!("VID version mismatch");
-            return None;
+            return false;
         };
         let VidCommon::V0(common) = common else {
             tracing::info!("VID version mismatch");
-            return None;
+            return false;
         };
 
-        ADVZScheme::is_consistent(commit, common).ok()?;
+        if ADVZScheme::is_consistent(commit, common).is_err() {
+            tracing::info!("VID common mismatch");
+            return false;
+        }
         let Some(ns_index) = ns_table.find_ns_id(&tx.namespace()) else {
             tracing::info!("ns id {} does not exist", tx.namespace());
-            return None; // error: ns id does not exist
+            return false; // error: ns id does not exist
         };
         let ns_range = ns_table.ns_range(&ns_index, &PayloadByteLen::from_vid_common(common));
         let ns_byte_len = ns_range.byte_len();
 
         if !NumTxs::new(&self.payload_num_txs, &ns_byte_len).in_bounds(&self.tx_index) {
             tracing::info!("tx index {:?} out of bounds", self.tx_index);
-            return None; // error: tx index out of bounds
+            return false; // error: tx index out of bounds
         }
 
         let vid = advz_scheme(
@@ -151,7 +154,7 @@ impl ADVZTxProof {
         // Verify proof for tx table len
         {
             let range = ns_range.block_range(&NumTxsRange::new(&ns_byte_len));
-            if vid
+            if !vid
                 .payload_verify(
                     Statement {
                         payload_subslice: &self.payload_num_txs.to_payload_bytes(),
@@ -161,17 +164,16 @@ impl ADVZTxProof {
                     },
                     &self.payload_proof_num_txs,
                 )
-                .ok()?
-                .is_err()
+                .is_ok_and(|res| res.is_ok())
             {
-                return Some(false);
+                return false;
             }
         }
 
         // Verify proof for tx table entries
         {
             let range = ns_range.block_range(&TxTableEntriesRange::new(&self.tx_index));
-            if vid
+            if !vid
                 .payload_verify(
                     Statement {
                         payload_subslice: &self.payload_tx_table_entries.to_payload_bytes(),
@@ -181,10 +183,9 @@ impl ADVZTxProof {
                     },
                     &self.payload_proof_tx_table_entries,
                 )
-                .ok()?
-                .is_err()
+                .is_ok_and(|res| res.is_ok())
             {
-                return Some(false);
+                return false;
             }
         }
 
@@ -198,7 +199,7 @@ impl ADVZTxProof {
 
             match (&self.payload_proof_tx, range.is_empty()) {
                 (Some(proof), false) => {
-                    if vid
+                    if !vid
                         .payload_verify(
                             Statement {
                                 payload_subslice: tx.payload(),
@@ -208,10 +209,9 @@ impl ADVZTxProof {
                             },
                             proof,
                         )
-                        .ok()?
-                        .is_err()
+                        .is_ok_and(|res| res.is_ok())
                     {
-                        return Some(false);
+                        return false;
                     }
                 },
                 (None, true) => {}, // 0-length tx, nothing to verify
@@ -220,15 +220,15 @@ impl ADVZTxProof {
                         "tx verify: missing proof for nonempty tx payload range {:?}",
                         range
                     );
-                    return None;
+                    return false;
                 },
                 (Some(_), true) => {
                     tracing::error!("tx verify: unexpected proof for empty tx payload range");
-                    return None;
+                    return false;
                 },
             }
         }
 
-        Some(true)
+        true
     }
 }

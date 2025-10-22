@@ -20,10 +20,8 @@ fixed-leader-election = []
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.8", package = "cdn-broker", features = [
-    "global-permits",
-] }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.8", package = "cdn-marshal" }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, optional = true }
 espresso-types = { path = "../../../types" }
@@ -47,7 +45,6 @@ tokio = { workspace = true }
 
 tracing = { workspace = true }
 url = { workspace = true }
-workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 anyhow = { workspace = true }

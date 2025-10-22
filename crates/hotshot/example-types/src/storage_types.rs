@@ -52,9 +52,9 @@ pub struct TestStorageState<TYPES: NodeType> {
     vid2: VidShares2<TYPES>,
     das: HashMap<TYPES::View, Proposal<TYPES, DaProposal<TYPES>>>,
     da2s: HashMap<TYPES::View, Proposal<TYPES, DaProposal2<TYPES>>>,
-    proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
-    proposals2: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
-    proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    pub proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
+    pub proposals2: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
+    pub proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
     high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
     eqc: Option<(
@@ -99,7 +99,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
 
 #[derive(Clone, Debug)]
 pub struct TestStorage<TYPES: NodeType> {
-    inner: Arc<RwLock<TestStorageState<TYPES>>>,
+    pub inner: Arc<RwLock<TestStorageState<TYPES>>>,
     /// `should_return_err` is a testing utility to validate negative cases.
     pub should_return_err: Arc<AtomicBool>,
     pub delay_config: DelayConfig,
@@ -415,7 +415,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn migrate_consensus(&self) -> Result<()> {
+    async fn migrate_storage(&self) -> Result<()> {
         let mut storage_writer = self.inner.write().await;
 
         for (view, proposal) in storage_writer.proposals.clone().iter() {

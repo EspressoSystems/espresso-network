@@ -5,18 +5,35 @@ authors = { workspace = true }
 edition = { workspace = true }
 publish = false
 
+[dependencies]
+hotshot-query-service = { workspace = true }
+serde_json = { workspace = true }
+
 [dev-dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
 client = { path = "../client" }
 dotenvy = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types", features = ["testing"] }
 futures = { workspace = true }
+hotshot-contract-adapter = { path = "../contracts/rust/adapter" }
+hotshot-state-prover = { path = "../hotshot-state-prover" }
+hotshot-types = { path = "../crates/hotshot/types" }
+jf-signature = { workspace = true }
+portpicker = { workspace = true }
+rand = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-sequencer = { path = "../sequencer" }
+sequencer = { path = "../sequencer", features = ["testing"] }
+sequencer-utils = { path = "../utils" }
+staking-cli = { path = "../staking-cli" }
 surf-disco = { workspace = true }
 tempfile = { workspace = true }
+test-log = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
 vbs = { workspace = true }
 
 [[test]]

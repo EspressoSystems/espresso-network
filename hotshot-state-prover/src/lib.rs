@@ -28,6 +28,8 @@ pub mod v2;
 /// Light client V3 prover, where we introduce a new field `auth_root` for contract friendly state verification.
 pub mod v3;
 
+pub mod utils;
+
 #[cfg(test)]
 mod test_utils;
 
@@ -113,7 +115,7 @@ impl ProverServiceState {
 
 impl StateProverConfig {
     pub async fn validate_light_client_contract(&self) -> Result<(), ProverError> {
-        let provider = ProviderBuilder::new().on_client(self.l1_rpc_client.clone());
+        let provider = ProviderBuilder::new().connect_client(self.l1_rpc_client.clone());
 
         if let Err(e) = is_proxy_contract(&provider, self.light_client_address).await {
             Err(ProverError::ContractError(anyhow::anyhow!(
@@ -144,6 +146,8 @@ pub enum ProverError {
     GasPriceTooHigh(String, String),
     /// Epoch has already started on block {0}, please upgrade the contract to V2.
     EpochAlreadyStarted(u64),
+    /// Internal error when generating the SNARK proof: {0}
+    DeprecatedPlonkError(jf_plonk_compat::errors::PlonkError),
 }
 
 impl From<PlonkError> for ProverError {
@@ -153,3 +157,9 @@ impl From<PlonkError> for ProverError {
 }
 
 impl std::error::Error for ProverError {}
+
+impl From<jf_plonk_compat::errors::PlonkError> for ProverError {
+    fn from(err: jf_plonk_compat::errors::PlonkError) -> Self {
+        Self::DeprecatedPlonkError(err)
+    }
+}

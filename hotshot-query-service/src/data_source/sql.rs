@@ -384,7 +384,7 @@ mod generic_test {
 mod test {
     use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
     use hotshot_types::{data::VidShare, vid::advz::advz_scheme};
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
 
     use super::*;
     use crate::{

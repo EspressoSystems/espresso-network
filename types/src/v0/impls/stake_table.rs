@@ -1,7 +1,8 @@
 use std::{
-    cmp::{max, min},
+    cmp::min,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
+    ops::Bound,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -11,7 +12,8 @@ use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::{utils::format_ether, Address, U256},
     providers::Provider,
-    rpc::types::Log,
+    rpc::types::{Filter, Log},
+    sol_types::{SolEvent, SolEventInterface},
 };
 use anyhow::{bail, ensure, Context};
 use ark_ec::AffineRepr;
@@ -19,16 +21,13 @@ use ark_serialize::CanonicalSerialize;
 use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use futures::{
-    future::BoxFuture,
-    stream::{self, StreamExt},
-};
+use futures::future::BoxFuture;
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
     StakeTableV2::{
         self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-        Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
+        StakeTableV2Events, Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 use hotshot_types::{
@@ -41,7 +40,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -102,122 +101,82 @@ impl DisplayLog for Log {
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub struct StakeTableEvents {
-    registrations: Vec<(ValidatorRegistered, Log)>,
-    registrations_v2: Vec<(ValidatorRegisteredV2, Log)>,
-    deregistrations: Vec<(ValidatorExit, Log)>,
-    delegated: Vec<(Delegated, Log)>,
-    undelegated: Vec<(Undelegated, Log)>,
-    keys: Vec<(ConsensusKeysUpdated, Log)>,
-    keys_v2: Vec<(ConsensusKeysUpdatedV2, Log)>,
-    commission_updates: Vec<(CommissionUpdated, Log)>,
+impl TryFrom<StakeTableV2Events> for StakeTableEvent {
+    type Error = anyhow::Error;
+
+    fn try_from(value: StakeTableV2Events) -> anyhow::Result<Self> {
+        match value {
+            StakeTableV2Events::ValidatorRegistered(v) => Ok(StakeTableEvent::Register(v)),
+            StakeTableV2Events::ValidatorRegisteredV2(v) => Ok(StakeTableEvent::RegisterV2(v)),
+            StakeTableV2Events::ValidatorExit(v) => Ok(StakeTableEvent::Deregister(v)),
+            StakeTableV2Events::Delegated(v) => Ok(StakeTableEvent::Delegate(v)),
+            StakeTableV2Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
+            StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
+            StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
+            StakeTableV2Events::CommissionUpdated(v) => Ok(StakeTableEvent::CommissionUpdate(v)),
+            StakeTableV2Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::ExitEscrowPeriodUpdated({v:?})"
+            )),
+            StakeTableV2Events::Initialized(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Initialized({v:?})"
+            )),
+            StakeTableV2Events::MaxCommissionIncreaseUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MaxCommissionIncreaseUpdated({v:?})"
+            )),
+            StakeTableV2Events::MinCommissionUpdateIntervalUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MinCommissionUpdateIntervalUpdated({v:?})"
+            )),
+            StakeTableV2Events::OwnershipTransferred(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::OwnershipTransferred({v:?})"
+            )),
+            StakeTableV2Events::Paused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Paused({v:?})"
+            )),
+            StakeTableV2Events::RoleAdminChanged(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::RoleAdminChanged({v:?})"
+            )),
+            StakeTableV2Events::RoleGranted(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::RoleGranted({v:?})"
+            )),
+            StakeTableV2Events::RoleRevoked(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::RoleRevoked({v:?})"
+            )),
+            StakeTableV2Events::Unpaused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Unpaused({v:?})"
+            )),
+            StakeTableV2Events::Upgraded(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Upgraded({v:?})"
+            )),
+            StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::Withdrawal({v:?})"
+            )),
+        }
+    }
 }
 
-impl StakeTableEvents {
-    /// Creates a new instance of `StakeTableEvents` with the provided events.
-    ///
-    /// Remove unauthenticated registration and key update events
-    #[allow(clippy::too_many_arguments)]
-    fn from_l1_logs(
-        registrations: Vec<(ValidatorRegistered, Log)>,
-        registrations_v2: Vec<(ValidatorRegisteredV2, Log)>,
-        deregistrations: Vec<(ValidatorExit, Log)>,
-        delegated: Vec<(Delegated, Log)>,
-        undelegated: Vec<(Undelegated, Log)>,
-        keys: Vec<(ConsensusKeysUpdated, Log)>,
-        keys_v2: Vec<(ConsensusKeysUpdatedV2, Log)>,
-        commission_updates: Vec<(CommissionUpdated, Log)>,
-    ) -> Self {
-        let registrations_v2 = registrations_v2
-            .into_iter()
-            .filter(|(event, log)| {
-                event
-                    .authenticate()
-                    .map_err(|_| {
-                        tracing::warn!(
-                            "Failed to authenticate ValidatorRegisteredV2 event {}",
-                            log.display()
-                        );
-                    })
-                    .is_ok()
-            })
-            .collect();
-        let keys_v2 = keys_v2
-            .into_iter()
-            .filter(|(event, log)| {
-                event
-                    .authenticate()
-                    .map_err(|_| {
-                        tracing::warn!(
-                            "Failed to authenticate ConsensusKeysUpdatedV2 event {}",
-                            log.display()
-                        );
-                    })
-                    .is_ok()
-            })
-            .collect();
-        Self {
-            registrations,
-            registrations_v2,
-            deregistrations,
-            delegated,
-            undelegated,
-            keys,
-            keys_v2,
-            commission_updates,
-        }
+fn sort_stake_table_events(
+    event_logs: Vec<(StakeTableV2Events, Log)>,
+) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
+    let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
+
+    let key = |log: &Log| -> Result<EventKey, EventSortingError> {
+        let block_number = log
+            .block_number
+            .ok_or(EventSortingError::MissingBlockNumber)?;
+        let log_index = log.log_index.ok_or(EventSortingError::MissingLogIndex)?;
+        Ok((block_number, log_index))
+    };
+
+    for (e, log) in event_logs {
+        let k = key(&log)?;
+        let evt: StakeTableEvent = e
+            .try_into()
+            .map_err(|_| EventSortingError::InvalidStakeTableV2Event)?;
+        events.push((k, evt));
     }
 
-    pub fn sort_events(self) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
-        let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
-        let Self {
-            registrations,
-            registrations_v2,
-            deregistrations,
-            delegated,
-            undelegated,
-            keys,
-            keys_v2,
-            commission_updates,
-        } = self;
-
-        let key = |log: &Log| -> Result<EventKey, EventSortingError> {
-            let block_number = log
-                .block_number
-                .ok_or(EventSortingError::MissingBlockNumber)?;
-            let log_index = log.log_index.ok_or(EventSortingError::MissingLogIndex)?;
-            Ok((block_number, log_index))
-        };
-
-        for (registration, log) in registrations {
-            events.push((key(&log)?, registration.into()));
-        }
-        for (registration, log) in registrations_v2 {
-            events.push((key(&log)?, registration.into()));
-        }
-        for (dereg, log) in deregistrations {
-            events.push((key(&log)?, dereg.into()));
-        }
-        for (delegation, log) in delegated {
-            events.push((key(&log)?, delegation.into()));
-        }
-        for (undelegated, log) in undelegated {
-            events.push((key(&log)?, undelegated.into()));
-        }
-        for (update, log) in keys {
-            events.push((key(&log)?, update.into()));
-        }
-        for (update, log) in keys_v2 {
-            events.push((key(&log)?, update.into()));
-        }
-        for (commission_update, log) in commission_updates {
-            events.push((key(&log)?, commission_update.into()));
-        }
-
-        events.sort_by_key(|(key, _)| *key);
-        Ok(events)
-    }
+    events.sort_by_key(|(key, _)| *key);
+    Ok(events)
 }
 
 #[derive(Debug, Default)]
@@ -639,13 +598,28 @@ pub(crate) fn select_active_validator_set(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+pub struct ValidatorSet {
+    pub all_validators: ValidatorMap,
+    pub active_validators: ValidatorMap,
+    pub stake_table_hash: Option<StakeTableHash>,
+}
+
 /// Extract the active validator set from the L1 stake table events.
-pub(crate) fn active_validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+pub(crate) fn validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> Result<(ValidatorMap, StakeTableHash), StakeTableError> {
-    let (mut validators, stake_table_hash) = validators_from_l1_events(events)?;
-    select_active_validator_set(&mut validators)?;
-    Ok((validators, stake_table_hash))
+) -> Result<ValidatorSet, StakeTableError> {
+    let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
+    let mut active_validators = all_validators.clone();
+    select_active_validator_set(&mut active_validators)?;
+
+    let validator_set = ValidatorSet {
+        all_validators,
+        active_validators,
+        stake_table_hash: Some(stake_table_hash),
+    };
+
+    Ok(validator_set)
 }
 
 impl std::fmt::Debug for StakeTableEvent {
@@ -674,12 +648,20 @@ pub struct EpochCommittees {
     state: HashMap<Epoch, EpochCommittee>,
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
+    /// DA committees, indexed by the first epoch in which they apply
+    da_committees: BTreeMap<u64, DaCommittee>,
     first_epoch: Option<Epoch>,
     epoch_height: u64,
     /// Fixed block reward (used only in V3).
     /// starting from V4, block reward is dynamic
     fixed_block_reward: Option<RewardAmount>,
     fetcher: Arc<Fetcher>,
+}
+
+#[derive(Debug, Clone)]
+struct DaCommittee {
+    committee: Vec<PeerConfig<SeqTypes>>,
+    indexed_committee: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 impl Fetcher {
@@ -818,9 +800,8 @@ impl Fetcher {
             from_block,
             to_block,
         )
-        .await;
+        .await?;
 
-        let contract_events = contract_events.sort_events()?;
         let mut events = match from_block {
             Some(_) => persistence_events
                 .into_iter()
@@ -849,7 +830,7 @@ impl Fetcher {
         contract: Address,
         from_block: Option<u64>,
         to_block: u64,
-    ) -> StakeTableEvents {
+    ) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
         let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         // get the block number when the contract was initialized
@@ -858,10 +839,9 @@ impl Fetcher {
             Some(block) => block,
             None => {
                 let start = Instant::now();
-
                 loop {
                     match stake_table_contract.initializedAtBlock().call().await {
-                        Ok(init_block) => break init_block._0.to::<u64>(),
+                        Ok(init_block) => break init_block.to::<u64>(),
                         Err(err) => {
                             if start.elapsed() >= max_retry_duration {
                                 panic!(
@@ -888,270 +868,94 @@ impl Fetcher {
             if chunk_end < start {
                 return None;
             }
-
             let chunk = (start, chunk_end);
             start = chunk_end + 1;
             Some(chunk)
         });
 
-        // fetch registered events
-        // retry if the call to the provider to fetch the events fails
-        let registered_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ValidatorRegistered events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "ValidatorRegistered event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .ValidatorRegistered_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
+        let retry_delay = l1_client.options().l1_retry_delay;
+
+        let mut events = vec![];
+
+        for (from, to) in chunks {
+            let provider = l1_client.provider.clone();
+
+            tracing::debug!(from, to, "fetch all stake table events in range");
+            // fetch events
+            // retry if the call to the provider to fetch the events fails
+            let logs: Vec<Log> = retry(
+                retry_delay,
+                max_retry_duration,
+                "stake table events fetch",
+                move || {
+                    let provider = provider.clone();
+
+                    Box::pin(async move {
+                        let filter = Filter::new()
+                            .events([
+                                ValidatorRegistered::SIGNATURE,
+                                ValidatorRegisteredV2::SIGNATURE,
+                                ValidatorExit::SIGNATURE,
+                                Delegated::SIGNATURE,
+                                Undelegated::SIGNATURE,
+                                ConsensusKeysUpdated::SIGNATURE,
+                                ConsensusKeysUpdatedV2::SIGNATURE,
+                                CommissionUpdated::SIGNATURE,
+                            ])
+                            .address(contract)
+                            .from_block(from)
+                            .to_block(to);
+                        provider.get_logs(&filter).await
+                    })
+                },
+            )
+            .await;
+
+            for log in logs {
+                let event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)?;
+
+                match &event {
+                    StakeTableV2Events::ValidatorRegisteredV2(event) => {
+                        if let Err(err) = event.authenticate() {
+                            tracing::warn!(
+                                %err,
+                                "Failed to authenticate ValidatorRegisteredV2 event: {}",
+                                log.display()
+                            );
+                            continue;
+                        }
                     },
-                )
-                .await;
-                stream::iter(events)
-            }
-        });
 
-        // fetch registered events v2
-        // retry if the call to the provider to fetch the events fails
-        let registered_events_v2 = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ValidatorRegisteredV2 events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "ValidatorRegisteredV2 event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .ValidatorRegisteredV2_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
+                    StakeTableV2Events::ConsensusKeysUpdatedV2(event) => {
+                        if let Err(err) = event.authenticate() {
+                            tracing::warn!(
+                                %err,
+                                "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
+                                log.display()
+                            );
+                            continue;
+                        }
                     },
-                )
-                .await;
-
-                stream::iter(events.into_iter().filter(|(event, log)| {
-                    if let Err(e) = event.authenticate() {
-                        tracing::warn!(
-                            %e,
-                            "Failed to authenticate ValidatorRegisteredV2 event: {}",
-                            log.display()
-                        );
-                        return false;
-                    }
-                    true
-                }))
-            }
-        });
-
-        // fetch validator de registration events
-        let deregistered_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ValidatorExit events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "ValidatorExit event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .ValidatorExit_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
+                    StakeTableV2Events::CommissionUpdated(CommissionUpdated {
+                        validator,
+                        newCommission,
+                        ..
+                    }) => {
+                        if *newCommission > COMMISSION_BASIS_POINTS {
+                            return Err(StakeTableError::InvalidCommission(
+                                *validator,
+                                *newCommission,
+                            ));
+                        }
                     },
-                )
-                .await;
-                stream::iter(events)
-            }
-        });
+                    _ => {},
+                }
 
-        // fetch delegated events
-        let delegated_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch Delegated events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "Delegated event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .Delegated_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
-                    },
-                )
-                .await;
-                stream::iter(events)
+                events.push((event, log.clone()));
             }
-        });
+        }
 
-        // fetch undelegated events
-        let undelegated_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch Undelegated events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "Undelegated event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .Undelegated_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
-                    },
-                )
-                .await;
-                stream::iter(events)
-            }
-        });
-        // fetch consensus keys updated events
-        let keys_update_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ConsensusKeysUpdated events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "ConsensusKeysUpdated event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .ConsensusKeysUpdated_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
-                    },
-                )
-                .await;
-                stream::iter(events)
-            }
-        });
-        // fetch consensus keys updated v2 events
-        let keys_update_events_v2 = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ConsensusKeysUpdatedV2 events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "ConsensusKeysUpdatedV2 event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .ConsensusKeysUpdatedV2_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
-                    },
-                )
-                .await;
-
-                stream::iter(events.into_iter().filter(|(event, log)| {
-                    if let Err(e) = event.authenticate() {
-                        tracing::warn!(
-                            %e,
-                            "Failed to authenticate ConsensusKeysUpdatedV2 event {}",
-                            log.display()
-                        );
-                        return false;
-                    }
-                    true
-                }))
-            }
-        });
-
-        // fetch commission updated events
-        let commission_updated_events = stream::iter(chunks).then(|(from, to)| {
-            let retry_delay = l1_client.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch CommissionUpdated events in range");
-                let events = retry(
-                    retry_delay,
-                    max_retry_duration,
-                    "CommissionUpdated event fetch",
-                    move || {
-                        let stake_table_contract = stake_table_contract.clone();
-                        Box::pin(async move {
-                            stake_table_contract
-                                .CommissionUpdated_filter()
-                                .from_block(from)
-                                .to_block(to)
-                                .query()
-                                .await
-                        })
-                    },
-                )
-                .await;
-                stream::iter(events)
-            }
-        });
-
-        let registrations = registered_events.flatten().collect().await;
-        let registrations_v2 = registered_events_v2.flatten().collect().await;
-        let deregistrations = deregistered_events.flatten().collect().await;
-        let delegated = delegated_events.flatten().collect().await;
-        let undelegated = undelegated_events.flatten().collect().await;
-        let keys = keys_update_events.flatten().collect().await;
-        let keys_v2 = keys_update_events_v2.flatten().collect().await;
-        let commission_updates = commission_updated_events.flatten().collect().await;
-
-        StakeTableEvents::from_l1_logs(
-            registrations,
-            registrations_v2,
-            deregistrations,
-            delegated,
-            undelegated,
-            keys,
-            keys_v2,
-            commission_updates,
-        )
+        sort_stake_table_events(events).map_err(Into::into)
     }
 
     /// Get `StakeTable` at specific l1 block height.
@@ -1185,10 +989,10 @@ impl Fetcher {
         contract: Address,
         to_block: u64,
     ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
-        let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await;
-        let sorted = events.sort_events()?;
+        let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
+
         // Process the sorted events and return the resulting stake table.
-        validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
+        validators_from_l1_events(events.into_iter().map(|(_, e)| e))
             .context("failed to construct validators set from l1 events")
     }
 
@@ -1248,7 +1052,6 @@ impl Fetcher {
             .call()
             .await
             .map_err(FetchRewardError::ContractCall)?
-            ._0
             .to::<u64>();
 
         tracing::info!("stake table init block ={stake_table_init_block}");
@@ -1258,8 +1061,7 @@ impl Fetcher {
             .block(BlockId::finalized())
             .call()
             .await
-            .map_err(FetchRewardError::TokenAddressFetch)?
-            ._0;
+            .map_err(FetchRewardError::TokenAddressFetch)?;
 
         let token = EspToken::new(token_address, provider.clone());
 
@@ -1347,7 +1149,7 @@ impl Fetcher {
     pub async fn scan_token_contract_initialized_event_log(
         &self,
         stake_table_init_block: u64,
-        token: EspTokenInstance<(), L1Provider>,
+        token: EspTokenInstance<L1Provider>,
     ) -> Result<Log, FetchRewardError> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
         const MAX_BLOCKS_SCANNED: u64 = 200_000;
@@ -1397,11 +1199,7 @@ impl Fetcher {
         Ok(())
     }
 
-    pub async fn fetch(
-        &self,
-        epoch: Epoch,
-        header: &Header,
-    ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
+    pub async fn fetch(&self, epoch: Epoch, header: &Header) -> anyhow::Result<ValidatorSet> {
         let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
             bail!("No stake table contract address found in Chain config");
@@ -1425,7 +1223,7 @@ impl Fetcher {
             },
         };
 
-        match active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+        match validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
             Ok(res) => Ok(res),
             Err(e) => {
                 bail!("failed to construct stake table {e:?}");
@@ -1524,14 +1322,10 @@ struct NonEpochCommittee {
     /// Keys for nodes participating in the network
     stake_table: Vec<PeerConfig<SeqTypes>>,
 
-    /// Keys for DA members
-    da_members: Vec<PeerConfig<SeqTypes>>,
+    da_committee: DaCommittee,
 
     /// Stake entries indexed by public key, for efficient lookup.
     indexed_stake_table: HashMap<PubKey, PeerConfig<SeqTypes>>,
-
-    /// DA entries indexed by public key, for efficient lookup.
-    indexed_da_members: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 /// Holds Stake table and da stake
@@ -1953,12 +1747,16 @@ impl EpochCommittees {
             })
             .collect();
 
+        let da_committee = DaCommittee {
+            committee: da_members,
+            indexed_committee: indexed_da_members,
+        };
+
         let members = NonEpochCommittee {
             eligible_leaders,
             stake_table,
-            da_members,
             indexed_stake_table,
-            indexed_da_members,
+            da_committee,
         };
 
         let mut map = HashMap::new();
@@ -1981,6 +1779,7 @@ impl EpochCommittees {
 
         Self {
             non_epoch_committee: members,
+            da_committees: BTreeMap::new(),
             state: map,
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
@@ -2037,6 +1836,19 @@ impl EpochCommittees {
             Some(self.non_epoch_committee.stake_table.clone())
         }
     }
+
+    fn get_da_committee(&self, epoch: Option<Epoch>) -> DaCommittee {
+        if let Some(e) = epoch {
+            // returns the greatest key smaller than or equal to `e`
+            self.da_committees
+                .range((Bound::Included(&0), Bound::Included(&*e)))
+                .last()
+                .map(|(_, committee)| committee.clone())
+                .unwrap_or(self.non_epoch_committee.da_committee.clone())
+        } else {
+            self.non_epoch_committee.da_committee.clone()
+        }
+    }
 }
 
 /// Calculates the stake ratio `p` and reward rate `R(p)`.
@@ -2091,13 +1903,19 @@ pub struct LeaderLookupError;
 // #[async_trait]
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
+    type Storage = ();
     type StakeTableHash = StakeTableState;
+
     // DO NOT USE. Dummy constructor to comply w/ trait.
-    fn new(
+    fn new<I: NodeImplementation<SeqTypes>>(
         // TODO remove `new` from trait and remove this fn as well.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         _committee_members: Vec<PeerConfig<SeqTypes>>,
         _da_members: Vec<PeerConfig<SeqTypes>>,
+        _storage: Self::Storage,
+        _network: Arc<<I as NodeImplementation<SeqTypes>>::Network>,
+        _public_key: <SeqTypes as NodeType>::SignatureKey,
+        _epoch_height: u64,
     ) -> Self {
         panic!("This function has been replaced with new_stake()");
     }
@@ -2107,8 +1925,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.get_stake_table(&epoch).unwrap_or_default().into()
     }
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<Epoch>) -> HSStakeTable<SeqTypes> {
-        self.non_epoch_committee.da_members.clone().into()
+    fn da_stake_table(&self, epoch: Option<Epoch>) -> HSStakeTable<SeqTypes> {
+        self.get_da_committee(epoch).committee.clone().into()
     }
 
     /// Get all members of the committee for the current view
@@ -2128,12 +1946,11 @@ impl Membership<SeqTypes> for EpochCommittees {
     fn da_committee_members(
         &self,
         _view_number: <SeqTypes as NodeType>::View,
-        _epoch: Option<Epoch>,
+        epoch: Option<Epoch>,
     ) -> BTreeSet<PubKey> {
-        self.non_epoch_committee
-            .indexed_da_members
-            .clone()
-            .into_keys()
+        self.da_stake_table(epoch)
+            .iter()
+            .map(|peer_config| PubKey::public_key(&peer_config.stake_table_entry))
             .collect()
     }
 
@@ -2154,10 +1971,9 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the DA stake table entry for a public key
-    fn da_stake(&self, pub_key: &PubKey, _epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
-        // Only return the stake if it is above zero
-        self.non_epoch_committee
-            .indexed_da_members
+    fn da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
+        self.get_da_committee(epoch)
+            .indexed_committee
             .get(pub_key)
             .cloned()
     }
@@ -2243,58 +2059,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.da_stake_table(epoch).len()
     }
 
-    /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-        if total_stake < U256::MAX / two {
-            ((total_stake * two) / three) + one
-        } else {
-            ((total_stake / three) * two) + two
-        }
-    }
-
-    /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_da_stake(epoch);
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-
-        if total_stake < U256::MAX / two {
-            ((total_stake * two) / three) + one
-        } else {
-            ((total_stake / three) * two) + two
-        }
-    }
-
-    /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        let one = U256::ONE;
-        let three = U256::from(3);
-
-        (total_stake / three) + one
-    }
-
-    /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        let nine = U256::from(9);
-        let ten = U256::from(10);
-
-        let normal_threshold = self.success_threshold(epoch);
-        let higher_threshold = if total_stake < U256::MAX / nine {
-            (total_stake * nine) / ten
-        } else {
-            (total_stake / ten) * nine
-        };
-
-        max(higher_threshold, normal_threshold)
-    }
-
     /// Adds the epoch committee and block reward for a given epoch,
     /// either by fetching from L1 or using local state if available.
     /// It also calculates and stores the block reward based on header version.
@@ -2333,7 +2097,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         // - exists without a reward, reuse validators and update reward.
         // and fetch from L1 if the stake table hash is missing.
         // - doesn't exist, fetch it from L1.
-        let (validators, stake_table_hash) = match epoch_committee {
+        let (active_validators, all_validators, stake_table_hash) = match epoch_committee {
             Some(committee)
                 if committee.block_reward.is_some()
                     && committee.header.is_some()
@@ -2353,22 +2117,30 @@ impl Membership<SeqTypes> for EpochCommittees {
                 }
 
                 if let Some(hash) = committee.stake_table_hash {
-                    (committee.validators.clone(), Some(hash))
+                    (committee.validators.clone(), Default::default(), Some(hash))
                 } else {
                     // if stake table hash is missing then recalculate from events
                     tracing::info!(
                         "Stake table hash missing for epoch {epoch}. recalculating by fetching \
                          from l1."
                     );
-                    let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
-                    (map, Some(hash))
+                    let set = fetcher.fetch(epoch, &block_header).await?;
+                    (
+                        set.active_validators,
+                        set.all_validators,
+                        set.stake_table_hash,
+                    )
                 }
             },
 
             None => {
                 tracing::info!("Stake table missing for epoch {epoch}. Fetching from L1.");
-                let (map, hash) = fetcher.fetch(epoch, &block_header).await?;
-                (map, Some(hash))
+                let set = fetcher.fetch(epoch, &block_header).await?;
+                (
+                    set.active_validators,
+                    set.all_validators,
+                    set.stake_table_hash,
+                )
             },
         };
 
@@ -2379,7 +2151,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             tracing::info!(?epoch, "calculating dynamic block reward");
             let reader = membership.read().await;
             let reward = reader
-                .calculate_dynamic_block_reward(&epoch, &block_header, &validators)
+                .calculate_dynamic_block_reward(&epoch, &block_header, &active_validators)
                 .await?;
 
             tracing::info!(?epoch, "calculated dynamic block reward = {reward:?}");
@@ -2389,7 +2161,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         let mut membership_writer = membership.write().await;
         membership_writer.insert_committee(
             epoch,
-            validators.clone(),
+            active_validators.clone(),
             block_reward,
             stake_table_hash,
             Some(block_header),
@@ -2398,10 +2170,17 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let persistence_lock = fetcher.persistence.lock().await;
         if let Err(e) = persistence_lock
-            .store_stake(epoch, validators, block_reward, stake_table_hash)
+            .store_stake(epoch, active_validators, block_reward, stake_table_hash)
             .await
         {
-            tracing::error!(?e, "`add_epoch_root`, error storing stake table");
+            tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing stake table");
+        }
+
+        if let Err(e) = persistence_lock
+            .store_all_validators(epoch, all_validators)
+            .await
+        {
+            tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
         }
 
         Ok(())
@@ -2550,6 +2329,25 @@ impl Membership<SeqTypes> for EpochCommittees {
         let committee = self.state.get(&epoch)?;
         committee.stake_table_hash
     }
+
+    fn add_da_committee(&mut self, first_epoch: u64, committee: Vec<PeerConfig<SeqTypes>>) {
+        let indexed_committee: HashMap<PubKey, _> = committee
+            .iter()
+            .map(|peer_config| {
+                (
+                    PubKey::public_key(&peer_config.stake_table_entry),
+                    peer_config.clone(),
+                )
+            })
+            .collect();
+
+        let da_committee = DaCommittee {
+            committee,
+            indexed_committee,
+        };
+
+        self.da_committees.insert(first_epoch, da_committee);
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -2611,7 +2409,7 @@ pub mod testing {
             Self::random_update_keys(self.account, self.commission)
         }
 
-        fn random_update_keys(account: Address, commission: u16) -> Self {
+        pub fn random_update_keys(account: Address, commission: u16) -> Self {
             let mut rng = &mut rand::thread_rng();
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
@@ -2767,7 +2565,8 @@ mod tests {
         ]
         .to_vec();
 
-        let (st, _) = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let validators_set = validator_set_from_l1_events(events.iter().cloned())?;
+        let st = validators_set.active_validators;
         let st_val_1 = st.get(&val_1.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
         assert_eq!(st_val_1.stake, U256::from(8));
@@ -2783,7 +2582,8 @@ mod tests {
 
         events.push(ValidatorExit::from(&val_1).into());
 
-        let (st, _) = active_validator_set_from_l1_events(events.iter().cloned())?;
+        let validator_set = validator_set_from_l1_events(events.iter().cloned())?;
+        let st = validator_set.active_validators;
         // The first validator should have been removed
         assert_eq!(st.get(&val_1.account), None);
 
@@ -2797,7 +2597,7 @@ mod tests {
         events.push(ValidatorExit::from(&val_2).into());
 
         // This should fail because the validator has exited and no longer exists in the stake table.
-        assert!(active_validator_set_from_l1_events(events.iter().cloned()).is_err());
+        assert!(validator_set_from_l1_events(events.iter().cloned()).is_err());
 
         Ok(())
     }
@@ -2917,16 +2717,15 @@ mod tests {
         .into();
 
         // first ensure that wan build a valid stake table
-        assert!(active_validator_set_from_l1_events(
-            vec![register.clone(), delegate.clone()].into_iter()
-        )
-        .is_ok());
+        assert!(
+            validator_set_from_l1_events(vec![register.clone(), delegate.clone()].into_iter())
+                .is_ok()
+        );
 
         // add the invalid key update (re-using the same consensus keys)
         let key_update = ConsensusKeysUpdated::from(&val).into();
-        let err =
-            active_validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
-                .unwrap_err();
+        let err = validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
+            .unwrap_err();
 
         let bls: BLSPubKey = val.bls_vk.into();
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
@@ -3321,9 +3120,7 @@ mod tests {
             None,
             8582328,
         )
-        .await;
-
-        let sorted_events = events.sort_events().expect("failed to sort");
+        .await?;
 
         // Serialize and write sorted events
         let json_events = serde_json::to_string_pretty(&sorted_events)?;
@@ -3344,8 +3141,10 @@ mod tests {
         let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
         // Reconstruct stake table from events
-        let (reconstructed_stake_table, _) =
-            active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
+        let reconstructed_stake_table =
+            validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+                .unwrap()
+                .active_validators;
 
         let stake_table_json =
             std::fs::read_to_string("../data/v3/decaf_stake_table.json").unwrap();
@@ -3383,7 +3182,8 @@ mod tests {
             None,
             latest_block,
         )
-        .await;
+        .await
+        .unwrap();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

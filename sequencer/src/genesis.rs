@@ -6,9 +6,10 @@ use std::{
 use alloy::primitives::Address;
 use anyhow::{Context, Ok};
 use espresso_types::{
-    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
-    Upgrade,
+    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes,
+    Timestamp, Upgrade,
 };
+use hotshot_types::{version_ser, VersionedDaCommittee};
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
 
@@ -67,6 +68,8 @@ pub struct Genesis {
     #[serde(rename = "upgrade", with = "upgrade_ser")]
     #[serde(default)]
     pub upgrades: BTreeMap<Version, Upgrade>,
+    #[serde(default)]
+    pub da_committees: Option<Vec<VersionedDaCommittee<SeqTypes>>>,
 }
 
 impl Genesis {
@@ -130,39 +133,6 @@ impl Genesis {
         }
         // TODO: it's optional for the fee contract to be included in a proxy in v1 so no need to panic but revisit this after v1 https://github.com/EspressoSystems/espresso-sequencer/pull/2000#discussion_r1765174702
         Ok(())
-    }
-}
-
-mod version_ser {
-
-    use serde::{de, Deserialize, Deserializer, Serializer};
-    use vbs::version::Version;
-
-    pub fn serialize<S>(ver: &Version, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&ver.to_string())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Version, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let version_str = String::deserialize(deserializer)?;
-
-        let version: Vec<_> = version_str.split('.').collect();
-
-        let version = Version {
-            major: version[0]
-                .parse()
-                .map_err(|_| de::Error::custom("invalid version format"))?,
-            minor: version[1]
-                .parse()
-                .map_err(|_| de::Error::custom("invalid version format"))?,
-        };
-
-        Ok(version)
     }
 }
 
@@ -565,7 +535,7 @@ mod test {
         let admin = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
         let mut contracts = Contracts::new();
 
@@ -624,7 +594,7 @@ mod test {
         let admin = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
         let mut contracts = Contracts::new();
 
@@ -839,7 +809,7 @@ mod test {
         let admin = wallet.default_signer().address();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
         let mut contracts = Contracts::new();
 

@@ -22,7 +22,7 @@ use hotshot_types::{
     traits::signature_key::LCV1StateSignatureKey,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
-use jf_relation::Circuit as _;
+use jf_relation_compat::Circuit as _;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
 use time::ext::InstantExt;
@@ -246,7 +246,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let wallet = EthereumWallet::from(state.config.signer.clone());
     let provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_client(state.config.l1_rpc_client.clone());
+        .connect_client(state.config.l1_rpc_client.clone());
 
     // only sync light client state when gas price is sane
     if let Some(max_gas_price) = state.config.max_gas_price {
@@ -413,7 +413,7 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
 
     use alloy::{
         node_bindings::Anvil,
@@ -461,7 +461,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_read_contract_state() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let rng = &mut test_rng();
         let genesis_state = LightClientStateSol::dummy_genesis();
@@ -512,7 +512,7 @@ mod test {
         let wallet = anvil.wallet().unwrap();
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         // a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
         let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
         let mut contracts = Contracts::new();

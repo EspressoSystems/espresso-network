@@ -51,7 +51,7 @@ use sequencer::{
 };
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
-use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
@@ -386,7 +386,7 @@ async fn main() -> anyhow::Result<()> {
         let wallet = EthereumWallet::from(signer.clone());
         let provider = ProviderBuilder::new()
             .wallet(wallet.clone())
-            .on_http(url.clone());
+            .connect_http(url.clone());
         let admin = provider.default_signer_address();
         let chain_id = provider.get_chain_id().await?;
 
@@ -536,7 +536,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let staking_priv_keys = network_config.staking_priv_keys();
-            setup_stake_table_contract_for_test(
+            StakingTransactions::create(
                 l1_url.clone(),
                 &provider,
                 l1_contracts
@@ -545,6 +545,8 @@ async fn main() -> anyhow::Result<()> {
                 staking_priv_keys,
                 DelegationConfig::default(),
             )
+            .await?
+            .apply_all()
             .await?;
         }
     }
@@ -790,7 +792,7 @@ impl ApiState {
     pub fn light_client_instance(
         &self,
         chain_id: Option<u64>,
-    ) -> Result<LightClientV2MockInstance<(), HttpProviderWithWallet>, ServerError> {
+    ) -> Result<LightClientV2MockInstance<HttpProviderWithWallet>, ServerError> {
         // if chain id is not provided, primary L1 light client is used
         let id = chain_id.unwrap_or(self.l1_chain_id);
 
@@ -809,7 +811,7 @@ impl ApiState {
 
         let provider = ProviderBuilder::new()
             .wallet(self.wallet.clone())
-            .on_http(provider_url.clone());
+            .connect_http(provider_url.clone());
         let contract = LightClientV2Mock::new(*proxy_addr, provider);
         Ok(contract)
     }
@@ -971,7 +973,7 @@ mod tests {
         availability::{BlockQueryData, TransactionQueryData, VidCommonQueryData},
         explorer::TransactionDetailResponse,
     };
-    use jf_merkle_tree::MerkleTreeScheme;
+    use jf_merkle_tree_compat::MerkleTreeScheme;
     use portpicker::pick_unused_port;
     use rand::Rng;
     use sequencer::SequencerApiVersion;
@@ -1243,7 +1245,7 @@ mod tests {
                 .unwrap();
             let provider = ProviderBuilder::new()
                 .wallet(EthereumWallet::from(signer))
-                .on_http(l1_url.clone());
+                .connect_http(l1_url.clone());
 
             let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
@@ -1273,7 +1275,6 @@ mod tests {
                 .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
-                .map(|ret| ret._0)
                 .unwrap_or(false)
             {
                 tracing::info!("waiting for setting hotshot down");
@@ -1292,7 +1293,6 @@ mod tests {
                 .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
-                .map(|ret| ret._0)
                 .unwrap_or(true)
             {
                 tracing::info!("waiting for setting hotshot up");
@@ -1406,7 +1406,7 @@ mod tests {
                 .unwrap();
             let provider = ProviderBuilder::new()
                 .wallet(EthereumWallet::from(signer))
-                .on_http(l1_url.clone());
+                .connect_http(l1_url.clone());
 
             let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
@@ -1437,7 +1437,7 @@ mod tests {
                     .unwrap();
                 let provider = ProviderBuilder::new()
                     .wallet(EthereumWallet::from(signer))
-                    .on_http(provider_url.clone());
+                    .connect_http(provider_url.clone());
 
                 let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
@@ -1467,7 +1467,6 @@ mod tests {
                     .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
-                    .map(|ret| ret._0)
                     .unwrap_or(false)
                 {
                     tracing::info!("waiting for setting hotshot down");
@@ -1486,7 +1485,6 @@ mod tests {
                     .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
-                    .map(|ret| ret._0)
                     .unwrap_or(true)
                 {
                     tracing::info!("waiting for setting hotshot up");

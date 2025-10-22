@@ -189,7 +189,7 @@ async fn main() {
                 let l1 = opt
                     .l1
                     .as_ref()
-                    .map(|url| ProviderBuilder::new().on_http(url.clone()));
+                    .map(|url| ProviderBuilder::new().connect_http(url.clone()));
                 async move {
                     let mut ok = true;
 

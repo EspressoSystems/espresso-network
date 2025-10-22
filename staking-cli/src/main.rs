@@ -6,15 +6,23 @@ use alloy::{
     eips::BlockId,
     primitives::{utils::format_ether, Address},
     providers::{Provider, ProviderBuilder},
+    rpc::types::Log,
+    sol_types::SolEventInterface,
 };
 use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
-    sol_types::EspToken::{self, EspTokenErrors},
+    sol_types::{
+        EspToken::{self, EspTokenErrors, EspTokenEvents},
+        StakeTableV2::StakeTableV2Events,
+    },
 };
-use hotshot_types::light_client::StateKeyPair;
+use hotshot_types::{
+    light_client::{StateKeyPair, StateVerKey},
+    signature_key::BLSPubKey,
+};
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
@@ -87,14 +95,81 @@ impl Args {
     }
 }
 
-fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
-    tracing::error!("{}: {err}", msg.as_ref());
+fn output_success(msg: impl AsRef<str>) {
+    if std::env::var("RUST_LOG_FORMAT") == Ok("json".to_string()) {
+        tracing::info!("{}", msg.as_ref());
+    } else {
+        println!("{}", msg.as_ref());
+    }
+}
+
+fn output_error(msg: impl AsRef<str>) -> ! {
+    if std::env::var("RUST_LOG_FORMAT") == Ok("json".to_string()) {
+        tracing::error!("{}", msg.as_ref());
+    } else {
+        eprintln!("{}", msg.as_ref());
+    }
     std::process::exit(1);
 }
 
+fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
+    output_error(format!("{}: {err}", msg.as_ref()))
+}
+
 fn exit(msg: impl AsRef<str>) -> ! {
-    tracing::error!("Error: {}", msg.as_ref());
-    std::process::exit(1);
+    output_error(format!("Error: {}", msg.as_ref()))
+}
+
+// Events containing custom structs do not get the Debug derive, due to a bug in
+// foundry. We instead format those types nicely with tagged base64.
+fn decode_and_display_logs(logs: &[Log]) {
+    for log in logs {
+        if let Ok(decoded) = StakeTableV2Events::decode_log(log.as_ref()) {
+            match &decoded.data {
+                StakeTableV2Events::ValidatorRegistered(e) => output_success(format!(
+                    "event: ValidatorRegistered {{ account: {}, blsVk: {}, schnorrVk: {}, \
+                     commission: {} }}",
+                    e.account,
+                    BLSPubKey::from(e.blsVk),
+                    StateVerKey::from(e.schnorrVk),
+                    e.commission
+                )),
+                StakeTableV2Events::ValidatorRegisteredV2(e) => output_success(format!(
+                    "event: ValidatorRegisteredV2 {{ account: {}, blsVK: {}, schnorrVK: {}, \
+                     commission: {} }}",
+                    e.account,
+                    BLSPubKey::from(e.blsVK),
+                    StateVerKey::from(e.schnorrVK),
+                    e.commission
+                )),
+                StakeTableV2Events::Delegated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::Undelegated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::ValidatorExit(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::ConsensusKeysUpdated(e) => output_success(format!(
+                    "event: ConsensusKeysUpdated {{ account: {}, blsVK: {}, schnorrVK: {} }}",
+                    e.account,
+                    BLSPubKey::from(e.blsVK),
+                    StateVerKey::from(e.schnorrVK)
+                )),
+                StakeTableV2Events::ConsensusKeysUpdatedV2(e) => output_success(format!(
+                    "event: ConsensusKeysUpdatedV2 {{ account: {}, blsVK: {}, schnorrVK: {} }}",
+                    e.account,
+                    BLSPubKey::from(e.blsVK),
+                    StateVerKey::from(e.schnorrVK)
+                )),
+                StakeTableV2Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
+
+                _ => {},
+            }
+        } else if let Ok(decoded) = EspTokenEvents::decode_log(log.as_ref()) {
+            match &decoded.data {
+                EspTokenEvents::Transfer(e) => output_success(format!("event: {e:?}")),
+                EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
+                _ => {},
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -223,7 +298,7 @@ pub async fn main() -> Result<()> {
         compact,
     } = config.commands
     {
-        let provider = ProviderBuilder::new().on_http(config.rpc_url.clone());
+        let provider = ProviderBuilder::new().connect_http(config.rpc_url.clone());
         let query_block = l1_block_number.unwrap_or(BlockId::latest());
         let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
             exit_err("Failed to get block {query_block}", "Block not found");
@@ -256,7 +331,7 @@ pub async fn main() -> Result<()> {
 
     let provider = ProviderBuilder::new()
         .wallet(wallet.clone())
-        .on_http(config.rpc_url.clone());
+        .connect_http(config.rpc_url.clone());
     let stake_table_addr = config.stake_table_address;
     let token_addr = fetch_token_address(config.rpc_url.clone(), stake_table_addr).await?;
     let token = EspToken::new(token_addr, &provider);
@@ -265,7 +340,7 @@ pub async fn main() -> Result<()> {
     match config.commands {
         Commands::TokenBalance { address } => {
             let address = address.unwrap_or(account);
-            let balance = format_ether(token.balanceOf(address).call().await?._0);
+            let balance = format_ether(token.balanceOf(address).call().await?);
             tracing::info!("Token balance for {address}: {balance} ESP");
             return Ok(());
         },
@@ -275,8 +350,7 @@ pub async fn main() -> Result<()> {
                 token
                     .allowance(owner, config.stake_table_address)
                     .call()
-                    .await?
-                    ._0,
+                    .await?,
             );
             tracing::info!("Stake table token allowance for {owner}: {allowance} ESP");
             return Ok(());
@@ -295,58 +369,47 @@ pub async fn main() -> Result<()> {
     }
 
     // Commands that require a signer
-    let result = match config.commands {
+    let pending_tx = match config.commands {
         Commands::RegisterValidator {
             signature_args,
             commission,
         } => {
-            tracing::info!("Registering validator {account} with commission {commission}");
             let input = NodeSignatureInput::try_from((signature_args, &wallet))?;
             let payload = NodeSignatures::try_from((input, &wallet))?;
-            register_validator(&provider, stake_table_addr, commission, payload).await
+            register_validator(&provider, stake_table_addr, commission, payload).await?
         },
         Commands::UpdateConsensusKeys { signature_args } => {
             tracing::info!("Updating validator {account} with new keys");
             let input = NodeSignatureInput::try_from((signature_args, &wallet))?;
             let payload = NodeSignatures::try_from((input, &wallet))?;
-            update_consensus_keys(&provider, stake_table_addr, payload).await
+            update_consensus_keys(&provider, stake_table_addr, payload).await?
         },
         Commands::DeregisterValidator {} => {
             tracing::info!("Deregistering validator {account}");
-            deregister_validator(&provider, stake_table_addr).await
+            deregister_validator(&provider, stake_table_addr).await?
         },
         Commands::UpdateCommission { new_commission } => {
             tracing::info!("Updating validator {account} commission to {new_commission}");
-            update_commission(&provider, stake_table_addr, new_commission).await
+            update_commission(&provider, stake_table_addr, new_commission).await?
         },
         Commands::Approve { amount } => {
-            tracing::info!(
-                "Approving stake table {} to spend {amount}",
-                config.stake_table_address
-            );
-            approve(&provider, token_addr, stake_table_addr, amount).await
+            approve(&provider, token_addr, stake_table_addr, amount).await?
         },
         Commands::Delegate {
             validator_address,
             amount,
-        } => {
-            tracing::info!("Delegating {amount} to {validator_address}");
-            delegate(&provider, stake_table_addr, validator_address, amount).await
-        },
+        } => delegate(&provider, stake_table_addr, validator_address, amount).await?,
         Commands::Undelegate {
             validator_address,
             amount,
-        } => {
-            tracing::info!("Undelegating {amount} from {validator_address}");
-            undelegate(&provider, stake_table_addr, validator_address, amount).await
-        },
+        } => undelegate(&provider, stake_table_addr, validator_address, amount).await?,
         Commands::ClaimWithdrawal { validator_address } => {
             tracing::info!("Claiming withdrawal for {validator_address}");
-            claim_withdrawal(&provider, stake_table_addr, validator_address).await
+            claim_withdrawal(&provider, stake_table_addr, validator_address).await?
         },
         Commands::ClaimValidatorExit { validator_address } => {
             tracing::info!("Claiming validator exit for {validator_address}");
-            claim_validator_exit(&provider, stake_table_addr, validator_address).await
+            claim_validator_exit(&provider, stake_table_addr, validator_address).await?
         },
         Commands::StakeForDemo {
             num_validators,
@@ -363,21 +426,24 @@ pub async fn main() -> Result<()> {
         Commands::Transfer { amount, to } => {
             let amount_esp = format_ether(amount);
             tracing::info!("Transferring {amount_esp} ESP to {to}");
-            Ok(token
+            token
                 .transfer(to, amount)
                 .send()
                 .await
                 .maybe_decode_revert::<EspTokenErrors>()?
-                .get_receipt()
-                .await?)
         },
         _ => unreachable!(),
     };
 
-    match result {
-        Ok(receipt) => tracing::info!("Success! transaction hash: {}", receipt.transaction_hash),
-        Err(err) => exit_err("Failed:", err),
-    };
-
-    Ok(())
+    match pending_tx.get_receipt().await {
+        Ok(receipt) => {
+            output_success(format!(
+                "Success! transaction hash: {}",
+                receipt.transaction_hash
+            ));
+            decode_and_display_logs(receipt.inner.logs());
+            Ok(())
+        },
+        Err(err) => exit_err("Failed", err),
+    }
 }

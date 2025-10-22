@@ -19,9 +19,11 @@ use url::Url;
 pub mod claim;
 pub mod delegation;
 pub mod demo;
+pub mod funding;
 pub mod info;
 pub mod l1;
 pub mod parse;
+pub mod receipt;
 pub mod registration;
 pub mod signature;
 

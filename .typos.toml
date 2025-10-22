@@ -12,6 +12,13 @@ extend-exclude = [
   "node-metrics/src/api/node_validator/v0/example_prometheus_metrics_output.txt",
   "crates/hotshot/orchestrator/run-config.toml",
   "crates/hotshot/macros/src/lib.rs",
+  "crates/hotshot/types/src/light_client.rs",
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
+  "data/insta_snapshots",
 ]
+
+[default.extend-words]
+Forgetten = "Forgetten"
+# Common "spelling" of "type" in Rust/go
+typ = "typ"

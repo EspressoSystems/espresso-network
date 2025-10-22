@@ -215,7 +215,7 @@ where
 
     let persistence = storage_opt.create().await?;
     persistence
-        .migrate_consensus()
+        .migrate_storage()
         .await
         .context("failed to migrate consensus data")?;
 
@@ -336,6 +336,7 @@ mod test {
             epoch_start_block: None,
             stake_table_capacity: None,
             genesis_version: Version { major: 0, minor: 1 },
+            da_committees: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

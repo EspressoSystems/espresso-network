@@ -16,8 +16,10 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
+    v0_3::{
+        EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy, Validator,
+    },
+    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     StakeTableHash, ValidatorMap,
 };
 use futures::stream::StreamExt;
@@ -65,7 +67,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
-use sqlx::{query, Executor, Row};
+use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
     catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
@@ -119,7 +121,7 @@ pub struct SqliteOptions {
         env = "ESPRESSO_SEQUENCER_STORAGE_PATH",
         value_parser = build_sqlite_path
     )]
-    pub(crate) path: Option<PathBuf>,
+    pub(crate) path: PathBuf,
 }
 
 pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
@@ -319,9 +321,7 @@ impl From<SqliteOptions> for Config {
     fn from(opt: SqliteOptions) -> Self {
         let mut cfg = Config::default();
 
-        if let Some(path) = opt.path {
-            cfg = cfg.db_path(path);
-        }
+        cfg = cfg.db_path(opt.path);
 
         cfg = cfg.max_connections(20);
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
@@ -354,7 +354,18 @@ impl From<SqliteOptions> for Options {
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
-            ..Default::default()
+            uri: None,
+            prune: false,
+            pruning: Default::default(),
+            consensus_pruning: Default::default(),
+            fetch_rate_limit: None,
+            active_fetch_delay: None,
+            chunk_fetch_delay: None,
+            archive: false,
+            lightweight: false,
+            min_connections: 0,
+            types_migration_batch_size: None,
+            pool: None,
         }
     }
 }
@@ -416,9 +427,7 @@ impl TryFrom<&Options> for Config {
                 "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
             ));
 
-            if let Some(path) = &opt.sqlite_options.path {
-                cfg = cfg.db_path(path.clone());
-            }
+            cfg = cfg.db_path(opt.sqlite_options.path.clone());
         }
 
         if opt.prune {
@@ -485,6 +494,12 @@ pub struct PruningOptions {
     /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
     pages: Option<u64>,
+}
+
+impl Default for PruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
 }
 
 impl From<PruningOptions> for PrunerCfg {
@@ -579,6 +594,12 @@ pub struct ConsensusPruningOptions {
     target_usage: u64,
 }
 
+impl Default for ConsensusPruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
+}
+
 #[async_trait]
 impl PersistenceOptions for Options {
     type Persistence = Persistence;
@@ -651,7 +672,11 @@ impl Persistence {
         tx.commit().await
     }
 
-    async fn generate_decide_events(&self, consumer: &impl EventConsumer) -> anyhow::Result<()> {
+    async fn generate_decide_events(
+        &self,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        consumer: &impl EventConsumer,
+    ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
             .db
             .read()
@@ -676,6 +701,7 @@ impl Persistence {
                 Some(v) => v + 1,
                 None => 0,
             };
+            tracing::debug!(?from_view, "generate decide event");
 
             let mut parent = None;
             let mut rows =
@@ -824,13 +850,28 @@ impl Persistence {
                 .collect();
 
             // Generate decide event for the consumer.
-            tracing::debug!(?to_view, ?final_qc, ?leaf_chain, "generating decide event");
+            tracing::debug!(
+                ?from_view,
+                ?to_view,
+                ?final_qc,
+                ?leaf_chain,
+                "generating decide event"
+            );
+            // Insert the deciding QC at the appropriate position, with the last decide event in the
+            // chain.
+            let qc2 = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == final_qc.view_number() + 1)
+                    .then_some(deciding_qc.clone())
+            } else {
+                None
+            };
             consumer
                 .handle_event(&Event {
                     view_number: to_view,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(leaf_chain),
-                        qc: Arc::new(final_qc),
+                        committing_qc: Arc::new(final_qc),
+                        deciding_qc: qc2,
                         block_size: None,
                     },
                 })
@@ -1068,6 +1109,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let values = leaf_chain
@@ -1097,7 +1139,7 @@ impl SequencerPersistence for Persistence {
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
         // need.
-        if let Err(err) = self.generate_decide_events(consumer).await {
+        if let Err(err) = self.generate_decide_events(deciding_qc, consumer).await {
             // GC/event processing failure is not an error, since by this point we have at least
             // managed to persist the decided leaves successfully, and GC will just run again at the
             // next decide. Log an error but do not return it.
@@ -1966,6 +2008,123 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
+        let batch_size: i64 = 10_000;
+        let mut tx = self.db.read().await?;
+
+        let migration_status = query_as::<(bool, i64)>(
+            "SELECT completed, migrated_rows 
+         FROM epoch_migration 
+         WHERE table_name = 'stake_table_events'",
+        )
+        .fetch_optional(tx.as_mut())
+        .await?;
+
+        let mut offset = if let Some((completed, migrated_rows)) = migration_status {
+            if completed {
+                tracing::info!("Migration already completed for stake_table_events");
+                return Ok(());
+            }
+            tracing::info!(
+                "Resuming stake_table_events migration from offset={}",
+                migrated_rows
+            );
+            migrated_rows
+        } else {
+            tracing::info!("No existing migration entry for stake_table_events, starting from 0");
+            0
+        };
+
+        tracing::warn!("migrating stake_table_events…");
+
+        loop {
+            let mut rtx = self.db.read().await?;
+            let rows = query(
+                "SELECT l1_block, log_index, event 
+             FROM stake_table_events
+             ORDER BY l1_block, log_index
+             LIMIT $1 OFFSET $2",
+            )
+            .bind(batch_size)
+            .bind(offset)
+            .fetch_all(rtx.as_mut())
+            .await?;
+            drop(rtx);
+
+            if rows.is_empty() {
+                break;
+            }
+
+            let mut values = Vec::new();
+
+            for row in rows.iter() {
+                let l1_block: i64 = row.try_get("l1_block")?;
+                let log_index: i64 = row.try_get("log_index")?;
+                let event_value: serde_json::Value = row.try_get("event")?;
+
+                // deserialize legacy
+                let legacy_event: StakeTableEventLegacy =
+                    serde_json::from_value(event_value.clone())
+                        .context("Failed to deserialize legacy stake_table_event")?;
+
+                let new_event: StakeTableEvent = legacy_event.into();
+                let event_json = serde_json::to_value(new_event)?;
+
+                values.push((l1_block, log_index, event_json));
+            }
+
+            // Insert batch into new table
+            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+            );
+
+            query_builder.push_values(values, |mut b, (l1_block, log_index, event)| {
+                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+            });
+            query_builder.push(
+                " ON CONFLICT (l1_block, log_index) 
+      DO UPDATE SET event = EXCLUDED.event",
+            );
+
+            let mut wtx = self.db.write().await?;
+            query_builder.build().execute(wtx.as_mut()).await?;
+
+            // update migration progress
+            offset += rows.len() as i64;
+
+            wtx.upsert(
+                "epoch_migration",
+                ["table_name", "completed", "migrated_rows"],
+                ["table_name"],
+                [("stake_table_events".to_string(), false, offset)],
+            )
+            .await?;
+            wtx.commit().await?;
+
+            tracing::info!(
+                "stake_table_events migration progress: rows={} offset={}",
+                rows.len(),
+                offset
+            );
+
+            if rows.len() < batch_size as usize {
+                break;
+            }
+        }
+        let mut wtx = self.db.write().await?;
+        wtx.upsert(
+            "epoch_migration",
+            ["table_name", "completed", "migrated_rows"],
+            ["table_name"],
+            [("stake_table_events".to_string(), true, offset)],
+        )
+        .await?;
+        wtx.commit().await?;
+
+        tracing::warn!("migration complete for stake_table_events");
+
+        Ok(())
+    }
     async fn store_next_epoch_quorum_certificate(
         &self,
         high_qc: NextEpochQuorumCertificate2<SeqTypes>,
@@ -2293,8 +2452,8 @@ impl MembershipPersistence for Persistence {
         let mut tx = self.db.read().await?;
 
         let rows = match query_as::<(i64, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)>(
-            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root ORDER BY \
-             epoch DESC LIMIT $1",
+            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
+             stake is NOT NULL ORDER BY epoch DESC LIMIT $1",
         )
         .bind(limit as i64)
         .fetch_all(tx.as_mut())
@@ -2507,6 +2666,70 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+
+        if all_validators.is_empty() {
+            return Ok(());
+        }
+
+        let mut query_builder =
+            QueryBuilder::new("INSERT INTO stake_table_validators (epoch, address, validator) ");
+
+        query_builder.push_values(all_validators, |mut b, (address, validator)| {
+            let validator_json =
+                serde_json::to_value(&validator).expect("cannot serialize validator to json");
+            b.push_bind(epoch.u64() as i64)
+                .push_bind(address.to_string())
+                .push_bind(validator_json);
+        });
+
+        query_builder
+            .push(" ON CONFLICT (epoch, address) DO UPDATE SET validator = EXCLUDED.validator");
+
+        let query = query_builder.build();
+
+        query.execute(tx.as_mut()).await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        let mut tx = self.db.read().await?;
+
+        // Use LOWER(address) in ORDER BY to ensure consistent ordering for SQlite and Postgres.
+        // Postgres sorts text case sensitively by default, while SQLite sorts case insensitively.
+        // Applying LOWER() makes the result consistent.
+        let rows = query(
+            "SELECT address, validator
+         FROM stake_table_validators
+         WHERE epoch = $1
+         ORDER BY LOWER(address) ASC
+         LIMIT $2 OFFSET $3",
+        )
+        .bind(epoch.u64() as i64)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(tx.as_mut())
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let validator_json: serde_json::Value = row.try_get("validator")?;
+                serde_json::from_value::<Validator<PubKey>>(validator_json).map_err(Into::into)
+            })
+            .collect()
     }
 }
 
@@ -2749,10 +2972,7 @@ mod testing {
 
             #[cfg(feature = "embedded-db")]
             {
-                SqliteOptions {
-                    path: Some(db.path()),
-                }
-                .into()
+                SqliteOptions { path: db.path() }.into()
             }
         }
     }
@@ -2761,9 +2981,16 @@ mod testing {
 #[cfg(test)]
 mod test {
 
+    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
+    use hotshot_contract_adapter::sol_types::{
+        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
+        StakeTableV2::{Delegated, Undelegated},
+        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
+        ValidatorRegisteredV2Legacy,
+    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
@@ -2784,7 +3011,7 @@ mod test {
             avidm::{init_avidm_param, AvidMScheme},
         },
     };
-    use jf_vid::VidScheme;
+    use jf_advz::VidScheme;
     use vbs::version::StaticVersionType;
 
     use super::*;
@@ -3102,7 +3329,7 @@ mod test {
         // the target, because of the minimum retention.
         tracing::info!("decide view 1");
         storage
-            .append_decided_leaves(data_view + 1, [], &NullEventConsumer)
+            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert_eq!(
@@ -3122,7 +3349,7 @@ mod test {
         // retention) so it gets pruned.
         tracing::info!("decide view 2");
         storage
-            .append_decided_leaves(data_view + 2, [], &NullEventConsumer)
+            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);
@@ -3333,7 +3560,7 @@ mod test {
             tx.commit().await.expect("failed to commit");
         }
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
 
         let mut tx = storage.db.read().await.unwrap();
         let (anchor_leaf2_count,) = query_as::<(i64,)>("SELECT COUNT(*) from anchor_leaf2")
@@ -3403,7 +3630,162 @@ mod test {
             "Wrong light client state update certificate in the storage",
         );
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_stake_table_events_migration() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let validator = espresso_types::testing::TestValidator::random();
+
+        let delegator = Address::random();
+
+        let legacy_events: Vec<(i64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
+            (
+                1,
+                1,
+                StakeTableEventLegacy::Register(ValidatorRegisteredLegacy {
+                    account: validator.account,
+                    blsVk: validator.bls_vk.into(),
+                    schnorrVk: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                }),
+                StakeTableEvent::Register((&validator).into()),
+            ),
+            (
+                1,
+                2,
+                StakeTableEventLegacy::RegisterV2(ValidatorRegisteredV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    commission: validator.commission,
+                    blsSig: validator.bls_sig.into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::RegisterV2((&validator).into()),
+            ),
+            (
+                1,
+                3,
+                StakeTableEventLegacy::KeyUpdate(ConsensusKeysUpdatedLegacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                }),
+                StakeTableEvent::KeyUpdate((&validator).into()),
+            ),
+            (
+                1,
+                4,
+                StakeTableEventLegacy::KeyUpdateV2(ConsensusKeysUpdatedV2Legacy {
+                    account: validator.account,
+                    blsVK: validator.bls_vk.into(),
+                    schnorrVK: validator.schnorr_vk.into(),
+                    blsSig: validator.bls_sig.into(),
+                    schnorrSig: validator.schnorr_sig.clone(),
+                }),
+                StakeTableEvent::KeyUpdateV2((&validator).into()),
+            ),
+            (
+                1,
+                5,
+                StakeTableEventLegacy::Deregister(ValidatorExitLegacy {
+                    validator: validator.account,
+                }),
+                StakeTableEvent::Deregister((&validator).into()),
+            ),
+            (
+                1,
+                6,
+                StakeTableEventLegacy::Delegate(DelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Delegate(Delegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+            (
+                1,
+                7,
+                StakeTableEventLegacy::Undelegate(UndelegatedLegacy {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+                StakeTableEvent::Undelegate(Undelegated {
+                    delegator,
+                    validator: validator.account,
+                    amount: U256::ZERO,
+                }),
+            ),
+        ];
+
+        let mut tx = storage.db.write().await.unwrap();
+
+        for (block, log_index, legacy_event, _) in &legacy_events {
+            let legacy_json = serde_json::to_value(legacy_event).unwrap();
+            query(
+                "INSERT INTO stake_table_events (l1_block, log_index, event)
+             VALUES ($1, $2, $3)",
+            )
+            .bind(block)
+            .bind(log_index)
+            .bind(legacy_json)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+
+        tx.commit().await.unwrap();
+
+        storage.migrate_stake_table_events().await.unwrap();
+
+        let mut tx = storage.db.read().await.unwrap();
+
+        let (completed, migrated_rows) = query_as::<(bool, i64)>(
+            "SELECT completed, migrated_rows 
+         FROM epoch_migration 
+         WHERE table_name = 'stake_table_events'",
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert!(completed, "migration should be marked as completed");
+        assert_eq!(
+            migrated_rows,
+            legacy_events.len() as i64,
+            "all rows should be migrated"
+        );
+
+        for (block, log_index, _, expected_event) in legacy_events {
+            let row = query(
+                "SELECT event 
+             FROM stake_table_events 
+             WHERE l1_block = $1 AND log_index = $2",
+            )
+            .bind(block)
+            .bind(log_index)
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+
+            let event_value: serde_json::Value = row.try_get("event").unwrap();
+            let migrated_event: StakeTableEvent = serde_json::from_value(event_value).unwrap();
+
+            assert_eq!(
+                migrated_event, expected_event,
+                "event migrated incorrectly from legacy"
+            );
+        }
     }
 }
 

@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, ti
 
 use alloy::primitives::U256;
 use hotshot_utils::anytrace::*;
-use jf_vid::{VidDisperse as JfVidDisperse, VidScheme};
+use jf_advz::{VidDisperse as JfVidDisperse, VidScheme};
 use serde::{Deserialize, Serialize};
 use tokio::{task::spawn_blocking, time::Instant};
 

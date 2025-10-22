@@ -6,8 +6,14 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     get_l1_deposits,
     v0_1::IterableFeeInfo,
-    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT},
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
+    v0_3::{
+        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1,
+        RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
+    },
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     NodeState, ValidatedState,
 };
@@ -32,7 +38,7 @@ use hotshot_types::{
     utils::epoch_from_block_number,
     vote::HasViewNumber,
 };
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme,
 };
@@ -44,6 +50,7 @@ use super::{
     BlocksFrontier,
 };
 use crate::{
+    api::RewardAccountProofDataSource,
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{sql::Options, ChainConfigPersistence},
     state::compute_state_update,
@@ -92,6 +99,87 @@ impl SequencerDataSource for DataSource {
     }
 }
 
+impl RewardAccountProofDataSource for SqlStorage {
+    async fn load_v1_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV1,
+    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch v1 reward account {account:?}; height {height}"
+        ))?;
+
+        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+            .await
+            .context("getting block height")? as u64;
+        ensure!(
+            block_height > 0,
+            "cannot get accounts for height {height}: no blocks available"
+        );
+
+        // Check if we have the desired state snapshot. If so, we can load the desired accounts
+        // directly.
+        if height < block_height {
+            let (tree, _) = load_v1_reward_accounts(&mut tx, height, &[account])
+                .await
+                .with_context(|| {
+                    format!("failed to load v1 reward account {account:?} at height {height}")
+                })?;
+
+            let (proof, balance) = RewardAccountProofV1::prove(&tree, account.into())
+                .with_context(|| {
+                    format!("reward account {account:?} not available at height {height}")
+                })?;
+
+            Ok(RewardAccountQueryDataV1 { balance, proof })
+        } else {
+            bail!(
+                "requested height {height} is not yet available (latest block height: \
+                 {block_height})"
+            );
+        }
+    }
+
+    async fn load_v2_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch reward account {account:?}; height {height}"
+        ))?;
+
+        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+            .await
+            .context("getting block height")? as u64;
+        ensure!(
+            block_height > 0,
+            "cannot get accounts for height {height}: no blocks available"
+        );
+
+        // Check if we have the desired state snapshot. If so, we can load the desired accounts
+        // directly.
+        if height < block_height {
+            let (tree, _) = load_v2_reward_accounts(&mut tx, height, &[account])
+                .await
+                .with_context(|| {
+                    format!("failed to load v2 reward account {account:?} at height {height}")
+                })?;
+
+            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
+                .with_context(|| {
+                    format!("reward account {account:?} not available at height {height}")
+                })?;
+
+            Ok(RewardAccountQueryDataV2 { balance, proof })
+        } else {
+            bail!(
+                "requested height {height} is not yet available (latest block height: \
+                 {block_height})"
+            );
+        }
+    }
+}
 impl CatchupStorage for SqlStorage {
     async fn get_reward_accounts_v1(
         &self,
@@ -289,6 +377,28 @@ impl CatchupStorage for SqlStorage {
         }
 
         Ok(chain)
+    }
+}
+
+impl RewardAccountProofDataSource for DataSource {
+    async fn load_v1_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV1,
+    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+        self.as_ref()
+            .load_v1_reward_account_proof(height, account)
+            .await
+    }
+
+    async fn load_v2_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+        self.as_ref()
+            .load_v2_reward_account_proof(height, account)
+            .await
     }
 }
 
@@ -882,9 +992,7 @@ pub(crate) mod impl_testable_data_source {
 
         #[cfg(feature = "embedded-db")]
         {
-            let opt = crate::persistence::sql::SqliteOptions {
-                path: Some(db.path()),
-            };
+            let opt = crate::persistence::sql::SqliteOptions { path: db.path() };
             opt.into()
         }
     }

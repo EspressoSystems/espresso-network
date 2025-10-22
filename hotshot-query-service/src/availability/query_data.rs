@@ -28,7 +28,7 @@ use hotshot_types::{
     },
     vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon},
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
 
@@ -89,6 +89,26 @@ where
     pub position: u32,
 }
 
+/// The proof system and the statement which is proved will vary by application, with different
+/// applications proving stronger or weaker statements depending on the trust assumptions at
+/// play. Some may prove a very strong statement (for example, a shared sequencer proving that
+/// the transaction belongs not only to the block but to a section of the block dedicated to a
+/// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
+/// query service may use `()` for the proof).
+pub trait VerifiableInclusion<Types: NodeType>:
+    Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync
+{
+    /// Verify the inclusion proof against a payload commitment.
+    /// Returns `None` on error.
+    fn verify(
+        &self,
+        metadata: &Metadata<Types>,
+        tx: &Transaction<Types>,
+        payload_commitment: &VidCommitment,
+        common: &VidCommon,
+    ) -> bool;
+}
+
 /// A block payload whose contents (e.g. individual transactions) can be examined.
 ///
 /// Note to implementers: this trait has only a few required methods. The provided methods, for
@@ -107,14 +127,7 @@ where
         Self: 'a;
 
     /// A proof that a certain transaction exists in the block.
-    ///
-    /// The proof system and the statement which is proved will vary by application, with different
-    /// applications proving stronger or weaker statements depending on the trust assumptions at
-    /// play. Some may prove a very strong statement (for example, a shared sequencer proving that
-    /// the transaction belongs not only to the block but to a section of the block dedicated to a
-    /// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
-    /// query service may use `()` for the proof).
-    type InclusionProof: Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync;
+    type InclusionProof: VerifiableInclusion<Types>;
 
     /// The number of transactions in the block.
     fn len(&self, meta: &Self::Metadata) -> usize;

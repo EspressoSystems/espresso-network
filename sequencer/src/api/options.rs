@@ -25,7 +25,7 @@ use hotshot_types::traits::{
     network::ConnectedNetwork,
     node_implementation::Versions,
 };
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use tide_disco::{listener::RateLimitListener, method::ReadState, Api, App, Url};
 use vbs::version::StaticVersionType;
 
@@ -39,6 +39,7 @@ use super::{
     ApiState, StorageState,
 };
 use crate::{
+    api::endpoints::RewardMerkleTreeVersion,
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
@@ -427,7 +428,7 @@ impl Options {
                 SequencerApiVersion,
                 RewardMerkleTreeV1,
                 { RewardMerkleTreeV1::ARITY },
-            >(ver)
+            >(ver, RewardMerkleTreeVersion::V1)
             .context("failed to define reward-state api")
         })?;
 
@@ -438,7 +439,7 @@ impl Options {
                 SequencerApiVersion,
                 RewardMerkleTreeV2,
                 { RewardMerkleTreeV2::ARITY },
-            >(ver)
+            >(ver, RewardMerkleTreeVersion::V2)
             .context("failed to define reward-state api")
         })?;
 

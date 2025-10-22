@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
@@ -32,6 +32,7 @@ use hotshot_types::{
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
@@ -43,10 +44,11 @@ use crate::{
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+        Validator,
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    SeqTypes, ValidatorMap,
+    PubKey, SeqTypes, ValidatorMap,
 };
 
 #[async_trait]
@@ -505,11 +507,24 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )>;
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: IndexMap<Address, Validator<PubKey>>,
+    ) -> anyhow::Result<()>;
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>>;
 }
 
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage
+    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
@@ -724,7 +739,13 @@ pub trait SequencerPersistence:
 
     /// Update storage based on an event from consensus.
     async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
-        if let EventType::Decide { leaf_chain, qc, .. } = &event.event {
+        if let EventType::Decide {
+            leaf_chain,
+            committing_qc,
+            deciding_qc,
+            ..
+        } = &event.event
+        {
             let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
                 // No new leaves.
                 return;
@@ -733,14 +754,14 @@ pub trait SequencerPersistence:
             // Associate each decided leaf with a QC.
             let chain = leaf_chain.iter().zip(
                 // The first (most recent) leaf corresponds to the QC triggering the decide event.
-                std::iter::once((**qc).clone())
+                std::iter::once((**committing_qc).clone())
                     // Moving backwards in the chain, each leaf corresponds with the subsequent
                     // leaf's justify QC.
                     .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc())),
             );
 
             if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, consumer)
+                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
                 .await
             {
                 tracing::error!(
@@ -780,6 +801,7 @@ pub trait SequencerPersistence:
         &self,
         decided_view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 
@@ -831,7 +853,10 @@ pub trait SequencerPersistence:
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
-    async fn migrate_consensus(&self) -> anyhow::Result<()> {
+
+    async fn migrate_stake_table_events(&self) -> anyhow::Result<()>;
+
+    async fn migrate_storage(&self) -> anyhow::Result<()> {
         tracing::warn!("migrating consensus data...");
 
         self.migrate_anchor_leaf().await?;
@@ -841,6 +866,10 @@ pub trait SequencerPersistence:
         self.migrate_quorum_certificates().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");
+
+        tracing::warn!("migrating stake table events");
+        self.migrate_stake_table_events().await?;
+        tracing::warn!("stake table events have been migrated");
 
         Ok(())
     }

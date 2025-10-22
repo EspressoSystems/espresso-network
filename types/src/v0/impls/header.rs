@@ -1,6 +1,6 @@
 use std::fmt;
 
-use alloy::primitives::{FixedBytes, Keccak256};
+use alloy::primitives::{Keccak256, B256};
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -17,7 +17,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
 };
-use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
+use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -1149,18 +1149,18 @@ impl BlockHeader<SeqTypes> for Header {
         })
     }
 
-    fn auth_root(&self) -> anyhow::Result<FixedBytes<32>> {
+    fn auth_root(&self) -> anyhow::Result<B256> {
         match self {
-            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(FixedBytes::from([0u8; 32])),
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(B256::ZERO),
             Header::V4(header) => {
                 // Temporary placeholder values for future fields
-                let placeholder_1 = [0; 32];
-                let placeholder_2 = [0; 32];
-                let placeholder_3 = [0; 32];
-                let placeholder_4 = [0; 32];
-                let placeholder_5 = [0; 32];
-                let placeholder_6 = [0; 32];
-                let placeholder_7 = [0; 32];
+                let placeholder_1 = B256::ZERO;
+                let placeholder_2 = B256::ZERO;
+                let placeholder_3 = B256::ZERO;
+                let placeholder_4 = B256::ZERO;
+                let placeholder_5 = B256::ZERO;
+                let placeholder_6 = B256::ZERO;
+                let placeholder_7 = B256::ZERO;
 
                 let mut hasher = Keccak256::new();
 

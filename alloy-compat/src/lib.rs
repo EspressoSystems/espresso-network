@@ -172,7 +172,7 @@ pub mod ethers_serde {
         }
     }
 
-    use alloy::primitives::{PrimitiveSignature, U256};
+    use alloy::primitives::{Signature, U256};
     /// the compatible representation of the old ethers' signature
     /// especially the `v` parity field.
     #[derive(Serialize, Deserialize)]
@@ -185,13 +185,13 @@ pub mod ethers_serde {
         v: u64,
     }
 
-    impl From<CompatRepr> for PrimitiveSignature {
+    impl From<CompatRepr> for Signature {
         fn from(repr: CompatRepr) -> Self {
-            PrimitiveSignature::new(repr.r, repr.s, repr.v == 28)
+            Signature::new(repr.r, repr.s, repr.v == 28)
         }
     }
-    impl From<&PrimitiveSignature> for CompatRepr {
-        fn from(sig: &PrimitiveSignature) -> Self {
+    impl From<&Signature> for CompatRepr {
+        fn from(sig: &Signature) -> Self {
             CompatRepr {
                 r: sig.r(),
                 s: sig.s(),
@@ -200,21 +200,20 @@ pub mod ethers_serde {
         }
     }
 
-    /// PrimitiveSignature
+    /// Signature
     pub mod signature {
+        use alloy::signers::Signature;
+
         use super::*;
 
-        pub fn serialize<S: Serializer>(
-            sig: &PrimitiveSignature,
-            serializer: S,
-        ) -> Result<S::Ok, S::Error> {
+        pub fn serialize<S: Serializer>(sig: &Signature, serializer: S) -> Result<S::Ok, S::Error> {
             let repr: CompatRepr = sig.into();
             repr.serialize(serializer)
         }
 
         pub fn deserialize<'de, D: Deserializer<'de>>(
             deserializer: D,
-        ) -> Result<PrimitiveSignature, D::Error> {
+        ) -> Result<Signature, D::Error> {
             let repr = CompatRepr::deserialize(deserializer)?;
             if repr.v != 27 && repr.v != 28 {
                 return Err(serde::de::Error::custom("wrong v, only 27 or 28"));
@@ -229,9 +228,9 @@ pub mod ethers_serde {
 
             #[derive(Serialize, Deserialize, Debug, PartialEq)]
             #[serde(transparent)]
-            struct Wrapper(#[serde(with = "signature")] pub PrimitiveSignature);
+            struct Wrapper(#[serde(with = "signature")] pub Signature);
 
-            let v = Wrapper(PrimitiveSignature::from_scalars_and_parity(
+            let v = Wrapper(Signature::from_scalars_and_parity(
                 b256!("840cfc572845f5786e702984c2a582528cad4b49b2a10b9db1be7fca90058565"),
                 b256!("25e7109ceb98168d95b09b18bbf6b685130e0562f233877d492b94eee0c5b6d1"),
                 false,
@@ -254,16 +253,16 @@ pub mod ethers_serde {
         }
     }
 
-    /// Option<PrimitiveSignature>
+    /// Option<Signature>
     pub mod option_signature {
         use super::*;
 
-        pub fn serialize<S: Serializer, T: Into<PrimitiveSignature> + Serialize + Clone>(
+        pub fn serialize<S: Serializer, T: Into<Signature> + Serialize + Clone>(
             sig: &Option<T>,
             serializer: S,
         ) -> Result<S::Ok, S::Error> {
             if let Some(sig) = sig {
-                let sig: PrimitiveSignature = sig.clone().into();
+                let sig: Signature = sig.clone().into();
                 let repr: CompatRepr = (&sig).into();
                 Some(repr).serialize(serializer)
             } else {
@@ -271,13 +270,13 @@ pub mod ethers_serde {
             }
         }
 
-        pub fn deserialize<'de, D: Deserializer<'de>, T: From<PrimitiveSignature>>(
+        pub fn deserialize<'de, D: Deserializer<'de>, T: From<Signature>>(
             deserializer: D,
         ) -> Result<Option<T>, D::Error> {
             let repr = <Option<CompatRepr>>::deserialize(deserializer)?;
 
             Ok(repr.map(|v| {
-                let sig: PrimitiveSignature = v.into();
+                let sig: Signature = v.into();
                 sig.into()
             }))
         }
@@ -289,9 +288,9 @@ pub mod ethers_serde {
 
             #[derive(Serialize, Deserialize, Debug, PartialEq)]
             #[serde(transparent)]
-            struct Wrapper(#[serde(with = "option_signature")] pub Option<PrimitiveSignature>);
+            struct Wrapper(#[serde(with = "option_signature")] pub Option<Signature>);
 
-            let v = Wrapper(Some(PrimitiveSignature::from_scalars_and_parity(
+            let v = Wrapper(Some(Signature::from_scalars_and_parity(
                 b256!("840cfc572845f5786e702984c2a582528cad4b49b2a10b9db1be7fca90058565"),
                 b256!("25e7109ceb98168d95b09b18bbf6b685130e0562f233877d492b94eee0c5b6d1"),
                 false,

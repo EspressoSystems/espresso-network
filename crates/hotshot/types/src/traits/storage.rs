@@ -37,7 +37,6 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
     /// Add a proposal to the stored VID proposals.
-    /// TODO(Chengyu): fix this
     async fn append_vid2(&self, proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>)
         -> Result<()>;
 
@@ -144,7 +143,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
     ) -> Result<()>;
     /// Migrate leaves from `Leaf` to `Leaf2`, and proposals from `QuorumProposal` to `QuorumProposal2`
-    async fn migrate_consensus(&self) -> Result<()> {
+    async fn migrate_storage(&self) -> Result<()> {
         Ok(())
     }
     /// Add a drb result

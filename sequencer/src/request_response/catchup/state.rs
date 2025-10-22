@@ -17,7 +17,7 @@ use hotshot_types::{
     traits::{network::ConnectedNetwork, node_implementation::Versions},
     utils::verify_leaf_chain,
 };
-use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
 use tokio::time::timeout;
 

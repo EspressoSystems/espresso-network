@@ -12,6 +12,7 @@ import (
 	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/stretchr/testify/require"
 )
 
 var workingDir = "../../../"
@@ -67,6 +68,24 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	}
 	fmt.Println("submitted transaction with hash", hash)
 
+	stream, err := client.StreamTransactions(ctx, 1)
+	require.NoError(t, err)
+
+	txData, err := stream.Next(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, txData)
+	require.Equal(t, txData.Transaction.Payload, tx.Payload)
+	require.Equal(t, txData.Transaction.Namespace, tx.Namespace)
+
+	// Test streaming with namespace filter
+	nsStream, err := client.StreamTransactionsInNamespace(ctx, 1, tx.Namespace)
+	require.NoError(t, err)
+
+	nsTxData, err := nsStream.Next(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, nsTxData)
+	require.Equal(t, nsTxData.Transaction.Payload, tx.Payload)
+	require.Equal(t, nsTxData.Transaction.Namespace, tx.Namespace)
 }
 
 func runDevNode(ctx context.Context, tmpDir string) func() {
