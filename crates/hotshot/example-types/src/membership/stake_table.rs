@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{collections::BTreeMap, fmt::Debug, ops::Bound};
 
 use hotshot_types::{
     drb::DrbResult,
@@ -43,6 +43,44 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
         PeerConfig {
             stake_table_entry: test_stake_table_entry.stake_table_entry,
             state_ver_key: test_stake_table_entry.state_ver_key,
+        }
+    }
+}
+
+// Map from first epoch to DA committee stake table entries
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TestDaCommittees<
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+>(BTreeMap<u64, Vec<TestStakeTableEntry<PubKey, StatePubKey>>>);
+
+impl<
+        PubKey: SignatureKey,
+        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+    > TestDaCommittees<PubKey, StatePubKey>
+{
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
+    pub fn add(
+        &mut self,
+        first_epoch: u64,
+        committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        self.0.insert(first_epoch, committee);
+    }
+
+    pub fn get(&self, epoch: Option<u64>) -> Option<Vec<TestStakeTableEntry<PubKey, StatePubKey>>> {
+        if let Some(e) = epoch {
+            // returns the greatest key smaller than or equal to `e`
+            self.0
+                .range((Bound::Included(&0), Bound::Included(&e)))
+                .last()
+                .map(|(_, committee)| committee)
+                .cloned()
+        } else {
+            None
         }
     }
 }
@@ -100,4 +138,10 @@ pub trait TestStakeTable<
     fn first_epoch(&self) -> Option<u64>;
 
     fn get_epoch_drb(&self, epoch: u64) -> anyhow::Result<DrbResult>;
+
+    fn add_da_committee(
+        &mut self,
+        first_epoch: u64,
+        committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    );
 }

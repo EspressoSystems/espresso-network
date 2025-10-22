@@ -14,6 +14,7 @@ use hotshot_types::{
         signature_key::StakeTableEntryType,
     },
     utils::transition_block_for_epoch,
+    PeerConfig,
 };
 
 use crate::{
@@ -355,5 +356,10 @@ impl<
                 },
             }
         }
+    }
+
+    fn add_da_committee(&mut self, first_epoch: u64, committee: Vec<PeerConfig<TYPES>>) {
+        self.inner
+            .add_da_committee(first_epoch, committee.into_iter().map(Into::into).collect());
     }
 }
