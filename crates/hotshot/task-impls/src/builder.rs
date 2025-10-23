@@ -78,7 +78,7 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
 
         Self {
             client: Client::builder(url.clone())
-                .set_timeout(Some(request_timeout))
+                .set_timeout(Some(request_timeout)).set_tcp_nodelay(true)
                 .build(),
             _marker: std::marker::PhantomData,
         }
