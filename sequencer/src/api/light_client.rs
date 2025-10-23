@@ -27,6 +27,15 @@ where
             // If we have a known-finalized block, we will not need a final 2-chain of QCs to prove
             // the last leaf in the result finalized, since we will either terminate with a 3-chain
             // of leaves or at the `finalized` leaf. Thus, we can use None for the final QC chain.
+            if finalized <= requested {
+                return Err(Error::Custom {
+                    message: format!(
+                        "finalized leaf height ({finalized}) must be greater than requested \
+                         ({requested})"
+                    ),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
             (finalized, None)
         },
         None => {
@@ -211,6 +220,32 @@ mod test {
                 .unwrap(),
             leaves[0]
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_bad_finalized() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Insert a single leaf. If we request this leaf but provide a finalized leaf which is
+        // earlier, we should fail.
+        let leaves = leaf_chain::<EpochVersion>(1..2).await;
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let err = get_leaf_proof(&ds, 1, Some(0), Duration::MAX)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
