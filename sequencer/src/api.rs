@@ -16,6 +16,7 @@ use espresso_types::{
     v0::traits::SequencerPersistence,
     v0_3::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+        Validator,
     },
     v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
@@ -221,6 +222,15 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().previous_proposal_participation().await
     }
+
+    async fn get_all_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        self.as_ref().get_all_validators(epoch, offset, limit).await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -329,6 +339,18 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .read()
             .await
             .previous_proposal_participation()
+    }
+
+    async fn get_all_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        let handle = self.consensus().await;
+        let handle_read = handle.read().await;
+        let storage = handle_read.storage();
+        storage.load_all_validators(epoch, offset, limit).await
     }
 }
 
@@ -980,7 +1002,7 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -1185,6 +1207,7 @@ pub mod test_helpers {
             let mut contracts = Contracts::new();
             let args = DeployerArgsBuilder::default()
                 .deployer(deployer.clone())
+                .rpc_url(l1_url.clone())
                 .mock_light_client(true)
                 .genesis_lc_state(genesis_state)
                 .genesis_st_state(genesis_stake)
@@ -1217,7 +1240,7 @@ pub mod test_helpers {
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
                 .expect("StakeTableProxy address not found");
-            setup_stake_table_contract_for_test(
+            StakingTransactions::create(
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,
@@ -1225,7 +1248,10 @@ pub mod test_helpers {
                 delegation_config,
             )
             .await
-            .expect("stake table setup failed");
+            .expect("stake table setup failed")
+            .apply_all()
+            .await
+            .expect("send all txns failed");
 
             // enable interval mining with a 1s interval.
             // This ensures that blocks are finalized every second, even when there are no transactions.
@@ -1984,6 +2010,7 @@ mod api_tests {
             .append_decided_leaves(
                 ViewNumber::new(1),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &FailConsumer,
             )
             .await
@@ -2001,6 +2028,7 @@ mod api_tests {
             .append_decided_leaves(
                 ViewNumber::new(4),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                None,
                 &consumer,
             )
             .await
@@ -2095,6 +2123,7 @@ mod api_tests {
             .append_decided_leaves(
                 leaf.view_number(),
                 [(&leaf_info(leaf.clone()), qc.clone())],
+                None,
                 &consumer,
             )
             .await
@@ -2127,6 +2156,7 @@ mod api_tests {
             .append_decided_leaves(
                 leaf.view_number(),
                 [(&leaf_info(leaf.clone()), qc)],
+                None,
                 &consumer,
             )
             .await
@@ -2174,7 +2204,7 @@ mod test {
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
         v0_4::RewardMerkleProofV2,
         validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
-        Header, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
+        Header, L1Client, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
         SequencerVersions, ValidatedState,
     };
     use futures::{
@@ -2209,6 +2239,7 @@ mod test {
     };
     use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
+    use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
     use staking_cli::{
@@ -2220,7 +2251,7 @@ mod test {
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
         TestNetwork, TestNetworkConfigBuilder,
     };
-    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
+    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode};
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -2237,7 +2268,7 @@ mod test {
         },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
-        testing::{wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
+        testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
 
     type PosVersionV3 = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
@@ -2741,7 +2772,8 @@ mod test {
     async fn test_chain_config_from_instance() {
         // This test uses a ValidatedState which only has the default chain config commitment.
         // The NodeState has the full chain config.
-        // Both chain config commitments will match, so the ValidatedState should have the full chain config after a non-genesis block is decided.
+        // Both chain config commitments will match, so the ValidatedState should have the
+        // full chain config after a non-genesis block is decided.
 
         let port = pick_unused_port().expect("No ports free");
 
@@ -3224,21 +3256,21 @@ mod test {
             let view_number = event.view_number;
             views.insert(view_number.u64());
 
-            if let hotshot::types::EventType::Decide { qc, .. } = event.event {
-                assert!(qc.data.epoch.is_some(), "epochs are live");
-                assert!(qc.data.block_number.is_some());
+            if let hotshot::types::EventType::Decide { committing_qc, .. } = event.event {
+                assert!(committing_qc.data.epoch.is_some(), "epochs are live");
+                assert!(committing_qc.data.block_number.is_some());
 
-                let epoch = qc.data.epoch.unwrap().u64();
+                let epoch = committing_qc.data.epoch.unwrap().u64();
                 epochs.insert(epoch);
 
                 tracing::debug!(
                     "Got decide: epoch: {:?}, block: {:?} ",
                     epoch,
-                    qc.data.block_number
+                    committing_qc.data.block_number
                 );
 
                 let expected_epoch =
-                    epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
+                    epoch_from_block_number(committing_qc.data.block_number.unwrap(), epoch_height);
                 tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
 
                 assert_eq!(expected_epoch, epoch);
@@ -3359,8 +3391,8 @@ mod test {
     async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
         // This test registers 5 validators and multiple delegators for each validator.
         // One of the delegators is also a validator.
-        // The test verifies that the cumulative reward at each block height equals the total block reward,
-        // which is a constant.
+        // The test verifies that the cumulative reward at each block height equals
+        // the total block reward, which is a constant.
 
         let epoch_height = 20;
 
@@ -3544,6 +3576,7 @@ mod test {
         let mut target_bh = 0;
         while let Some(header) = headers.next().await {
             let header = header.unwrap();
+            println!("got header with height {}", header.height());
             if header.height() == 0 {
                 continue;
             }
@@ -4961,30 +4994,6 @@ mod test {
         Ok(())
     }
 
-    /// Waits until a node has reached the given target epoch (exclusive).
-    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
-    async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
-        epoch_height: u64,
-        target_epoch: u64,
-    ) {
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                println!(
-                    "Node decided at height: {}, epoch: {:?}",
-                    leaf.height(),
-                    epoch
-                );
-
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
-            }
-        }
-    }
-
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
@@ -5077,6 +5086,7 @@ mod test {
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
             .deployer(deployer.clone())
+            .rpc_url(network_config.l1_url().clone())
             .mock_light_client(true)
             .genesis_lc_state(genesis_state)
             .genesis_st_state(genesis_stake)
@@ -5809,7 +5819,14 @@ mod test {
         let deployer_addr = network.cfg.signer().address();
         let mut contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
-        upgrade_stake_table_v2(provider, &mut contracts, deployer_addr, deployer_addr).await?;
+        upgrade_stake_table_v2(
+            provider,
+            L1Client::new(vec![network.cfg.l1_url()])?,
+            &mut contracts,
+            deployer_addr,
+            deployer_addr,
+        )
+        .await?;
 
         let mut commissions = vec![];
         for (i, (validator, provider)) in
@@ -5825,7 +5842,10 @@ mod test {
             .try_into()?;
             commissions.push((validator, commission, new_commission));
             tracing::info!(%validator, %commission, %new_commission, "Update commission");
-            update_commission(provider, st_addr, new_commission).await?;
+            update_commission(provider, st_addr, new_commission)
+                .await?
+                .get_receipt()
+                .await?;
         }
 
         // wait until new stake table takes effect
@@ -6060,12 +6080,99 @@ mod test {
                     .await
                     .unwrap();
 
-                assert_eq!(
-                    reward_claim_input,
-                    res.to_reward_claim_input(Default::default())?
-                );
+                assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
             }
         }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_all_validators_endpoint() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 20;
+
+        type V4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V4>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V4::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let err = client
+            .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/1001")
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .unwrap_err();
+
+        assert_matches!(err, ServerError { status, message} if
+                status == StatusCode::BAD_REQUEST
+                && message.contains("Limit cannot be greater than 1000")
+        );
+
+        // Wait for the chain to progress beyond epoch 3
+        let mut events = network.peers[0].event_stream().await;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
+
+        // Verify that there are no validators for epoch # 1 and epoch # 2
+        {
+            client
+                .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/100")
+                .send()
+                .await
+                .unwrap()
+                .is_empty();
+
+            client
+                .get::<Vec<Validator<PubKey>>>("node/all-validators/2/0/100")
+                .send()
+                .await
+                .unwrap()
+                .is_empty();
+        }
+
+        // Get the epoch # 3 validators
+        let validators = client
+            .get::<Vec<Validator<PubKey>>>("node/all-validators/3/0/100")
+            .send()
+            .await
+            .expect("validators");
+
+        assert!(!validators.is_empty());
 
         Ok(())
     }

@@ -57,7 +57,6 @@ use vbs::{
 };
 
 use crate::{
-    active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{EventKey, RewardAmount, StakeTableEvent},
@@ -65,9 +64,9 @@ use crate::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    Transaction, ValidatedState,
+    validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
+    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
+    SeqTypes, StakeTableHash, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -219,9 +218,10 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    let (_, hash) =
-        active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
-    hash
+    validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+        .unwrap()
+        .stake_table_hash
+        .unwrap()
 }
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
@@ -691,9 +691,7 @@ async fn test_reward_proof_endpoint_serialization() {
         insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
     });
 
-    let reward_claim_input = reward_proof
-        .to_reward_claim_input(Default::default())
-        .unwrap();
+    let reward_claim_input = reward_proof.to_reward_claim_input().unwrap();
 
     settings.bind(|| {
         insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);

@@ -7,7 +7,9 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use derive_builder::Builder;
+use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
+use url::Url;
 
 use crate::{
     encode_function_call,
@@ -28,6 +30,7 @@ use crate::{
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
 /// - `deployer`: deployer's wallet provider
+/// - `rpc_url`: RPC URL for the L1 network
 /// - `token_recipient`: initial token holder, same as deployer if None.
 /// - `mock_light_client`: flag to indicate whether deploying mocked contract
 /// - `genesis_lc_state`: Genesis light client state
@@ -62,6 +65,7 @@ use crate::{
 #[builder(setter(strip_option))]
 pub struct DeployerArgs<P: Provider + WalletProvider> {
     deployer: P,
+    rpc_url: Url,
     #[builder(default)]
     token_recipient: Option<Address>,
     #[builder(default)]
@@ -70,8 +74,6 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     use_multisig: bool,
     #[builder(default)]
     dry_run: bool,
-    #[builder(default)]
-    rpc_url: String,
     #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
     #[builder(default)]
@@ -193,9 +195,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     // - It's a simple ERC20 token with minimal upgrade complexity
                     // - No emergency updates are expected for token functionality
                     // - SafeExitTimelock provides sufficient security for token operations
-                    tracing::info!("Transferring ownership to SafeExitTimelock");
                     // deployer is the timelock owner
                     if use_timelock_owner {
+                        tracing::info!("Transferring ownership to SafeExitTimelock");
                         let timelock_addr = contracts
                             .address(Contract::SafeExitTimelock)
                             .expect("fail to get SafeExitTimelock address");
@@ -212,7 +214,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     upgrade_esp_token_v2_multisig_owner(
                         provider,
                         contracts,
-                        self.rpc_url.clone(),
+                        self.rpc_url.to_string(),
                         Some(self.dry_run),
                     )
                     .await?;
@@ -223,9 +225,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         .expect("fail to get EspTokenProxy address");
 
                     if let Some(use_timelock_owner) = self.use_timelock_owner {
-                        tracing::info!("Transferring ownership to SafeExitTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
+                            tracing::info!("Transferring ownership to SafeExitTimelock");
                             let timelock_addr = contracts
                                 .address(Contract::SafeExitTimelock)
                                 .expect("fail to get SafeExitTimelock address");
@@ -301,7 +303,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             epoch_start_block,
                         },
                         use_mock,
-                        rpc_url,
+                        rpc_url.to_string(),
                         Some(dry_run),
                     )
                     .await?;
@@ -329,7 +331,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         contracts,
                         use_mock,
-                        rpc_url,
+                        rpc_url.to_string(),
                         Some(dry_run),
                     )
                     .await?;
@@ -395,12 +397,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let multisig_pauser = self.multisig_pauser.context(
                     "Multisig pauser address must be set for the upgrade to StakeTableV2",
                 )?;
+                let l1_client = L1Client::new(vec![self.rpc_url.clone()])?;
                 tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
                 if use_multisig {
                     upgrade_stake_table_v2_multisig_owner(
                         provider,
+                        l1_client,
                         contracts,
-                        self.rpc_url.clone(),
+                        self.rpc_url.to_string(),
                         self.multisig.context(
                             "Multisig address must be set when upgrading to --use-multisig flag \
                              is present",
@@ -410,8 +414,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
                 } else {
-                    crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
-                        .await?;
+                    crate::upgrade_stake_table_v2(
+                        provider,
+                        l1_client,
+                        contracts,
+                        multisig_pauser,
+                        admin,
+                    )
+                    .await?;
 
                     let addr = contracts
                         .address(Contract::StakeTableProxy)
@@ -495,6 +505,39 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
             },
+            Contract::RewardClaimProxy => {
+                let token_addr = contracts
+                    .address(Contract::EspTokenProxy)
+                    .context("no ESP token proxy address")?;
+                let lc_addr = contracts
+                    .address(Contract::LightClientProxy)
+                    .context("no LightClient proxy address")?;
+                let pauser = self.multisig_pauser.context(
+                    "Multisig pauser address must be set for RewardClaimProxy deployment",
+                )?;
+                let addr = crate::deploy_reward_claim_proxy(
+                    provider, contracts, token_addr, lc_addr, admin, pauser,
+                )
+                .await?;
+
+                if let Some(use_timelock_owner) = self.use_timelock_owner {
+                    // RewardClaim uses SafeExitTimelock because:
+                    // - It is not expected to require urgent upgrades.
+                    // - In emergency situations it can be paused.
+                    // - It can mint ESP tokens, users should have enough time
+                    //   to react if they do not agree with an upgrade.
+                    tracing::info!("Transferring ownership to SafeExitTimelock");
+                    if use_timelock_owner {
+                        let timelock_addr = contracts
+                            .address(Contract::SafeExitTimelock)
+                            .expect("fail to get SafeExitTimelock address");
+                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
+                    }
+                } else if let Some(multisig) = self.multisig {
+                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
+                    crate::transfer_ownership(provider, target, addr, multisig).await?;
+                }
+            },
             _ => {
                 panic!("Deploying {target} not supported.");
             },
@@ -521,6 +564,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
+        self.deploy(contracts, Contract::LightClientV3).await?;
+        self.deploy(contracts, Contract::RewardClaimProxy).await?;
+        self.deploy(contracts, Contract::EspTokenV2).await?;
         Ok(())
     }
 

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use alloy::{
     primitives::{utils::parse_units, Address},
-    providers::{Provider, ProviderBuilder},
+    providers::ProviderBuilder,
     rpc::client::RpcClient,
     signers::{
         local::{coins_bip39::English, MnemonicBuilder},
@@ -13,7 +13,7 @@ use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 use espresso_types::{parse_duration, v0_1::SwitchingTransport, L1ClientOptions};
 use hotshot_contract_adapter::sol_types;
-use hotshot_state_prover::StateProverConfig;
+use hotshot_state_prover::{utils::ChainIdRetry, StateProverConfig};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
@@ -111,12 +111,23 @@ async fn main() {
     let args = Args::parse();
     args.logging.init();
 
+    // Remove sensitive info from URLs to log for easier debugging
+    for url in &args.l1_provider_url {
+        let sanitized_url = format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default());
+        tracing::info!("Using L1 provider: {sanitized_url}");
+    }
+
     // prepare config for state prover from user options
-    let transport = SwitchingTransport::new(args.l1_options, args.l1_provider_url)
+    let transport = SwitchingTransport::new(args.l1_options.clone(), args.l1_provider_url)
         .expect("failed to create switching transport, check your l1 provider urls");
     let rpc_client = RpcClient::new(transport.clone(), false);
     let l1_provider = ProviderBuilder::new().connect_client(rpc_client.clone());
-    let chain_id = l1_provider.get_chain_id().await.unwrap();
+
+    let chain_id = ChainIdRetry::default()
+        .get_chain_id(&l1_provider)
+        .await
+        .expect("failed to get chain ID from L1 providers");
+
     let signer = MnemonicBuilder::<English>::default()
         .phrase(args.eth_mnemonic)
         .index(args.eth_account_index)

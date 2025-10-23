@@ -14,6 +14,9 @@ interface IRewardClaim {
     /// @notice Reward amount must be greater than zero
     error InvalidRewardAmount();
 
+    /// @notice A claim would exceed the remaining daily capacity
+    error DailyLimitExceeded();
+
     /// @notice Claim staking rewards
     ///
     /// @param lifetimeRewards Total earned lifetime rewards for the user @param
