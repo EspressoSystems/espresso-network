@@ -32,7 +32,7 @@ use hotshot_types::{
     },
     traits::{
         election::Membership,
-        network::{ConnectedNetwork, ViewMessage},
+        network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
     vote::HasViewNumber,
@@ -723,8 +723,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
         _consensus: OuterConsensus<TYPES>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
-        network: Arc<I::Network>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>> {
         match event {
             HotShotEvent::QuorumProposalSend(proposal, _) => {
