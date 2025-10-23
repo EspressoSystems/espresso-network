@@ -26,12 +26,16 @@ use hotshot_types::{
         convert_proposal, GeneralConsensusMessage, Message, MessageKind, Proposal,
         SequencingMessage, UpgradeLock,
     },
-    simple_vote::{HasEpoch, QuorumVote2},
+    simple_vote::{
+        HasEpoch, QuorumVote2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
+        ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+    },
     traits::{
         election::Membership,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
+    vote::HasViewNumber,
 };
 
 #[derive(Debug)]
@@ -692,6 +696,92 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                     }
                 }
                 vec![]
+            },
+            _ => vec![event.clone()],
+        }
+    }
+
+    async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
+        vec![event.clone()]
+    }
+}
+
+#[derive(Debug)]
+pub struct DishonestViewSyncWrongEpoch<TYPES: NodeType> {
+    pub first_dishonest_view_number: u64,
+    pub epoch_modifier: fn(TYPES::Epoch) -> TYPES::Epoch,
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+    for DishonestViewSyncWrongEpoch<TYPES>
+{
+    async fn send_handler(
+        &mut self,
+        event: &HotShotEvent<TYPES>,
+        public_key: &TYPES::SignatureKey,
+        private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        upgrade_lock: &UpgradeLock<TYPES, V>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
+    ) -> Vec<HotShotEvent<TYPES>> {
+        match event {
+            HotShotEvent::QuorumProposalSend(proposal, _) => {
+                if self.first_dishonest_view_number > proposal.data.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::QuorumVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::TimeoutVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::ViewSyncPreCommitVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                let view_number = vote.data.round;
+                let vote = if upgrade_lock.epochs_enabled(view_number).await {
+                    ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
+                        ViewSyncPreCommitData2 {
+                            relay: 0,
+                            round: view_number,
+                            epoch: vote.data.epoch.map(self.epoch_modifier),
+                        },
+                        view_number,
+                        public_key,
+                        private_key,
+                        upgrade_lock,
+                    )
+                    .await
+                    .context("Failed to sign pre commit vote!")
+                    .unwrap()
+                } else {
+                    let vote = ViewSyncPreCommitVote::<TYPES>::create_signed_vote(
+                        ViewSyncPreCommitData {
+                            relay: 0,
+                            round: view_number,
+                        },
+                        view_number,
+                        public_key,
+                        private_key,
+                        upgrade_lock,
+                    )
+                    .await
+                    .context("Failed to sign pre commit vote!")
+                    .unwrap();
+                    vote.to_vote2()
+                };
+                vec![HotShotEvent::ViewSyncPreCommitVoteSend(vote)]
             },
             _ => vec![event.clone()],
         }
