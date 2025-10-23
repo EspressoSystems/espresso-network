@@ -177,7 +177,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let initial_supply = self
                     .initial_token_supply
                     .context("Initial token supply must be set when deploying esp token")?;
-                let addr = crate::deploy_token_proxy(
+                crate::deploy_token_proxy(
                     provider,
                     contracts,
                     admin,
@@ -188,22 +188,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
 
-                if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    // EspToken uses SafeExitTimelock (not OpsTimelock) because:
-                    // - It's a simple ERC20 token with minimal upgrade complexity
-                    // - No emergency updates are expected for token functionality
-                    // - SafeExitTimelock provides sufficient security for token operations
-                    // deployer is the timelock owner
-                    if use_timelock_owner {
-                        tracing::info!("Transferring ownership to SafeExitTimelock");
-                        let timelock_addr = contracts
-                            .address(Contract::SafeExitTimelock)
-                            .expect("fail to get SafeExitTimelock address");
-                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
-                    }
-                } else if let Some(multisig) = self.multisig {
-                    crate::transfer_ownership(provider, target, addr, multisig).await?;
-                }
+                // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
             },
             Contract::EspTokenV2 => {
                 let use_multisig = self.use_multisig;
@@ -225,6 +210,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     if let Some(use_timelock_owner) = self.use_timelock_owner {
                         // deployer is the timelock owner
                         if use_timelock_owner {
+                            // EspToken uses SafeExitTimelock (not OpsTimelock) because:
+                            // - It's a simple ERC20 token with minimal upgrade complexity
+                            // - No emergency updates are expected for token functionality
+                            // - SafeExitTimelock provides sufficient security for token operations
                             tracing::info!("Transferring ownership to SafeExitTimelock");
                             let timelock_addr = contracts
                                 .address(Contract::SafeExitTimelock)

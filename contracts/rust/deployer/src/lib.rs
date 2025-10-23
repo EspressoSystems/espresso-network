@@ -969,10 +969,11 @@ pub async fn deploy_reward_claim_proxy(
         anyhow::bail!("EspToken address is not a contract, can't deploy RewardClaimProxy");
     }
 
-    // verify the light client address contains a contract
-    if !is_contract(&provider, light_client_addr).await? {
-        anyhow::bail!("LightClient address is not a contract, can't deploy RewardClaimProxy");
-    }
+    // TODO: MA currently disabled because in the local demo we deploy RewardClaimProxy before LightClientProxy
+    // // verify the light client address contains a contract
+    // if !is_contract(&provider, light_client_addr).await? {
+    //     anyhow::bail!("LightClient address is not a contract, can't deploy RewardClaimProxy");
+    // }
 
     let init_data = reward_claim
         .initialize(owner, esp_token_addr, light_client_addr, pauser)
@@ -1220,6 +1221,16 @@ pub async fn transfer_ownership(
             tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
             let stake_table = StakeTable::new(target_address, &provider);
             stake_table
+                .transferOwnership(new_owner)
+                .send()
+                .await?
+                .get_receipt()
+                .await?
+        },
+        Contract::RewardClaim | Contract::RewardClaimProxy => {
+            tracing::info!(%target_address, %new_owner, "Transfer RewardClaim ownership");
+            let reward_claim = RewardClaim::new(target_address, &provider);
+            reward_claim
                 .transferOwnership(new_owner)
                 .send()
                 .await?
