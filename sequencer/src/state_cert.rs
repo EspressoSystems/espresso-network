@@ -1,54 +1,19 @@
-//! State certificate
+//! State certificate validation and error handling
 
 use std::collections::HashMap;
 
 use alloy::primitives::{FixedBytes, U256};
 use anyhow::bail;
-use derive_more::From;
 use espresso_types::SeqTypes;
 use hotshot_query_service::availability::Error;
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     light_client::StateVerKey,
-    simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
-    },
+    simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::{
-        node_implementation::NodeType,
-        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
-    },
+    traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
 };
-use serde::{Deserialize, Serialize};
 use tide_disco::StatusCode;
-
-/// A wrapper around `LightClientStateUpdateCertificateV1`.
-///
-/// This struct is returned by the `state-cert` API endpoint for backward compatibility.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV1<Types: NodeType>(pub LightClientStateUpdateCertificateV1<Types>);
-
-/// A wrapper around `LightClientStateUpdateCertificateV2`.
-///
-/// The V2 certificate includes additional fields compared to earlier versions:
-/// - Light client v3 signatures
-/// - `auth_root` — used by the reward claim contract to verify that its
-///   calculated `auth_root` matches the one in the Light Client contract.
-///
-/// This struct is returned by the `state-cert-v2` API endpoint.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
-
-impl<Types> From<StateCertQueryDataV2<Types>> for StateCertQueryDataV1<Types>
-where
-    Types: NodeType,
-{
-    fn from(cert: StateCertQueryDataV2<Types>) -> Self {
-        Self(cert.0.into())
-    }
-}
 
 /// Error type for state certificate fetching operations
 #[derive(Debug, thiserror::Error)]

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use espresso_types::{NamespaceId, NsProof, PubKey};
+use espresso_types::{NamespaceId, NsProof, PubKey, StateCertQueryDataV1, StateCertQueryDataV2};
 use futures::{
     future::{try_join_all, FutureExt, TryFutureExt},
     join,
@@ -27,7 +27,10 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     api::{
-        data_source::{RequestResponseDataSource, SequencerDataSource},
+        data_source::{
+            RequestResponseDataSource, SequencerDataSource, StateCertDataSource,
+            StateCertFetchingDataSource,
+        },
         StorageState,
     },
     SeqTypes, SequencerApiVersion, SequencerPersistence,
@@ -387,6 +390,85 @@ where
             .boxed()
         })?;
     }
+
+    api.at("get_state_cert", move |req, state| {
+        async move {
+            let epoch: u64 = req.integer_param("epoch")?;
+
+            let state_cert = state
+                .read(|state| state.get_state_cert_by_epoch(epoch).boxed())
+                .await
+                .map_err(|e| availability::Error::Custom {
+                    message: format!("Failed to get state cert: {e}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?;
+
+            let cert_v2 = match state_cert {
+                Some(cert) => cert,
+                None => {
+                    // Not found locally, try to fetch from peers
+                    let cert = state
+                        .read(|state| state.request_state_cert(epoch, timeout).boxed())
+                        .await?;
+
+                    // Store the fetched certificate
+                    state
+                        .read(|state| state.insert_state_cert(epoch, cert.clone()).boxed())
+                        .await
+                        .map_err(|e| availability::Error::Custom {
+                            message: format!("Failed to store state cert: {e}"),
+                            status: StatusCode::INTERNAL_SERVER_ERROR,
+                        })?;
+
+                    cert
+                },
+            };
+
+            Ok(StateCertQueryDataV1::from(StateCertQueryDataV2(cert_v2)))
+        }
+        .boxed()
+    })?;
+
+    api.at("get_state_cert_v2", |req, state| {
+        async move {
+            let epoch: u64 = req.integer_param("epoch")?;
+
+            // Use the trait method which delegates to persistence
+            let state_cert = state
+                .read(|state| state.get_state_cert_by_epoch(epoch).boxed())
+                .await
+                .map_err(|e| availability::Error::Custom {
+                    message: format!("Failed to get state cert: {e}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?;
+
+            match state_cert {
+                Some(cert) => Ok(StateCertQueryDataV2(cert)),
+                None => {
+                    // Not found locally, try to fetch from peers
+                    let cert = state
+                        .read(|state| {
+                            state
+                                .request_state_cert(epoch, Duration::from_secs(60))
+                                .boxed()
+                        })
+                        .await?;
+
+                    // Store the fetched certificate
+                    state
+                        .read(|state| state.insert_state_cert(epoch, cert.clone()).boxed())
+                        .await
+                        .map_err(|e| availability::Error::Custom {
+                            message: format!("Failed to store state cert: {e}"),
+                            status: StatusCode::INTERNAL_SERVER_ERROR,
+                        })?;
+
+                    Ok(StateCertQueryDataV2(cert))
+                },
+            }
+        }
+        .boxed()
+    })?;
 
     Ok(api)
 }

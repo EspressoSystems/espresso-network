@@ -384,7 +384,6 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 }
 
-#[async_trait]
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
 {

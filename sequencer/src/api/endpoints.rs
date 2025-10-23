@@ -42,18 +42,12 @@ use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, RequestParams, StatusCode};
 use vbs::version::{StaticVersion, StaticVersionType};
 
-use super::{
-    data_source::{
-        CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, RequestResponseDataSource,
-        SequencerDataSource, StakeTableDataSource, StateCertDataSource,
-        StateCertFetchingDataSource, StateSignatureDataSource, SubmitDataSource,
-    },
-    StorageState,
+use super::data_source::{
+    CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
+    StateSignatureDataSource, SubmitDataSource,
 };
 use crate::{
-    api::RewardAccountProofDataSource,
-    state_cert::{StateCertQueryDataV1, StateCertQueryDataV2},
-    SeqTypes, SequencerApiVersion, SequencerPersistence,
+    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
 };
 
 mod availability;
