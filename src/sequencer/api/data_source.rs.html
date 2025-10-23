@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a>    v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
 <a href=#15 id=15 data-nosnippet>15</a>    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 <a href=#16 id=16 data-nosnippet>16</a>};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>futures::future::Future;
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>futures::future::{BoxFuture, Future};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>hotshot::types::BLSPubKey;
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>hotshot_query_service::{
 <a href=#20 id=20 data-nosnippet>20</a>    availability::{AvailabilityDataSource, VidCommonQueryData},
@@ -285,32 +285,31 @@
 <a href=#285 id=285 data-nosnippet>285</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;RewardMerkleTreeV1&gt;&gt;;
 <a href=#286 id=286 data-nosnippet>286</a>}
 <a href=#287 id=287 data-nosnippet>287</a>
-<a href=#288 id=288 data-nosnippet>288</a><span class="attr">#[async_trait]
-<a href=#289 id=289 data-nosnippet>289</a></span><span class="kw">pub trait </span>RequestResponseDataSource&lt;Types: NodeType&gt; {
-<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">async fn </span>request_vid_shares(
-<a href=#291 id=291 data-nosnippet>291</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#292 id=292 data-nosnippet>292</a>        block_number: u64,
-<a href=#293 id=293 data-nosnippet>293</a>        vid_common_data: VidCommonQueryData&lt;Types&gt;,
-<a href=#294 id=294 data-nosnippet>294</a>        duration: Duration,
-<a href=#295 id=295 data-nosnippet>295</a>    ) -&gt; anyhow::Result&lt;Vec&lt;VidShare&gt;&gt;;
-<a href=#296 id=296 data-nosnippet>296</a>}
-<a href=#297 id=297 data-nosnippet>297</a>
-<a href=#298 id=298 data-nosnippet>298</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
-<a href=#299 id=299 data-nosnippet>299</a></span><span class="kw">pub mod </span>testing {
-<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">use super</span>::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
-<a href=#301 id=301 data-nosnippet>301</a>
-<a href=#302 id=302 data-nosnippet>302</a>    <span class="attr">#[async_trait]
-<a href=#303 id=303 data-nosnippet>303</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">type </span>Storage: Sync;
-<a href=#305 id=305 data-nosnippet>305</a>
-<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
-<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">fn </span>leaf_only_ds_options(
-<a href=#309 id=309 data-nosnippet>309</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
-<a href=#310 id=310 data-nosnippet>310</a>            _opt: Options,
-<a href=#311 id=311 data-nosnippet>311</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
-<a href=#312 id=312 data-nosnippet>312</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
-<a href=#313 id=313 data-nosnippet>313</a>        }
-<a href=#314 id=314 data-nosnippet>314</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
-<a href=#315 id=315 data-nosnippet>315</a>    }
-<a href=#316 id=316 data-nosnippet>316</a>}</code></pre></div></section></main></body></html>
+<a href=#288 id=288 data-nosnippet>288</a><span class="kw">pub trait </span>RequestResponseDataSource&lt;Types: NodeType&gt; {
+<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">fn </span>request_vid_shares(
+<a href=#290 id=290 data-nosnippet>290</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#291 id=291 data-nosnippet>291</a>        block_number: u64,
+<a href=#292 id=292 data-nosnippet>292</a>        vid_common_data: VidCommonQueryData&lt;Types&gt;,
+<a href=#293 id=293 data-nosnippet>293</a>        duration: Duration,
+<a href=#294 id=294 data-nosnippet>294</a>    ) -&gt; <span class="kw">impl </span>Future&lt;Output = BoxFuture&lt;<span class="lifetime">'static</span>, anyhow::Result&lt;Vec&lt;VidShare&gt;&gt;&gt;&gt; + Send;
+<a href=#295 id=295 data-nosnippet>295</a>}
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
+<a href=#298 id=298 data-nosnippet>298</a></span><span class="kw">pub mod </span>testing {
+<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">use super</span>::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="attr">#[async_trait]
+<a href=#302 id=302 data-nosnippet>302</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">type </span>Storage: Sync;
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">fn </span>leaf_only_ds_options(
+<a href=#308 id=308 data-nosnippet>308</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
+<a href=#309 id=309 data-nosnippet>309</a>            _opt: Options,
+<a href=#310 id=310 data-nosnippet>310</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
+<a href=#311 id=311 data-nosnippet>311</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
+<a href=#312 id=312 data-nosnippet>312</a>        }
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
+<a href=#314 id=314 data-nosnippet>314</a>    }
+<a href=#315 id=315 data-nosnippet>315</a>}</code></pre></div></section></main></body></html>

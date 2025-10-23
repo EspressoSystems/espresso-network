@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["AvidMNsProofV1"],"struct":["AvidMNsProof"]};
+window.SIDEBAR_ITEMS = {"struct":["AvidMIncorrectEncodingNsProof","AvidMNsProof"]};
