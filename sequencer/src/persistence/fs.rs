@@ -371,7 +371,7 @@ impl Inner {
     /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
     /// within these view ranges have been processed by the event consumer.
     async fn generate_decide_events(
-        &self,
+        &mut self,
         view: ViewNumber,
         deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
         consumer: &impl EventConsumer,
@@ -398,7 +398,7 @@ impl Inner {
             }
 
             // Move the state cert to the finalized dir if it exists.
-            let state_cert = self.finalized_state_cert(v)?;
+            let state_cert = self.store_finalized_state_cert(v)?;
 
             // Fill in the full block payload using the DA proposals we had persisted.
             if let Some(proposal) = self.load_da_proposal(v)? {
@@ -564,8 +564,8 @@ impl Inner {
         Ok(None)
     }
 
-    fn finalized_state_cert(
-        &self,
+    fn store_finalized_state_cert(
+        &mut self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let dir_path = self.state_cert_dir_path();
@@ -604,7 +604,15 @@ impl Inner {
             .join(epoch.to_string())
             .with_extension("txt");
 
-        fs::write(&finalized_file_path, &bytes).context(format!(
+        self.replace(
+            &finalized_file_path,
+            |_| Ok(true),
+            |mut file| {
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+        .context(format!(
             "finalizing light client state update certificate file for epoch {epoch:?}"
         ))?;
 
@@ -688,7 +696,16 @@ impl SequencerPersistence for Persistence {
             let view = leaf.view_number().u64();
             let bytes = bincode::serialize(&(leaf, qc))?;
             let new_file = path.join(view.to_string()).with_extension("txt");
-            fs::write(new_file, bytes).context(format!("writing anchor leaf file {view}"))?;
+            inner
+                .replace(
+                    &new_file,
+                    |_| Ok(true),
+                    |mut file| {
+                        file.write_all(&bytes)?;
+                        Ok(())
+                    },
+                )
+                .context(format!("writing anchor leaf file {view}"))?;
 
             // Now we can remove the old file.
             fs::remove_file(&legacy_path).context("removing legacy anchor leaf file")?;
@@ -1569,7 +1586,7 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.epoch_root_block_header_dir_path();
 
         fs::create_dir_all(dir_path.clone())
@@ -1579,9 +1596,18 @@ impl SequencerPersistence for Persistence {
             bincode::serialize(&block_header).context("serialize block header")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        fs::write(file_path, block_header_bytes).context(format!(
-            "writing epoch root block header file for epoch {epoch:?}"
-        ))?;
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |mut file| {
+                    file.write_all(&block_header_bytes)?;
+                    Ok(())
+                },
+            )
+            .context(format!(
+                "writing epoch root block header file for epoch {epoch:?}"
+            ))?;
 
         Ok(())
     }
@@ -1590,7 +1616,7 @@ impl SequencerPersistence for Persistence {
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         // let epoch = state_cert.epoch;
         let view = state_cert.light_client_state.view_number;
         let dir_path = inner.state_cert_dir_path();
@@ -1602,9 +1628,18 @@ impl SequencerPersistence for Persistence {
             .context("serialize light client state update certificate")?;
 
         let file_path = dir_path.join(view.to_string()).with_extension("txt");
-        fs::write(file_path, bytes).context(format!(
-            "writing light client state update certificate file for view {view:?}"
-        ))?;
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |mut file| {
+                    file.write_all(&bytes)?;
+                    Ok(())
+                },
+            )
+            .context(format!(
+                "writing light client state update certificate file for view {view:?}"
+            ))?;
 
         Ok(())
     }
@@ -1873,10 +1908,17 @@ impl MembershipPersistence for Persistence {
                 continue;
             }
 
-            let file = File::create(&file_path).context("Failed to create event file")?;
-            let writer = BufWriter::new(file);
+            inner
+                .replace(
+                    &file_path,
+                    |_| Ok(true),
+                    |file| {
+                        let writer = BufWriter::new(file);
 
-            serde_json::to_writer_pretty(writer, &event)
+                        serde_json::to_writer_pretty(writer, &event)?;
+                        Ok(())
+                    },
+                )
                 .context("Failed to write event to file")?;
         }
 
@@ -2006,7 +2048,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         all_validators: ValidatorMap,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.read().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.stake_table_dir_path();
         let validators_dir = dir_path.join("validators");
 
@@ -2017,12 +2059,20 @@ impl MembershipPersistence for Persistence {
         // Path = validators/epoch_<number>.json
         let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
 
-        let file = File::create(&file_path)
-            .with_context(|| format!("Failed to create validator file: {file_path:?}"))?;
-        let writer = BufWriter::new(file);
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |file| {
+                    let writer = BufWriter::new(file);
 
-        serde_json::to_writer_pretty(writer, &all_validators)
-            .with_context(|| format!("Failed to serialize validators for epoch {epoch}"))?;
+                    serde_json::to_writer_pretty(writer, &all_validators).with_context(|| {
+                        format!("Failed to serialize validators for epoch {epoch}")
+                    })?;
+                    Ok(())
+                },
+            )
+            .with_context(|| format!("Failed to write validator file: {file_path:?}"))?;
 
         Ok(())
     }
