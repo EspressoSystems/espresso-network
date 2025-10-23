@@ -46,16 +46,19 @@ build profile="dev" features="":
     cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
 
 demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
-    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-pos-base *args: (build "test" "--no-default-features --features pos")
-    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-drb-header-upgrade *args: (build "test" "--no-default-features --features pos,drb-and-header")
-    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-drb-header *args: (build "test" "--no-default-features --features drb-and-header")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features --features fee,drb-and-header")
-    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -150,7 +153,9 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$|^RewardClaimPrototypeMock$"
+VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|IRewardClaim|IPlonkVerifier"
+REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -163,6 +168,9 @@ gen-bindings:
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
 
+    # HACK: add serde support for fixed byte arrays in the generated bindings
+    sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
+
     just export-contract-abis
     just gen-go-bindings
 
@@ -170,7 +178,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 
@@ -231,10 +239,10 @@ gen-go-bindings:
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
-test-go:
+test-go *args:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
-    cd sdks/go && go test -v ./...
+    cd sdks/go && go test -v ./... {{args}}
 
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}

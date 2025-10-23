@@ -70,6 +70,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         start_threshold: (1, 1),
         num_nodes_with_stake: NonZeroUsize::new(known_nodes_with_stake.len()).unwrap(),
         known_da_nodes: known_da_nodes.clone(),
+        da_committees: Default::default(),
         num_bootstrap: num_bootstrap_nodes,
         known_nodes_with_stake: known_nodes_with_stake.clone(),
         da_staked_committee_size: known_da_nodes.len(),
@@ -642,13 +643,14 @@ where
                     secondary_network_delay,
                 ),
                 storage: Rc::new(move |node_id| {
-                    let mut storage = TestStorage::<TYPES>::default();
-                    // update storage impl to use settings delay option
-                    storage.delay_config = metadata
-                        .async_delay_config
-                        .get(&node_id)
-                        .cloned()
-                        .unwrap_or_default();
+                    let storage = TestStorage::<TYPES> {
+                        delay_config: metadata
+                            .async_delay_config
+                            .get(&node_id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    };
                     storage
                 }),
                 hotshot_config,

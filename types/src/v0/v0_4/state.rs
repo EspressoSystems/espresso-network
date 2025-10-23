@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use alloy::primitives::{Address, U256};
 use derive_more::{Display, From, Into};
+use hotshot_contract_adapter::reward::{RewardAuthData, RewardClaimInput};
 use jf_merkle_tree_compat::{
     universal_merkle_tree::UniversalMerkleTree, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
@@ -80,6 +81,38 @@ pub enum RewardMerkleProofV2 {
 pub struct RewardAccountQueryDataV2 {
     pub balance: U256,
     pub proof: RewardAccountProofV2,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RewardClaimError {
+    #[error("Zero reward balance")]
+    ZeroRewardError,
+    #[error("Failed to convert proof: {0}")]
+    ProofConversionError(#[from] anyhow::Error),
+}
+
+impl RewardAccountQueryDataV2 {
+    /// Convert query data to reward claim input for contract submission.
+    ///
+    /// Auth root inputs (other than the reward merkle tree root) are currently
+    /// all zero placeholder values.
+    pub fn to_reward_claim_input(self) -> Result<RewardClaimInput, RewardClaimError> {
+        if self.balance == U256::ZERO {
+            return Err(RewardClaimError::ZeroRewardError);
+        }
+
+        let account_proof = match self.proof.proof {
+            RewardMerkleProofV2::Presence(_) => self.proof,
+            RewardMerkleProofV2::Absence(_) => {
+                return Err(RewardClaimError::ZeroRewardError);
+            },
+        };
+
+        Ok(RewardClaimInput {
+            lifetime_rewards: self.balance,
+            auth_data: RewardAuthData::new(account_proof.try_into()?).into(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

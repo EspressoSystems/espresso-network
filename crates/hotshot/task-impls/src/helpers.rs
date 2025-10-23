@@ -287,7 +287,9 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
         tokio::spawn(async move {
             let membership_clone = membership.clone();
-            let epoch_root_future = tokio::spawn(async move {
+
+            // First add the epoch root to `membership`
+            {
                 let start = Instant::now();
                 if let Err(e) = Membership::add_epoch_root(
                     Arc::clone(membership_clone.membership()),
@@ -299,25 +301,17 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
                     tracing::error!("Failed to add epoch root for epoch {next_epoch_number}: {e}");
                 }
                 tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
-            });
+            }
 
             let membership_clone = membership.clone();
 
-            let drb_result_future = tokio::spawn(async move {
-                membership_clone
-                    .compute_drb_result(next_epoch_number, decided_leaf.clone())
-                    .await
-            });
-
-            let (_, drb_result) = tokio::join!(epoch_root_future, drb_result_future);
+            let drb_result = membership_clone
+                .compute_drb_result(next_epoch_number, decided_leaf.clone())
+                .await;
 
             let drb_result = match drb_result {
-                Ok(Ok(result)) => result,
+                Ok(result) => result,
                 Err(e) => {
-                    tracing::error!("Failed to compute DRB result from decide: {e}");
-                    return;
-                },
-                Ok(Err(e)) => {
                     tracing::error!("Failed to compute DRB result from decide: {e}");
                     return;
                 },
@@ -345,8 +339,14 @@ pub struct LeafChainTraversalOutcome<TYPES: NodeType> {
     /// The new decided view obtained from a 3 chain starting from the proposal's parent.
     pub new_decided_view_number: Option<TYPES::View>,
 
-    /// The qc for the decided chain.
-    pub new_decide_qc: Option<QuorumCertificate2<TYPES>>,
+    /// The QC signing the new leaf, causing it to become committed.
+    pub committing_qc: Option<QuorumCertificate2<TYPES>>,
+
+    /// A second QC extending the committing QC, causing the new leaf chain to become decided.
+    ///
+    /// This is only applicable in HotStuff2, and will be [`None`] prior to HotShot version 0.3.
+    /// HotStuff1 (HotShot < 0.3) uses a different commit rule, which is not captured in this type.
+    pub deciding_qc: Option<QuorumCertificate2<TYPES>>,
 
     /// The decided leaves with corresponding validated state and VID info.
     pub leaf_views: Vec<LeafInfo<TYPES>>,
@@ -367,7 +367,8 @@ impl<TYPES: NodeType + Default> Default for LeafChainTraversalOutcome<TYPES> {
         Self {
             new_locked_view_number: None,
             new_decided_view_number: None,
-            new_decide_qc: None,
+            committing_qc: None,
+            deciding_qc: None,
             leaf_views: Vec::new(),
             included_txns: None,
             decided_upgrade_cert: None,
@@ -440,7 +441,8 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     if grand_parent_info.leaf.view_number() + 1 != parent_info.leaf.view_number() {
         return res;
     }
-    res.new_decide_qc = Some(parent_info.leaf.justify_qc().clone());
+    res.committing_qc = Some(parent_info.leaf.justify_qc().clone());
+    res.deciding_qc = Some(proposed_leaf.justify_qc().clone());
     let decided_view_number = grand_parent_info.leaf.view_number();
     res.new_decided_view_number = Some(decided_view_number);
     // We've reached decide, now get the leaf chain all the way back to the last decided view, not including it.
@@ -590,7 +592,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
                         res.new_locked_view_number = Some(leaf.view_number());
                         // The next leaf in the chain, if there is one, is decided, so this
                         // leaf's justify_qc would become the QC for the decided chain.
-                        res.new_decide_qc = Some(leaf.justify_qc().clone());
+                        res.committing_qc = Some(leaf.justify_qc().clone());
                     } else if current_chain_length == 3 {
                         // And we decide when the chain length is 3.
                         res.new_decided_view_number = Some(leaf.view_number());

@@ -211,7 +211,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
                 .builder_urls
                 .iter()
                 .cloned()
-                .map(BuilderClient::new)
+                .map(|url| BuilderClient::new(url, handle.builder_timeout()))
                 .collect(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
@@ -248,6 +248,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             consensus_metrics,
             first_epoch: None,
             stake_table_capacity: handle.hotshot.config.stake_table_capacity,
+            da_committees: handle.hotshot.config.da_committees.clone(),
         }
     }
 }

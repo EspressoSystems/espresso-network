@@ -49,10 +49,7 @@ pub use crate::bindings::{
     plonk_verifier::PlonkVerifier,
     plonk_verifier_v2::PlonkVerifierV2,
     plonk_verifier_v3::PlonkVerifierV3,
-    reward_claim_prototype_mock::{
-        RewardClaimPrototypeMock,
-        RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,
-    },
+    reward_claim::RewardClaim,
     safe_exit_timelock::SafeExitTimelock,
     stake_table::StakeTable,
     stake_table_v2::{
@@ -83,7 +80,6 @@ sol! {
         uint256 v;
         uint256 u;
     }
-
 }
 
 // Due to <https://github.com/foundry-rs/foundry/issues/10153> the rust bindings contain duplicate types for our solidity types.

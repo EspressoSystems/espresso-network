@@ -6,7 +6,7 @@ use futures::{stream::unfold, Stream, StreamExt};
 use hotshot::types::Event;
 use hotshot_events_service::events::Error as EventStreamError;
 use hotshot_types::traits::node_implementation::NodeType;
-use surf_disco::{client::HealthStatus, Client};
+use surf_disco::{client::HealthStatus, reexports::WebSocketConfig, Client};
 use tokio::time::{sleep, timeout};
 use tracing::{error, warn};
 use url::Url;
@@ -64,8 +64,16 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
 
         tracing::info!("Builder client connected to the hotshot events API");
 
+        // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
+        // send us malicious messages.
+        let websocket_config = WebSocketConfig {
+            max_message_size: None,
+            max_frame_size: None,
+            ..Default::default()
+        };
+
         Ok(client
-            .socket("hotshot-events/events")
+            .socket_with_config("hotshot-events/events", websocket_config)
             .subscribe::<Event<Types>>()
             .await?)
     }

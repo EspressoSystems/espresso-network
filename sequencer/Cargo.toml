@@ -45,10 +45,8 @@ byteorder = "1"
 hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
 
 # CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.0", package = "cdn-broker", features = [
-    "global-permits",
-] }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.0", package = "cdn-marshal" }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = { workspace = true }
@@ -81,8 +79,8 @@ jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 
-jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-advz = { workspace = true }
+jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 libp2p = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"

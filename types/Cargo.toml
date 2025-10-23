@@ -45,10 +45,11 @@ hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 humantime = "2"
 indexmap = { workspace = true }
+insta = { version = "1.43", features = ["yaml"] }
 itertools = { workspace = true }
+jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()
-jf-advz = { workspace = true }
 lru = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = "0.12"
