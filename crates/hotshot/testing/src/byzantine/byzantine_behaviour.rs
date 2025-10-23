@@ -750,8 +750,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                     return vec![event.clone()];
                 }
                 let view_number = vote.data.round;
-                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
-                    let Ok(vote) = ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
+                let vote = if upgrade_lock.epochs_enabled(view_number).await {
+                    ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
                         ViewSyncPreCommitData2 {
                             relay: 0,
                             round: view_number,
@@ -763,15 +763,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         upgrade_lock,
                     )
                     .await
-                    else {
-                        tracing::error!("Failed to sign pre commit vote!");
-                        return vec![];
-                    };
-                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
-                        GeneralConsensusMessage::ViewSyncPreCommitVote2(vote),
-                    ))
+                    .context("Failed to sign pre commit vote!")
+                    .unwrap()
                 } else {
-                    let Ok(vote) = ViewSyncPreCommitVote::<TYPES>::create_signed_vote(
+                    let vote = ViewSyncPreCommitVote::<TYPES>::create_signed_vote(
                         ViewSyncPreCommitData {
                             relay: 0,
                             round: view_number,
@@ -782,48 +777,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         upgrade_lock,
                     )
                     .await
-                    else {
-                        tracing::error!("Failed to sign pre commit vote!");
-                        return vec![];
-                    };
-                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
-                        GeneralConsensusMessage::ViewSyncPreCommitVote(vote),
-                    ))
+                    .context("Failed to sign pre commit vote!")
+                    .unwrap();
+                    vote.to_vote2()
                 };
-                let message = Message {
-                    sender: public_key.clone(),
-                    kind: message_kind,
-                };
-                let serialized_message = match upgrade_lock.serialize(&message).await {
-                    Ok(serialized) => serialized,
-                    Err(e) => {
-                        panic!("Failed to serialize message: {e}");
-                    },
-                };
-                let Ok(node) = membership_coordinator
-                    .membership()
-                    .read()
-                    .await
-                    .leader(view_number, message.kind.epoch())
-                else {
-                    panic!(
-                        "Failed to find leader for view {} and epoch {:?}",
-                        message.kind.view_number(),
-                        message.kind.epoch()
-                    );
-                };
-                let transmit_result = network
-                    .direct_message(serialized_message.clone(), node.clone())
-                    .await;
-                match transmit_result {
-                    Ok(()) => tracing::info!(
-                        "Sent ViewSyncPreCommitVoteSend for view {} and epoch {:?} to the leader",
-                        view_number,
-                        message.kind.epoch(),
-                    ),
-                    Err(e) => panic!("Failed to send message task: {e:?}"),
-                }
-                vec![]
+                vec![HotShotEvent::ViewSyncPreCommitVoteSend(vote)]
             },
             _ => vec![event.clone()],
         }

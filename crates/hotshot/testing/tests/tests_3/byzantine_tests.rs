@@ -284,6 +284,7 @@ cross_tests!(
     },
 );
 
+// Tests that dishonest nodes cannot form a precommit certificate for a new epoch without forming an eQC.
 cross_tests!(
     TestName: view_sync_next_epoch,
     Impls: [PushCdnImpl],
@@ -323,6 +324,7 @@ cross_tests!(
     },
 );
 
+// Tests that dishonest nodes cannot form a precommit certificate for an old epoch.
 cross_tests!(
     TestName: view_sync_old_epoch,
     Impls: [PushCdnImpl],
