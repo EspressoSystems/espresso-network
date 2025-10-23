@@ -516,10 +516,14 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
         // Get the stake table for validation
         let coordinator = consensus_read.membership_coordinator.clone();
-        if let Err(_) = coordinator
+        if let Err(err) = coordinator
             .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
             .await
         {
+            tracing::warn!(
+                "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
+            );
+
             coordinator
                 .wait_for_catchup(EpochNumber::new(epoch))
                 .await
@@ -2442,7 +2446,7 @@ mod test {
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
-        SequencerVersions, ValidatedState,
+        SequencerVersions, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -2509,7 +2513,6 @@ mod test {
         catchup::{NullStateCatchup, StatePeers},
         persistence,
         persistence::no_storage,
-        state_cert::{StateCertQueryDataV1, StateCertQueryDataV2},
         testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
 
@@ -5964,6 +5967,7 @@ mod test {
         // Get the state cert for the epoch 3 to 5
         for i in 3..=TEST_EPOCHS {
             // v2
+
             let state_query_data_v2 = client
                 .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
                 .send()
@@ -6074,9 +6078,7 @@ mod test {
         let new_storage: hotshot_query_service::data_source::sql::testing::TmpDb =
             SqlDataSource::create_storage().await;
         let new_persistence: persistence::sql::Options =
-            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage)
-                .try_into()
-                .unwrap();
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
 
         let node_0_port = pick_unused_port().expect("No ports free for query service");
         tracing::info!("node_0_port {node_0_port}");

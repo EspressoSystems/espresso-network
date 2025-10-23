@@ -15,18 +15,15 @@ use hotshot_types::{
 };
 use tide_disco::StatusCode;
 
-/// Error type for state certificate fetching operations
+/// Error type for state certificate fetching
 #[derive(Debug, thiserror::Error)]
 pub enum StateCertFetchError {
-    /// Failed to fetch the certificate from peers (maps to NOT_FOUND)
     #[error("Failed to fetch state certificate: {0}")]
     FetchError(#[source] anyhow::Error),
 
-    /// Failed to validate the certificate (maps to INTERNAL_SERVER_ERROR)
     #[error("State certificate validation failed: {0}")]
     ValidationError(#[source] anyhow::Error),
 
-    /// Other errors (maps to INTERNAL_SERVER_ERROR)
     #[error("State certificate error: {0}")]
     Other(#[source] anyhow::Error),
 }
