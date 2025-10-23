@@ -63,6 +63,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
+    state_cert::{validate_state_cert, StateCertError},
     state_signature::StateSigner,
     SeqTypes, SequencerApiVersion, SequencerContext,
 };
@@ -380,7 +381,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertError> {
         self.as_ref().request_state_cert(epoch, timeout).await
     }
 }
@@ -495,24 +496,25 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertError> {
         tracing::info!("fetching state certificate for epoch={epoch}");
         let consensus = self.consensus().await;
         let consensus_read = consensus.read().await;
 
-        // let current_epoch = consensus_read.cur_epoch().await;
+        let current_epoch = consensus_read.cur_epoch().await;
 
         // // The highest epoch we can have a state certificate for is current_epoch + 1
         // // Check if requested epoch is beyond the highest possible epoch
-        // let highest_epoch = current_epoch.map(|e| e.u64() + 1);
+        let highest_epoch = current_epoch.map(|e| e.u64() + 1);
 
-        // if Some(epoch) > highest_epoch {
-        //     bail!(
-        //         "requested state certificate for epoch {epoch} is beyond the highest possible \
-        //          epoch {highest_epoch:?}"
-        //     );
-        // }
+        if Some(epoch) > highest_epoch {
+            return Err(StateCertError::Other(anyhow::anyhow!(
+                "requested state certificate for epoch {epoch} is beyond the highest possible \
+                 epoch {highest_epoch:?}"
+            )));
+        }
 
+        // Get the stake table for validation
         let coordinator = consensus_read.membership_coordinator.clone();
         if let Err(_) = coordinator
             .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
@@ -521,8 +523,25 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             coordinator
                 .wait_for_catchup(EpochNumber::new(epoch))
                 .await
-                .context(format!("failed to catch up for epoch={epoch}"))?;
+                .map_err(|e| {
+                    StateCertError::Other(
+                        anyhow::Error::new(e)
+                            .context(format!("failed to catch up for stake table epoch={epoch}")),
+                    )
+                })?;
         }
+
+        let membership = coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
+            .await
+            .map_err(|e| {
+                StateCertError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("failed to get stake table for epoch={epoch}")),
+                )
+            })?;
+
+        let stake_table = membership.stake_table().await;
 
         drop(consensus_read);
         drop(consensus);
@@ -539,14 +558,23 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(epoch)).await;
 
         match result {
-            Err(_) => bail!("timeout while fetching state cert for epoch {epoch}"),
+            Err(_) => Err(StateCertError::FetchError(anyhow::anyhow!(
+                "timeout while fetching state cert for epoch {epoch}"
+            ))),
             Ok(Ok(cert)) => {
-                tracing::info!("fetched state certificate for epoch {epoch}");
+                // Validation errors should be mapped to ValidationError
+                validate_state_cert(&cert, &stake_table).map_err(|e| {
+                    StateCertError::ValidationError(e.context(format!(
+                        "state certificate validation failed for epoch={epoch}"
+                    )))
+                })?;
+
+                tracing::info!("fetched and validated state certificate for epoch {epoch}");
                 Ok(cert)
             },
-            Ok(Err(e)) => {
-                Err(e).with_context(|| format!("failed to fetch state cert for epoch {epoch}"))
-            },
+            Ok(Err(e)) => Err(StateCertError::FetchError(
+                e.context(format!("failed to fetch state cert for epoch {epoch}")),
+            )),
         }
     }
 }
@@ -2378,7 +2406,6 @@ mod test {
         },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
-        fetching::provider::{AnyProvider, NoFetching},
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2421,6 +2448,7 @@ mod test {
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
+        persistence,
         persistence::no_storage,
         testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
@@ -5920,9 +5948,11 @@ mod test {
         }
     }
 
-    use sqlx::Executor;
+    /// Test state certificate catchup functionality by simulating a node that falls behind and needs
+    /// to catch up. This test starts a 5-node network with epoch height 10, waits for 3 epochs to
+    /// pass, then removes and restarts node 0 with a fresh storage. The
+    /// restarted node catches up for the missing state certificates.
 
-    use crate::{api::data_source::SequencerDataSource, persistence};
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
@@ -6028,14 +6058,14 @@ mod test {
             .unwrap();
 
         let mut events = network.peers[0].event_stream().await;
-        // Wait until at least 3 epochs have passed
-        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+        // Wait until at least 5 epochs have passed
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 5).await;
 
         let client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(60))).await;
 
-        for epoch in 3..=4 {
+        for epoch in 3..=5 {
             let state_cert = client
                 .get::<StateCertQueryDataV2<SeqTypes>>(&format!(
                     "availability/state-cert-v2/{epoch}"

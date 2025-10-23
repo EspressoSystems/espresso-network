@@ -649,11 +649,7 @@ where
                     // Not found locally, try to fetch from peers
                     let cert = state
                         .read(|state| state.request_state_cert(epoch, timeout).boxed())
-                        .await
-                        .map_err(|e| availability::Error::Custom {
-                            message: format!("Failed to fetch state cert from peers: {e}"),
-                            status: StatusCode::NOT_FOUND,
-                        })?;
+                        .await?;
 
                     // Store the fetched certificate
                     state
@@ -696,11 +692,7 @@ where
                                 .request_state_cert(epoch, Duration::from_secs(60))
                                 .boxed()
                         })
-                        .await
-                        .map_err(|e| availability::Error::Custom {
-                            message: format!("Failed to fetch state cert from peers: {e}"),
-                            status: StatusCode::NOT_FOUND,
-                        })?;
+                        .await?;
 
                     // Store the fetched certificate
                     state

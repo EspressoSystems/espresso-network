@@ -10297,6 +10297,7 @@ dependencies = [
  "tagged-base64",
  "tempfile",
  "test-log",
+ "thiserror 1.0.69",
  "tide-disco",
  "time 0.3.44",
  "tokio",

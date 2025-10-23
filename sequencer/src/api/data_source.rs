@@ -42,7 +42,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{persistence, SeqTypes, SequencerApiVersion};
+use crate::{persistence, state_cert::StateCertError, SeqTypes, SequencerApiVersion};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -322,7 +322,7 @@ pub trait StateCertFetchingDataSource<Types: NodeType> {
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<Types>>;
+    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertError>;
 }
 
 #[cfg(any(test, feature = "testing"))]
