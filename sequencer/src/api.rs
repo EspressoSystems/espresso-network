@@ -6088,7 +6088,7 @@ mod test {
             },
             tmp_options(&new_storage),
         );
-        let _node_0 = opt
+        let node_0 = opt
             .clone()
             .serve(|metrics, consumer, storage| {
                 let cfg = network.cfg.clone();
@@ -6119,7 +6119,7 @@ mod test {
             .await
             .unwrap();
 
-        let mut events = network.peers[0].event_stream().await;
+        let mut events = node_0.event_stream().await;
         // Wait until at least 5 epochs have passed
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 5).await;
 
