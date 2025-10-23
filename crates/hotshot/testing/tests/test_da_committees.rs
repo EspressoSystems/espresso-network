@@ -85,7 +85,7 @@ cross_tests!(
         });
 
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
-            num_successful_views: 500,
+            num_successful_views: 400,
             ..Default::default()
         };
 

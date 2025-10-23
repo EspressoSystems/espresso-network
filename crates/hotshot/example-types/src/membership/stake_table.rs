@@ -85,6 +85,16 @@ impl<
     }
 }
 
+impl<
+        PubKey: SignatureKey,
+        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+    > Default for TestDaCommittees<PubKey, StatePubKey>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub trait TestStakeTable<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
