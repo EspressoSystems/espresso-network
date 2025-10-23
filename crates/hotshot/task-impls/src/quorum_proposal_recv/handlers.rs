@@ -364,6 +364,22 @@ async fn view_change_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>
         },
     }
 
+    // if we are using HS2 we update our locked view for any QC from a leader greater than our current lock
+    {
+        let mut consensus_writer = validation_info.consensus.write().await;
+        let liveness_check =
+            proposal.data.justify_qc().view_number() > consensus_writer.locked_view();
+        if liveness_check
+            && validation_info
+                .upgrade_lock
+                .version(proposal.data.view_number())
+                .await
+                .is_ok_and(|v| v >= V::Epochs::VERSION)
+        {
+            consensus_writer.update_locked_view(proposal.data.justify_qc().view_number());
+        }
+    }
+
     if (network_epoch > task_state.cur_epoch && network_view <= task_state.cur_view)
         || (network_epoch < task_state.cur_epoch && network_view > task_state.cur_view)
     {
@@ -562,7 +578,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
         quorum_proposal_sender_key,
     )
     .await?;
-      
+
     validation_info.consensus.write().await.highest_block = proposal_block_number;
 
     Ok(())
