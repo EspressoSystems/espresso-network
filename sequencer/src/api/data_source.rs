@@ -14,7 +14,7 @@ use espresso_types::{
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
-use futures::future::Future;
+use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, VidCommonQueryData},
@@ -306,14 +306,13 @@ pub(crate) trait CatchupDataSource: Sync {
     ) -> impl Send + Future<Output = anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 }
 
-#[async_trait]
 pub trait RequestResponseDataSource<Types: NodeType> {
-    async fn request_vid_shares(
+    fn request_vid_shares(
         &self,
         block_number: u64,
         vid_common_data: VidCommonQueryData<Types>,
         duration: Duration,
-    ) -> anyhow::Result<Vec<VidShare>>;
+    ) -> impl Future<Output = BoxFuture<'static, anyhow::Result<Vec<VidShare>>>> + Send;
 }
 
 #[async_trait]

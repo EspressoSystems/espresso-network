@@ -643,7 +643,7 @@ where
     F: Fn(semver::Version) -> anyhow::Result<Api<S, ModuleError, ModuleVersion>>,
 {
     let v0 = "0.0.1".parse().unwrap();
-    let v1 = "1.0.0".parse().unwrap();
+    let v1 = "1.1.0".parse().unwrap();
     let result1 = f(v0)?;
     let result2 = f(v1)?;
 

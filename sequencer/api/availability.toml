@@ -1,8 +1,44 @@
 [route.getnamespaceproof]
-PATH = ["block/:height/namespace/:namespace"]
+PATH = [
+    "block/:height/namespace/:namespace",
+    "block/hash/:hash/namespace/:namespace",
+    "block/payload-hash/:payload-hash/namespace/:namespace",
+]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
+":namespace" = "Integer"
+DOC = """
+Get the transactions in a namespace of the given block, along with a proof.
+
+The block may be specified in the same manner as for the non-namespaced block endpoints.
+"""
+
+[route.getnamespaceproof_range]
+PATH = ["block/:from/:until/namespace/:namespace"]
+":from" = "Integer"
+":until" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Get the transactions in the specified namespace from each block in a range.
+
+Returns a list of the same namespace proof type returned by `block/:height/namespace/namespace`.
+
+The allowable length of the requested range may be restricted by an implementation-defined limit
+(see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
+"""
+
+[route.stream_namespace_proofs]
+PATH = ["stream/blocks/:height/namespace/:namespace"]
+METHOD = "SOCKET"
 ":height" = "Integer"
 ":namespace" = "Integer"
-DOC = "Get the transactions in a namespace of the given block, along with a proof."
+DOC = """
+Subscribe to the namespace data from each block, starting at `:height`.
+
+Opens a WebSockets connection and sends a stream of the same data type returned by
+`block/:height/namespace/:namespace`.
+"""
 
 [route.incorrect_encoding_proof]
 PATH = ["incorrect-encoding-proof/:block_number"]

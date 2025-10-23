@@ -356,7 +356,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 }
 
-#[async_trait]
 impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     RequestResponseDataSource<SeqTypes> for StorageState<N, P, D, V>
 {
@@ -365,7 +364,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         block_number: u64,
         vid_common_data: VidCommonQueryData<SeqTypes>,
         timeout_duration: Duration,
-    ) -> anyhow::Result<Vec<VidShare>> {
+    ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
         self.as_ref()
             .request_vid_shares(block_number, vid_common_data, timeout_duration)
             .await
@@ -394,7 +393,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         block_number: u64,
         vid_common_data: VidCommonQueryData<SeqTypes>,
         duration: Duration,
-    ) -> anyhow::Result<Vec<VidShare>> {
+    ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
         // Get a handle to the request response protocol
         let request_response_protocol = self
             .sequencer_context
@@ -404,86 +403,89 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .request_response_protocol
             .clone();
 
-        // Get the total VID weight based on the VID common data
-        let total_weight = match vid_common_data.common() {
-            VidCommon::V0(_) => {
-                // TODO: This needs to be done via the stake table
-                return Err(anyhow::anyhow!(
-                    "V0 total weight calculation not supported yet"
-                ));
-            },
-            VidCommon::V1(v1) => v1.total_weights,
-        };
-
-        // Create the AvidM parameters from the total weight
-        let avidm_param =
-            init_avidm_param(total_weight).with_context(|| "failed to initialize avidm param")?;
-
-        // Get the payload hash for verification
-        let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
-            bail!("V0 share verification not supported yet");
-        };
-
-        // Create a random request id
-        let request_id = rand::thread_rng().gen();
-
-        // Request and verify the shares from all other nodes, timing out after `duration` seconds
-        let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let received_shares_clone = received_shares.clone();
-        let request_result: anyhow::Result<_, _> = timeout(
-            duration,
-            request_response_protocol.request_indefinitely::<_, _, _>(
-                Request::VidShare(block_number, request_id),
-                RequestType::Broadcast,
-                move |_request, response| {
-                    let avidm_param = avidm_param.clone();
-                    let received_shares = received_shares_clone.clone();
-                    async move {
-                        // Make sure the response was a V1 share
-                        let Response::VidShare(VidShare::V1(received_share)) = response else {
-                            bail!("V0 share verification not supported yet");
-                        };
-
-                        // Verify the share
-                        let Ok(Ok(_)) = AvidMScheme::verify_share(
-                            &avidm_param,
-                            &local_payload_hash,
-                            &received_share,
-                        ) else {
-                            bail!("share verification failed");
-                        };
-
-                        // Add the share to the list of received shares
-                        received_shares.lock().push(received_share);
-
-                        bail!("waiting for more shares");
-
-                        #[allow(unreachable_code)]
-                        Ok(())
-                    }
+        async move {
+            // Get the total VID weight based on the VID common data
+            let total_weight = match vid_common_data.common() {
+                VidCommon::V0(_) => {
+                    // TODO: This needs to be done via the stake table
+                    return Err(anyhow::anyhow!(
+                        "V0 total weight calculation not supported yet"
+                    ));
                 },
-            ),
-        )
-        .await;
+                VidCommon::V1(v1) => v1.total_weights,
+            };
 
-        // If the request timed out, return the shares we have collected so far
-        match request_result {
-            Err(_) => {
-                // If it timed out, this was successful. Return the shares we have collected so far
-                Ok(received_shares
-                    .lock()
-                    .clone()
-                    .into_iter()
-                    .map(VidShare::V1)
-                    .collect())
-            },
+            // Create the AvidM parameters from the total weight
+            let avidm_param = init_avidm_param(total_weight)
+                .with_context(|| "failed to initialize avidm param")?;
 
-            // If it was an error from the inner request, return that error
-            Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+            // Get the payload hash for verification
+            let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
+                bail!("V0 share verification not supported yet");
+            };
 
-            // If it was successful, this was unexpected.
-            Ok(Ok(_)) => bail!("this should not be possible"),
+            // Create a random request id
+            let request_id = rand::thread_rng().gen();
+
+            // Request and verify the shares from all other nodes, timing out after `duration` seconds
+            let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let received_shares_clone = received_shares.clone();
+            let request_result: anyhow::Result<_, _> = timeout(
+                duration,
+                request_response_protocol.request_indefinitely::<_, _, _>(
+                    Request::VidShare(block_number, request_id),
+                    RequestType::Broadcast,
+                    move |_request, response| {
+                        let avidm_param = avidm_param.clone();
+                        let received_shares = received_shares_clone.clone();
+                        async move {
+                            // Make sure the response was a V1 share
+                            let Response::VidShare(VidShare::V1(received_share)) = response else {
+                                bail!("V0 share verification not supported yet");
+                            };
+
+                            // Verify the share
+                            let Ok(Ok(_)) = AvidMScheme::verify_share(
+                                &avidm_param,
+                                &local_payload_hash,
+                                &received_share,
+                            ) else {
+                                bail!("share verification failed");
+                            };
+
+                            // Add the share to the list of received shares
+                            received_shares.lock().push(received_share);
+
+                            bail!("waiting for more shares");
+
+                            #[allow(unreachable_code)]
+                            Ok(())
+                        }
+                    },
+                ),
+            )
+            .await;
+
+            // If the request timed out, return the shares we have collected so far
+            match request_result {
+                Err(_) => {
+                    // If it timed out, this was successful. Return the shares we have collected so far
+                    Ok(received_shares
+                        .lock()
+                        .clone()
+                        .into_iter()
+                        .map(VidShare::V1)
+                        .collect())
+                },
+
+                // If it was an error from the inner request, return that error
+                Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+
+                // If it was successful, this was unexpected.
+                Ok(Ok(_)) => bail!("this should not be possible"),
+            }
         }
+        .boxed()
     }
 }
 
@@ -1986,9 +1988,21 @@ mod api_tests {
         let block_height = wait_for_decide_on_handle(&mut events, &txn).await.0 as usize;
         tracing::info!(block_height, "transaction sequenced");
 
+        // Submit a second transaction for range queries.
+        let txn2 = Transaction::new(ns_id, vec![5, 6, 7, 8]);
+        client
+            .post::<Commitment<Transaction>>("submit/submit")
+            .body_json(&txn2)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let block_height2 = wait_for_decide_on_handle(&mut events, &txn2).await.0 as usize;
+        tracing::info!(block_height2, "transaction sequenced");
+
         // Wait for the query service to update to this block height.
         client
-            .socket(&format!("availability/stream/blocks/{block_height}"))
+            .socket(&format!("availability/stream/blocks/{block_height2}"))
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -2010,6 +2024,30 @@ mod api_tests {
                 .send()
                 .await
                 .unwrap();
+
+            // Check other means of querying the same proof.
+            assert_eq!(
+                ns_query_res,
+                client
+                    .get(&format!(
+                        "availability/block/hash/{}/namespace/{ns_id}",
+                        header.commit()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                ns_query_res,
+                client
+                    .get(&format!(
+                        "availability/block/payload-hash/{}/namespace/{ns_id}",
+                        header.payload_commitment()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+            );
 
             // Verify namespace proof if present
             if let Some(ns_proof) = ns_query_res.proof {
@@ -2042,6 +2080,25 @@ mod api_tests {
         }
         assert!(found_txn);
         assert!(found_empty_block);
+
+        // Test range query.
+        let ns_proofs: Vec<NamespaceProofQueryData> = client
+            .get(&format!(
+                "availability/block/{block_height}/{}/namespace/{ns_id}",
+                block_height2 + 1
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ns_proofs.len(), block_height2 + 1 - block_height);
+        assert_eq!(&ns_proofs[0].transactions, std::slice::from_ref(&txn));
+        assert_eq!(
+            &ns_proofs[ns_proofs.len() - 1].transactions,
+            std::slice::from_ref(&txn2)
+        );
+        for proof in &ns_proofs[1..ns_proofs.len() - 1] {
+            assert_eq!(proof.transactions, &[]);
+        }
     }
 
     #[rstest_reuse::apply(testable_sequencer_data_source)]
@@ -2383,13 +2440,15 @@ mod test {
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
         v0_4::RewardMerkleProofV2,
-        validators_from_l1_events, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion,
-        Header, L1Client, L1ClientOptions, MockSequencerVersions, NamespaceId, RewardDistributor,
+        validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
+        EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
+        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
         SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
+        try_join,
     };
     use hotshot::types::EventType;
     use hotshot_contract_adapter::{
@@ -2431,7 +2490,9 @@ mod test {
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
         TestNetwork, TestNetworkConfigBuilder,
     };
-    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode};
+    use tide_disco::{
+        app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode, Url,
+    };
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -6486,5 +6547,219 @@ mod test {
         assert!(!validators.is_empty());
 
         Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_namespace_query_compat_v0_2() {
+        test_namespace_query_compat_helper(SequencerVersions::<FeeVersion, FeeVersion>::new())
+            .await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_namespace_query_compat_v0_3() {
+        test_namespace_query_compat_helper(SequencerVersions::<EpochVersion, EpochVersion>::new())
+            .await;
+    }
+
+    async fn test_namespace_query_compat_helper<V: Versions>(v: V) {
+        // Number of nodes running in the test network.
+        const NUM_NODES: usize = 5;
+
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::from(options::Http {
+                port,
+                max_connections: None,
+            }))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let mut network = TestNetwork::new(config, v).await;
+        let mut events = network.server.event_stream().await;
+
+        // Submit a transaction.
+        let ns = NamespaceId::from(10_000u64);
+        let tx = Transaction::new(ns, vec![1, 2, 3]);
+        network.server.submit_transaction(tx.clone()).await.unwrap();
+        let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
+
+        // Check namespace proof queries.
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        let (header, common): (Header, VidCommonQueryData<SeqTypes>) = try_join!(
+            client.get(&format!("availability/header/{block}")).send(),
+            client
+                .get(&format!("availability/vid/common/{block}"))
+                .send()
+        )
+        .unwrap();
+        let version = header.version();
+
+        // The latest version of the API (whether we specifically ask for v1 or let the redirect
+        // occur) will give us a namespace proof no matter which VID version is in use.
+        for api_ver in ["/v1", ""] {
+            tracing::info!("test namespace API version: {api_ver}");
+
+            let ns_proof: NamespaceProofQueryData = client
+                .get(&format!(
+                    "{api_ver}/availability/block/{block}/namespace/{ns}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            let proof = ns_proof.proof.as_ref().unwrap();
+            if version < EpochVersion::version() {
+                assert!(matches!(proof, NsProof::V0(..)));
+            } else {
+                assert!(matches!(proof, NsProof::V1(..)));
+            }
+            let (txs, ns_from_proof) = proof
+                .verify(
+                    header.ns_table(),
+                    &header.payload_commitment(),
+                    common.common(),
+                )
+                .unwrap();
+            assert_eq!(ns_from_proof, ns);
+            assert_eq!(txs, ns_proof.transactions);
+            assert_eq!(txs, std::slice::from_ref(&tx));
+
+            // Test range endpoint.
+            let ns_proofs: Vec<NamespaceProofQueryData> = client
+                .get(&format!(
+                    "{api_ver}/availability/block/{}/{}/namespace/{ns}",
+                    block,
+                    block + 1
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
+
+            // Any API version can correctly tell us that the namespace does not exist.
+            let ns_proof: NamespaceProofQueryData = client
+                .get(&format!(
+                    "{api_ver}/availability/block/{}/namespace/{ns}",
+                    block - 1
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(ns_proof.proof, None);
+            assert_eq!(ns_proof.transactions, vec![]);
+
+            // Test streaming.
+            let mut proofs = client
+                .socket(&format!(
+                    "{api_ver}/availability/stream/blocks/0/namespace/{ns}"
+                ))
+                .subscribe()
+                .await
+                .unwrap();
+            for i in 0.. {
+                tracing::info!(i, "stream proof");
+                let proof: NamespaceProofQueryData = proofs.next().await.unwrap().unwrap();
+                if proof.proof.is_none() {
+                    tracing::info!("waiting for non-trivial proof from stream");
+                    continue;
+                }
+                assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
+                break;
+            }
+        }
+
+        // The legacy version of the API only works for old VID.
+        tracing::info!("test namespace API version: v0");
+        if version < EpochVersion::version() {
+            let ns_proof: ADVZNamespaceProofQueryData = client
+                .get(&format!("v0/availability/block/{block}/namespace/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            let proof = ns_proof.proof.as_ref().unwrap();
+            let VidCommon::V0(common) = common.common() else {
+                panic!("wrong VID common version");
+            };
+            let (txs, ns_from_proof) = proof
+                .verify(header.ns_table(), &header.payload_commitment(), common)
+                .unwrap();
+            assert_eq!(ns_from_proof, ns);
+            assert_eq!(txs, ns_proof.transactions);
+            assert_eq!(&txs, std::slice::from_ref(&tx));
+
+            // Test range endpoint.
+            let ns_proofs: Vec<ADVZNamespaceProofQueryData> = client
+                .get(&format!(
+                    "v0/availability/block/{}/{}/namespace/{ns}",
+                    block,
+                    block + 1
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
+        } else {
+            // It will fail if we ask for a proof for a block using new VID.
+            client
+                .get::<ADVZNamespaceProofQueryData>(&format!(
+                    "v0/availability/block/{block}/namespace/{ns}"
+                ))
+                .send()
+                .await
+                .unwrap_err();
+        }
+
+        // Any API version can correctly tell us that the namespace does not exist.
+        let ns_proof: ADVZNamespaceProofQueryData = client
+            .get(&format!(
+                "v0/availability/block/{}/namespace/{ns}",
+                block - 1
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ns_proof.proof, None);
+        assert_eq!(ns_proof.transactions, vec![]);
+
+        // Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
+        // VID version we can't deal with.
+        let mut proofs = client
+            .socket(&format!("v0/availability/stream/blocks/0/namespace/{ns}"))
+            .subscribe()
+            .await
+            .unwrap();
+        for i in 0.. {
+            tracing::info!(i, "stream proof");
+            let proof: ADVZNamespaceProofQueryData = match proofs.next().await {
+                Some(proof) => proof.unwrap(),
+                None => {
+                    // Steam not expected to end on legacy consensus version.
+                    assert!(
+                        version >= EpochVersion::version(),
+                        "legacy steam ended while still on legacy consensus"
+                    );
+                    break;
+                },
+            };
+            if proof.proof.is_none() {
+                tracing::info!("waiting for non-trivial proof from stream");
+                continue;
+            }
+            assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
+            break;
+        }
+
+        network.server.shut_down().await;
     }
 }
