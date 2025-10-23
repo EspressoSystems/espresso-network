@@ -457,7 +457,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch(retry, |client| async move {
             client
                 .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&format!(
-                    "catchup/state-cert-v2/{epoch}"
+                    "catchup/{epoch}/state-cert"
                 ))
                 .send()
                 .await
@@ -976,6 +976,7 @@ impl StateCatchup for NullStateCatchup {
 #[derive(Clone)]
 pub struct ParallelStateCatchup {
     providers: Arc<Mutex<Vec<Arc<dyn StateCatchup>>>>,
+    backoff: BackoffParams,
 }
 
 impl ParallelStateCatchup {
@@ -983,6 +984,7 @@ impl ParallelStateCatchup {
     pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
         Self {
             providers: Arc::new(Mutex::new(providers.to_vec())),
+            backoff: BackoffParams::disabled(),
         }
     }
 
@@ -1379,7 +1381,7 @@ impl StateCatchup for ParallelStateCatchup {
     }
 
     fn backoff(&self) -> &BackoffParams {
-        unreachable!()
+        &self.backoff
     }
 
     fn name(&self) -> String {
@@ -1593,6 +1595,29 @@ impl StateCatchup for ParallelStateCatchup {
         }})
         .await
     }
+
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_state_cert(0, epoch).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(
+            move |provider| async move { provider.fetch_state_cert(epoch).await },
+        )
+        .await
+    }
+
     async fn remember_blocks_merkle_tree(
         &self,
         instance: &NodeState,

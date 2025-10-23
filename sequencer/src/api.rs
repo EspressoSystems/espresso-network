@@ -13,7 +13,7 @@ use derivative::Derivative;
 use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
-    v0::traits::SequencerPersistence,
+    v0::traits::{SequencerPersistence, StateCatchup},
     v0_3::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
         Validator,
@@ -496,30 +496,33 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         epoch: u64,
         timeout: Duration,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        use espresso_types::v0::traits::StateCatchup;
-
+        tracing::info!("fetching state certificate for epoch={epoch}");
         let consensus = self.consensus().await;
         let consensus_read = consensus.read().await;
 
-        let current_epoch = consensus_read.cur_epoch().await;
+        // let current_epoch = consensus_read.cur_epoch().await;
 
-        // The highest epoch we can have a state certificate for is current_epoch + 1
-        // Check if requested epoch is beyond the highest possible epoch
-        let highest_epoch = current_epoch.map(|e| e.u64() + 1);
+        // // The highest epoch we can have a state certificate for is current_epoch + 1
+        // // Check if requested epoch is beyond the highest possible epoch
+        // let highest_epoch = current_epoch.map(|e| e.u64() + 1);
 
-        if Some(epoch) > highest_epoch {
-            bail!(
-                "requested state certificate for epoch {epoch} is beyond the highest possible \
-                 epoch {highest_epoch:?}"
-            );
-        }
+        // if Some(epoch) > highest_epoch {
+        //     bail!(
+        //         "requested state certificate for epoch {epoch} is beyond the highest possible \
+        //          epoch {highest_epoch:?}"
+        //     );
+        // }
 
-        // Get the stake table for the requested epoch from membership
-        // to validate state cert
-        let _stake_table = consensus_read
-            .membership_coordinator
+        let coordinator = consensus_read.membership_coordinator.clone();
+        if let Err(_) = coordinator
             .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
-            .await?;
+            .await
+        {
+            coordinator
+                .wait_for_catchup(EpochNumber::new(epoch))
+                .await
+                .context(format!("failed to catch up for epoch={epoch}"))?;
+        }
 
         drop(consensus_read);
         drop(consensus);
@@ -537,9 +540,10 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
         match result {
             Err(_) => bail!("timeout while fetching state cert for epoch {epoch}"),
-            // Got a response
-            Ok(Ok(cert)) => Ok(cert),
-            // Fetch failed
+            Ok(Ok(cert)) => {
+                tracing::info!("fetched state certificate for epoch {epoch}");
+                Ok(cert)
+            },
             Ok(Err(e)) => {
                 Err(e).with_context(|| format!("failed to fetch state cert for epoch {epoch}"))
             },
@@ -1018,14 +1022,11 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
 
     async fn get_state_cert(
         &self,
-        _epoch: u64,
-    ) -> anyhow::Result<
-        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
-    > {
-        bail!(
-            "state certificates are not available in consensus memory, must be fetched from \
-             storage"
-        )
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.get_state_cert_by_epoch(epoch)
+            .await?
+            .context(format!("state cert not found for epoch {epoch}"))
     }
 }
 
@@ -1391,6 +1392,7 @@ pub mod test_helpers {
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
                 .expect("StakeTableProxy address not found");
+
             StakingTransactions::create(
                 l1_url.clone(),
                 &deployer,
@@ -2376,6 +2378,7 @@ mod test {
         },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
+        fetching::provider::{AnyProvider, NoFetching},
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -5914,6 +5917,133 @@ mod test {
             let state_cert_v1 = state_query_data_v1.0.clone();
             tracing::info!("state_cert_v1: {state_cert_v1:?}");
             assert_eq!(state_query_data_v1, state_query_data_v2.into());
+        }
+    }
+
+    use sqlx::Executor;
+
+    use crate::{api::data_source::SequencerDataSource, persistence};
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub(crate) async fn test_state_cert_catchup<Ver: Versions>(#[case] versions: Ver) {
+        const EPOCH_HEIGHT: u64 = 10;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+        let state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, versions).await;
+
+        let mut events = network.peers[2].event_stream().await;
+        // Wait until at least 5 epochs have passed
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
+
+        // Remove peer 0 and restart it with the query module enabled.
+        // Adding an additional node to the test network is not straight forward,
+        // as the keys have already been initialized in the config above.
+        // So, we remove this node and re-add it using the same index.
+        network.peers.remove(0);
+
+        let new_storage: hotshot_query_service::data_source::sql::testing::TmpDb =
+            SqlDataSource::create_storage().await;
+        let new_persistence: persistence::sql::Options =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage)
+                .try_into()
+                .unwrap();
+
+        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        tracing::info!("node_0_port {node_0_port}");
+        let opt = Options::with_port(node_0_port).query_sql(
+            Query {
+                peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+            },
+            tmp_options(&new_storage),
+        );
+        let _node_0 = opt
+            .clone()
+            .serve(|metrics, consumer, storage| {
+                let cfg = network.cfg.clone();
+                let new_persistence = new_persistence.clone();
+                let state = state.clone();
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            new_persistence.clone(),
+                            Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                                Default::default(),
+                                &NoMetrics,
+                            )),
+                            storage,
+                            &*metrics,
+                            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            versions,
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let mut events = network.peers[0].event_stream().await;
+        // Wait until at least 3 epochs have passed
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(60))).await;
+
+        for epoch in 3..=4 {
+            let state_cert = client
+                .get::<StateCertQueryDataV2<SeqTypes>>(&format!(
+                    "availability/state-cert-v2/{epoch}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(state_cert.0.epoch.u64(), epoch);
         }
     }
 

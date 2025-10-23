@@ -176,7 +176,7 @@ pub(crate) trait StateCertDataSource {
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<crate::SeqTypes>,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()>;
 }
 
@@ -303,7 +303,7 @@ pub(crate) trait CatchupDataSource: Sync {
     fn get_state_cert(
         &self,
         epoch: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<LightClientStateUpdateCertificateV2<crate::SeqTypes>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 }
 
 #[async_trait]

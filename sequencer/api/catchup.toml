@@ -106,7 +106,6 @@ Merkle proofs for each account can be extracted from this tree.
 """
 
 
-
 [route.reward_account_v2]
 PATH = ["/:height/:view/reward-account-v2/:address"]
 ":height" = "Integer"

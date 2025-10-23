@@ -693,7 +693,7 @@ where
                     let cert = state
                         .read(|state| {
                             state
-                                .request_state_cert(epoch, Duration::from_secs(30))
+                                .request_state_cert(epoch, Duration::from_secs(60))
                                 .boxed()
                         })
                         .await
