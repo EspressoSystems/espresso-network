@@ -6536,34 +6536,39 @@ mod test {
                 tracing::info!(version = %leaf.header().version(), height = leaf.header().height(), view = ?leaf.leaf().view_number(), "waiting for epoch upgrade");
                 continue;
             }
-            break (leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT));
+            break (leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT).unwrap());
         };
         tracing::info!(upgrade_height, ?first_epoch, "epochs enabled");
 
-        // Wait for an epoch change.
-        let next_epoch_height = loop {
-            let leaf = leaves.next().await.unwrap().unwrap();
-            let epoch = leaf.leaf().epoch(EPOCH_HEIGHT);
-            if epoch > first_epoch {
+        // Wait for two epoch changes (so we get to the first epoch that actually uses the stake
+        // table).
+        let mut epoch_heights = [0; 2];
+        for (i, epoch_height) in epoch_heights.iter_mut().enumerate() {
+            let desired_epoch = first_epoch + (i as u64);
+            *epoch_height = loop {
+                let leaf = leaves.next().await.unwrap().unwrap();
+                let epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
+                if epoch > desired_epoch {
+                    tracing::info!(
+                        height = leaf.height(),
+                        ?desired_epoch,
+                        ?epoch,
+                        "changed epoch"
+                    );
+                    break leaf.height();
+                }
                 tracing::info!(
-                    height = leaf.height(),
-                    ?first_epoch,
-                    ?epoch,
-                    "changed epoch"
+                    ?desired_epoch,
+                    height = leaf.header().height(),
+                    view = ?leaf.leaf().view_number(),
+                    "waiting for epoch change"
                 );
-                break leaf.height();
-            }
-            tracing::info!(
-                ?epoch,
-                height = leaf.header().height(),
-                view = ?leaf.leaf().view_number(),
-                "waiting for epoch change"
-            );
-        };
+            };
+        }
 
         // Wait a few more blocks.
         let neighborhood = 2;
-        let max_block = next_epoch_height + neighborhood;
+        let max_block = epoch_heights[1] + neighborhood;
         loop {
             let leaf = leaves.next().await.unwrap().unwrap();
             if leaf.height() >= max_block {
@@ -6579,8 +6584,10 @@ mod test {
             (0..=neighborhood)
         // * A few blocks just before and after the upgrade
             .chain(upgrade_height-neighborhood..upgrade_height+neighborhood)
-        // * A few blocks just before and after the epoch change
-            .chain(next_epoch_height-neighborhood..max_block);
+        // * A few blocks just before and after the first epoch change
+            .chain(epoch_heights[0]-neighborhood..epoch_heights[0] + neighborhood)
+        // * A few blocks just before and after the stake table comes into effect
+            .chain(epoch_heights[1]-neighborhood..max_block);
 
         let quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
         for i in heights {
