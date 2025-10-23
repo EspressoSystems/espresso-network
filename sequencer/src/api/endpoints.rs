@@ -23,10 +23,7 @@ pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
-    availability::{
-        self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu, StateCertQueryDataV1,
-        StateCertQueryDataV2,
-    },
+    availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
     merklized_state::{
         self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
@@ -60,7 +57,9 @@ use super::{
     StorageState,
 };
 use crate::{
-    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
+    api::RewardAccountProofDataSource,
+    state_cert::{StateCertQueryDataV1, StateCertQueryDataV2},
+    SeqTypes, SequencerApiVersion, SequencerPersistence,
 };
 
 pub(super) fn fee<State, Ver>(

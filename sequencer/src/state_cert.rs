@@ -4,20 +4,55 @@ use std::collections::HashMap;
 
 use alloy::primitives::{FixedBytes, U256};
 use anyhow::bail;
+use derive_more::From;
 use espresso_types::SeqTypes;
 use hotshot_query_service::availability::Error;
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     light_client::StateVerKey,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+    },
     stake_table::HSStakeTable,
-    traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
+    traits::{
+        node_implementation::NodeType,
+        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
+    },
 };
+use serde::{Deserialize, Serialize};
 use tide_disco::StatusCode;
+
+/// A wrapper around `LightClientStateUpdateCertificateV1`.
+///
+/// This struct is returned by the `state-cert` API endpoint for backward compatibility.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
+#[serde(bound = "")]
+pub struct StateCertQueryDataV1<Types: NodeType>(pub LightClientStateUpdateCertificateV1<Types>);
+
+/// A wrapper around `LightClientStateUpdateCertificateV2`.
+///
+/// The V2 certificate includes additional fields compared to earlier versions:
+/// - Light client v3 signatures
+/// - `auth_root` — used by the reward claim contract to verify that its
+///   calculated `auth_root` matches the one in the Light Client contract.
+///
+/// This struct is returned by the `state-cert-v2` API endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
+#[serde(bound = "")]
+pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
+
+impl<Types> From<StateCertQueryDataV2<Types>> for StateCertQueryDataV1<Types>
+where
+    Types: NodeType,
+{
+    fn from(cert: StateCertQueryDataV2<Types>) -> Self {
+        Self(cert.0.into())
+    }
+}
 
 /// Error type for state certificate fetching operations
 #[derive(Debug, thiserror::Error)]
-pub enum StateCertError {
+pub enum StateCertFetchError {
     /// Failed to fetch the certificate from peers (maps to NOT_FOUND)
     #[error("Failed to fetch state certificate: {0}")]
     FetchError(#[source] anyhow::Error),
@@ -31,18 +66,18 @@ pub enum StateCertError {
     Other(#[source] anyhow::Error),
 }
 
-impl From<StateCertError> for hotshot_query_service::availability::Error {
-    fn from(err: StateCertError) -> Self {
+impl From<StateCertFetchError> for hotshot_query_service::availability::Error {
+    fn from(err: StateCertFetchError) -> Self {
         match err {
-            StateCertError::FetchError(e) => Error::Custom {
+            StateCertFetchError::FetchError(e) => Error::Custom {
                 message: format!("Failed to fetch state cert from peers: {e}"),
                 status: StatusCode::NOT_FOUND,
             },
-            StateCertError::ValidationError(e) => Error::Custom {
+            StateCertFetchError::ValidationError(e) => Error::Custom {
                 message: format!("State certificate validation failed: {e}"),
                 status: StatusCode::INTERNAL_SERVER_ERROR,
             },
-            StateCertError::Other(e) => Error::Custom {
+            StateCertFetchError::Other(e) => Error::Custom {
                 message: format!("Failed to process state cert: {e}"),
                 status: StatusCode::INTERNAL_SERVER_ERROR,
             },

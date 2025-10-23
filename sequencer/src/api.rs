@@ -63,7 +63,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
-    state_cert::{validate_state_cert, StateCertError},
+    state_cert::{validate_state_cert, StateCertFetchError},
     state_signature::StateSigner,
     SeqTypes, SequencerApiVersion, SequencerContext,
 };
@@ -75,7 +75,6 @@ pub mod options;
 pub mod sql;
 mod update;
 
-pub use hotshot_query_service::availability::{StateCertQueryDataV1, StateCertQueryDataV2};
 pub use options::Options;
 
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
@@ -381,7 +380,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertError> {
+    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
         self.as_ref().request_state_cert(epoch, timeout).await
     }
 }
@@ -496,7 +495,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertError> {
+    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
         tracing::info!("fetching state certificate for epoch={epoch}");
         let consensus = self.consensus().await;
         let consensus_read = consensus.read().await;
@@ -508,7 +507,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let highest_epoch = current_epoch.map(|e| e.u64() + 1);
 
         if Some(epoch) > highest_epoch {
-            return Err(StateCertError::Other(anyhow::anyhow!(
+            return Err(StateCertFetchError::Other(anyhow::anyhow!(
                 "requested state certificate for epoch {epoch} is beyond the highest possible \
                  epoch {highest_epoch:?}"
             )));
@@ -524,7 +523,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
                 .wait_for_catchup(EpochNumber::new(epoch))
                 .await
                 .map_err(|e| {
-                    StateCertError::Other(
+                    StateCertFetchError::Other(
                         anyhow::Error::new(e)
                             .context(format!("failed to catch up for stake table epoch={epoch}")),
                     )
@@ -535,7 +534,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
             .await
             .map_err(|e| {
-                StateCertError::Other(
+                StateCertFetchError::Other(
                     anyhow::Error::new(e)
                         .context(format!("failed to get stake table for epoch={epoch}")),
                 )
@@ -558,13 +557,13 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(epoch)).await;
 
         match result {
-            Err(_) => Err(StateCertError::FetchError(anyhow::anyhow!(
+            Err(_) => Err(StateCertFetchError::FetchError(anyhow::anyhow!(
                 "timeout while fetching state cert for epoch {epoch}"
             ))),
             Ok(Ok(cert)) => {
                 // Validation errors should be mapped to ValidationError
                 validate_state_cert(&cert, &stake_table).map_err(|e| {
-                    StateCertError::ValidationError(e.context(format!(
+                    StateCertFetchError::ValidationError(e.context(format!(
                         "state certificate validation failed for epoch={epoch}"
                     )))
                 })?;
@@ -572,7 +571,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
                 tracing::info!("fetched and validated state certificate for epoch {epoch}");
                 Ok(cert)
             },
-            Ok(Err(e)) => Err(StateCertError::FetchError(
+            Ok(Err(e)) => Err(StateCertFetchError::FetchError(
                 e.context(format!("failed to fetch state cert for epoch {epoch}")),
             )),
         }
@@ -2401,8 +2400,8 @@ mod test {
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{
-            BlockQueryData, BlockSummaryQueryData, LeafQueryData, StateCertQueryDataV1,
-            StateCertQueryDataV2, TransactionQueryData, VidCommonQueryData,
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
+            VidCommonQueryData,
         },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
@@ -2450,6 +2449,7 @@ mod test {
         catchup::{NullStateCatchup, StatePeers},
         persistence,
         persistence::no_storage,
+        state_cert::{StateCertQueryDataV1, StateCertQueryDataV2},
         testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
 
