@@ -987,7 +987,7 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
             self.qc.data.epoch
         ))?;
         if !is_epoch_transition(block_number, epoch_height) {
-            tracing::trace!(
+            tracing::debug!(
                 block_number,
                 epoch_height,
                 "QC is not in an epoch transition"
