@@ -12,8 +12,8 @@ use jf_merkle_tree::MerkleTreeError;
 use jf_poseidon2::Poseidon2Error;
 use serde::{Deserialize, Serialize};
 
-pub mod avid_m;
-pub mod avid_m_gf2;
+pub mod avidm;
+pub mod avidm_gf2;
 mod utils;
 
 /// A glorified [`bool`] that leverages compile lints to encourage the caller to

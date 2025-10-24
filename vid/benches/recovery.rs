@@ -1,7 +1,7 @@
 //! Benchmark of VID dispersal
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::RngCore;
-use vid::{avid_m::AvidMScheme, VidScheme};
+use vid::{avidm::AvidMScheme, VidScheme};
 
 fn verify_benchmark(c: &mut Criterion) {
     let param_list = [(6, 10), (50, 100)];

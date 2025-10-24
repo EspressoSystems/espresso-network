@@ -458,7 +458,7 @@ pub mod tests {
     use rand::{seq::SliceRandom, RngCore};
 
     use super::F;
-    use crate::{avid_m::AvidMScheme, utils::bytes_to_field, VidScheme};
+    use crate::{avidm::AvidMScheme, utils::bytes_to_field, VidScheme};
 
     #[test]
     fn test_padding() {

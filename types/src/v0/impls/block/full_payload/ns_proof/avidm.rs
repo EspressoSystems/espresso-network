@@ -4,7 +4,7 @@ use hotshot_types::{
     data::VidCommitment,
     vid::avidm::{AvidMCommon, AvidMShare},
 };
-use vid::avid_m::namespaced::NsAvidMScheme;
+use vid::avidm::namespaced::NsAvidMScheme;
 
 use crate::{
     v0_3::{AvidMIncorrectEncodingNsProof, AvidMNsProof},
