@@ -15,6 +15,8 @@ extend-exclude = [
   "crates/hotshot/types/src/light_client.rs",
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
+  "crates/libp2p_test/config/**/libp2p_test.toml",
+  "crates/libp2p_test/terraform/variables.tf",
   "data/insta_snapshots",
 ]
 

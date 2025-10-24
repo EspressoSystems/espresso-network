@@ -26,6 +26,7 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/libp2p_test",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -67,6 +68,7 @@ default-members = [
     "crates/hotshot/utils",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
+    "crates/libp2p_test",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -228,6 +230,10 @@ libp2p = { package = "libp2p", version = "0.56", default-features = false, featu
     "request-response",
     "secp256k1",
     "serde",
+    "tcp",
+    "noise",
+    "yamux",
+    "ping",
 ] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"
