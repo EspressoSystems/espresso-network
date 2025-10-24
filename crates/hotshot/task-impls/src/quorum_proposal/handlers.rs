@@ -14,7 +14,7 @@ use std::{
 };
 
 use async_broadcast::{Receiver, Sender};
-use collector_common::{Trace, send_trace};
+use collector_common::{send_trace, Trace};
 use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
@@ -590,8 +590,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 maybe_next_epoch_qc
                     .as_ref()
                     .is_some_and(|neqc| neqc.data.leaf_commit == parent_qc.data.leaf_commit),
-                "Jusify QC on our proposal is for an epoch transition block but we don't have the \
-                 corresponding next epoch QC. Do not propose."
+                "Justify QC on our proposal is for an epoch transition block but we don't have \
+                 the corresponding next epoch QC. Do not propose."
             );
             maybe_next_epoch_qc
         } else {
@@ -655,7 +655,9 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         );
 
         // Send the trace when we generate the proposal event
-        let _ = send_trace(&Trace::ProposalSendEventGenerated(*(proposed_leaf.view_number())));
+        let _ = send_trace(&Trace::ProposalSendEventGenerated(
+            *(proposed_leaf.view_number()),
+        ));
 
         broadcast_event(
             Arc::new(HotShotEvent::QuorumProposalSend(

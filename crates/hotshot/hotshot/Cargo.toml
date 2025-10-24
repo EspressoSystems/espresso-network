@@ -30,6 +30,7 @@ cdn-broker = { workspace = true }
 cdn-client = { workspace = true }
 cdn-marshal = { workspace = true }
 chrono = { workspace = true }
+collector-common = { path = "../../collector-common" }
 committable = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
@@ -49,7 +50,6 @@ rand = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 sha2 = { workspace = true }
 time = { workspace = true }
-collector-common = { path = "../../collector-common" }
 
 tokio = { workspace = true }
 tracing = { workspace = true }

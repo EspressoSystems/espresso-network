@@ -257,13 +257,13 @@ cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "bf
 cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "bf/no-delay", package = "cdn-client" }
 cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "bf/no-delay", package = "cdn-marshal" }
 
-[patch.crates-io]
-tide-disco = { git = "https://github.com/EspressoSystems/tide-disco", branch = "bf/no-delay"}
-surf-disco = { git = "https://github.com/EspressoSystems/surf-disco", branch = "bf/no-delay" }
-
 [workspace.lints.clippy]
 # may prevent accidental deadlocks from holding guards over match statments
 significant_drop_in_scrutinee = "warn"
+
+[patch.crates-io]
+tide-disco = { git = "https://github.com/EspressoSystems/tide-disco", branch = "bf/no-delay" }
+surf-disco = { git = "https://github.com/EspressoSystems/surf-disco", branch = "bf/no-delay" }
 
 # NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
 [profile.dev]
