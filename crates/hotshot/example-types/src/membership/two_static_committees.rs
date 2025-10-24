@@ -150,4 +150,12 @@ where
     fn first_epoch(&self) -> Option<u64> {
         self.first_epoch
     }
+
+    fn add_da_committee(
+        &mut self,
+        _first_epoch: u64,
+        _committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        panic!("Dynamic DA committees are not supported for TwoStakeTables")
+    }
 }

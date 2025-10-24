@@ -18,7 +18,7 @@ use hotshot_types::{
     },
 };
 
-use crate::membership::stake_table::{TestStakeTable, TestStakeTableEntry};
+use crate::membership::stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry};
 
 #[derive(Clone, Debug)]
 
@@ -39,6 +39,8 @@ pub struct RandomizedStakeTable<
 
     /// Stake tables randomized with the DRB, used (only) for leader election
     randomized_committee: RandomizedCommittee<<PubKey as SignatureKey>::StakeTableEntry>,
+
+    da_committees: TestDaCommittees<PubKey, StatePubKey>,
 }
 
 impl<PubKey, StatePubKey> TestStakeTable<PubKey, StatePubKey>
@@ -69,6 +71,7 @@ where
             randomized_committee,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
+            da_committees: TestDaCommittees::new(),
         }
     }
 
@@ -76,8 +79,10 @@ where
         self.quorum_members.clone()
     }
 
-    fn da_stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.da_members.clone()
+    fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.da_committees
+            .get(epoch)
+            .unwrap_or(self.da_members.clone())
     }
 
     fn full_stake_table(&self) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
@@ -125,5 +130,13 @@ where
 
     fn first_epoch(&self) -> Option<u64> {
         self.first_epoch
+    }
+
+    fn add_da_committee(
+        &mut self,
+        first_epoch: u64,
+        committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        self.da_committees.add(first_epoch, committee);
     }
 }

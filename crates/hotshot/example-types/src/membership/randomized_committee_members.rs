@@ -21,7 +21,7 @@ use tracing::error;
 
 use crate::membership::{
     helpers::QuorumFilterConfig,
-    stake_table::{TestStakeTable, TestStakeTableEntry},
+    stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -40,6 +40,8 @@ pub struct RandomizedCommitteeMembers<
     epochs: BTreeSet<u64>,
 
     drb_results: BTreeMap<u64, DrbResult>,
+
+    da_committees: TestDaCommittees<PubKey, StatePubKey>,
 
     _quorum_pd: PhantomData<QuorumConfig>,
 
@@ -106,6 +108,7 @@ impl<
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
+            da_committees: TestDaCommittees::new(),
             _quorum_pd: PhantomData,
             _da_pd: PhantomData,
         };
@@ -134,16 +137,20 @@ impl<
     }
 
     fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        let da_members = self
+            .da_committees
+            .get(epoch)
+            .unwrap_or(self.da_members.clone());
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
-            self.da_members
-                .iter()
+            da_members
+                .into_iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| v.clone())
+                .map(|(_, v)| v)
                 .collect()
         } else {
-            self.da_members.clone()
+            da_members.clone()
         }
     }
 
@@ -198,5 +205,13 @@ impl<
 
     fn first_epoch(&self) -> Option<u64> {
         self.first_epoch
+    }
+
+    fn add_da_committee(
+        &mut self,
+        first_epoch: u64,
+        committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        self.da_committees.add(first_epoch, committee);
     }
 }
