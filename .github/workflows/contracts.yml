@@ -39,7 +39,7 @@ jobs:
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -103,7 +103,7 @@ jobs:
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
