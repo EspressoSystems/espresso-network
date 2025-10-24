@@ -367,7 +367,7 @@ impl Versions for EpochUpgradeTestVersions {
 pub struct DaCommitteeTestVersions {}
 
 impl Versions for DaCommitteeTestVersions {
-    type Base = StaticVersion<0, 2>;
+    type Base = StaticVersion<0, 4>;
     type Upgrade = StaticVersion<0, 4>;
     const UPGRADE_HASH: [u8; 32] = [
         1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
