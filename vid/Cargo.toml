@@ -38,15 +38,11 @@ criterion = "0.5"
 rand = { workspace = true }
 
 [[bench]]
-name = "dispersal"
+name = "avidm"
 harness = false
 
 [[bench]]
-name = "verify"
-harness = false
-
-[[bench]]
-name = "recovery"
+name = "avidm_gf2"
 harness = false
 
 [lints]
