@@ -305,7 +305,10 @@ impl AvidMScheme {
         commit: &AvidMCommit,
         share: &RawAvidMShare,
     ) -> VidResult<crate::VerificationResult> {
-        if share.range.end > param.total_weights || share.range.len() != share.payload.len() {
+        if share.range.end > param.total_weights
+            || share.range.len() != share.payload.len()
+            || share.range.len() != share.mt_proofs.len()
+        {
             return Err(VidError::InvalidShare);
         }
         for (i, index) in share.range.clone().enumerate() {

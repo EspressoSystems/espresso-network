@@ -13,6 +13,7 @@ use jf_poseidon2::Poseidon2Error;
 use serde::{Deserialize, Serialize};
 
 pub mod avid_m;
+pub mod avid_m_gf2;
 mod utils;
 
 /// A glorified [`bool`] that leverages compile lints to encourage the caller to
@@ -47,6 +48,12 @@ impl From<Poseidon2Error> for VidError {
 
 impl From<MerkleTreeError> for VidError {
     fn from(err: MerkleTreeError) -> Self {
+        VidError::Internal(err.into())
+    }
+}
+
+impl From<reed_solomon_simd::Error> for VidError {
+    fn from(err: reed_solomon_simd::Error) -> Self {
         VidError::Internal(err.into())
     }
 }

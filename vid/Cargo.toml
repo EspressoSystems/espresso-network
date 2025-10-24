@@ -26,6 +26,7 @@ jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "
 jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.2.0", features = ["bn254"] }
 jf-utils = { workspace = true }
 p3-maybe-rayon = "0.2"
+reed-solomon-simd = "3.1.0"
 serde = { workspace = true }
 sha2 = { workspace = true }
 sha3 = { version = "0.10" }
