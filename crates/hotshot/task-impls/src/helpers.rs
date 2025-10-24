@@ -30,8 +30,8 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, DaCertificate2, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
@@ -339,14 +339,16 @@ pub struct LeafChainTraversalOutcome<TYPES: NodeType> {
     /// The new decided view obtained from a 3 chain starting from the proposal's parent.
     pub new_decided_view_number: Option<TYPES::View>,
 
-    /// The QC signing the new leaf, causing it to become committed.
-    pub committing_qc: Option<QuorumCertificate2<TYPES>>,
+    /// The QC signing the latest new leaf, causing it to become committed.
+    ///
+    /// Only present if a new leaf chain has been decided.
+    pub committing_qc: Option<CertificatePair<TYPES>>,
 
     /// A second QC extending the committing QC, causing the new leaf chain to become decided.
     ///
     /// This is only applicable in HotStuff2, and will be [`None`] prior to HotShot version 0.3.
     /// HotStuff1 (HotShot < 0.3) uses a different commit rule, which is not captured in this type.
-    pub deciding_qc: Option<QuorumCertificate2<TYPES>>,
+    pub deciding_qc: Option<CertificatePair<TYPES>>,
 
     /// The decided leaves with corresponding validated state and VID info.
     pub leaf_views: Vec<LeafInfo<TYPES>>,
@@ -441,8 +443,8 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     if grand_parent_info.leaf.view_number() + 1 != parent_info.leaf.view_number() {
         return res;
     }
-    res.committing_qc = Some(parent_info.leaf.justify_qc().clone());
-    res.deciding_qc = Some(proposed_leaf.justify_qc().clone());
+    res.committing_qc = Some(CertificatePair::for_parent(&parent_info.leaf));
+    res.deciding_qc = Some(CertificatePair::for_parent(&proposed_leaf));
     let decided_view_number = grand_parent_info.leaf.view_number();
     res.new_decided_view_number = Some(decided_view_number);
     // We've reached decide, now get the leaf chain all the way back to the last decided view, not including it.
@@ -592,7 +594,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
                         res.new_locked_view_number = Some(leaf.view_number());
                         // The next leaf in the chain, if there is one, is decided, so this
                         // leaf's justify_qc would become the QC for the decided chain.
-                        res.committing_qc = Some(leaf.justify_qc().clone());
+                        res.committing_qc = Some(CertificatePair::for_parent(leaf));
                     } else if current_chain_length == 3 {
                         // And we decide when the chain length is 3.
                         res.new_decided_view_number = Some(leaf.view_number());
@@ -1267,14 +1269,17 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     upgrade_lock: &UpgradeLock<TYPES, V>,
     epoch_height: u64,
 ) -> Result<()> {
+    let cert = CertificatePair::new(qc.clone(), maybe_next_epoch_qc.cloned());
+
     let mut epoch_membership = membership_coordinator
-        .stake_table_for_epoch(qc.data.epoch)
+        .stake_table_for_epoch(cert.epoch())
         .await?;
 
     let membership_stake_table = epoch_membership.stake_table().await;
     let membership_success_threshold = epoch_membership.success_threshold().await;
 
-    if let Err(e) = qc
+    if let Err(e) = cert
+        .qc()
         .is_valid_cert(
             &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
             membership_success_threshold,
@@ -1286,44 +1291,23 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
         return Err(warn!("Invalid certificate: {e}"));
     }
 
-    if upgrade_lock.epochs_enabled(qc.view_number()).await {
-        ensure!(
-            qc.data.block_number.is_some(),
-            "QC for epoch {:?} has no block number",
-            qc.data.epoch
-        );
-    }
-
-    if qc
-        .data
-        .block_number
-        .is_some_and(|b| is_epoch_transition(b, epoch_height))
-    {
-        ensure!(
-            maybe_next_epoch_qc.is_some(),
-            error!("Received High QC for the transition block but not the next epoch QC")
-        );
-    }
-
-    if let Some(next_epoch_qc) = maybe_next_epoch_qc {
-        // If the next epoch qc exists, make sure it's equal to the qc
-        if qc.view_number() != next_epoch_qc.view_number() || qc.data != *next_epoch_qc.data {
-            bail!("Next epoch qc exists but it's not equal with qc.");
+    // Check the next epoch QC if required.
+    if upgrade_lock.epochs_enabled(cert.view_number()).await {
+        if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)? {
+            epoch_membership = epoch_membership.next_epoch_stake_table().await?;
+            let membership_next_stake_table = epoch_membership.stake_table().await;
+            let membership_next_success_threshold = epoch_membership.success_threshold().await;
+            next_epoch_qc
+                .is_valid_cert(
+                    &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
+                    membership_next_success_threshold,
+                    upgrade_lock,
+                )
+                .await
+                .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
         }
-        epoch_membership = epoch_membership.next_epoch_stake_table().await?;
-        let membership_next_stake_table = epoch_membership.stake_table().await;
-        let membership_next_success_threshold = epoch_membership.success_threshold().await;
-
-        // Validate the next epoch qc as well
-        next_epoch_qc
-            .is_valid_cert(
-                &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
-                membership_next_success_threshold,
-                upgrade_lock,
-            )
-            .await
-            .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
     }
+
     Ok(())
 }
 

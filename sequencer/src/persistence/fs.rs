@@ -34,7 +34,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
@@ -366,6 +366,28 @@ impl Inner {
         Ok(())
     }
 
+    fn parse_decided_leaf(
+        &self,
+        bytes: &[u8],
+    ) -> anyhow::Result<(Leaf2, CertificatePair<SeqTypes>)> {
+        // Old versions of the software did not store the next epoch QC. Without knowing which
+        // version this file was created with, we can simply try parsing both ways and then
+        // reconstruct a certificate pair with or without the next epoch QC.
+        match bincode::deserialize(bytes) {
+            Ok((leaf, cert)) => Ok((leaf, cert)),
+            Err(err) => {
+                tracing::warn!(
+                    "error parsing decided leaf, maybe file was created without next epoch QC? \
+                     {err}"
+                );
+                let (leaf, qc) =
+                    bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(bytes)
+                        .context("parsing decided leaf")?;
+                Ok((leaf, CertificatePair::non_epoch_change(qc)))
+            },
+        }
+    }
+
     /// Generate events based on persisted decided leaves.
     ///
     /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
@@ -373,7 +395,7 @@ impl Inner {
     async fn generate_decide_events(
         &mut self,
         view: ViewNumber,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -387,9 +409,7 @@ impl Inner {
 
             let bytes =
                 fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
-            let (mut leaf, qc) =
-                bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(&bytes)
-                    .context(format!("parsing decided leaf {}", path.display()))?;
+            let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // Include the VID share if available.
             let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
@@ -421,7 +441,7 @@ impl Inner {
                 delta: Default::default(),
             };
 
-            leaves.insert(v, (info, qc));
+            leaves.insert(v, (info, cert));
         }
 
         // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
@@ -437,28 +457,31 @@ impl Inner {
 
         let mut intervals = vec![];
         let mut current_interval = None;
-        for (view, (leaf, qc)) in leaves {
+        for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            // Insert the deciding QC at the appropriate position, with the last decide event in the
-            // chain.
-            let qc2 = if let Some(deciding_qc) = &deciding_qc {
-                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
-            } else {
-                None
-            };
+            {
+                // Insert the deciding QC at the appropriate position, with the last decide event in the
+                // chain.
+                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                    (deciding_qc.view_number() == cert.view_number() + 1)
+                        .then_some(deciding_qc.clone())
+                } else {
+                    None
+                };
 
-            consumer
-                .handle_event(&Event {
-                    view_number: view,
-                    event: EventType::Decide {
-                        committing_qc: Arc::new(qc),
-                        deciding_qc: qc2,
-                        leaf_chain: Arc::new(vec![leaf]),
-                        block_size: None,
-                    },
-                })
-                .await?;
+                consumer
+                    .handle_event(&Event {
+                        view_number: view,
+                        event: EventType::Decide {
+                            committing_qc: Arc::new(cert),
+                            deciding_qc,
+                            leaf_chain: Arc::new(vec![leaf]),
+                            block_size: None,
+                        },
+                    })
+                    .await?;
+            }
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
                     // If we have a chain of consecutive leaves, extend the current interval of
@@ -528,15 +551,13 @@ impl Inner {
             for (_, path) in view_files(self.decided_leaf2_path())? {
                 let bytes =
                     fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
-                let (leaf2, qc2) =
-                    bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(&bytes)
-                        .context(format!("parsing decided leaf {}", path.display()))?;
+                let (leaf, cert) = self.parse_decided_leaf(&bytes)?;
                 if let Some((anchor_leaf, _)) = &anchor {
-                    if leaf2.view_number() > anchor_leaf.view_number() {
-                        anchor = Some((leaf2, qc2));
+                    if leaf.view_number() > anchor_leaf.view_number() {
+                        anchor = Some((leaf, cert.qc().clone()));
                     }
                 } else {
-                    anchor = Some((leaf2, qc2));
+                    anchor = Some((leaf, cert.qc().clone()));
                 }
             }
 
@@ -673,8 +694,8 @@ impl SequencerPersistence for Persistence {
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -711,7 +732,7 @@ impl SequencerPersistence for Persistence {
             fs::remove_file(&legacy_path).context("removing legacy anchor leaf file")?;
         }
 
-        for (info, qc2) in leaf_chain {
+        for (info, cert) in leaf_chain {
             let view = info.leaf.view_number().u64();
             let file_path = path.join(view.to_string()).with_extension("txt");
             inner.replace(
@@ -723,7 +744,7 @@ impl SequencerPersistence for Persistence {
                     Ok(false)
                 },
                 |mut file| {
-                    let bytes = bincode::serialize(&(&info.leaf.clone(), qc2))?;
+                    let bytes = bincode::serialize(&(&info.leaf, cert))?;
                     file.write_all(&bytes)?;
                     Ok(())
                 },
@@ -1215,7 +1236,7 @@ impl SequencerPersistence for Persistence {
                 .context(format!("parsing decided leaf {}", path.display()))?;
 
             let leaf2: Leaf2 = leaf.into();
-            let qc2 = qc.to_qc2();
+            let cert = CertificatePair::non_epoch_change(qc.to_qc2());
 
             let new_leaf_path = new_leaf_dir.join(view.to_string()).with_extension("txt");
 
@@ -1226,7 +1247,7 @@ impl SequencerPersistence for Persistence {
                     Ok(false)
                 },
                 |mut file| {
-                    let bytes = bincode::serialize(&(&leaf2.clone(), qc2))?;
+                    let bytes = bincode::serialize(&(&leaf2.clone(), cert))?;
                     file.write_all(&bytes)?;
                     Ok(())
                 },

@@ -32,7 +32,7 @@ use derive_more::{Deref, DerefMut};
 use futures::{future::Future, stream::TryStreamExt};
 use hotshot_types::{
     data::VidShare,
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::CertificatePair,
     traits::{
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
@@ -502,7 +502,7 @@ where
     async fn insert_leaf_with_qc_chain(
         &mut self,
         leaf: LeafQueryData<Types>,
-        qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
         let height = leaf.height();
 

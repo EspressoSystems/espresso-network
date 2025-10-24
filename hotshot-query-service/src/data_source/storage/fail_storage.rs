@@ -18,7 +18,7 @@ use async_lock::Mutex;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{
-    data::VidShare, simple_certificate::QuorumCertificate2, traits::node_implementation::NodeType,
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
 };
 
 use super::{
@@ -482,7 +482,7 @@ where
     async fn insert_leaf_with_qc_chain(
         &mut self,
         leaf: LeafQueryData<Types>,
-        qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_leaf_with_qc_chain(leaf, qc_chain).await
@@ -577,7 +577,7 @@ where
         self.inner.get_header_window(start, end, limit).await
     }
 
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>> {
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.latest_qc_chain().await
     }

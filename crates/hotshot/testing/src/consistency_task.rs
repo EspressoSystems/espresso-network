@@ -16,6 +16,7 @@ use hotshot_types::{
     event::{Event, EventType},
     message::UpgradeLock,
     traits::node_implementation::{ConsensusTime, NodeType, Versions},
+    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
@@ -408,15 +409,15 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
             match deciding_qc {
                 Some(deciding_qc) => {
                     let last_leaf = &leaf_chain[0].leaf;
-                    ensure!(committing_qc.view_number == last_leaf.view_number());
-                    ensure!(committing_qc.data.leaf_commit == last_leaf.commit());
-                    ensure!(deciding_qc.view_number == committing_qc.view_number + 1);
+                    ensure!(committing_qc.view_number() == last_leaf.view_number());
+                    ensure!(committing_qc.leaf_commit() == last_leaf.commit());
+                    ensure!(deciding_qc.view_number() == committing_qc.view_number() + 1);
                 },
                 None => {
                     // Once we hit the epoch upgrade, every subsequent decide should come with a QC
                     // chain proving its own finality.
                     ensure!(
-                        committing_qc.data.epoch.is_none(),
+                        committing_qc.epoch().is_none(),
                         "expected 2nd deciding QC for post-epochs decide"
                     );
                 },
