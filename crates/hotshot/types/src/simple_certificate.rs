@@ -784,7 +784,7 @@ impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV1<TYPES>>
             signatures: v1
                 .signatures
                 .into_iter()
-                .map(|(key, sig)| (key, sig.clone(), sig)) // Cloning the signatues here because we use it only for storage.
+                .map(|(key, sig)| (key, sig.clone(), sig)) // Cloning the signatures here because we use it only for storage.
                 .collect(),
             auth_root: Default::default(),
         }
@@ -982,11 +982,10 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
         &self,
         epoch_height: u64,
     ) -> Result<Option<&NextEpochQuorumCertificate2<TYPES>>> {
-        let block_number = self
-            .qc
-            .data
-            .block_number
-            .context(warn!("block number is missing from post-epochs QC"))?;
+        let block_number = self.qc.data.block_number.context(warn!(
+            "QC for epoch {:?} has no block number",
+            self.qc.data.epoch
+        ))?;
         if !is_epoch_transition(block_number, epoch_height) {
             tracing::trace!(
                 block_number,
@@ -997,7 +996,7 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
         }
 
         let next_epoch_qc = self.next_epoch_qc.as_ref().context(warn!(
-            "next epoch QC is missing from epoch transition cert at block number {block_number}"
+            "Received High QC for the transition block {block_number} but not the next epoch QC"
         ))?;
 
         // The signature from the next epoch must be over the same data.

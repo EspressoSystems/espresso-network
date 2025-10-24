@@ -1269,14 +1269,17 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     upgrade_lock: &UpgradeLock<TYPES, V>,
     epoch_height: u64,
 ) -> Result<()> {
+    let cert = CertificatePair::new(qc.clone(), maybe_next_epoch_qc.cloned());
+
     let mut epoch_membership = membership_coordinator
-        .stake_table_for_epoch(qc.data.epoch)
+        .stake_table_for_epoch(cert.epoch())
         .await?;
 
     let membership_stake_table = epoch_membership.stake_table().await;
     let membership_success_threshold = epoch_membership.success_threshold().await;
 
-    if let Err(e) = qc
+    if let Err(e) = cert
+        .qc()
         .is_valid_cert(
             &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
             membership_success_threshold,
@@ -1288,44 +1291,23 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
         return Err(warn!("Invalid certificate: {e}"));
     }
 
-    if upgrade_lock.epochs_enabled(qc.view_number()).await {
-        ensure!(
-            qc.data.block_number.is_some(),
-            "QC for epoch {:?} has no block number",
-            qc.data.epoch
-        );
-    }
-
-    if qc
-        .data
-        .block_number
-        .is_some_and(|b| is_epoch_transition(b, epoch_height))
-    {
-        ensure!(
-            maybe_next_epoch_qc.is_some(),
-            error!("Received High QC for the transition block but not the next epoch QC")
-        );
-    }
-
-    if let Some(next_epoch_qc) = maybe_next_epoch_qc {
-        // If the next epoch qc exists, make sure it's equal to the qc
-        if qc.view_number() != next_epoch_qc.view_number() || qc.data != *next_epoch_qc.data {
-            bail!("Next epoch qc exists but it's not equal with qc.");
+    // Check the next epoch QC if required.
+    if upgrade_lock.epochs_enabled(cert.view_number()).await {
+        if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)? {
+            epoch_membership = epoch_membership.next_epoch_stake_table().await?;
+            let membership_next_stake_table = epoch_membership.stake_table().await;
+            let membership_next_success_threshold = epoch_membership.success_threshold().await;
+            next_epoch_qc
+                .is_valid_cert(
+                    &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
+                    membership_next_success_threshold,
+                    upgrade_lock,
+                )
+                .await
+                .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
         }
-        epoch_membership = epoch_membership.next_epoch_stake_table().await?;
-        let membership_next_stake_table = epoch_membership.stake_table().await;
-        let membership_next_success_threshold = epoch_membership.success_threshold().await;
-
-        // Validate the next epoch qc as well
-        next_epoch_qc
-            .is_valid_cert(
-                &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
-                membership_next_success_threshold,
-                upgrade_lock,
-            )
-            .await
-            .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
     }
+
     Ok(())
 }
 
