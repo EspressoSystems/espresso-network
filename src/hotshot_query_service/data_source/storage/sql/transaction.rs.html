@@ -32,7 +32,7 @@
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>futures::{future::Future, stream::TryStreamExt};
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>hotshot_types::{
 <a href=#34 id=34 data-nosnippet>34</a>    data::VidShare,
-<a href=#35 id=35 data-nosnippet>35</a>    simple_certificate::QuorumCertificate2,
+<a href=#35 id=35 data-nosnippet>35</a>    simple_certificate::CertificatePair,
 <a href=#36 id=36 data-nosnippet>36</a>    traits::{
 <a href=#37 id=37 data-nosnippet>37</a>        block_contents::BlockHeader,
 <a href=#38 id=38 data-nosnippet>38</a>        metrics::{Counter, Gauge, Histogram, Metrics},
@@ -502,7 +502,7 @@
 <a href=#502 id=502 data-nosnippet>502</a>    <span class="kw">async fn </span>insert_leaf_with_qc_chain(
 <a href=#503 id=503 data-nosnippet>503</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#504 id=504 data-nosnippet>504</a>        leaf: LeafQueryData&lt;Types&gt;,
-<a href=#505 id=505 data-nosnippet>505</a>        qc_chain: <span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;,
+<a href=#505 id=505 data-nosnippet>505</a>        qc_chain: <span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;,
 <a href=#506 id=506 data-nosnippet>506</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#507 id=507 data-nosnippet>507</a>        <span class="kw">let </span>height = leaf.height();
 <a href=#508 id=508 data-nosnippet>508</a>

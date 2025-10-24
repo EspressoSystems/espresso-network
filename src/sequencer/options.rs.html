@@ -524,132 +524,144 @@
 <a href=#524 id=524 data-nosnippet>524</a>                SequencerModule::Explorer(m) =&gt; {
 <a href=#525 id=525 data-nosnippet>525</a>                    curr = m.add(<span class="kw-2">&amp;mut </span>modules.explorer, <span class="kw-2">&amp;mut </span>provided)<span class="question-mark">?
 <a href=#526 id=526 data-nosnippet>526</a>                </span>},
-<a href=#527 id=527 data-nosnippet>527</a>            }
-<a href=#528 id=528 data-nosnippet>528</a>        }
-<a href=#529 id=529 data-nosnippet>529</a>
-<a href=#530 id=530 data-nosnippet>530</a>        <span class="prelude-val">Ok</span>(modules)
-<a href=#531 id=531 data-nosnippet>531</a>    }
-<a href=#532 id=532 data-nosnippet>532</a>}
-<a href=#533 id=533 data-nosnippet>533</a>
-<a href=#534 id=534 data-nosnippet>534</a><span class="kw">trait </span>ModuleInfo: Args + FromArgMatches {
-<a href=#535 id=535 data-nosnippet>535</a>    <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str;
-<a href=#536 id=536 data-nosnippet>536</a>    <span class="kw">fn </span>requires() -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt;;
-<a href=#537 id=537 data-nosnippet>537</a>}
-<a href=#538 id=538 data-nosnippet>538</a>
-<a href=#539 id=539 data-nosnippet>539</a><span class="macro">macro_rules!</span> module {
-<a href=#540 id=540 data-nosnippet>540</a>    (<span class="macro-nonterminal">$name</span>:expr, <span class="macro-nonterminal">$opt</span>:ty $(,requires: $(<span class="macro-nonterminal">$req</span>:expr),<span class="kw-2">*</span>)<span class="question-mark">?</span>) =&gt; {
-<a href=#541 id=541 data-nosnippet>541</a>        <span class="kw">impl </span>ModuleInfo <span class="kw">for </span><span class="macro-nonterminal">$opt </span>{
-<a href=#542 id=542 data-nosnippet>542</a>            <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="macro-nonterminal">$name</span>;
-<a href=#543 id=543 data-nosnippet>543</a>
-<a href=#544 id=544 data-nosnippet>544</a>            <span class="kw">fn </span>requires() -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
-<a href=#545 id=545 data-nosnippet>545</a>                <span class="macro">vec!</span>[$($(<span class="macro-nonterminal">$req</span>),<span class="kw-2">*</span>)<span class="question-mark">?</span>]
-<a href=#546 id=546 data-nosnippet>546</a>            }
-<a href=#547 id=547 data-nosnippet>547</a>        }
-<a href=#548 id=548 data-nosnippet>548</a>    };
-<a href=#549 id=549 data-nosnippet>549</a>}
-<a href=#550 id=550 data-nosnippet>550</a>
-<a href=#551 id=551 data-nosnippet>551</a><span class="macro">module!</span>(<span class="string">"storage-fs"</span>, persistence::fs::Options);
-<a href=#552 id=552 data-nosnippet>552</a><span class="macro">module!</span>(<span class="string">"storage-sql"</span>, persistence::sql::Options);
-<a href=#553 id=553 data-nosnippet>553</a><span class="macro">module!</span>(<span class="string">"http"</span>, api::options::Http);
-<a href=#554 id=554 data-nosnippet>554</a><span class="macro">module!</span>(<span class="string">"query"</span>, api::options::Query, requires: <span class="string">"http"</span>);
-<a href=#555 id=555 data-nosnippet>555</a><span class="macro">module!</span>(<span class="string">"submit"</span>, api::options::Submit, requires: <span class="string">"http"</span>);
-<a href=#556 id=556 data-nosnippet>556</a><span class="macro">module!</span>(<span class="string">"status"</span>, api::options::Status, requires: <span class="string">"http"</span>);
-<a href=#557 id=557 data-nosnippet>557</a><span class="macro">module!</span>(<span class="string">"catchup"</span>, api::options::Catchup, requires: <span class="string">"http"</span>);
-<a href=#558 id=558 data-nosnippet>558</a><span class="macro">module!</span>(<span class="string">"config"</span>, api::options::Config, requires: <span class="string">"http"</span>);
-<a href=#559 id=559 data-nosnippet>559</a><span class="macro">module!</span>(<span class="string">"hotshot-events"</span>, api::options::HotshotEvents, requires: <span class="string">"http"</span>);
-<a href=#560 id=560 data-nosnippet>560</a><span class="macro">module!</span>(<span class="string">"explorer"</span>, api::options::Explorer, requires: <span class="string">"http"</span>, <span class="string">"storage-sql"</span>);
-<a href=#561 id=561 data-nosnippet>561</a>
-<a href=#562 id=562 data-nosnippet>562</a><span class="attr">#[derive(Clone, Debug, Args)]
-<a href=#563 id=563 data-nosnippet>563</a></span><span class="kw">struct </span>Module&lt;Options: ModuleInfo&gt; {
-<a href=#564 id=564 data-nosnippet>564</a>    <span class="attr">#[clap(flatten)]
-<a href=#565 id=565 data-nosnippet>565</a>    </span>options: Box&lt;Options&gt;,
-<a href=#566 id=566 data-nosnippet>566</a>
-<a href=#567 id=567 data-nosnippet>567</a>    <span class="doccomment">/// Add more optional modules.
-<a href=#568 id=568 data-nosnippet>568</a>    </span><span class="attr">#[clap(raw = <span class="bool-val">true</span>)]
-<a href=#569 id=569 data-nosnippet>569</a>    </span>modules: Vec&lt;String&gt;,
-<a href=#570 id=570 data-nosnippet>570</a>}
-<a href=#571 id=571 data-nosnippet>571</a>
-<a href=#572 id=572 data-nosnippet>572</a><span class="kw">impl</span>&lt;Options: ModuleInfo&gt; Module&lt;Options&gt; {
-<a href=#573 id=573 data-nosnippet>573</a>    <span class="doccomment">/// Add this as an optional module. Return the next optional module args.
-<a href=#574 id=574 data-nosnippet>574</a>    </span><span class="kw">fn </span>add(
-<a href=#575 id=575 data-nosnippet>575</a>        <span class="self">self</span>,
-<a href=#576 id=576 data-nosnippet>576</a>        options: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;Options&gt;,
-<a href=#577 id=577 data-nosnippet>577</a>        provided: <span class="kw-2">&amp;mut </span>HashSet&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt;,
-<a href=#578 id=578 data-nosnippet>578</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;String&gt;, clap::Error&gt; {
-<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">if </span>options.is_some() {
-<a href=#580 id=580 data-nosnippet>580</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(clap::Error::raw(
-<a href=#581 id=581 data-nosnippet>581</a>                ErrorKind::TooManyValues,
-<a href=#582 id=582 data-nosnippet>582</a>                <span class="macro">format!</span>(<span class="string">"optional module {} can only be started once"</span>, Options::NAME),
-<a href=#583 id=583 data-nosnippet>583</a>            ));
-<a href=#584 id=584 data-nosnippet>584</a>        }
-<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">for </span>req <span class="kw">in </span>Options::requires() {
-<a href=#586 id=586 data-nosnippet>586</a>            <span class="kw">if </span>!provided.contains(<span class="kw-2">&amp;</span>req) {
-<a href=#587 id=587 data-nosnippet>587</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(clap::Error::raw(
-<a href=#588 id=588 data-nosnippet>588</a>                    ErrorKind::MissingRequiredArgument,
-<a href=#589 id=589 data-nosnippet>589</a>                    <span class="macro">format!</span>(<span class="string">"module {} is missing required module {req}"</span>, Options::NAME),
-<a href=#590 id=590 data-nosnippet>590</a>                ));
-<a href=#591 id=591 data-nosnippet>591</a>            }
-<a href=#592 id=592 data-nosnippet>592</a>        }
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw-2">*</span>options = <span class="prelude-val">Some</span>(<span class="kw-2">*</span><span class="self">self</span>.options);
-<a href=#594 id=594 data-nosnippet>594</a>        provided.insert(Options::NAME);
-<a href=#595 id=595 data-nosnippet>595</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.modules)
-<a href=#596 id=596 data-nosnippet>596</a>    }
-<a href=#597 id=597 data-nosnippet>597</a>}
-<a href=#598 id=598 data-nosnippet>598</a>
-<a href=#599 id=599 data-nosnippet>599</a><span class="attr">#[derive(Clone, Debug, Parser)]
-<a href=#600 id=600 data-nosnippet>600</a></span><span class="kw">enum </span>SequencerModule {
-<a href=#601 id=601 data-nosnippet>601</a>    <span class="doccomment">/// Run an HTTP server.
-<a href=#602 id=602 data-nosnippet>602</a>    ///
-<a href=#603 id=603 data-nosnippet>603</a>    /// The basic HTTP server comes with healthcheck and version endpoints. Add additional endpoints
-<a href=#604 id=604 data-nosnippet>604</a>    /// by enabling additional modules:
-<a href=#605 id=605 data-nosnippet>605</a>    /// * query: add query service endpoints
-<a href=#606 id=606 data-nosnippet>606</a>    /// * submit: add transaction submission endpoints
-<a href=#607 id=607 data-nosnippet>607</a>    </span>Http(Module&lt;api::options::Http&gt;),
-<a href=#608 id=608 data-nosnippet>608</a>    <span class="doccomment">/// Alias for storage-fs.
-<a href=#609 id=609 data-nosnippet>609</a>    </span>Storage(Module&lt;persistence::fs::Options&gt;),
-<a href=#610 id=610 data-nosnippet>610</a>    <span class="doccomment">/// Use the file system for persistent storage.
-<a href=#611 id=611 data-nosnippet>611</a>    </span>StorageFs(Module&lt;persistence::fs::Options&gt;),
-<a href=#612 id=612 data-nosnippet>612</a>    <span class="doccomment">/// Use a Postgres database for persistent storage.
-<a href=#613 id=613 data-nosnippet>613</a>    </span>StorageSql(Module&lt;persistence::sql::Options&gt;),
-<a href=#614 id=614 data-nosnippet>614</a>    <span class="doccomment">/// Run the query API module.
-<a href=#615 id=615 data-nosnippet>615</a>    ///
-<a href=#616 id=616 data-nosnippet>616</a>    /// This module requires the http module to be started.
-<a href=#617 id=617 data-nosnippet>617</a>    </span>Query(Module&lt;api::options::Query&gt;),
-<a href=#618 id=618 data-nosnippet>618</a>    <span class="doccomment">/// Run the transaction submission API module.
+<a href=#527 id=527 data-nosnippet>527</a>                SequencerModule::LightClient(m) =&gt; {
+<a href=#528 id=528 data-nosnippet>528</a>                    curr = m.add(<span class="kw-2">&amp;mut </span>modules.light_client, <span class="kw-2">&amp;mut </span>provided)<span class="question-mark">?
+<a href=#529 id=529 data-nosnippet>529</a>                </span>},
+<a href=#530 id=530 data-nosnippet>530</a>            }
+<a href=#531 id=531 data-nosnippet>531</a>        }
+<a href=#532 id=532 data-nosnippet>532</a>
+<a href=#533 id=533 data-nosnippet>533</a>        <span class="prelude-val">Ok</span>(modules)
+<a href=#534 id=534 data-nosnippet>534</a>    }
+<a href=#535 id=535 data-nosnippet>535</a>}
+<a href=#536 id=536 data-nosnippet>536</a>
+<a href=#537 id=537 data-nosnippet>537</a><span class="kw">trait </span>ModuleInfo: Args + FromArgMatches {
+<a href=#538 id=538 data-nosnippet>538</a>    <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str;
+<a href=#539 id=539 data-nosnippet>539</a>    <span class="kw">fn </span>requires() -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt;;
+<a href=#540 id=540 data-nosnippet>540</a>}
+<a href=#541 id=541 data-nosnippet>541</a>
+<a href=#542 id=542 data-nosnippet>542</a><span class="macro">macro_rules!</span> module {
+<a href=#543 id=543 data-nosnippet>543</a>    (<span class="macro-nonterminal">$name</span>:expr, <span class="macro-nonterminal">$opt</span>:ty $(,requires: $(<span class="macro-nonterminal">$req</span>:expr),<span class="kw-2">*</span>)<span class="question-mark">?</span>) =&gt; {
+<a href=#544 id=544 data-nosnippet>544</a>        <span class="kw">impl </span>ModuleInfo <span class="kw">for </span><span class="macro-nonterminal">$opt </span>{
+<a href=#545 id=545 data-nosnippet>545</a>            <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="macro-nonterminal">$name</span>;
+<a href=#546 id=546 data-nosnippet>546</a>
+<a href=#547 id=547 data-nosnippet>547</a>            <span class="kw">fn </span>requires() -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
+<a href=#548 id=548 data-nosnippet>548</a>                <span class="macro">vec!</span>[$($(<span class="macro-nonterminal">$req</span>),<span class="kw-2">*</span>)<span class="question-mark">?</span>]
+<a href=#549 id=549 data-nosnippet>549</a>            }
+<a href=#550 id=550 data-nosnippet>550</a>        }
+<a href=#551 id=551 data-nosnippet>551</a>    };
+<a href=#552 id=552 data-nosnippet>552</a>}
+<a href=#553 id=553 data-nosnippet>553</a>
+<a href=#554 id=554 data-nosnippet>554</a><span class="macro">module!</span>(<span class="string">"storage-fs"</span>, persistence::fs::Options);
+<a href=#555 id=555 data-nosnippet>555</a><span class="macro">module!</span>(<span class="string">"storage-sql"</span>, persistence::sql::Options);
+<a href=#556 id=556 data-nosnippet>556</a><span class="macro">module!</span>(<span class="string">"http"</span>, api::options::Http);
+<a href=#557 id=557 data-nosnippet>557</a><span class="macro">module!</span>(<span class="string">"query"</span>, api::options::Query, requires: <span class="string">"http"</span>);
+<a href=#558 id=558 data-nosnippet>558</a><span class="macro">module!</span>(<span class="string">"submit"</span>, api::options::Submit, requires: <span class="string">"http"</span>);
+<a href=#559 id=559 data-nosnippet>559</a><span class="macro">module!</span>(<span class="string">"status"</span>, api::options::Status, requires: <span class="string">"http"</span>);
+<a href=#560 id=560 data-nosnippet>560</a><span class="macro">module!</span>(<span class="string">"catchup"</span>, api::options::Catchup, requires: <span class="string">"http"</span>);
+<a href=#561 id=561 data-nosnippet>561</a><span class="macro">module!</span>(<span class="string">"config"</span>, api::options::Config, requires: <span class="string">"http"</span>);
+<a href=#562 id=562 data-nosnippet>562</a><span class="macro">module!</span>(<span class="string">"hotshot-events"</span>, api::options::HotshotEvents, requires: <span class="string">"http"</span>);
+<a href=#563 id=563 data-nosnippet>563</a><span class="macro">module!</span>(<span class="string">"explorer"</span>, api::options::Explorer, requires: <span class="string">"http"</span>, <span class="string">"storage-sql"</span>);
+<a href=#564 id=564 data-nosnippet>564</a><span class="macro">module!</span>(<span class="string">"light-client"</span>, api::options::LightClient, requires: <span class="string">"http"</span>, <span class="string">"storage-sql"</span>);
+<a href=#565 id=565 data-nosnippet>565</a>
+<a href=#566 id=566 data-nosnippet>566</a><span class="attr">#[derive(Clone, Debug, Args)]
+<a href=#567 id=567 data-nosnippet>567</a></span><span class="kw">struct </span>Module&lt;Options: ModuleInfo&gt; {
+<a href=#568 id=568 data-nosnippet>568</a>    <span class="attr">#[clap(flatten)]
+<a href=#569 id=569 data-nosnippet>569</a>    </span>options: Box&lt;Options&gt;,
+<a href=#570 id=570 data-nosnippet>570</a>
+<a href=#571 id=571 data-nosnippet>571</a>    <span class="doccomment">/// Add more optional modules.
+<a href=#572 id=572 data-nosnippet>572</a>    </span><span class="attr">#[clap(raw = <span class="bool-val">true</span>)]
+<a href=#573 id=573 data-nosnippet>573</a>    </span>modules: Vec&lt;String&gt;,
+<a href=#574 id=574 data-nosnippet>574</a>}
+<a href=#575 id=575 data-nosnippet>575</a>
+<a href=#576 id=576 data-nosnippet>576</a><span class="kw">impl</span>&lt;Options: ModuleInfo&gt; Module&lt;Options&gt; {
+<a href=#577 id=577 data-nosnippet>577</a>    <span class="doccomment">/// Add this as an optional module. Return the next optional module args.
+<a href=#578 id=578 data-nosnippet>578</a>    </span><span class="kw">fn </span>add(
+<a href=#579 id=579 data-nosnippet>579</a>        <span class="self">self</span>,
+<a href=#580 id=580 data-nosnippet>580</a>        options: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;Options&gt;,
+<a href=#581 id=581 data-nosnippet>581</a>        provided: <span class="kw-2">&amp;mut </span>HashSet&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt;,
+<a href=#582 id=582 data-nosnippet>582</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;String&gt;, clap::Error&gt; {
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">if </span>options.is_some() {
+<a href=#584 id=584 data-nosnippet>584</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(clap::Error::raw(
+<a href=#585 id=585 data-nosnippet>585</a>                ErrorKind::TooManyValues,
+<a href=#586 id=586 data-nosnippet>586</a>                <span class="macro">format!</span>(<span class="string">"optional module {} can only be started once"</span>, Options::NAME),
+<a href=#587 id=587 data-nosnippet>587</a>            ));
+<a href=#588 id=588 data-nosnippet>588</a>        }
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">for </span>req <span class="kw">in </span>Options::requires() {
+<a href=#590 id=590 data-nosnippet>590</a>            <span class="kw">if </span>!provided.contains(<span class="kw-2">&amp;</span>req) {
+<a href=#591 id=591 data-nosnippet>591</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(clap::Error::raw(
+<a href=#592 id=592 data-nosnippet>592</a>                    ErrorKind::MissingRequiredArgument,
+<a href=#593 id=593 data-nosnippet>593</a>                    <span class="macro">format!</span>(<span class="string">"module {} is missing required module {req}"</span>, Options::NAME),
+<a href=#594 id=594 data-nosnippet>594</a>                ));
+<a href=#595 id=595 data-nosnippet>595</a>            }
+<a href=#596 id=596 data-nosnippet>596</a>        }
+<a href=#597 id=597 data-nosnippet>597</a>        <span class="kw-2">*</span>options = <span class="prelude-val">Some</span>(<span class="kw-2">*</span><span class="self">self</span>.options);
+<a href=#598 id=598 data-nosnippet>598</a>        provided.insert(Options::NAME);
+<a href=#599 id=599 data-nosnippet>599</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.modules)
+<a href=#600 id=600 data-nosnippet>600</a>    }
+<a href=#601 id=601 data-nosnippet>601</a>}
+<a href=#602 id=602 data-nosnippet>602</a>
+<a href=#603 id=603 data-nosnippet>603</a><span class="attr">#[derive(Clone, Debug, Parser)]
+<a href=#604 id=604 data-nosnippet>604</a></span><span class="kw">enum </span>SequencerModule {
+<a href=#605 id=605 data-nosnippet>605</a>    <span class="doccomment">/// Run an HTTP server.
+<a href=#606 id=606 data-nosnippet>606</a>    ///
+<a href=#607 id=607 data-nosnippet>607</a>    /// The basic HTTP server comes with healthcheck and version endpoints. Add additional endpoints
+<a href=#608 id=608 data-nosnippet>608</a>    /// by enabling additional modules:
+<a href=#609 id=609 data-nosnippet>609</a>    /// * query: add query service endpoints
+<a href=#610 id=610 data-nosnippet>610</a>    /// * submit: add transaction submission endpoints
+<a href=#611 id=611 data-nosnippet>611</a>    </span>Http(Module&lt;api::options::Http&gt;),
+<a href=#612 id=612 data-nosnippet>612</a>    <span class="doccomment">/// Alias for storage-fs.
+<a href=#613 id=613 data-nosnippet>613</a>    </span>Storage(Module&lt;persistence::fs::Options&gt;),
+<a href=#614 id=614 data-nosnippet>614</a>    <span class="doccomment">/// Use the file system for persistent storage.
+<a href=#615 id=615 data-nosnippet>615</a>    </span>StorageFs(Module&lt;persistence::fs::Options&gt;),
+<a href=#616 id=616 data-nosnippet>616</a>    <span class="doccomment">/// Use a Postgres database for persistent storage.
+<a href=#617 id=617 data-nosnippet>617</a>    </span>StorageSql(Module&lt;persistence::sql::Options&gt;),
+<a href=#618 id=618 data-nosnippet>618</a>    <span class="doccomment">/// Run the query API module.
 <a href=#619 id=619 data-nosnippet>619</a>    ///
 <a href=#620 id=620 data-nosnippet>620</a>    /// This module requires the http module to be started.
-<a href=#621 id=621 data-nosnippet>621</a>    </span>Submit(Module&lt;api::options::Submit&gt;),
-<a href=#622 id=622 data-nosnippet>622</a>    <span class="doccomment">/// Run the status API module.
+<a href=#621 id=621 data-nosnippet>621</a>    </span>Query(Module&lt;api::options::Query&gt;),
+<a href=#622 id=622 data-nosnippet>622</a>    <span class="doccomment">/// Run the transaction submission API module.
 <a href=#623 id=623 data-nosnippet>623</a>    ///
 <a href=#624 id=624 data-nosnippet>624</a>    /// This module requires the http module to be started.
-<a href=#625 id=625 data-nosnippet>625</a>    </span>Status(Module&lt;api::options::Status&gt;),
-<a href=#626 id=626 data-nosnippet>626</a>    <span class="doccomment">/// Run the state catchup API module.
+<a href=#625 id=625 data-nosnippet>625</a>    </span>Submit(Module&lt;api::options::Submit&gt;),
+<a href=#626 id=626 data-nosnippet>626</a>    <span class="doccomment">/// Run the status API module.
 <a href=#627 id=627 data-nosnippet>627</a>    ///
 <a href=#628 id=628 data-nosnippet>628</a>    /// This module requires the http module to be started.
-<a href=#629 id=629 data-nosnippet>629</a>    </span>Catchup(Module&lt;api::options::Catchup&gt;),
-<a href=#630 id=630 data-nosnippet>630</a>    <span class="doccomment">/// Run the config API module.
-<a href=#631 id=631 data-nosnippet>631</a>    </span>Config(Module&lt;api::options::Config&gt;),
-<a href=#632 id=632 data-nosnippet>632</a>
-<a href=#633 id=633 data-nosnippet>633</a>    <span class="doccomment">/// Run the hotshot events API module.
-<a href=#634 id=634 data-nosnippet>634</a>    ///
-<a href=#635 id=635 data-nosnippet>635</a>    /// This module requires the http module to be started.
-<a href=#636 id=636 data-nosnippet>636</a>    </span>HotshotEvents(Module&lt;api::options::HotshotEvents&gt;),
-<a href=#637 id=637 data-nosnippet>637</a>    <span class="doccomment">/// Run the explorer API module.
+<a href=#629 id=629 data-nosnippet>629</a>    </span>Status(Module&lt;api::options::Status&gt;),
+<a href=#630 id=630 data-nosnippet>630</a>    <span class="doccomment">/// Run the state catchup API module.
+<a href=#631 id=631 data-nosnippet>631</a>    ///
+<a href=#632 id=632 data-nosnippet>632</a>    /// This module requires the http module to be started.
+<a href=#633 id=633 data-nosnippet>633</a>    </span>Catchup(Module&lt;api::options::Catchup&gt;),
+<a href=#634 id=634 data-nosnippet>634</a>    <span class="doccomment">/// Run the config API module.
+<a href=#635 id=635 data-nosnippet>635</a>    </span>Config(Module&lt;api::options::Config&gt;),
+<a href=#636 id=636 data-nosnippet>636</a>
+<a href=#637 id=637 data-nosnippet>637</a>    <span class="doccomment">/// Run the hotshot events API module.
 <a href=#638 id=638 data-nosnippet>638</a>    ///
-<a href=#639 id=639 data-nosnippet>639</a>    /// This module requires the http and storage-sql modules to be started.
-<a href=#640 id=640 data-nosnippet>640</a>    </span>Explorer(Module&lt;api::options::Explorer&gt;),
-<a href=#641 id=641 data-nosnippet>641</a>}
-<a href=#642 id=642 data-nosnippet>642</a>
-<a href=#643 id=643 data-nosnippet>643</a><span class="attr">#[derive(Clone, Debug, Default)]
-<a href=#644 id=644 data-nosnippet>644</a></span><span class="kw">pub struct </span>Modules {
-<a href=#645 id=645 data-nosnippet>645</a>    <span class="kw">pub </span>storage_fs: <span class="prelude-ty">Option</span>&lt;persistence::fs::Options&gt;,
-<a href=#646 id=646 data-nosnippet>646</a>    <span class="kw">pub </span>storage_sql: <span class="prelude-ty">Option</span>&lt;persistence::sql::Options&gt;,
-<a href=#647 id=647 data-nosnippet>647</a>    <span class="kw">pub </span>http: <span class="prelude-ty">Option</span>&lt;api::options::Http&gt;,
-<a href=#648 id=648 data-nosnippet>648</a>    <span class="kw">pub </span>query: <span class="prelude-ty">Option</span>&lt;api::options::Query&gt;,
-<a href=#649 id=649 data-nosnippet>649</a>    <span class="kw">pub </span>submit: <span class="prelude-ty">Option</span>&lt;api::options::Submit&gt;,
-<a href=#650 id=650 data-nosnippet>650</a>    <span class="kw">pub </span>status: <span class="prelude-ty">Option</span>&lt;api::options::Status&gt;,
-<a href=#651 id=651 data-nosnippet>651</a>    <span class="kw">pub </span>catchup: <span class="prelude-ty">Option</span>&lt;api::options::Catchup&gt;,
-<a href=#652 id=652 data-nosnippet>652</a>    <span class="kw">pub </span>config: <span class="prelude-ty">Option</span>&lt;api::options::Config&gt;,
-<a href=#653 id=653 data-nosnippet>653</a>    <span class="kw">pub </span>hotshot_events: <span class="prelude-ty">Option</span>&lt;api::options::HotshotEvents&gt;,
-<a href=#654 id=654 data-nosnippet>654</a>    <span class="kw">pub </span>explorer: <span class="prelude-ty">Option</span>&lt;api::options::Explorer&gt;,
-<a href=#655 id=655 data-nosnippet>655</a>}</code></pre></div></section></main></body></html>
+<a href=#639 id=639 data-nosnippet>639</a>    /// This module requires the http module to be started.
+<a href=#640 id=640 data-nosnippet>640</a>    </span>HotshotEvents(Module&lt;api::options::HotshotEvents&gt;),
+<a href=#641 id=641 data-nosnippet>641</a>    <span class="doccomment">/// Run the explorer API module.
+<a href=#642 id=642 data-nosnippet>642</a>    ///
+<a href=#643 id=643 data-nosnippet>643</a>    /// This module requires the http and storage-sql modules to be started.
+<a href=#644 id=644 data-nosnippet>644</a>    </span>Explorer(Module&lt;api::options::Explorer&gt;),
+<a href=#645 id=645 data-nosnippet>645</a>    <span class="doccomment">/// Run the light client API module.
+<a href=#646 id=646 data-nosnippet>646</a>    ///
+<a href=#647 id=647 data-nosnippet>647</a>    /// This module provides data and proofs necessary for an untrusting light client to retrieve
+<a href=#648 id=648 data-nosnippet>648</a>    /// and verify Espresso data from this server.
+<a href=#649 id=649 data-nosnippet>649</a>    ///
+<a href=#650 id=650 data-nosnippet>650</a>    /// This module requires the http and storage-sql modules to be started.
+<a href=#651 id=651 data-nosnippet>651</a>    </span>LightClient(Module&lt;api::options::LightClient&gt;),
+<a href=#652 id=652 data-nosnippet>652</a>}
+<a href=#653 id=653 data-nosnippet>653</a>
+<a href=#654 id=654 data-nosnippet>654</a><span class="attr">#[derive(Clone, Debug, Default)]
+<a href=#655 id=655 data-nosnippet>655</a></span><span class="kw">pub struct </span>Modules {
+<a href=#656 id=656 data-nosnippet>656</a>    <span class="kw">pub </span>storage_fs: <span class="prelude-ty">Option</span>&lt;persistence::fs::Options&gt;,
+<a href=#657 id=657 data-nosnippet>657</a>    <span class="kw">pub </span>storage_sql: <span class="prelude-ty">Option</span>&lt;persistence::sql::Options&gt;,
+<a href=#658 id=658 data-nosnippet>658</a>    <span class="kw">pub </span>http: <span class="prelude-ty">Option</span>&lt;api::options::Http&gt;,
+<a href=#659 id=659 data-nosnippet>659</a>    <span class="kw">pub </span>query: <span class="prelude-ty">Option</span>&lt;api::options::Query&gt;,
+<a href=#660 id=660 data-nosnippet>660</a>    <span class="kw">pub </span>submit: <span class="prelude-ty">Option</span>&lt;api::options::Submit&gt;,
+<a href=#661 id=661 data-nosnippet>661</a>    <span class="kw">pub </span>status: <span class="prelude-ty">Option</span>&lt;api::options::Status&gt;,
+<a href=#662 id=662 data-nosnippet>662</a>    <span class="kw">pub </span>catchup: <span class="prelude-ty">Option</span>&lt;api::options::Catchup&gt;,
+<a href=#663 id=663 data-nosnippet>663</a>    <span class="kw">pub </span>config: <span class="prelude-ty">Option</span>&lt;api::options::Config&gt;,
+<a href=#664 id=664 data-nosnippet>664</a>    <span class="kw">pub </span>hotshot_events: <span class="prelude-ty">Option</span>&lt;api::options::HotshotEvents&gt;,
+<a href=#665 id=665 data-nosnippet>665</a>    <span class="kw">pub </span>explorer: <span class="prelude-ty">Option</span>&lt;api::options::Explorer&gt;,
+<a href=#666 id=666 data-nosnippet>666</a>    <span class="kw">pub </span>light_client: <span class="prelude-ty">Option</span>&lt;api::options::LightClient&gt;,
+<a href=#667 id=667 data-nosnippet>667</a>}</code></pre></div></section></main></body></html>

@@ -20,7 +20,7 @@
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>futures::stream::{StreamExt, TryStreamExt};
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>hotshot_types::{
 <a href=#22 id=22 data-nosnippet>22</a>    data::VidShare,
-<a href=#23 id=23 data-nosnippet>23</a>    simple_certificate::QuorumCertificate2,
+<a href=#23 id=23 data-nosnippet>23</a>    simple_certificate::CertificatePair,
 <a href=#24 id=24 data-nosnippet>24</a>    traits::{block_contents::BlockHeader, node_implementation::NodeType},
 <a href=#25 id=25 data-nosnippet>25</a>};
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>snafu::OptionExt;
@@ -302,7 +302,7 @@
 <a href=#302 id=302 data-nosnippet>302</a>        <span class="prelude-val">Ok</span>(TimeWindowQueryData { window, prev, next })
 <a href=#303 id=303 data-nosnippet>303</a>    }
 <a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
+<a href=#305 id=305 data-nosnippet>305</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
 <a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">let </span><span class="prelude-val">Some</span>((json,)) = query_as(<span class="string">"SELECT qcs FROM latest_qc_chain LIMIT 1"</span>)
 <a href=#307 id=307 data-nosnippet>307</a>            .fetch_optional(<span class="self">self</span>.as_mut())
 <a href=#308 id=308 data-nosnippet>308</a>            .<span class="kw">await</span><span class="question-mark">?

@@ -24,7 +24,7 @@
 <a href=#24 id=24 data-nosnippet>24</a>};
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>hotshot_types::{
 <a href=#26 id=26 data-nosnippet>26</a>    data::{VidCommitment, VidShare},
-<a href=#27 id=27 data-nosnippet>27</a>    simple_certificate::QuorumCertificate2,
+<a href=#27 id=27 data-nosnippet>27</a>    simple_certificate::CertificatePair,
 <a href=#28 id=28 data-nosnippet>28</a>    traits::node_implementation::NodeType,
 <a href=#29 id=29 data-nosnippet>29</a>};
 <a href=#30 id=30 data-nosnippet>30</a>
@@ -310,7 +310,7 @@
 <a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">pub </span>vid_common: <span class="prelude-ty">Option</span>&lt;VidCommonQueryData&lt;Types&gt;&gt;,
 <a href=#311 id=311 data-nosnippet>311</a>    <span class="kw">pub </span>vid_share: <span class="prelude-ty">Option</span>&lt;VidShare&gt;,
 <a href=#312 id=312 data-nosnippet>312</a>    <span class="kw">pub </span>state_cert: <span class="prelude-ty">Option</span>&lt;StateCertQueryDataV2&lt;Types&gt;&gt;,
-<a href=#313 id=313 data-nosnippet>313</a>    <span class="kw">pub </span>qc_chain: <span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;,
+<a href=#313 id=313 data-nosnippet>313</a>    <span class="kw">pub </span>qc_chain: <span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;,
 <a href=#314 id=314 data-nosnippet>314</a>}
 <a href=#315 id=315 data-nosnippet>315</a>
 <a href=#316 id=316 data-nosnippet>316</a><span class="kw">impl</span>&lt;Types: NodeType&gt; From&lt;LeafQueryData&lt;Types&gt;&gt; <span class="kw">for </span>BlockInfo&lt;Types&gt; {
@@ -343,7 +343,7 @@
 <a href=#343 id=343 data-nosnippet>343</a>        }
 <a href=#344 id=344 data-nosnippet>344</a>    }
 <a href=#345 id=345 data-nosnippet>345</a>
-<a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">pub fn </span>with_qc_chain(<span class="kw-2">mut </span><span class="self">self</span>, qc_chain: [QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]) -&gt; <span class="self">Self </span>{
+<a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">pub fn </span>with_qc_chain(<span class="kw-2">mut </span><span class="self">self</span>, qc_chain: [CertificatePair&lt;Types&gt;; <span class="number">2</span>]) -&gt; <span class="self">Self </span>{
 <a href=#347 id=347 data-nosnippet>347</a>        <span class="self">self</span>.qc_chain = <span class="prelude-val">Some</span>(qc_chain);
 <a href=#348 id=348 data-nosnippet>348</a>        <span class="self">self
 <a href=#349 id=349 data-nosnippet>349</a>    </span>}

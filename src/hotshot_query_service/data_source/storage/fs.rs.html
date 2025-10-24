@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>futures::future::Future;
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>hotshot_types::{
 <a href=#31 id=31 data-nosnippet>31</a>    data::{VidCommitment, VidShare},
-<a href=#32 id=32 data-nosnippet>32</a>    simple_certificate::QuorumCertificate2,
+<a href=#32 id=32 data-nosnippet>32</a>    simple_certificate::CertificatePair,
 <a href=#33 id=33 data-nosnippet>33</a>    traits::{
 <a href=#34 id=34 data-nosnippet>34</a>        block_contents::BlockHeader,
 <a href=#35 id=35 data-nosnippet>35</a>        node_implementation::{ConsensusTime, NodeType},
@@ -87,7 +87,7 @@
 <a href=#87 id=87 data-nosnippet>87</a>    block_storage: LedgerLog&lt;BlockQueryData&lt;Types&gt;&gt;,
 <a href=#88 id=88 data-nosnippet>88</a>    vid_storage: LedgerLog&lt;(VidCommonQueryData&lt;Types&gt;, <span class="prelude-ty">Option</span>&lt;VidShare&gt;)&gt;,
 <a href=#89 id=89 data-nosnippet>89</a>    state_cert_storage: LedgerLog&lt;StateCertQueryDataV2&lt;Types&gt;&gt;,
-<a href=#90 id=90 data-nosnippet>90</a>    latest_qc_chain: <span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;,
+<a href=#90 id=90 data-nosnippet>90</a>    latest_qc_chain: <span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;,
 <a href=#91 id=91 data-nosnippet>91</a>}
 <a href=#92 id=92 data-nosnippet>92</a>
 <a href=#93 id=93 data-nosnippet>93</a><span class="kw">impl</span>&lt;Types&gt; FileSystemStorageInner&lt;Types&gt;
@@ -672,7 +672,7 @@
 <a href=#672 id=672 data-nosnippet>672</a>    <span class="kw">async fn </span>insert_leaf_with_qc_chain(
 <a href=#673 id=673 data-nosnippet>673</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#674 id=674 data-nosnippet>674</a>        leaf: LeafQueryData&lt;Types&gt;,
-<a href=#675 id=675 data-nosnippet>675</a>        qc_chain: <span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;,
+<a href=#675 id=675 data-nosnippet>675</a>        qc_chain: <span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;,
 <a href=#676 id=676 data-nosnippet>676</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#677 id=677 data-nosnippet>677</a>        <span class="self">self</span>.inner
 <a href=#678 id=678 data-nosnippet>678</a>            .leaf_storage
@@ -918,7 +918,7 @@
 <a href=#918 id=918 data-nosnippet>918</a>        <span class="prelude-val">Ok</span>(res)
 <a href=#919 id=919 data-nosnippet>919</a>    }
 <a href=#920 id=920 data-nosnippet>920</a>
-<a href=#921 id=921 data-nosnippet>921</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
+<a href=#921 id=921 data-nosnippet>921</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
 <a href=#922 id=922 data-nosnippet>922</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.latest_qc_chain.clone())
 <a href=#923 id=923 data-nosnippet>923</a>    }
 <a href=#924 id=924 data-nosnippet>924</a>}

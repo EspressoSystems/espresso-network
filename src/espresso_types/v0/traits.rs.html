@@ -19,8 +19,8 @@
 <a href=#19 id=19 data-nosnippet>19</a>    event::{HotShotAction, LeafInfo},
 <a href=#20 id=20 data-nosnippet>20</a>    message::{convert_proposal, Proposal},
 <a href=#21 id=21 data-nosnippet>21</a>    simple_certificate::{
-<a href=#22 id=22 data-nosnippet>22</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
-<a href=#23 id=23 data-nosnippet>23</a>        QuorumCertificate2, UpgradeCertificate,
+<a href=#22 id=22 data-nosnippet>22</a>        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+<a href=#23 id=23 data-nosnippet>23</a>        QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
 <a href=#24 id=24 data-nosnippet>24</a>    },
 <a href=#25 id=25 data-nosnippet>25</a>    stake_table::HSStakeTable,
 <a href=#26 id=26 data-nosnippet>26</a>    traits::{
@@ -757,7 +757,7 @@
 <a href=#757 id=757 data-nosnippet>757</a>                </span>std::iter::once((<span class="kw-2">**</span>committing_qc).clone())
 <a href=#758 id=758 data-nosnippet>758</a>                    <span class="comment">// Moving backwards in the chain, each leaf corresponds with the subsequent
 <a href=#759 id=759 data-nosnippet>759</a>                    // leaf's justify QC.
-<a href=#760 id=760 data-nosnippet>760</a>                    </span>.chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc())),
+<a href=#760 id=760 data-nosnippet>760</a>                    </span>.chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(<span class="kw-2">&amp;</span>leaf.leaf))),
 <a href=#761 id=761 data-nosnippet>761</a>            );
 <a href=#762 id=762 data-nosnippet>762</a>
 <a href=#763 id=763 data-nosnippet>763</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self
@@ -800,8 +800,8 @@
 <a href=#800 id=800 data-nosnippet>800</a>    </span><span class="kw">async fn </span>append_decided_leaves(
 <a href=#801 id=801 data-nosnippet>801</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#802 id=802 data-nosnippet>802</a>        decided_view: ViewNumber,
-<a href=#803 id=803 data-nosnippet>803</a>        leaf_chain: <span class="kw">impl </span>IntoIterator&lt;Item = (<span class="kw-2">&amp;</span>LeafInfo&lt;SeqTypes&gt;, QuorumCertificate2&lt;SeqTypes&gt;)&gt; + Send,
-<a href=#804 id=804 data-nosnippet>804</a>        deciding_qc: <span class="prelude-ty">Option</span>&lt;Arc&lt;QuorumCertificate2&lt;SeqTypes&gt;&gt;&gt;,
+<a href=#803 id=803 data-nosnippet>803</a>        leaf_chain: <span class="kw">impl </span>IntoIterator&lt;Item = (<span class="kw-2">&amp;</span>LeafInfo&lt;SeqTypes&gt;, CertificatePair&lt;SeqTypes&gt;)&gt; + Send,
+<a href=#804 id=804 data-nosnippet>804</a>        deciding_qc: <span class="prelude-ty">Option</span>&lt;Arc&lt;CertificatePair&lt;SeqTypes&gt;&gt;&gt;,
 <a href=#805 id=805 data-nosnippet>805</a>        consumer: <span class="kw-2">&amp;</span>(<span class="kw">impl </span>EventConsumer + <span class="lifetime">'static</span>),
 <a href=#806 id=806 data-nosnippet>806</a>    ) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#807 id=807 data-nosnippet>807</a>

@@ -23,8 +23,8 @@
 <a href=#23 id=23 data-nosnippet>23</a>    event::{Event, EventType, HotShotAction, LeafInfo},
 <a href=#24 id=24 data-nosnippet>24</a>    message::Proposal,
 <a href=#25 id=25 data-nosnippet>25</a>    simple_certificate::{
-<a href=#26 id=26 data-nosnippet>26</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-<a href=#27 id=27 data-nosnippet>27</a>        UpgradeCertificate,
+<a href=#26 id=26 data-nosnippet>26</a>        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+<a href=#27 id=27 data-nosnippet>27</a>        QuorumCertificate2, UpgradeCertificate,
 <a href=#28 id=28 data-nosnippet>28</a>    },
 <a href=#29 id=29 data-nosnippet>29</a>    traits::metrics::Metrics,
 <a href=#30 id=30 data-nosnippet>30</a>    vote::HasViewNumber,
@@ -66,8 +66,8 @@
 <a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">async fn </span>append_decided_leaves(
 <a href=#67 id=67 data-nosnippet>67</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#68 id=68 data-nosnippet>68</a>        view_number: ViewNumber,
-<a href=#69 id=69 data-nosnippet>69</a>        leaves: <span class="kw">impl </span>IntoIterator&lt;Item = (<span class="kw-2">&amp;</span>LeafInfo&lt;SeqTypes&gt;, QuorumCertificate2&lt;SeqTypes&gt;)&gt; + Send,
-<a href=#70 id=70 data-nosnippet>70</a>        deciding_qc: <span class="prelude-ty">Option</span>&lt;Arc&lt;QuorumCertificate2&lt;SeqTypes&gt;&gt;&gt;,
+<a href=#69 id=69 data-nosnippet>69</a>        leaves: <span class="kw">impl </span>IntoIterator&lt;Item = (<span class="kw-2">&amp;</span>LeafInfo&lt;SeqTypes&gt;, CertificatePair&lt;SeqTypes&gt;)&gt; + Send,
+<a href=#70 id=70 data-nosnippet>70</a>        deciding_qc: <span class="prelude-ty">Option</span>&lt;Arc&lt;CertificatePair&lt;SeqTypes&gt;&gt;&gt;,
 <a href=#71 id=71 data-nosnippet>71</a>        consumer: <span class="kw-2">&amp;</span><span class="kw">impl </span>EventConsumer,
 <a href=#72 id=72 data-nosnippet>72</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>leaves = leaves

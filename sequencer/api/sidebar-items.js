@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["data_source","endpoints","fs","options","sql","update"],"struct":["ApiState"],"trait":["RewardAccountProofDataSource"],"type":["BlocksFrontier","BoxLazy","StorageState"]};
+window.SIDEBAR_ITEMS = {"mod":["data_source","endpoints","fs","light_client","options","sql","update"],"struct":["ApiState"],"trait":["RewardAccountProofDataSource"],"type":["BlocksFrontier","BoxLazy","StorageState"]};

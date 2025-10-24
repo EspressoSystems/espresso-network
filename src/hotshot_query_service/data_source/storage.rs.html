@@ -62,7 +62,7 @@
 <a href=#62 id=62 data-nosnippet>62</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#63 id=63 data-nosnippet>63</a><span class="kw">use </span>futures::future::Future;
 <a href=#64 id=64 data-nosnippet>64</a><span class="kw">use </span>hotshot_types::{
-<a href=#65 id=65 data-nosnippet>65</a>    data::VidShare, simple_certificate::QuorumCertificate2, traits::node_implementation::NodeType,
+<a href=#65 id=65 data-nosnippet>65</a>    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
 <a href=#66 id=66 data-nosnippet>66</a>};
 <a href=#67 id=67 data-nosnippet>67</a><span class="kw">use </span>jf_merkle_tree_compat::prelude::MerkleProof;
 <a href=#68 id=68 data-nosnippet>68</a><span class="kw">use </span>tagged_base64::TaggedBase64;
@@ -215,7 +215,7 @@
 <a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">fn </span>insert_leaf_with_qc_chain(
 <a href=#216 id=216 data-nosnippet>216</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#217 id=217 data-nosnippet>217</a>        leaf: LeafQueryData&lt;Types&gt;,
-<a href=#218 id=218 data-nosnippet>218</a>        qc_chain: <span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;,
+<a href=#218 id=218 data-nosnippet>218</a>        qc_chain: <span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;,
 <a href=#219 id=219 data-nosnippet>219</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt;;
 <a href=#220 id=220 data-nosnippet>220</a>    <span class="kw">fn </span>insert_block(
 <a href=#221 id=221 data-nosnippet>221</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -259,7 +259,7 @@
 <a href=#259 id=259 data-nosnippet>259</a>        limit: usize,
 <a href=#260 id=260 data-nosnippet>260</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt;;
 <a href=#261 id=261 data-nosnippet>261</a>
-<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[QuorumCertificate2&lt;Types&gt;; <span class="number">2</span>]&gt;&gt;;
+<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;&gt;;
 <a href=#263 id=263 data-nosnippet>263</a>
 <a href=#264 id=264 data-nosnippet>264</a>    <span class="doccomment">/// Search the database for missing objects and generate a report.
 <a href=#265 id=265 data-nosnippet>265</a>    </span><span class="kw">async fn </span>sync_status(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;SyncStatus&gt;;
