@@ -13,6 +13,7 @@ use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::ViewNumber,
     message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{network::ConnectedNetwork, node_implementation::Versions},
     utils::verify_leaf_chain,
@@ -166,6 +167,18 @@ impl<
         )
         .await
         .with_context(|| "timed out while fetching reward accounts")?
+    }
+
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        timeout(timeout_duration, self.fetch_state_cert(epoch))
+            .await
+            .with_context(|| "timed out while fetching state cert")?
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -482,6 +495,37 @@ impl<
             .with_context(|| "failed to request v1 reward accounts")?;
 
         tracing::info!("Fetched v1 reward accounts for height: {height}, view: {view}");
+
+        Ok(response)
+    }
+
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        tracing::info!("Fetching state cert for epoch: {epoch}");
+
+        // Create the response validation function
+        let response_validation_fn = move |_request: &Request, response: Response| async move {
+            // Make sure the response is a state cert response
+            let Response::StateCert(state_cert) = response else {
+                return Err(anyhow::anyhow!("expected state cert response"));
+            };
+
+            Ok(state_cert)
+        };
+
+        // Wait for the protocol to send us the state cert
+        let response = self
+            .request_indefinitely(
+                Request::StateCert(epoch),
+                RequestType::Batched,
+                response_validation_fn,
+            )
+            .await
+            .with_context(|| "failed to request state cert")?;
+
+        tracing::info!("Fetched state cert for epoch: {epoch}");
 
         Ok(response)
     }

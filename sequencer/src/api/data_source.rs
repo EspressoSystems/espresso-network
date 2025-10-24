@@ -26,6 +26,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
@@ -41,7 +42,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{persistence, SeqTypes, SequencerApiVersion};
+use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -164,6 +165,21 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
 }
 
+// Thin wrapper trait to access persistence methods from API handlers
+#[async_trait]
+pub(crate) trait StateCertDataSource {
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
+}
+
 pub(crate) trait CatchupDataSource: Sync {
     /// Get the state of the requested `account`.
     ///
@@ -283,6 +299,11 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV1>>;
+
+    fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 }
 
 pub trait RequestResponseDataSource<Types: NodeType> {
@@ -292,6 +313,15 @@ pub trait RequestResponseDataSource<Types: NodeType> {
         vid_common_data: VidCommonQueryData<Types>,
         duration: Duration,
     ) -> impl Future<Output = BoxFuture<'static, anyhow::Result<Vec<VidShare>>>> + Send;
+}
+
+#[async_trait]
+pub trait StateCertFetchingDataSource<Types: NodeType> {
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
 }
 
 #[cfg(any(test, feature = "testing"))]

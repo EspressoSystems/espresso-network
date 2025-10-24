@@ -616,8 +616,8 @@ mod test {
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
             Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-            PayloadQueryData, StateCertQueryDataV2, TransactionHash, UpdateAvailabilityData,
-            VidCommonMetadata, VidCommonQueryData,
+            PayloadQueryData, TransactionHash, UpdateAvailabilityData, VidCommonMetadata,
+            VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
         node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
@@ -783,9 +783,6 @@ mod test {
         ) -> Fetch<BlockWithTransaction<MockTypes>> {
             self.hotshot_qs.get_block_containing_transaction(hash).await
         }
-        async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<MockTypes>> {
-            self.hotshot_qs.get_state_cert(epoch).await
-        }
     }
 
     // Imiplement data source trait for node API.
@@ -864,7 +861,7 @@ mod test {
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         hotshot_qs
-            .append(BlockInfo::new(leaf, Some(block), None, None, None))
+            .append(BlockInfo::new(leaf, Some(block), None, None))
             .await
             .unwrap();
 

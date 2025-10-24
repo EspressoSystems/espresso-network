@@ -22,6 +22,7 @@ mod header;
 mod nsproof;
 mod stake_table;
 mod state;
+mod state_cert;
 mod txproof;
 
 pub use chain_config::*;
@@ -29,4 +30,5 @@ pub use header::*;
 pub use nsproof::*;
 pub use stake_table::*;
 pub use state::*;
+pub use state_cert::*;
 pub use txproof::*;

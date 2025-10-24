@@ -129,7 +129,9 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
+pub use v0_3::StateCertQueryDataV1;
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
+pub use v0_4::StateCertQueryDataV2;
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,

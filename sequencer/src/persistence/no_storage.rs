@@ -288,6 +288,21 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn get_state_cert_by_epoch(
+        &self,
+        _epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        Ok(None)
+    }
+
+    async fn insert_state_cert(
+        &self,
+        _epoch: u64,
+        _cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 

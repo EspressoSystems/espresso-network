@@ -4,6 +4,7 @@ pub mod context;
 pub mod genesis;
 mod proposal_fetcher;
 mod request_response;
+pub mod state_cert;
 
 mod external_event_handler;
 pub mod options;

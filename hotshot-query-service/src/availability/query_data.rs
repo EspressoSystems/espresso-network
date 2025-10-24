@@ -13,13 +13,9 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use committable::{Commitment, Committable};
-use derive_more::derive::From;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidShare},
-    simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
-        QuorumCertificate2,
-    },
+    simple_certificate::QuorumCertificate2,
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
@@ -1086,39 +1082,8 @@ where
     }
 }
 
-/// A wrapper around `LightClientStateUpdateCertificateV2`.
-///
-/// The V2 certificate includes additional fields compared to earlier versions:
-/// - Light client v3 signatures
-/// - `auth_root` — used by the reward claim contract to verify that its
-///   calculated `auth_root` matches the one in the Light Client contract.
-///
-/// This struct is returned by the `state-cert-v2` API.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Limits {
     pub small_object_range_limit: usize,
     pub large_object_range_limit: usize,
-}
-
-impl<Types: NodeType> HeightIndexed for StateCertQueryDataV2<Types> {
-    fn height(&self) -> u64 {
-        self.0.light_client_state.block_height
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV1<Types: NodeType>(pub LightClientStateUpdateCertificateV1<Types>);
-
-impl<Types> From<StateCertQueryDataV2<Types>> for StateCertQueryDataV1<Types>
-where
-    Types: NodeType,
-{
-    fn from(cert: StateCertQueryDataV2<Types>) -> Self {
-        Self(cert.0.into())
-    }
 }

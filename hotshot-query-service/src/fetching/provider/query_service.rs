@@ -1334,7 +1334,7 @@ mod test {
             let block = blocks.next().await.unwrap();
 
             data_source
-                .append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
+                .append(BlockInfo::new(leaf, Some(block.clone()), None, None))
                 .await
                 .unwrap();
 
@@ -2387,7 +2387,7 @@ mod test {
         let block = network.data_source().get_block(1).await.await;
         let vid = network.data_source().get_vid_common(1).await.await;
         data_source
-            .append(BlockInfo::new(leaf, Some(block), Some(vid), None, None))
+            .append(BlockInfo::new(leaf, Some(block), Some(vid), None))
             .await
             .unwrap();
 

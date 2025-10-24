@@ -23,13 +23,12 @@ use sqlx::FromRow;
 use super::{
     super::transaction::{query, Transaction, TransactionMode},
     QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
-    STATE_CERT_COLUMNS, VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
+    VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
-        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
-        VidCommonQueryData,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::storage::{
         sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
@@ -383,16 +382,6 @@ where
         .await?;
         let leaf = LeafQueryData::from_row(&row)?;
         Ok(leaf)
-    }
-
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
-        let row = query(&format!(
-            "SELECT {STATE_CERT_COLUMNS} FROM finalized_state_cert WHERE epoch = $1 LIMIT 1"
-        ))
-        .bind(epoch as i64)
-        .fetch_one(self.as_mut())
-        .await?;
-        Ok(StateCertQueryDataV2::from_row(&row)?)
     }
 }
 

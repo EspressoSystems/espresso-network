@@ -36,7 +36,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         EncodeBytes,
     },
 };
@@ -59,8 +59,7 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2,
-        VidCommonQueryData,
+        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
         storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
@@ -681,38 +680,6 @@ where
             )
             .await
         }
-    }
-
-    async fn insert_state_cert(
-        &mut self,
-        state_cert: StateCertQueryDataV2<Types>,
-    ) -> anyhow::Result<()> {
-        let height = state_cert.height();
-
-        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring state cert which is already pruned"
-                );
-                return Ok(());
-            }
-        }
-        let epoch = state_cert.0.epoch.u64();
-        let bytes = bincode::serialize(&state_cert.0).context("failed to serialize state cert")?;
-        // Directly upsert the state cert to the finalized_state_cert table because
-        // this is called only when the corresponding leaf is decided.
-        self.upsert(
-            "finalized_state_cert",
-            ["epoch", "state_cert"],
-            ["epoch"],
-            [(epoch as i64, bytes)],
-        )
-        .await?;
-        Ok(())
     }
 }
 

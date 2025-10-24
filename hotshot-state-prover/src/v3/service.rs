@@ -9,13 +9,12 @@ use alloy::{
     rpc::types::TransactionReceipt,
 };
 use anyhow::{anyhow, Context, Result};
-use espresso_types::SeqTypes;
+use espresso_types::{SeqTypes, StateCertQueryDataV2};
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV3, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_query_service::availability::StateCertQueryDataV2;
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     data::EpochNumber,

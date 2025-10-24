@@ -240,7 +240,7 @@ surf-disco = "0.9"
 tagged-base64 = "0.4.1"
 tempfile = "3.10"
 test-log = { version = "0.2", features = ["color", "trace"], default-features = false }
-thiserror = "1.0.69"
+thiserror = "2"
 tide-disco = "0.9.4"
 time = "0.3"
 toml = "0.8"
