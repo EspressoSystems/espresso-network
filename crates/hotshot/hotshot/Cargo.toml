@@ -11,6 +11,7 @@ license = "MIT"
 default = ["docs", "doc-images"]
 example-upgrade = ["hotshot-task-impls/example-upgrade"]
 rewind = ["hotshot-task-impls/rewind"]
+stats = ["hotshot-task-impls/stats"]
 
 # Build the extended documentation
 docs = []

@@ -9,6 +9,7 @@ license = "MIT"
 [features]
 example-upgrade = []
 rewind = []
+stats = []
 
 [dependencies]
 alloy = { workspace = true }
