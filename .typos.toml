@@ -1,6 +1,5 @@
 [files]
 extend-exclude = [
-  "data/initial_stake_table.toml",
   ".env",
   "*.json",
   "**/*.pdf",
@@ -16,6 +15,9 @@ extend-exclude = [
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
   "data/insta_snapshots",
+  "data/initial_stake_table.toml",
+  "data/genesis/staging.toml",
+  "data/genesis/staging-proposer.toml",
 ]
 
 [default.extend-words]
