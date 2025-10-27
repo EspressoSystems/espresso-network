@@ -129,7 +129,7 @@ pub mod availability_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
-    use hotshot_types::data::Leaf2;
+    use hotshot_types::{data::Leaf2, vote::HasViewNumber};
 
     use super::test_helpers::*;
     use crate::{
@@ -302,9 +302,9 @@ pub mod availability_tests {
                 let qc_chain = tx.latest_qc_chain().await.unwrap().unwrap();
 
                 assert_eq!(last_leaf.height(), (block_height - 1) as u64);
-                assert_eq!(qc_chain[0].view_number, last_leaf.leaf().view_number());
-                assert_eq!(qc_chain[0].data.leaf_commit, last_leaf.hash());
-                assert_eq!(qc_chain[1].view_number, qc_chain[0].view_number + 1);
+                assert_eq!(qc_chain[0].view_number(), last_leaf.leaf().view_number());
+                assert_eq!(qc_chain[0].leaf_commit(), last_leaf.hash());
+                assert_eq!(qc_chain[1].view_number(), qc_chain[0].view_number() + 1);
             }
         }
     }
@@ -789,7 +789,7 @@ pub mod node_tests {
     };
     use hotshot_types::{
         data::{vid_commitment, VidCommitment, VidShare, ViewNumber},
-        simple_certificate::QuorumCertificate2,
+        simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::{
             block_contents::{BlockHeader, EncodeBytes},
             node_implementation::{ConsensusTime, Versions},
@@ -1425,7 +1425,7 @@ pub mod node_tests {
 
         async fn leaf_with_qc_chain(
             number: u64,
-        ) -> (LeafQueryData<MockTypes>, [QuorumCertificate2<MockTypes>; 2]) {
+        ) -> (LeafQueryData<MockTypes>, [CertificatePair<MockTypes>; 2]) {
             let mut leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
                 &Default::default(),
                 &Default::default(),
@@ -1445,7 +1445,13 @@ pub mod node_tests {
             qc2.view_number += 1;
 
             let leaf = LeafQueryData::new(leaf, qc1.clone()).unwrap();
-            (leaf, [qc1, qc2])
+            (
+                leaf,
+                [
+                    CertificatePair::non_epoch_change(qc1),
+                    CertificatePair::non_epoch_change(qc2),
+                ],
+            )
         }
 
         // Insert a leaf with QC chain.

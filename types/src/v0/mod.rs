@@ -187,6 +187,9 @@ pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 
+/// The highest protocol version supported by this version of the software.
+pub type MaxSupportedVersion = DrbAndHeaderUpgradeVersion;
+
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 

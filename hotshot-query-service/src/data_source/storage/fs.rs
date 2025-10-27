@@ -29,7 +29,7 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::CertificatePair,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -82,7 +82,7 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
-    latest_qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
+    latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -644,7 +644,7 @@ where
     async fn insert_leaf_with_qc_chain(
         &mut self,
         leaf: LeafQueryData<Types>,
-        qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
         self.inner
             .leaf_storage
@@ -880,7 +880,7 @@ where
         Ok(res)
     }
 
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>> {
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         Ok(self.inner.latest_qc_chain.clone())
     }
 }

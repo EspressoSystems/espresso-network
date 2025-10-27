@@ -56,7 +56,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
@@ -674,7 +674,7 @@ impl Persistence {
 
     async fn generate_decide_events(
         &self,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
@@ -704,10 +704,11 @@ impl Persistence {
             tracing::debug!(?from_view, "generate decide event");
 
             let mut parent = None;
-            let mut rows =
-                query("SELECT leaf, qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view")
-                    .bind(from_view)
-                    .fetch(tx.as_mut());
+            let mut rows = query(
+                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
+            )
+            .bind(from_view)
+            .fetch(tx.as_mut());
             let mut leaves = vec![];
             let mut final_qc = None;
             while let Some(row) = rows.next().await {
@@ -725,6 +726,12 @@ impl Persistence {
                 let leaf = bincode::deserialize::<Leaf2>(&leaf_data)?;
                 let qc_data: Vec<u8> = row.get("qc");
                 let qc = bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&qc_data)?;
+                let next_epoch_qc = match row.get::<Option<Vec<u8>>, _>("next_epoch_qc") {
+                    Some(bytes) => {
+                        Some(bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)?)
+                    },
+                    None => None,
+                };
                 let height = leaf.block_header().block_number();
 
                 // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
@@ -742,7 +749,7 @@ impl Persistence {
                 }
                 parent = Some(height);
                 leaves.push(leaf);
-                final_qc = Some(qc);
+                final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
             }
             drop(rows);
 
@@ -849,33 +856,35 @@ impl Persistence {
                 })
                 .collect();
 
-            // Generate decide event for the consumer.
-            tracing::debug!(
-                ?from_view,
-                ?to_view,
-                ?final_qc,
-                ?leaf_chain,
-                "generating decide event"
-            );
-            // Insert the deciding QC at the appropriate position, with the last decide event in the
-            // chain.
-            let qc2 = if let Some(deciding_qc) = &deciding_qc {
-                (deciding_qc.view_number() == final_qc.view_number() + 1)
-                    .then_some(deciding_qc.clone())
-            } else {
-                None
-            };
-            consumer
-                .handle_event(&Event {
-                    view_number: to_view,
-                    event: EventType::Decide {
-                        leaf_chain: Arc::new(leaf_chain),
-                        committing_qc: Arc::new(final_qc),
-                        deciding_qc: qc2,
-                        block_size: None,
-                    },
-                })
-                .await?;
+            {
+                // Generate decide event for the consumer.
+                tracing::debug!(
+                    ?from_view,
+                    ?to_view,
+                    ?final_qc,
+                    ?leaf_chain,
+                    "generating decide event"
+                );
+                // Insert the deciding QC at the appropriate position, with the last decide event in
+                // the chain.
+                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                    (deciding_qc.view_number() == final_qc.view_number() + 1)
+                        .then_some(deciding_qc.clone())
+                } else {
+                    None
+                };
+                consumer
+                    .handle_event(&Event {
+                        view_number: to_view,
+                        event: EventType::Decide {
+                            leaf_chain: Arc::new(leaf_chain),
+                            committing_qc: Arc::new(final_qc),
+                            deciding_qc,
+                            block_size: None,
+                        },
+                    })
+                    .await?;
+            }
 
             let mut tx = self.db.write().await?;
 
@@ -1108,13 +1117,13 @@ impl SequencerPersistence for Persistence {
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let values = leaf_chain
             .into_iter()
-            .map(|(info, qc2)| {
+            .map(|(info, cert)| {
                 // The leaf may come with a large payload attached. We don't care about this payload
                 // because we already store it separately, as part of the DA proposal. Storing it
                 // here contributes to load on the DB for no reason, so we remove it before
@@ -1122,10 +1131,14 @@ impl SequencerPersistence for Persistence {
                 let mut leaf = info.leaf.clone();
                 leaf.unfill_block_payload();
 
-                let view = qc2.view_number.u64() as i64;
+                let view = cert.view_number().u64() as i64;
                 let leaf_bytes = bincode::serialize(&leaf)?;
-                let qc_bytes = bincode::serialize(&qc2)?;
-                Ok((view, leaf_bytes, qc_bytes))
+                let qc_bytes = bincode::serialize(cert.qc())?;
+                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                    Some(qc) => Some(bincode::serialize(qc)?),
+                    None => None,
+                };
+                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -1133,8 +1146,13 @@ impl SequencerPersistence for Persistence {
         // event consumer later fails, there is no need to abort the storage of the leaves.
         let mut tx = self.db.write().await?;
 
-        tx.upsert("anchor_leaf2", ["view", "leaf", "qc"], ["view"], values)
-            .await?;
+        tx.upsert(
+            "anchor_leaf2",
+            ["view", "leaf", "qc", "next_epoch_qc"],
+            ["view"],
+            values,
+        )
+        .await?;
         tx.commit().await?;
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer

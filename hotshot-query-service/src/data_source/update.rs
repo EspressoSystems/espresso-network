@@ -28,6 +28,7 @@ use hotshot_types::{
         advz::advz_scheme,
         avidm::{init_avidm_param, AvidMScheme},
     },
+    vote::HasViewNumber,
 };
 use jf_advz::VidScheme;
 
@@ -87,7 +88,7 @@ where
         } = &event.event
         {
             // `qc` justifies the first (most recent) leaf...
-            let qcs = once((**committing_qc).clone())
+            let qcs = once(committing_qc.qc().clone())
                 // ...and each leaf in the chain justifies the subsequent leaf (its parent) through
                 // `leaf.justify_qc`.
                 .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc()))
@@ -167,8 +168,9 @@ where
 
                 let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
                 if let Some(deciding_qc) = deciding_qc {
-                    if deciding_qc.view_number == info.leaf.leaf().view_number() + 1 {
-                        let qc_chain = [info.leaf.qc().clone(), (**deciding_qc).clone()];
+                    if committing_qc.view_number() == info.leaf.leaf().view_number() {
+                        let qc_chain =
+                            [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
                         info = info.with_qc_chain(qc_chain);
                     }
                 }

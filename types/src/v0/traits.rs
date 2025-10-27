@@ -19,8 +19,8 @@ use hotshot_types::{
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::HSStakeTable,
     traits::{
@@ -807,7 +807,7 @@ pub trait SequencerPersistence:
                 std::iter::once((**committing_qc).clone())
                     // Moving backwards in the chain, each leaf corresponds with the subsequent
                     // leaf's justify QC.
-                    .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc())),
+                    .chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(&leaf.leaf))),
             );
 
             if let Err(err) = self
@@ -850,8 +850,8 @@ pub trait SequencerPersistence:
     async fn append_decided_leaves(
         &self,
         decided_view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 

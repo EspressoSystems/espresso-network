@@ -16,7 +16,7 @@ use hotshot_types::{
     drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
@@ -514,13 +514,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 let (validated_state, state_delta) =
                     TYPES::ValidatedState::genesis(&self.instance_state);
 
-                let qc = Arc::new(
-                    QuorumCertificate2::genesis::<V>(
-                        &validated_state,
-                        self.instance_state.as_ref(),
-                    )
-                    .await,
-                );
+                let qc = QuorumCertificate2::genesis::<V>(
+                    &validated_state,
+                    self.instance_state.as_ref(),
+                )
+                .await;
 
                 broadcast_event(
                     Event {
@@ -533,7 +531,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                                 None,
                                 None,
                             )]),
-                            committing_qc: qc.clone(),
+                            committing_qc: Arc::new(CertificatePair::non_epoch_change(qc)),
                             deciding_qc: None,
                             block_size: None,
                         },
