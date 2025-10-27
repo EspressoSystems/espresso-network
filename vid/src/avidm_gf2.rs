@@ -10,6 +10,11 @@ use sha2::Digest;
 
 use crate::{VidError, VidResult, VidScheme};
 
+/// Namespaced AvidMGF2 scheme
+pub mod namespaced;
+/// Namespace proofs for AvidMGF2 scheme
+pub mod proofs;
+
 /// Merkle tree scheme used in the VID
 pub type MerkleTree =
     jf_merkle_tree::hasher::HasherMerkleTree<sha3::Keccak256, HasherNode<sha3::Keccak256>>;
@@ -118,6 +123,33 @@ impl AvidMGF2Scheme {
         let mt = MerkleTree::from_elems(None, &share_digests)?;
         Ok((mt, shares))
     }
+
+    pub(crate) fn verify_internal(
+        param: &AvidMGF2Param,
+        commit: &AvidMGF2Commit,
+        share: &RawAvidMGF2Share,
+    ) -> VidResult<crate::VerificationResult> {
+        if share.range.end > param.total_weights
+            || share.range.len() != share.payload.len()
+            || share.range.len() != share.mt_proofs.len()
+        {
+            return Err(VidError::InvalidShare);
+        }
+        for (i, index) in share.range.clone().enumerate() {
+            let payload_digest = HasherNode::from(sha3::Keccak256::digest(&share.payload[i]));
+            if MerkleTree::verify(
+                commit.commit,
+                index as u64,
+                payload_digest,
+                &share.mt_proofs[i],
+            )?
+            .is_err()
+            {
+                return Ok(Err(()));
+            }
+        }
+        Ok(Ok(()))
+    }
 }
 
 impl VidScheme for AvidMGF2Scheme {
@@ -176,27 +208,7 @@ impl VidScheme for AvidMGF2Scheme {
         commit: &Self::Commit,
         share: &Self::Share,
     ) -> VidResult<crate::VerificationResult> {
-        if share.content.range.end > param.total_weights
-            || share.content.range.len() != share.content.payload.len()
-            || share.content.range.len() != share.content.mt_proofs.len()
-        {
-            return Err(VidError::InvalidShare);
-        }
-        for (i, index) in share.content.range.clone().enumerate() {
-            let payload_digest =
-                HasherNode::from(sha3::Keccak256::digest(&share.content.payload[i]));
-            if MerkleTree::verify(
-                commit.commit,
-                index as u64,
-                payload_digest,
-                &share.content.mt_proofs[i],
-            )?
-            .is_err()
-            {
-                return Ok(Err(()));
-            }
-        }
-        Ok(Ok(()))
+        Self::verify_internal(param, commit, &share.content)
     }
 
     fn recover(
