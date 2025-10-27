@@ -45,7 +45,7 @@ use crate::{
     },
 };
 
-/// A type alias for SQL storage
+/// Query Service Storage types that can be used for request-response data source
 #[derive(Clone)]
 pub enum Storage {
     Sql(Arc<SqlStorage>),
@@ -68,8 +68,10 @@ pub struct DataSource<
     pub node_state: NodeState,
     /// The storage
     pub storage: Option<Storage>,
+    /// sequencer persistence
+    pub persistence: Arc<P>,
     /// Phantom data
-    pub phantom: PhantomData<(N, P)>,
+    pub phantom: PhantomData<N>,
 }
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
@@ -335,6 +337,20 @@ impl<
                 };
 
                 Ok(Response::VidShare(vid_share))
+            },
+            Request::StateCert(epoch) => {
+                let state_cert = self
+                    .persistence
+                    .get_state_cert_by_epoch(*epoch)
+                    .await
+                    .with_context(|| {
+                        format!("failed to get state cert for epoch {epoch} from persistence")
+                    })?;
+
+                match state_cert {
+                    Some(cert) => Ok(Response::StateCert(cert)),
+                    None => bail!("State certificate for epoch {epoch} not found"),
+                }
             },
         }
     }

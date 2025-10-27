@@ -8,7 +8,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::RewardMerkleTreeV1,
     v0_4::RewardMerkleTreeV2,
-    BlockMerkleTree, PubKey,
+    BlockMerkleTree, PubKey, SeqTypes,
 };
 use futures::{
     channel::oneshot,
@@ -541,8 +541,7 @@ impl Options {
     fn init_hotshot_events_module<S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
     where
         S: 'static + Send + Sync + ReadState,
-        S::State:
-            Send + Sync + hotshot_events_service::events_source::EventsSource<crate::SeqTypes>,
+        S::State: Send + Sync + hotshot_events_service::events_source::EventsSource<SeqTypes>,
     {
         tracing::info!("Initializing HotShot events API at /hotshot-events");
         register_api("hotshot-events", app, move |ver| {

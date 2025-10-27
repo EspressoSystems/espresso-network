@@ -35,7 +35,7 @@ use jf_advz::VidScheme;
 use crate::{
     availability::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
-        StateCertQueryDataV2, UpdateAvailabilityData, VidCommonQueryData,
+        UpdateAvailabilityData, VidCommonQueryData,
     },
     Header, Payload, VidCommon,
 };
@@ -102,7 +102,7 @@ where
                 LeafInfo {
                     leaf: leaf2,
                     vid_share,
-                    state_cert,
+                    state_cert: _,
                     ..
                 },
             ) in qcs.zip(leaf_chain.iter().rev())
@@ -166,13 +166,7 @@ where
                     tracing::info!(height, "VID not available at decide");
                 }
 
-                let mut info = BlockInfo::new(
-                    leaf_data,
-                    block_data,
-                    vid_common,
-                    vid_share,
-                    state_cert.clone().map(StateCertQueryDataV2),
-                );
+                let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
                 if let Some(deciding_qc) = deciding_qc {
                     if committing_qc.view_number() == info.leaf.leaf().view_number() {
                         let qc_chain =

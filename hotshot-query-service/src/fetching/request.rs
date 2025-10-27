@@ -18,7 +18,7 @@ use derive_more::{From, Into};
 use hotshot_types::{data::VidCommitment, traits::node_implementation::NodeType};
 
 use crate::{
-    availability::{LeafHash, LeafQueryData, QcHash, StateCertQueryDataV2},
+    availability::{LeafHash, LeafQueryData, QcHash},
     Payload, VidCommon,
 };
 
@@ -67,12 +67,4 @@ impl<Types: NodeType> LeafRequest<Types> {
 
 impl<Types: NodeType> Request<Types> for LeafRequest<Types> {
     type Response = LeafQueryData<Types>;
-}
-
-/// A request for a light client state update certificate with a given epoch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
-pub struct StateCertRequest(pub u64);
-
-impl<Types: NodeType> Request<Types> for StateCertRequest {
-    type Response = StateCertQueryDataV2<Types>;
 }

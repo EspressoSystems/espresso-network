@@ -2379,6 +2379,64 @@ impl SequencerPersistence for Persistence {
         Ok(Some(cert))
     }
 
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let Some(row) = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query("SELECT state_cert FROM finalized_state_cert WHERE epoch = $1")
+                    .bind(epoch as i64),
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let bytes: Vec<u8> = row.get("state_cert");
+
+        let cert = match bincode::deserialize(&bytes) {
+            Ok(cert) => cert,
+            Err(err) => {
+                tracing::info!(
+                    error = %err,
+                    "Failed to deserialize state certificate with v2. attempting with v1"
+                );
+
+                let v1_cert =
+                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
+                        .with_context(|| {
+                        format!("Failed to deserialize using both v1 and v2. error: {err}")
+                    })?;
+
+                v1_cert.into()
+            },
+        };
+
+        Ok(Some(cert))
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let bytes = bincode::serialize(&cert)
+            .with_context(|| format!("Failed to serialize state cert for epoch {epoch}"))?;
+
+        let mut tx = self.db.write().await?;
+
+        tx.upsert(
+            "finalized_state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(epoch as i64, bytes)],
+        )
+        .await
+    }
+
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         let rows = self
             .db
