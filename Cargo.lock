@@ -11459,7 +11459,7 @@ dependencies = [
 [[package]]
 name = "surf-disco"
 version = "0.9.5"
-source = "git+https://github.com/EspressoSystems/surf-disco?branch=bf%2Fno-delay#5e1b26ede8566a9787a148676e9b0c2d954e92a4"
+source = "git+https://github.com/EspressoSystems/surf-disco?branch=bf%2Fno-delay#be4a8e747cc850a6af3d2d98a1916c27dad9ec7b"
 dependencies = [
  "async-std",
  "async-tungstenite",
