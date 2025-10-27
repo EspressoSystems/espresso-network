@@ -17,7 +17,7 @@ required-features = ["testing", "embedded-db"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee", "pos", "drb-and-header"]
+default = ["fee", "pos", "drb-and-header", "da-upgrade"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -30,6 +30,7 @@ embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 fee = []
 pos = []
 drb-and-header = []
+da-upgrade = []
 
 [dependencies]
 
