@@ -58,40 +58,38 @@ pub fn validate_state_cert(
         &cert.auth_root,
     );
 
-    // If auth_root is the default value (all zeros), we're on consensus version V3, so verify LCV2 signatures
-    // Otherwise, verify LCV3 signatures
-    let use_lcv2 = cert.auth_root == FixedBytes::<32>::default();
+    // If auth_root is the default value (all zeros), we're on consensus version V3, so verify LCV2 signatures only
+    // For consensus >= V4, verify both LCV3 and LCV2 signatures
+    let use_lcv2_only = cert.auth_root == FixedBytes::<32>::default();
 
     let signature_map: HashMap<&StateVerKey, _> = cert
         .signatures
         .iter()
-        .map(|(key, lcv3_sig, lcv2_sig)| {
-            if use_lcv2 {
-                (key, lcv2_sig)
-            } else {
-                (key, lcv3_sig)
-            }
-        })
+        .map(|(key, lcv3_sig, lcv2_sig)| (key, (lcv3_sig, lcv2_sig)))
         .collect();
 
     // Verify signatures and accumulate weight
     let mut accumulated_weight = U256::ZERO;
 
     for peer in stake_table.iter() {
-        if let Some(sig) = signature_map.get(&peer.state_ver_key) {
-            let is_valid = if use_lcv2 {
-                <StateVerKey as LCV2StateSignatureKey>::verify_state_sig(
-                    &peer.state_ver_key,
-                    sig,
-                    &cert.light_client_state,
-                    &cert.next_stake_table_state,
-                )
+        if let Some((lcv3_sig, lcv2_sig)) = signature_map.get(&peer.state_ver_key) {
+            let lcv2_valid = <StateVerKey as LCV2StateSignatureKey>::verify_state_sig(
+                &peer.state_ver_key,
+                lcv2_sig,
+                &cert.light_client_state,
+                &cert.next_stake_table_state,
+            );
+
+            let is_valid = if use_lcv2_only {
+                lcv2_valid
             } else {
-                <StateVerKey as LCV3StateSignatureKey>::verify_state_sig(
+                let lcv3_valid = <StateVerKey as LCV3StateSignatureKey>::verify_state_sig(
                     &peer.state_ver_key,
-                    sig,
+                    lcv3_sig,
                     signed_state_digest,
-                )
+                );
+
+                lcv3_valid && lcv2_valid
             };
 
             if is_valid {
