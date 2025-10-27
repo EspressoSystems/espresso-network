@@ -108,6 +108,10 @@ pub struct NetworkParams {
     pub cdn_endpoint: String,
     pub orchestrator_url: Url,
     pub state_relay_server_url: Url,
+
+    /// The URLs of the builders to use for submitting transactions
+    pub builder_urls: Vec<Url>,
+
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
     pub state_peers: Vec<Url>,
@@ -367,6 +371,12 @@ where
 
     if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
+    }
+
+    // Override the builder URLs in the network config with the ones from the command line
+    // if any were provided
+    if !network_params.builder_urls.is_empty() {
+        network_config.config.builder_urls = network_params.builder_urls.try_into().unwrap();
     }
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
