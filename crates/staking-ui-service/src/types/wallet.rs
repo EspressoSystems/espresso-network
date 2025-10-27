@@ -12,7 +12,7 @@ pub struct WalletSnapshot {
     /// Stake that has been undelegated but not yet withdrawn.
     pub pending_undelegations: Vec<PendingWithdrawal>,
 
-    /// Stake previously delegated to validators that have exited.
+    /// Stake previously delegated to nodes that have exited.
     pub pending_exits: Vec<PendingWithdrawal>,
 
     /// Total amount of rewards ever claimed from the contract.

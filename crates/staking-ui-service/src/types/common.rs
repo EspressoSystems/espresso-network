@@ -168,7 +168,7 @@ pub struct Withdrawal {
     pub delegator: Address,
 
     /// The node which was previously delegated to, which stake is now withdrawn.
-    pub validator: Address,
+    pub node: Address,
 
     /// The amount of stake.
     pub amount: ESPTokenAmount,
