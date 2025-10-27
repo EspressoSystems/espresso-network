@@ -45,7 +45,8 @@ pub use genesis::Genesis;
 use hotshot::{
     traits::implementations::{
         derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, GossipConfig,
-        KeyPair, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig,
+        WrappedSignatureKey,
     },
     types::SignatureKey,
 };
@@ -423,17 +424,17 @@ where
         topics
     };
 
-    // Initialize the push CDN network (and perform the initial connection)
-    let cdn_network = PushCdnNetwork::new(
-        network_params.cdn_endpoint,
-        topics,
-        KeyPair {
-            public_key: WrappedSignatureKey(validator_config.public_key),
-            private_key: validator_config.private_key.clone(),
-        },
-        CdnMetricsValue::new(metrics),
-    )
-    .with_context(|| format!("Failed to create CDN network {node_index}"))?;
+    // // Initialize the push CDN network (and perform the initial connection)
+    // let cdn_network = PushCdnNetwork::new(
+    //     network_params.cdn_endpoint,
+    //     topics,
+    //     KeyPair {
+    //         public_key: WrappedSignatureKey(validator_config.public_key),
+    //         private_key: validator_config.private_key.clone(),
+    //     },
+    //     CdnMetricsValue::new(metrics),
+    // )
+    // .with_context(|| format!("Failed to create CDN network {node_index}"))?;
 
     // Configure gossipsub based on the command line options
     let gossip_config = GossipConfig {
@@ -566,31 +567,31 @@ where
 
     // Initialize the Libp2p network
     let network = {
-        //     let p2p_network = Libp2pNetwork::from_config(
-        //         network_config.clone(),
-        //         persistence.clone(),
-        //         gossip_config,
-        //         request_response_config,
-        //         libp2p_bind_address,
-        //         &validator_config.public_key,
-        //         // We need the private key so we can derive our Libp2p keypair
-        //         // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
-        //         &validator_config.private_key,
-        //         hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
-        //     )
-        //     .await
-        //     .with_context(|| {
-        //         format!(
-        //             "Failed to create libp2p network on node {node_index}; binding to {:?}",
-        //             network_params.libp2p_bind_address
-        //         )
-        //     })?;
+        let p2p_network = Libp2pNetwork::from_config(
+            network_config.clone(),
+            persistence.clone(),
+            gossip_config,
+            request_response_config,
+            libp2p_bind_address,
+            &validator_config.public_key,
+            // We need the private key so we can derive our Libp2p keypair
+            // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
+            &validator_config.private_key,
+            hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to create libp2p network on node {node_index}; binding to {:?}",
+                network_params.libp2p_bind_address
+            )
+        })?;
 
         tracing::warn!("Waiting for the CDN connection to be initialized");
-        cdn_network.wait_for_ready().await;
+        p2p_network.wait_for_ready().await;
 
         // Combine the CDN and P2P networks
-        Arc::from(cdn_network)
+        Arc::from(p2p_network)
     };
 
     let mut ctx = SequencerContext::init(
