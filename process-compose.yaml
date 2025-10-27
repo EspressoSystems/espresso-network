@@ -146,7 +146,7 @@ processes:
     availability: *run-forever
 
   sequencer0:
-    command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup
+    command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup -- light-client
     environment:
       - ESPRESSO_SEQUENCER_API_PORT=${ESPRESSO_SEQUENCER0_API_PORT}
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0}

@@ -21,6 +21,7 @@ default = ["fee", "pos", "drb-and-header"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
+    "light-client/testing",
     "sequencer-utils/testing",
     "hotshot-query-service/testing",
 ]
@@ -71,6 +72,8 @@ hotshot-task-impls = { workspace = true }
 # Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
+
+light-client = { workspace = true }
 
 include_dir = "0.7"
 indexmap = { workspace = true }
@@ -139,6 +142,7 @@ reqwest = { workspace = true }
 test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
+light-client = { workspace = true, features = ["testing"] }
 sequencer = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 
