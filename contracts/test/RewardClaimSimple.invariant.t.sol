@@ -31,7 +31,8 @@ contract RewardClaimSimpleInvariantTest is StdInvariant, Test {
         console.log("Double claims:        ", handler.numDoubleClaims());
         console.log("Daily limit hits:     ", handler.numDailyLimitHits());
         console.log("Total claimed:        ", handler.totalClaimed());
-        console.log("Lifetime rewards:     ", handler.currentLifetimeRewards());
+        (, uint256 lifetimeRewards) = handler.rewardState(0);
+        console.log("Lifetime rewards:     ", lifetimeRewards);
         console.log("Daily limit:          ", handler.rewardClaim().dailyLimit());
     }
 

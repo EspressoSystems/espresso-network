@@ -63,13 +63,16 @@ contract RewardClaimHandler is RewardClaimTestBase {
         uint256 numAccountsToAdd = _bound(addSeed, 0, 10);
         uint256 numAccountsToUpdate = _bound(updateSeed, 0, 10);
 
-        string[] memory cmds = new string[](6);
+        string[] memory cmds = new string[](9);
         cmds[0] = "diff-test";
         cmds[1] = "evolve-reward-state";
         cmds[2] = hexState;
         cmds[3] = vm.toString(seed);
         cmds[4] = vm.toString(numAccountsToAdd);
         cmds[5] = vm.toString(numAccountsToUpdate);
+        cmds[6] = vm.toString(uint256(10 ether));
+        cmds[7] = vm.toString(uint256(100 ether));
+        cmds[8] = "10";
 
         bytes memory result = vm.ffi(cmds);
         (uint256 authRoot, AccountState[] memory newState, RewardClaimTestCase[] memory fixtures) =
