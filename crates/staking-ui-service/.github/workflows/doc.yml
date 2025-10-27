@@ -1,4 +1,4 @@
-name: Test
+name: Doc
 
 on:
   push:
@@ -15,20 +15,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  RUST_LOG: info
-  CARGO_TERM_COLOR: always
-
 jobs:
-  test:
+  clippy:
+    name: doc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main'  }}
+          shared-key: cargo-doc
       - uses: extractions/setup-just@v3
 
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Test
-        run: just test --no-tests=warn
-        timeout-minutes: 20
+      - name: Generate documentation
+        run: just doc
