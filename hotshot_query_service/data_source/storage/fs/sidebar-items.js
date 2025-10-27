@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["CACHED_BLOCKS_COUNT","CACHED_LEAVES_COUNT","CACHED_STATE_CERT_COUNT","CACHED_VID_COMMON_COUNT"],"fn":["range_iter","update_index_by_hash"],"struct":["FileSystemStorage","FileSystemStorageInner","Transaction"],"trait":["Revert"]};
+window.SIDEBAR_ITEMS = {"constant":["CACHED_BLOCKS_COUNT","CACHED_LEAVES_COUNT","CACHED_VID_COMMON_COUNT"],"fn":["range_iter","update_index_by_hash"],"struct":["FileSystemStorage","FileSystemStorageInner","Transaction"],"trait":["Revert"]};
