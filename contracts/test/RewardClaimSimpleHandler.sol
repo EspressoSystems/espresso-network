@@ -64,13 +64,19 @@ contract RewardClaimSimpleHandler is RewardClaimTestBase {
 
         if (fixtures.length > 0) {
             currentFixture = fixtures[0];
+        } else {
+            delete currentFixture;
         }
     }
 
     function claimRewards() public {
-        address user = rewardState[0].account;
-        uint256 previousClaimed = rewardClaim.claimedRewards(user);
+        if (currentFixture.authData.length == 0) {
+            return;
+        }
+
+        address user = currentFixture.account;
         uint256 lifetimeRewards = currentFixture.lifetimeRewards;
+        uint256 previousClaimed = rewardClaim.claimedRewards(user);
 
         if (lifetimeRewards == previousClaimed) {
             numDoubleClaims++;
@@ -97,7 +103,8 @@ contract RewardClaimSimpleHandler is RewardClaimTestBase {
     }
 
     function updateRoot(uint256 seed) public {
-        _updateRootInternal(seed);
+        uint256 boundedSeed = _bound(seed, 0, type(uint64).max);
+        _updateRootInternal(boundedSeed);
     }
 
     function advanceTime(uint256 hoursSeed) public {

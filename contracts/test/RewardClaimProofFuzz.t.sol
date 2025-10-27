@@ -159,19 +159,21 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
 
         validateTestCase(testCase, authRoot);
 
+        // This is a reference, but we don't need the original anymore
+        bytes memory corruptAuthData = testCase.authData;
+
         vm.pauseGasMetering();
-        for (uint256 byteIndex = 0; byteIndex < testCase.authData.length; byteIndex++) {
+        for (uint256 byteIndex = 0; byteIndex < corruptAuthData.length; byteIndex++) {
             for (uint256 bitIndex = 0; bitIndex < 8; bitIndex++) {
-                bytes memory corruptedAuthData = testCase.authData;
-                bytes1 mask;
-                assembly {
-                    mask := shl(bitIndex, 1)
-                }
-                corruptedAuthData[byteIndex] ^= mask;
+                bytes1 mask = bytes1(uint8(1 << bitIndex));
+                corruptAuthData[byteIndex] ^= mask;
 
                 vm.prank(testCase.account);
                 vm.expectRevert();
-                rewardClaim.claimRewards(testCase.lifetimeRewards, corruptedAuthData);
+                rewardClaim.claimRewards(testCase.lifetimeRewards, corruptAuthData);
+
+                // Reuse same memory for corruptions to avoid expensive copies in the loop
+                corruptAuthData[byteIndex] ^= mask;
             }
         }
         vm.resumeGasMetering();

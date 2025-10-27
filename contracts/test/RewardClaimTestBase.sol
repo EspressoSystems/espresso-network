@@ -24,6 +24,12 @@ contract RewardClaimTestBase is Test {
         bytes authData;
     }
 
+    struct RewardFixtureParams {
+        uint256 numAccounts;
+        uint64 seed;
+        uint256 amount;
+    }
+
     function setUp() public virtual {
         owner = makeAddr("owner");
         pauser = makeAddr("pauser");
@@ -70,54 +76,43 @@ contract RewardClaimTestBase is Test {
         vm.revertToState(snapshot);
     }
 
+    function getRewardFixture(RewardFixtureParams memory params)
+        internal
+        returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
+    {
+        string[] memory cmds = new string[](5);
+        cmds[0] = "diff-test";
+        cmds[1] = "gen-reward-fixture";
+        cmds[2] = vm.toString(params.numAccounts);
+        cmds[3] = vm.toString(params.seed);
+        cmds[4] = vm.toString(params.amount);
+        bytes memory result = vm.ffi(cmds);
+        (authRoot, fixtures) = abi.decode(result, (uint256, RewardClaimTestCase[]));
+    }
+
     function getFixtures(uint256 numAccounts)
         internal
         returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
     {
-        string[] memory cmds = new string[](3);
-        cmds[0] = "diff-test";
-        cmds[1] = "gen-reward-fixture";
-        cmds[2] = vm.toString(numAccounts);
-        bytes memory result = vm.ffi(cmds);
-        (authRoot, fixtures) = abi.decode(result, (uint256, RewardClaimTestCase[]));
+        return
+            getRewardFixture(RewardFixtureParams({ numAccounts: numAccounts, seed: 0, amount: 0 }));
     }
 
     function getFixturesWithSeed(uint256 numAccounts, uint64 seed)
         internal
         returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
     {
-        string[] memory cmds = new string[](4);
-        cmds[0] = "diff-test";
-        cmds[1] = "gen-reward-fixture";
-        cmds[2] = vm.toString(numAccounts);
-        cmds[3] = vm.toString(seed);
-        bytes memory result = vm.ffi(cmds);
-        (authRoot, fixtures) = abi.decode(result, (uint256, RewardClaimTestCase[]));
+        return getRewardFixture(
+            RewardFixtureParams({ numAccounts: numAccounts, seed: seed, amount: 0 })
+        );
     }
 
     function getFixturesWithAmount(uint256 numAccounts, uint256 amount)
         internal
         returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
     {
-        string[] memory cmds = new string[](4);
-        cmds[0] = "diff-test";
-        cmds[1] = "gen-reward-fixture-with-amount";
-        cmds[2] = vm.toString(numAccounts);
-        cmds[3] = vm.toString(amount);
-        bytes memory result = vm.ffi(cmds);
-        (authRoot, fixtures) = abi.decode(result, (uint256, RewardClaimTestCase[]));
-    }
-
-    function getFixturesWithAccountAndAmount(address account, uint256 amount)
-        internal
-        returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
-    {
-        string[] memory cmds = new string[](4);
-        cmds[0] = "diff-test";
-        cmds[1] = "gen-reward-fixture-with-account-and-amount";
-        cmds[2] = vm.toString(account);
-        cmds[3] = vm.toString(amount);
-        bytes memory result = vm.ffi(cmds);
-        (authRoot, fixtures) = abi.decode(result, (uint256, RewardClaimTestCase[]));
+        return getRewardFixture(
+            RewardFixtureParams({ numAccounts: numAccounts, seed: 0, amount: amount })
+        );
     }
 }
