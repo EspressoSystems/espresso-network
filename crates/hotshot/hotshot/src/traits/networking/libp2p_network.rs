@@ -227,8 +227,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                 // pick a free, unused UDP port for testing
                 let port = portpicker::pick_unused_port().expect("Could not find an open port");
 
-                let addr =
-                    Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();
+                let addr = Multiaddr::from_str(&format!("/ip4/127.0.0.1/tcp/{port}")).unwrap();
 
                 // We assign node's public key and stake value rather than read from config file since it's a test
                 let privkey = T::SignatureKey::generated_from_seed_indexed([0u8; 32], node_id).1;
@@ -352,8 +351,8 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
 
     // Conditionally build the multiaddr string
     let multiaddr_string = match ip {
-        Ok(IpAddr::V4(ip)) => format!("/ip4/{ip}/udp/{port}/quic-v1"),
-        Ok(IpAddr::V6(ip)) => format!("/ip6/{ip}/udp/{port}/quic-v1"),
+        Ok(IpAddr::V4(ip)) => format!("/ip4/{ip}/tcp/{port}"),
+        Ok(IpAddr::V6(ip)) => format!("/ip6/{ip}/tcp/{port}"),
         Err(_) => {
             // Try resolving the host. If it fails, continue but warn the user
             let lookup_result = addr.to_socket_addrs();
@@ -371,7 +370,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
                 );
             }
 
-            format!("/dns/{host}/udp/{port}/quic-v1")
+            format!("/dns/{host}/tcp/{port}")
         },
     };
 
@@ -1024,8 +1023,8 @@ mod test {
             let multiaddr =
                 derive_libp2p_multiaddr(&addr).expect("Failed to derive valid multiaddr, {}");
 
-            // Make sure it's the correct (quic) multiaddr
-            assert_eq!(multiaddr.to_string(), "/ip4/1.1.1.1/udp/8080/quic-v1");
+            // Make sure it's the correct (TCP) multiaddr
+            assert_eq!(multiaddr.to_string(), "/ip4/1.1.1.1/tcp/8080");
         }
 
         /// Test derivation of a valid IPv6 address -> Multiaddr
@@ -1037,11 +1036,8 @@ mod test {
             let multiaddr =
                 derive_libp2p_multiaddr(&addr).expect("Failed to derive valid multiaddr, {}");
 
-            // Make sure it's the correct (quic) multiaddr
-            assert_eq!(
-                multiaddr.to_string(),
-                format!("/ip6/{ipv6_addr}/udp/8080/quic-v1")
-            );
+            // Make sure it's the correct (TCP) multiaddr
+            assert_eq!(multiaddr.to_string(), format!("/ip6/{ipv6_addr}/tcp/8080"));
         }
 
         /// Test that an invalid address fails to derive to a Multiaddr
@@ -1063,8 +1059,8 @@ mod test {
             let multiaddr =
                 derive_libp2p_multiaddr(&addr).expect("Failed to derive valid multiaddr, {}");
 
-            // Make sure it's the correct (quic) multiaddr
-            assert_eq!(multiaddr.to_string(), "/dns/example.com/udp/8080/quic-v1");
+            // Make sure it's the correct (TCP) multiaddr
+            assert_eq!(multiaddr.to_string(), "/dns/example.com/tcp/8080");
         }
 
         /// Test that a non-existent domain name still resolves to a Multiaddr
@@ -1076,10 +1072,7 @@ mod test {
                 derive_libp2p_multiaddr(&addr).expect("Failed to derive valid multiaddr, {}");
 
             // Make sure it still worked
-            assert_eq!(
-                multiaddr.to_string(),
-                "/dns/libp2p.example.com/udp/8080/quic-v1"
-            );
+            assert_eq!(multiaddr.to_string(), "/dns/libp2p.example.com/tcp/8080");
         }
 
         /// Test that a domain name without a port fails to derive to a Multiaddr

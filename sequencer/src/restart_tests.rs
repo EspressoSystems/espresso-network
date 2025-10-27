@@ -1143,9 +1143,7 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
         .map(|node| {
             let port = node.libp2p_port;
             let peer_id = derive_libp2p_peer_id::<PubKey>(&node.staking_key).unwrap();
-            let addr = format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
-                .parse()
-                .unwrap();
+            let addr = format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap();
             (peer_id, addr)
         })
         .collect();

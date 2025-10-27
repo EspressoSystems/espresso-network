@@ -162,7 +162,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     ///
     /// Currently:
     ///   * Generates a random key pair and associated [`PeerId`]
-    ///   * Launches a hopefully production ready transport: QUIC v1 (RFC 9000) + DNS
+    ///   * Launches a production ready transport: TCP + DNS
     ///   * Generates a connection to the "broadcast" topic
     ///   * Creates a swarm to manage peers and events
     ///

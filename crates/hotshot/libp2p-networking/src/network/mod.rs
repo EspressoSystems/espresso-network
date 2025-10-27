@@ -23,20 +23,19 @@ use futures::channel::oneshot::Sender;
 use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
 use libp2p::{
     build_multiaddr,
-    core::{muxing::StreamMuxerBox, transport::Boxed},
+    core::{muxing::StreamMuxerBox, transport::Boxed, upgrade},
     dns::tokio::Transport as DnsTransport,
     gossipsub::Event as GossipEvent,
     identify::Event as IdentifyEvent,
     identity::Keypair,
-    quic,
+    noise,
     request_response::ResponseChannel,
-    Multiaddr, Transport,
+    tcp, yamux, Multiaddr, Transport,
 };
 use libp2p_identity::PeerId;
 use parking_lot::Mutex;
-use quic::tokio::Transport as QuicTransport;
+use tcp::tokio::Transport as TcpTransport;
 use tracing::instrument;
-use transport::ConsensusKeyAuthentication;
 
 pub use self::{
     def::NetworkDef,
@@ -141,10 +140,10 @@ pub enum NetworkEventInternal {
 }
 
 /// Bind all interfaces on port `port`
-/// NOTE we may want something more general in the fture.
+/// NOTE we may want something more general in the future.
 #[must_use]
 pub fn gen_multiaddr(port: u16) -> Multiaddr {
-    build_multiaddr!(Ip4([0, 0, 0, 0]), Udp(port), QuicV1)
+    build_multiaddr!(Ip4([0, 0, 0, 0]), Tcp(port))
 }
 
 /// `BoxedTransport` is a type alias for a boxed tuple containing a `PeerId` and a `StreamMuxerBox`.
@@ -161,29 +160,24 @@ type BoxedTransport = Boxed<(PeerId, StreamMuxerBox)>;
 #[instrument(skip(identity))]
 pub async fn gen_transport<T: NodeType>(
     identity: Keypair,
-    auth_message: Option<Vec<u8>>,
-    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
+    _auth_message: Option<Vec<u8>>,
+    _consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
 ) -> Result<BoxedTransport, NetworkError> {
-    // Create the initial `Quic` transport
-    let transport = {
-        let mut config = quic::Config::new(&identity);
-        config.handshake_timeout = std::time::Duration::from_secs(20);
-        QuicTransport::new(config)
-    };
-
-    // Require authentication against the stake table
-    let transport: ConsensusKeyAuthentication<_, T::SignatureKey, _> =
-        ConsensusKeyAuthentication::new(transport, auth_message, consensus_key_to_pid_map);
+    // Create the initial `TCP` transport
+    let transport = TcpTransport::new(tcp::Config::new().nodelay(true));
 
     // Support DNS resolution
-    let transport = {
-        {
-            DnsTransport::system(transport)
-        }
-    }
-    .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?;
+    let transport = DnsTransport::system(transport)
+        .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?;
 
-    Ok(transport
-        .map(|(peer_id, connection), _| (peer_id, StreamMuxerBox::new(connection)))
-        .boxed())
+    // Add noise authentication and yamux multiplexing
+    let transport = transport
+        .upgrade(upgrade::Version::V1)
+        .authenticate(noise::Config::new(&identity).map_err(|e| {
+            NetworkError::ConfigError(format!("failed to create noise config: {e}"))
+        })?)
+        .multiplex(yamux::Config::default())
+        .boxed();
+
+    Ok(transport)
 }
