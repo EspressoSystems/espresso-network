@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase */
 
-import "./RewardClaimTestBase.sol";
+import "./RewardClaim.Base.t.sol";
 
 contract RewardClaimProofVerificationTest is RewardClaimTestBase {
     function test_ValidProof_SingleAccount_Succeeds() public {

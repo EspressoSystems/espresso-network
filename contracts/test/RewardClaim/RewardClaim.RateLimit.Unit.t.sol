@@ -5,7 +5,7 @@
 pragma solidity ^0.8.28;
 
 import "./RewardClaim.t.sol";
-import "../src/interfaces/IRewardClaim.sol";
+import "../../src/interfaces/IRewardClaim.sol";
 
 // Conventions:
 // - Use checkLimitEnforced() helper for verifying limit exceeded

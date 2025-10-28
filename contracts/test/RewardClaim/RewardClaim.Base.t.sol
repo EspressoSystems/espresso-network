@@ -3,10 +3,10 @@ pragma solidity ^0.8.28;
 
 import "forge-std/Test.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import "../src/RewardClaim.sol";
-import "../src/EspTokenV2.sol";
-import "./mocks/LightClientV3Mock.sol";
-import "../src/interfaces/IRewardClaim.sol";
+import "../../src/RewardClaim.sol";
+import "../../src/EspTokenV2.sol";
+import "../mocks/LightClientV3Mock.sol";
+import "../../src/interfaces/IRewardClaim.sol";
 
 // Conventions:
 // - Always use `validateTestCase()` to validate successful claims before fuzzing without changing

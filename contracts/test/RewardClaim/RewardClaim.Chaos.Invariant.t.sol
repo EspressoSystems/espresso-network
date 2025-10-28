@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase, no-console */
 
-import "./RewardClaimTestBase.sol";
+import "./RewardClaim.Base.t.sol";
 import "forge-std/StdInvariant.sol";
 import "forge-std/console.sol";
 

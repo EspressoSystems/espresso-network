@@ -3,8 +3,9 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase, no-console */
 
-import "./RewardClaimTestBase.sol";
+import "./RewardClaim.Base.t.sol";
 
+/// forge-config: quick.fuzz.runs = 1
 contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     function testFuzz_ValidProofs_AlwaysSucceed(uint8 numAccounts, uint64 seed) public {
         vm.assume(numAccounts > 0 && numAccounts <= 1000);
@@ -139,7 +140,6 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         rewardClaim.claimRewards(testCase.lifetimeRewards, corruptedAuthData);
     }
 
-    /// forge-config: default.fuzz.runs = 1
     function testFuzz_EveryBitFlip_AlwaysFails(uint8 numAccounts, uint64 seed) public {
         vm.assume(numAccounts > 0 && numAccounts <= 50);
 
