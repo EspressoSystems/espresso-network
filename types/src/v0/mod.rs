@@ -44,7 +44,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5);
     };
 }
 
@@ -186,9 +186,10 @@ pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
+pub type DaUpgradeVersion = StaticVersion<0, 5>;
 
 /// The highest protocol version supported by this version of the software.
-pub type MaxSupportedVersion = DrbAndHeaderUpgradeVersion;
+pub type MaxSupportedVersion = DaUpgradeVersion;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;

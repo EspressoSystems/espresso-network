@@ -4,7 +4,7 @@ use vbs::version::Version;
 
 use crate::{
     v0_1::{self, ChainConfig},
-    v0_2, v0_3, v0_4,
+    v0_2, v0_3, v0_4, v0_5,
 };
 
 /// Each variant represents a specific minor version header.
@@ -14,6 +14,7 @@ pub enum Header {
     V2(v0_2::Header),
     V3(v0_3::Header),
     V4(v0_4::Header),
+    V5(v0_5::Header),
 }
 
 /// Enum to represent the first field of different versions of a header
