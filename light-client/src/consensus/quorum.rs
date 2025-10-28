@@ -26,9 +26,10 @@ pub trait Quorum {
                 (0, 2) => self.verify_static::<StaticVersion<0, 2>>(cert).await,
                 (0, 3) => self.verify_static::<StaticVersion<0, 3>>(cert).await,
                 (0, 4) => self.verify_static::<StaticVersion<0, 4>>(cert).await,
+                (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
                 _ => {
                     // Compile-time check that we aren't missing a case for a supported version.
-                    assert_type_eq_all!(MaxSupportedVersion, StaticVersion<0, 4>);
+                    assert_type_eq_all!(MaxSupportedVersion, StaticVersion<0, 5>);
                     bail!("unsupported version {version}");
                 },
             }
