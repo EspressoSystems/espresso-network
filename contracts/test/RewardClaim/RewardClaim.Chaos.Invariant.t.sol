@@ -3,11 +3,11 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase, no-console */
 
-import "./RewardClaim.Base.t.sol";
+import "./RewardClaim.t.sol";
 import "forge-std/StdInvariant.sol";
 import "forge-std/console.sol";
 
-contract RewardClaimHandler is RewardClaimTestBase {
+contract RewardClaimHandler is RewardClaimTest {
     struct AccountState {
         address account;
         uint256 lifetimeRewards;

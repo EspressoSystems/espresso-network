@@ -4,9 +4,9 @@
 
 pragma solidity ^0.8.28;
 
-import "./RewardClaim.t.sol";
+import "./RewardClaimMock.t.sol";
 
-contract RewardClaimPauseTest is RewardClaimTest {
+contract RewardClaimPauseTest is RewardClaimMockTest {
     function test_claim_FailsIfPaused() public {
         vm.prank(pauser);
         rewardClaim.pause();

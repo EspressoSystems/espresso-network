@@ -3,10 +3,10 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase, no-console */
 
-import "./RewardClaim.Base.t.sol";
+import "./RewardClaim.t.sol";
 
 /// forge-config: quick.fuzz.runs = 1
-contract RewardClaimProofFuzzTest is RewardClaimTestBase {
+contract RewardClaimProofFuzzTest is RewardClaimTest {
     function testFuzz_ValidProofs_AlwaysSucceed(uint256 numAccounts, uint64 seed) public {
         numAccounts = bound(numAccounts, 1, 1000);
 

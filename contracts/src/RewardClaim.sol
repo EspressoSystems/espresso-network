@@ -77,6 +77,9 @@ contract RewardClaim is
     /// @notice Attempting to set daily limit above the maximum allowed percentage
     error DailyLimitTooHigh();
 
+    /// @notice Attempting to set daily limit to the current value
+    error NoChangeRequired();
+
     /// @notice Total ESP token supply is zero during initialization
     error ZeroTotalSupply();
 
@@ -145,6 +148,7 @@ contract RewardClaim is
     /// espToken.totalSupply(). While unlikely to be exploited, this provides defense-in-depth
     /// security for critical security parameters.
     function setDailyLimit(uint256 newLimit) external onlyOwner nonReentrant {
+        require(newLimit != dailyLimit, NoChangeRequired());
         require(newLimit > 0, ZeroDailyLimit());
         uint256 maxLimit = (espToken.totalSupply() * MAX_DAILY_LIMIT_PERCENTAGE) / 100e18;
         require(newLimit <= maxLimit, DailyLimitTooHigh());

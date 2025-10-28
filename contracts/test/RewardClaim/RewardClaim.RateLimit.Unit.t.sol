@@ -4,13 +4,13 @@
 
 pragma solidity ^0.8.28;
 
-import "./RewardClaim.t.sol";
+import "./RewardClaimMock.t.sol";
 import "../../src/interfaces/IRewardClaim.sol";
 
 // Conventions:
 // - Use checkLimitEnforced() helper for verifying limit exceeded
 // - Tests verifying limit exceeded should exceed by exactly 1 wei for precision
-contract RewardClaimRateLimitTest is RewardClaimTest {
+contract RewardClaimRateLimitTest is RewardClaimMockTest {
     function checkLimitEnforced(address user, uint256 lifetimeRewards) internal {
         vm.prank(user);
         vm.expectRevert(IRewardClaim.DailyLimitExceeded.selector);
