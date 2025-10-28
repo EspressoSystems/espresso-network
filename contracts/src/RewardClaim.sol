@@ -152,15 +152,16 @@ contract RewardClaim is
         dailyLimit = newLimit;
     }
 
-    /// @notice Claim staking rewards
+    /// @notice Claim all unclaimed staking rewards
     /// @param lifetimeRewards Total earned lifetime rewards for the user
     /// @param authData Authentication data from Espresso query service
+    ///
     /// @dev nonReentrant is not strictly necessary (claimedRewards updated before
     /// external call, and re-entrancy would change msg.sender making proof
     /// verification fail), but makes the security properties much simpler to
     /// reason about. DO NOT REMOVE: intentionally kept for defense-in-depth and
-    /// code clarity. See RewardClaimReentrancy.t.sol for regression test.
-    function claimRewards(uint256 lifetimeRewards, bytes memory authData)
+    /// code clarity. See RewardClaim.Reentrancy.Unit.t.sol for regression test.
+    function claimRewards(uint256 lifetimeRewards, bytes calldata authData)
         external
         whenNotPaused
         nonReentrant
@@ -206,7 +207,7 @@ contract RewardClaim is
         emit Upgrade(newImplementation);
     }
 
-    function _verifyAuthRoot(uint256 lifetimeRewards, bytes memory authData)
+    function _verifyAuthRoot(uint256 lifetimeRewards, bytes calldata authData)
         internal
         view
         virtual
