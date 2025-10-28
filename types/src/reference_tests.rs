@@ -25,12 +25,12 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
+use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryDataV1,
-        StateCertQueryDataV2, TransactionQueryData, TransactionWithProofQueryData,
-        VidCommonQueryData,
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
+        TransactionWithProofQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
     VidCommon,

@@ -114,6 +114,7 @@ strum = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }

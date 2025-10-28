@@ -34,7 +34,7 @@ use super::{
         BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
         QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
-    BlockWithTransaction, StateCertQueryDataV2,
+    BlockWithTransaction,
 };
 use crate::{types::HeightIndexed, Header, Payload};
 
@@ -234,8 +234,6 @@ where
         h: TransactionHash<Types>,
     ) -> Fetch<BlockWithTransaction<Types>>;
 
-    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<Types>>;
-
     async fn subscribe_blocks(&self, from: usize) -> BoxStream<'static, BlockQueryData<Types>> {
         self.get_block_range(from..)
             .await
@@ -309,13 +307,12 @@ pub struct BlockInfo<Types: NodeType> {
     pub block: Option<BlockQueryData<Types>>,
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
-    pub state_cert: Option<StateCertQueryDataV2<Types>>,
     pub qc_chain: Option<[CertificatePair<Types>; 2]>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for BlockInfo<Types> {
     fn from(leaf: LeafQueryData<Types>) -> Self {
-        Self::new(leaf, None, None, None, None)
+        Self::new(leaf, None, None, None)
     }
 }
 
@@ -331,14 +328,12 @@ impl<Types: NodeType> BlockInfo<Types> {
         block: Option<BlockQueryData<Types>>,
         vid_common: Option<VidCommonQueryData<Types>>,
         vid_share: Option<VidShare>,
-        state_cert: Option<StateCertQueryDataV2<Types>>,
     ) -> Self {
         Self {
             leaf,
             block,
             vid_common,
             vid_share,
-            state_cert,
             qc_chain: None,
         }
     }

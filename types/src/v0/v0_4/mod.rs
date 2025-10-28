@@ -22,6 +22,8 @@ pub const VERSION: Version = Version { major: 0, minor: 4 };
 
 mod header;
 mod state;
+mod state_cert;
 
 pub use header::*;
 pub use state::*;
+pub use state_cert::*;
