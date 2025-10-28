@@ -2409,7 +2409,7 @@ pub mod testing {
             Self::random_update_keys(self.account, self.commission)
         }
 
-        fn random_update_keys(account: Address, commission: u16) -> Self {
+        pub fn random_update_keys(account: Address, commission: u16) -> Self {
             let mut rng = &mut rand::thread_rng();
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);

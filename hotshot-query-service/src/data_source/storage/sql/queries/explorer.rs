@@ -245,8 +245,9 @@ lazy_static::lazy_static! {
                         FROM transactions AS t1
                         WHERE t1.block_height = $1
                         ORDER BY t1.block_height, t1.ns_id, t1.position
-                        OFFSET $2
                         LIMIT 1
+                        OFFSET $2
+                       
                 )
                 ORDER BY h.height DESC",
         )

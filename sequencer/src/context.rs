@@ -196,6 +196,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             DataSource {
                 node_state: instance_state.clone(),
                 storage,
+                persistence: persistence.clone(),
                 consensus: handle.hotshot.clone(),
                 phantom: PhantomData,
             },

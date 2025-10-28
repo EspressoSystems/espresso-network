@@ -120,15 +120,11 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
         FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
-    fetching::{
-        self,
-        request::{self, StateCertRequest},
-        Provider,
-    },
+    fetching::{self, request, Provider},
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
@@ -143,7 +139,6 @@ use crate::{
 mod block;
 mod header;
 mod leaf;
-mod state_cert;
 mod transaction;
 mod vid;
 
@@ -810,10 +805,6 @@ where
         h: TransactionHash<Types>,
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.fetcher.clone().get(TransactionRequest::from(h)).await
-    }
-
-    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<Types>> {
-        self.fetcher.get(StateCertRequest::from(epoch)).await
     }
 }
 
@@ -1762,7 +1753,6 @@ where
     block: Notifier<BlockQueryData<Types>>,
     leaf: Notifier<LeafQueryData<Types>>,
     vid_common: Notifier<VidCommonQueryData<Types>>,
-    state_cert: Notifier<StateCertQueryDataV2<Types>>,
 }
 
 impl<Types> Default for Notifiers<Types>
@@ -1774,7 +1764,6 @@ where
             block: Notifier::new(),
             leaf: Notifier::new(),
             vid_common: Notifier::new(),
-            state_cert: Notifier::new(),
         }
     }
 }
@@ -2163,10 +2152,6 @@ impl<Types: NodeType> Storable<Types> for BlockInfo<Types> {
 
         if let Some(block) = self.block {
             block.store(storage, leaf_only).await?;
-        }
-
-        if let Some(state_cert) = self.state_cert {
-            state_cert.store(storage, leaf_only).await?;
         }
 
         Ok(())

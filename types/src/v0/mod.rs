@@ -129,7 +129,9 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
+pub use v0_3::StateCertQueryDataV1;
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
+pub use v0_4::StateCertQueryDataV2;
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
@@ -184,6 +186,9 @@ pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
+
+/// The highest protocol version supported by this version of the software.
+pub type MaxSupportedVersion = DrbAndHeaderUpgradeVersion;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;

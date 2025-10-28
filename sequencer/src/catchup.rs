@@ -33,6 +33,7 @@ use hotshot_types::{
     data::ViewNumber,
     message::UpgradeLock,
     network::NetworkConfig,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
@@ -448,6 +449,22 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.fetch(retry, |client| async move {
+            client
+                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&format!(
+                    "catchup/{epoch}/state-cert"
+                ))
+                .send()
+                .await
+        })
+        .await
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -557,6 +574,7 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 }
+
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
 
 impl<T, S> CatchupStorage for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
@@ -805,6 +823,14 @@ where
         Ok(proofs)
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        _epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        bail!("state cert catchup not supported for SqlStateCatchup");
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -919,6 +945,14 @@ impl StateCatchup for NullStateCatchup {
         bail!("state catchup is disabled");
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        _epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        bail!("state catchup is disabled");
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -937,6 +971,7 @@ impl StateCatchup for NullStateCatchup {
 #[derive(Clone)]
 pub struct ParallelStateCatchup {
     providers: Arc<Mutex<Vec<Arc<dyn StateCatchup>>>>,
+    backoff: BackoffParams,
 }
 
 impl ParallelStateCatchup {
@@ -944,6 +979,7 @@ impl ParallelStateCatchup {
     pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
         Self {
             providers: Arc::new(Mutex::new(providers.to_vec())),
+            backoff: BackoffParams::disabled(),
         }
     }
 
@@ -1315,8 +1351,32 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        // Try fetching the state cert on the local providers first
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_state_cert(retry, epoch).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(move |provider| async move {
+            provider.try_fetch_state_cert(retry, epoch).await
+        })
+        .await
+    }
+
     fn backoff(&self) -> &BackoffParams {
-        unreachable!()
+        &self.backoff
     }
 
     fn name(&self) -> String {
@@ -1530,6 +1590,29 @@ impl StateCatchup for ParallelStateCatchup {
         }})
         .await
     }
+
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_state_cert(0, epoch).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(
+            move |provider| async move { provider.fetch_state_cert(epoch).await },
+        )
+        .await
+    }
+
     async fn remember_blocks_merkle_tree(
         &self,
         instance: &NodeState,

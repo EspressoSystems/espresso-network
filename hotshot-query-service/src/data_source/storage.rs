@@ -62,7 +62,7 @@ use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{
-    data::VidShare, simple_certificate::QuorumCertificate2, traits::node_implementation::NodeType,
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
 };
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
@@ -70,8 +70,8 @@ use tagged_base64::TaggedBase64;
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-        PayloadQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
-        VidCommonMetadata, VidCommonQueryData,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata,
+        VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -197,8 +197,6 @@ where
 
     /// Get the first leaf which is available in the database with height >= `from`.
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
-
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>>;
 }
 
 pub trait UpdateAvailabilityStorage<Types>
@@ -215,7 +213,7 @@ where
     fn insert_leaf_with_qc_chain(
         &mut self,
         leaf: LeafQueryData<Types>,
-        qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
     fn insert_block(
         &mut self,
@@ -225,10 +223,6 @@ where
         &mut self,
         common: VidCommonQueryData<Types>,
         share: Option<VidShare>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>>;
-    fn insert_state_cert(
-        &mut self,
-        state_cert: StateCertQueryDataV2<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
@@ -259,7 +253,7 @@ where
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>>;
 
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>>;
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
 
     /// Search the database for missing objects and generate a report.
     async fn sync_status(&mut self) -> QueryResult<SyncStatus>;

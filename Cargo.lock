@@ -4187,6 +4187,7 @@ dependencies = [
  "tide-disco",
  "tokio",
  "tracing",
+ "url",
  "vbs",
 ]
 
@@ -4286,7 +4287,7 @@ dependencies = [
  "surf-disco",
  "tagged-base64",
  "test-log",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tide-disco",
  "time 0.3.44",
  "tokio",
@@ -5262,7 +5263,7 @@ dependencies = [
  "hotshot-types",
  "serde",
  "tagged-base64",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tide-disco",
  "toml",
  "vbs",
@@ -5376,7 +5377,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "surf-disco",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tide-disco",
  "tokio",
  "tracing",
@@ -5414,7 +5415,7 @@ dependencies = [
  "serde",
  "serde_arrays",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
 ]
 
@@ -5466,7 +5467,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "sha3",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "time 0.3.44",
  "tokio",
  "tracing",
@@ -5723,7 +5724,7 @@ dependencies = [
  "sha2 0.10.9",
  "surf-disco",
  "tagged-base64",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "time 0.3.44",
  "tokio",
  "tracing",
@@ -5765,7 +5766,7 @@ dependencies = [
  "sha2 0.10.9",
  "tagged-base64",
  "test-log",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tide-disco",
  "tokio",
  "tracing",
@@ -5820,7 +5821,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tagged-base64",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "time 0.3.44",
  "tokio",
  "toml",
@@ -7487,6 +7488,24 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "light-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "committable",
+ "derivative",
+ "espresso-types",
+ "hotshot-query-service",
+ "hotshot-types",
+ "serde",
+ "static_assertions",
+ "test-log",
+ "tokio",
+ "tracing",
+ "vbs",
 ]
 
 [[package]]
@@ -9525,7 +9544,7 @@ dependencies = [
  "parking_lot",
  "rand 0.8.5",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-util",
  "tracing",
@@ -10271,6 +10290,7 @@ dependencies = [
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "libp2p",
+ "light-client",
  "num_enum",
  "parking_lot",
  "portpicker",
@@ -10298,6 +10318,7 @@ dependencies = [
  "tagged-base64",
  "tempfile",
  "test-log",
+ "thiserror 2.0.17",
  "tide-disco",
  "time 0.3.44",
  "tokio",
@@ -11098,7 +11119,7 @@ dependencies = [
  "tagged-base64",
  "tempfile",
  "test-log",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "toml",
  "tracing",

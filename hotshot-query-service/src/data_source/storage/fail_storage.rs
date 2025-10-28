@@ -18,7 +18,7 @@ use async_lock::Mutex;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{
-    data::VidShare, simple_certificate::QuorumCertificate2, traits::node_implementation::NodeType,
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
 };
 
 use super::{
@@ -30,8 +30,7 @@ use super::{
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
-        VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::{
         storage::{PayloadMetadata, VidCommonMetadata},
@@ -465,11 +464,6 @@ where
             .await?;
         self.inner.first_available_leaf(from).await
     }
-
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
-        self.maybe_fail_read(FailableAction::GetStateCert).await?;
-        self.inner.get_state_cert(epoch).await
-    }
 }
 
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
@@ -482,7 +476,7 @@ where
     async fn insert_leaf_with_qc_chain(
         &mut self,
         leaf: LeafQueryData<Types>,
-        qc_chain: Option<[QuorumCertificate2<Types>; 2]>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_leaf_with_qc_chain(leaf, qc_chain).await
@@ -500,14 +494,6 @@ where
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_vid(common, share).await
-    }
-
-    async fn insert_state_cert(
-        &mut self,
-        state_cert: StateCertQueryDataV2<Types>,
-    ) -> anyhow::Result<()> {
-        self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_state_cert(state_cert).await
     }
 }
 
@@ -577,7 +563,7 @@ where
         self.inner.get_header_window(start, end, limit).await
     }
 
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[QuorumCertificate2<Types>; 2]>> {
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.latest_qc_chain().await
     }

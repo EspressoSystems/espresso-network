@@ -21,6 +21,7 @@ default = ["fee", "pos", "drb-and-header"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
+    "light-client/testing",
     "sequencer-utils/testing",
     "hotshot-query-service/testing",
 ]
@@ -72,6 +73,8 @@ hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 
+light-client = { workspace = true }
+
 include_dir = "0.7"
 indexmap = { workspace = true }
 itertools = { workspace = true }
@@ -111,6 +114,7 @@ strum = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
@@ -139,6 +143,7 @@ reqwest = { workspace = true }
 test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
+light-client = { workspace = true, features = ["testing"] }
 sequencer = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 

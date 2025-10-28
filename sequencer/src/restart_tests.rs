@@ -593,7 +593,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 else {
                     continue;
                 };
-                if qc.data.epoch >= Some(epoch) {
+                if qc.epoch() >= Some(epoch) {
                     tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }
@@ -836,6 +836,7 @@ impl TestNetwork {
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
             .deployer(deployer.clone())
+            .rpc_url(l1_url.clone())
             .mock_light_client(true)
             .genesis_lc_state(genesis_state)
             .genesis_st_state(genesis_stake)
