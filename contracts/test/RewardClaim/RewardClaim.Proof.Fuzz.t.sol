@@ -7,8 +7,8 @@ import "./RewardClaim.Base.t.sol";
 
 /// forge-config: quick.fuzz.runs = 1
 contract RewardClaimProofFuzzTest is RewardClaimTestBase {
-    function testFuzz_ValidProofs_AlwaysSucceed(uint8 numAccounts, uint64 seed) public {
-        vm.assume(numAccounts > 0 && numAccounts <= 1000);
+    function testFuzz_ValidProofs_AlwaysSucceed(uint256 numAccounts, uint64 seed) public {
+        numAccounts = bound(numAccounts, 1, 1000);
 
         (uint256 authRoot, RewardClaimTestCase[] memory fixtures) =
             getFixturesWithSeed(numAccounts, seed);
@@ -77,7 +77,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
 
     function testFuzz_TruncatedAuthData_AlwaysReverts(uint256 truncateAt, uint64 seed) public {
         (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
-        vm.assume(truncateAt < testCase.authData.length);
+        truncateAt %= testCase.authData.length;
         lightClient.setAuthRoot(authRoot);
 
         validateTestCase(testCase, authRoot);
@@ -93,11 +93,10 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     }
 
     function testFuzz_ValidProof_WrongAmount_Fails(uint256 wrongAmount, uint64 seed) public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
-        lightClient.setAuthRoot(authRoot);
-
-        vm.assume(wrongAmount != testCase.lifetimeRewards);
         vm.assume(wrongAmount > 0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        vm.assume(wrongAmount != testCase.lifetimeRewards);
+        lightClient.setAuthRoot(authRoot);
 
         validateTestCase(testCase, authRoot);
 
@@ -107,11 +106,10 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     }
 
     function testFuzz_ValidProof_WrongSender_Fails(address wrongSender, uint64 seed) public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
-        lightClient.setAuthRoot(authRoot);
-
-        vm.assume(wrongSender != testCase.account);
         vm.assume(wrongSender != address(0));
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        vm.assume(wrongSender != testCase.account);
+        lightClient.setAuthRoot(authRoot);
 
         validateTestCase(testCase, authRoot);
 
@@ -124,11 +122,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         public
     {
         vm.assume(xorMask != 0);
-
         (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        byteIndex %= testCase.authData.length;
         lightClient.setAuthRoot(authRoot);
-
-        vm.assume(byteIndex < testCase.authData.length);
 
         validateTestCase(testCase, authRoot);
 
@@ -140,8 +136,8 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         rewardClaim.claimRewards(testCase.lifetimeRewards, corruptedAuthData);
     }
 
-    function testFuzz_EveryBitFlip_AlwaysFails(uint8 numAccounts, uint64 seed) public {
-        vm.assume(numAccounts > 0 && numAccounts <= 50);
+    function testFuzz_EveryBitFlip_AlwaysFails(uint256 numAccounts, uint64 seed) public {
+        numAccounts = bound(numAccounts, 1, 50);
 
         (uint256 authRoot, RewardClaimTestCase[] memory fixtures) =
             getFixturesWithSeed(numAccounts, seed);
