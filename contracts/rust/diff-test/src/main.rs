@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use alloy::{
     hex,
     hex::ToHexExt,
@@ -9,7 +11,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ed_on_bn254::{EdwardsConfig as EdOnBn254Config, Fq as FqEd254};
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
-use ark_std::rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
+use ark_std::rand::{rngs::StdRng, seq::SliceRandom as _, Rng, RngCore, SeedableRng};
 use clap::{Parser, ValueEnum};
 use espresso_types::{
     v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
@@ -37,6 +39,27 @@ use jf_signature::{
     schnorr::KeyPair as SchnorrKeyPair,
 };
 use sha3::Keccak256;
+
+// TODO: remove this once we no longer have a conflict due to `alloy` and `ark` `rand` version.
+trait RandomCompat: Sized {
+    fn random_with(rng: &mut impl RngCore) -> Self;
+}
+
+impl RandomCompat for U256 {
+    fn random_with(rng: &mut impl RngCore) -> Self {
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+        U256::from_be_bytes(bytes)
+    }
+}
+
+impl RandomCompat for Address {
+    fn random_with(rng: &mut impl RngCore) -> Self {
+        let mut bytes = [0u8; 20];
+        rng.fill(&mut bytes);
+        Address::from(bytes)
+    }
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about=None)]
@@ -649,68 +672,59 @@ fn main() {
             println!("{}", res.abi_encode_params().encode_hex());
         },
         Action::EvolveRewardState => {
-            if cli.args.len() != 7 {
+            if cli.args.len() != 6 {
                 panic!(
                     "Should provide arg1=currentState, arg2=seed, arg3=numAccountsToAdd, \
-                     arg4=numAccountsToUpdate, arg5=minIncrement, arg6=maxIncrement, \
-                     arg7=maxFixtures"
+                     arg4=numAccountsToUpdate, arg5=maxRewardIncrement, arg6=numFixtures"
                 );
             }
 
-            let current_state =
+            let state_vec =
                 <Vec<(Address, U256)>>::abi_decode(&hex::decode(&cli.args[0]).unwrap()).unwrap();
             let seed = cli.args[1].parse::<u64>().unwrap();
             let num_add = cli.args[2].parse::<usize>().unwrap();
             let num_update = cli.args[3].parse::<usize>().unwrap();
-            let min_increment = cli.args[4].parse::<U256>().unwrap();
-            let max_increment = cli.args[5].parse::<U256>().unwrap();
-            let max_fixtures = cli.args[6].parse::<usize>().unwrap();
+            let max_reward_increment = cli.args[4].parse::<U256>().unwrap();
+            let num_fixtures = cli.args[5].parse::<usize>().unwrap();
 
             let mut rng = StdRng::seed_from_u64(seed);
-            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            let mut state: HashMap<Address, U256> = state_vec.into_iter().collect();
 
-            let mut state_map = std::collections::HashMap::new();
-            for (account, lifetime_rewards) in current_state {
-                let reward_account = RewardAccountV2::from(account);
-                let amount = RewardAmount(lifetime_rewards);
-                tree.update(reward_account, amount).unwrap();
-                state_map.insert(account, lifetime_rewards);
+            // Randomly select existing accounts to update
+            let existing_accounts: Vec<Address> = state.keys().copied().collect();
+            let num_to_update = num_update.min(existing_accounts.len());
+            let accounts_to_update: Vec<Address> = existing_accounts
+                .choose_multiple(&mut rng, num_to_update)
+                .copied()
+                .collect();
+
+            // Update existing accounts
+            for account in accounts_to_update {
+                let amount = if max_reward_increment > U256::ZERO {
+                    (U256::random_with(&mut rng) % max_reward_increment) + U256::from(1)
+                } else {
+                    U256::from(1)
+                };
+                *state.get_mut(&account).unwrap() += amount;
             }
 
+            // Add new accounts
             for _ in 0..num_add {
-                let mut bytes = [0u8; 20];
-                rng.fill(&mut bytes);
-                let account = Address::from(bytes);
-                let random_amount = if max_increment > min_increment {
-                    let range = (max_increment - min_increment).as_limbs()[0];
-                    min_increment + U256::from(rng.gen_range(0..=range))
+                let account = Address::random_with(&mut rng);
+                let amount = if max_reward_increment > U256::ZERO {
+                    (U256::random_with(&mut rng) % max_reward_increment) + U256::from(1)
                 } else {
-                    min_increment
+                    U256::from(1)
                 };
-                let reward_account = RewardAccountV2::from(account);
-                tree.update(reward_account, RewardAmount(random_amount))
-                    .unwrap();
-                state_map.insert(account, random_amount);
+                state.insert(account, amount);
             }
 
-            let accounts: Vec<Address> = state_map.keys().copied().collect();
-            let num_to_update = num_update.min(accounts.len());
-            for _ in 0..num_to_update {
-                let idx = rng.gen_range(0..accounts.len());
-                let account = accounts[idx];
-                let current = state_map[&account];
-                let increment = if max_increment > min_increment {
-                    let range = (max_increment - min_increment).as_limbs()[0];
-                    min_increment + U256::from(rng.gen_range(0..=range))
-                } else {
-                    min_increment
-                };
-                let new_amount = current + increment;
-
-                let reward_account = RewardAccountV2::from(account);
-                tree.update(reward_account, RewardAmount(new_amount))
+            // Build tree from final state
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            for (account, lifetime_rewards) in &state {
+                let reward_account = RewardAccountV2::from(*account);
+                tree.update(reward_account, RewardAmount(*lifetime_rewards))
                     .unwrap();
-                state_map.insert(account, new_amount);
             }
 
             let commitment = tree.commitment();
@@ -728,37 +742,30 @@ fn main() {
             let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
             let auth_root_u256: U256 = auth_root.into();
 
-            let new_state: Vec<(Address, U256)> = state_map.into_iter().collect();
+            // Generate fixtures for a random subset of accounts
+            let all_accounts: Vec<Address> = state.keys().copied().collect();
+            let num_fixtures_bounded = num_fixtures.min(all_accounts.len());
+            let selected_accounts: Vec<Address> = all_accounts
+                .choose_multiple(&mut rng, num_fixtures_bounded)
+                .copied()
+                .collect();
 
-            let num_fixtures = if new_state.is_empty() {
-                0
-            } else {
-                rng.gen_range(0..=max_fixtures.min(new_state.len()))
-            };
-            let mut fixtures: Vec<(Address, U256, Bytes)> = Vec::new();
-
-            if num_fixtures > 0 {
-                let mut indices: Vec<usize> = (0..new_state.len()).collect();
-                for i in 0..num_fixtures {
-                    let j = rng.gen_range(i..indices.len());
-                    indices.swap(i, j);
-                }
-
-                for i in 0..num_fixtures {
-                    let (account, _lifetime_rewards) = &new_state[indices[i]];
+            let fixtures: Vec<(Address, U256, Bytes)> = selected_accounts
+                .iter()
+                .map(|account| {
                     let proof = RewardAccountProofV2::prove(&tree, *account).unwrap();
                     let query_data: RewardAccountQueryDataV2 = proof.into();
                     let claim_input = query_data.to_reward_claim_input().unwrap();
-
-                    fixtures.push((
+                    (
                         *account,
                         claim_input.lifetime_rewards,
                         claim_input.auth_data.into(),
-                    ));
-                }
-            }
+                    )
+                })
+                .collect();
 
-            let res = (auth_root_u256, new_state, fixtures);
+            let state_vec: Vec<(Address, U256)> = state.into_iter().collect();
+            let res = (auth_root_u256, state_vec, fixtures);
             println!("{}", res.abi_encode_params().encode_hex());
         },
     };

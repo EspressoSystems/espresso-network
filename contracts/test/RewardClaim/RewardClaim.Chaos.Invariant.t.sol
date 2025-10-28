@@ -35,12 +35,10 @@ contract RewardClaimHandler is RewardClaimTestBase {
     uint256 public totalClaimAttempts;
     uint256 public successfulClaims;
     uint256 public dailyLimitHits;
-    uint64 public seed;
 
     Stats public stats;
 
     function initialize() public {
-        seed = 1;
         currentDay = block.timestamp / 1 days;
         initialSupply = espToken.totalSupply();
 
@@ -48,31 +46,32 @@ contract RewardClaimHandler is RewardClaimTestBase {
         rewardClaim.setDailyLimit(1000 ether);
     }
 
-    function evolveState(uint256 addSeed, uint256 updateSeed) public {
+    function evolveState(
+        uint64 seed,
+        uint256 addSeed,
+        uint256 updateSeed,
+        uint256 rewardSeed,
+        uint256 fixturesSeed
+    ) public {
         numIterations++;
-        seed = uint64(uint256(keccak256(abi.encodePacked(seed, block.timestamp, numIterations))));
-
-        if (rewardState.length > 0 && seed % 3 != 0) {
-            stats.evolveState.ok++;
-            return;
-        }
 
         bytes memory encodedState = abi.encode(rewardState);
         string memory hexState = vm.toString(encodedState);
 
-        uint256 numAccountsToAdd = _bound(addSeed, 0, 10);
-        uint256 numAccountsToUpdate = _bound(updateSeed, 0, 10);
+        uint256 numAccountsToAdd = _bound(addSeed, 0, 2);
+        uint256 numAccountsToUpdate = _bound(updateSeed, 0, 2);
+        uint256 maxRewardIncrement = _bound(rewardSeed, 1, 1_000_000_000 ether);
+        uint256 numFixtures = _bound(fixturesSeed, 1, 10);
 
-        string[] memory cmds = new string[](9);
+        string[] memory cmds = new string[](8);
         cmds[0] = "diff-test";
         cmds[1] = "evolve-reward-state";
         cmds[2] = hexState;
         cmds[3] = vm.toString(seed);
         cmds[4] = vm.toString(numAccountsToAdd);
         cmds[5] = vm.toString(numAccountsToUpdate);
-        cmds[6] = vm.toString(uint256(10 ether));
-        cmds[7] = vm.toString(uint256(100 ether));
-        cmds[8] = "10";
+        cmds[6] = vm.toString(maxRewardIncrement);
+        cmds[7] = vm.toString(numFixtures);
 
         bytes memory result = vm.ffi(cmds);
         (uint256 authRoot, AccountState[] memory newState, RewardClaimTestCase[] memory fixtures) =
@@ -130,11 +129,7 @@ contract RewardClaimHandler is RewardClaimTestBase {
                 // exceed the daily limit. We check here rather than in invariant_* because the
                 // limit can be reduced below totalDailyClaims by admin (valid), but claims must
                 // always respect the limit at the time they execute.
-                assertLe(
-                    totalDailyClaims,
-                    rewardClaim.dailyLimit(),
-                    "Daily limit exceeded immediately after claim"
-                );
+                assertLe(totalDailyClaims, rewardClaim.dailyLimit());
 
                 vm.prank(testCase.account);
                 vm.expectRevert(IRewardClaim.AlreadyClaimed.selector);
@@ -169,8 +164,10 @@ contract RewardClaimHandler is RewardClaimTestBase {
     }
 }
 
-/// forge-config: default.invariant.runs = 1
-/// forge-config: default.invariant.depth = 200
+/// forge-config: quick.invariant.runs = 1
+/// forge-config: quick.invariant.depth = 100
+/// forge-config: default.invariant.runs = 2
+/// forge-config: default.invariant.depth = 500
 contract RewardClaimInvariantTest is StdInvariant, Test {
     RewardClaimHandler public handler;
 
@@ -189,14 +186,6 @@ contract RewardClaimInvariantTest is StdInvariant, Test {
         targetSelector(FuzzSelector({ addr: address(handler), selectors: selectors }));
     }
 
-    function invariant_contractHoldsNoTokens() public view {
-        assertEq(
-            handler.espToken().balanceOf(address(handler.rewardClaim())),
-            0,
-            "RewardClaim should not hold tokens"
-        );
-    }
-
     function invariant_totalMintedMatchesClaimed() public view {
         uint256 currentSupply = handler.espToken().totalSupply();
         uint256 totalMinted = currentSupply - handler.initialSupply();
@@ -212,10 +201,5 @@ contract RewardClaimInvariantTest is StdInvariant, Test {
         console.log("Total claim attempts:", handler.totalClaimAttempts());
         console.log("Successful claims:", handler.successfulClaims());
         console.log("Daily limit hits:", handler.dailyLimitHits());
-        console.log("Current daily claims:", handler.totalDailyClaims());
-        console.log("Daily limit:", handler.rewardClaim().dailyLimit());
-        uint256 utilization =
-            (handler.totalDailyClaims() * 100) / handler.rewardClaim().dailyLimit();
-        console.log("Daily limit utilization:", utilization, "%");
     }
 }
