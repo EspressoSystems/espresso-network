@@ -5,7 +5,7 @@ use std::ops::Range;
 use jf_merkle_tree::MerkleTreeScheme;
 use serde::{Deserialize, Serialize};
 
-use super::{AvidMGF2Commit, AvidMGF2Share, RawAvidMGF2Share};
+use super::{AvidMGF2Commit, AvidMGF2Share};
 use crate::{
     avidm_gf2::{AvidMGF2Scheme, MerkleTree},
     VidError, VidResult, VidScheme,
@@ -30,29 +30,37 @@ pub struct NsAvidMGF2Common {
     pub ns_lens: Vec<usize>,
 }
 
-/// Namespaced share for each storage node
+/// Namespaced share for each storage node, contains one [`AvidMGF2Share`] for each namespace.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq, Default)]
-pub struct NsAvidMGF2Share {
-    /// Index number of the given share.
-    pub(crate) index: u32,
-    /// Actual share content
-    pub(crate) content: Vec<RawAvidMGF2Share>,
-}
+pub struct NsAvidMGF2Share(pub(crate) Vec<AvidMGF2Share>);
 
 impl NsAvidMGF2Share {
+    /// Return the number of namespaces in this share
+    pub fn num_nss(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Return the weight of this share
+    pub fn weight(&self) -> usize {
+        self.0.first().map_or(0, |share| share.weight())
+    }
+
+    /// Validate the share structure
+    pub fn validate(&self) -> bool {
+        let weight = self.weight();
+        self.0
+            .iter()
+            .all(|share| share.validate() && share.weight() == weight)
+    }
+
+    /// Check whether this share contains a given namespace
+    pub fn contains_ns(&self, ns_index: usize) -> bool {
+        ns_index < self.num_nss()
+    }
+
     /// Return the inner share for a given namespace if there exists one.
-    pub fn inner_ns_share(
-        &self,
-        common: &NsAvidMGF2Common,
-        ns_index: usize,
-    ) -> Option<AvidMGF2Share> {
-        if ns_index >= common.ns_lens.len() || ns_index >= self.content.len() {
-            return None;
-        }
-        Some(AvidMGF2Share {
-            index: self.index,
-            content: self.content[ns_index].clone(),
-        })
+    pub fn inner_ns_share(&self, ns_index: usize) -> Option<AvidMGF2Share> {
+        self.0.get(ns_index).cloned()
     }
 }
 
@@ -97,6 +105,7 @@ impl NsAvidMGF2Scheme {
         payload: &[u8],
         ns_table: impl IntoIterator<Item = Range<usize>>,
     ) -> VidResult<(NsAvidMGF2Commit, NsAvidMGF2Common, Vec<NsAvidMGF2Share>)> {
+        let num_storage_nodes = distribution.len();
         let mut ns_commits = vec![];
         let mut disperses = vec![];
         let mut ns_lens = vec![];
@@ -117,15 +126,12 @@ impl NsAvidMGF2Scheme {
                 .map_err(|err| VidError::Internal(err.into()))?
                 .commitment(),
         };
-        let mut shares = vec![NsAvidMGF2Share::default(); disperses[0].len()];
-        shares.iter_mut().for_each(|share| {
-            share.index = disperses[0][0].index;
-        });
+        let mut shares = vec![NsAvidMGF2Share::default(); num_storage_nodes];
         disperses.into_iter().for_each(|ns_disperse| {
             shares
                 .iter_mut()
                 .zip(ns_disperse)
-                .for_each(|(share, ns_share)| share.content.push(ns_share.content))
+                .for_each(|(share, ns_share)| share.0.push(ns_share))
         });
         Ok((commit, common, shares))
     }
@@ -137,13 +143,14 @@ impl NsAvidMGF2Scheme {
         share: &NsAvidMGF2Share,
     ) -> VidResult<crate::VerificationResult> {
         if !(common.ns_commits.len() == common.ns_lens.len()
-            && common.ns_commits.len() == share.content.len())
+            && common.ns_commits.len() == share.num_nss()
+            && share.validate())
         {
             return Err(VidError::InvalidShare);
         }
         // Verify the share for each namespace
-        for (commit, content) in common.ns_commits.iter().zip(share.content.iter()) {
-            if AvidMGF2Scheme::verify_internal(&common.param, commit, content)?.is_err() {
+        for (commit, content) in common.ns_commits.iter().zip(share.0.iter()) {
+            if AvidMGF2Scheme::verify_share(&common.param, commit, content)?.is_err() {
                 return Ok(Err(()));
             }
         }
@@ -186,16 +193,15 @@ impl NsAvidMGF2Scheme {
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
-        if shares
-            .iter()
-            .any(|share| ns_index >= common.ns_lens.len() || ns_index >= share.content.len())
+        if ns_index >= common.ns_lens.len()
+            || shares.iter().any(|share| share.contains_ns(ns_index))
         {
             return Err(VidError::IndexOutOfBound);
         }
         let ns_commit = &common.ns_commits[ns_index];
         let shares: Vec<_> = shares
             .iter()
-            .filter_map(|share| share.inner_ns_share(common, ns_index))
+            .filter_map(|share| share.inner_ns_share(ns_index))
             .collect();
         AvidMGF2Scheme::recover(&common.param, ns_commit, &shares)
     }
@@ -261,7 +267,7 @@ pub mod tests {
         let mut cumulated_weights = 0;
         let mut cut_index = 0;
         while cumulated_weights <= recovery_threshold {
-            cumulated_weights += shares[cut_index].content[0].range.len();
+            cumulated_weights += shares[cut_index].weight();
             cut_index += 1;
         }
         let ns0_payload_recovered =

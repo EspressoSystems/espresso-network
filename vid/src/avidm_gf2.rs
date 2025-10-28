@@ -46,9 +46,9 @@ impl AvidMGF2Param {
     }
 }
 
-/// The internal VID Share type
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq)]
-pub struct RawAvidMGF2Share {
+/// VID Share type to be distributed among the parties.
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AvidMGF2Share {
     /// Range of this share in the encoded payload.
     range: Range<usize>,
     /// Actual share content.
@@ -59,13 +59,16 @@ pub struct RawAvidMGF2Share {
     mt_proofs: Vec<MerkleProof>,
 }
 
-/// VID Share type to be distributed among the parties.
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AvidMGF2Share {
-    /// Index number of the given share.
-    index: u32,
-    /// Content of this AvidMShare.
-    content: RawAvidMGF2Share,
+impl AvidMGF2Share {
+    /// Get the weight of this share
+    pub fn weight(&self) -> usize {
+        self.range.len()
+    }
+
+    /// Validate the share structure.
+    pub fn validate(&self) -> bool {
+        self.payload.len() == self.range.len() && self.mt_proofs.len() == self.range.len()
+    }
 }
 
 /// VID Commitment type
@@ -125,34 +128,6 @@ impl AvidMGF2Scheme {
         let mt = MerkleTree::from_elems(None, &share_digests)?;
         Ok((mt, shares))
     }
-
-    pub(crate) fn verify_internal(
-        param: &AvidMGF2Param,
-        commit: &AvidMGF2Commit,
-        share: &RawAvidMGF2Share,
-    ) -> VidResult<crate::VerificationResult> {
-        if share.range.end > param.total_weights
-            || share.range.len() != share.payload.len()
-            || share.range.len() != share.mt_proofs.len()
-        {
-            return Err(VidError::InvalidShare);
-        }
-        for (i, index) in share.range.clone().enumerate() {
-            let payload_digest = HasherNode::from(sha3::Keccak256::digest(&share.payload[i]));
-            // TODO(Chengyu): switch to batch verification
-            if MerkleTree::verify(
-                commit.commit,
-                index as u64,
-                payload_digest,
-                &share.mt_proofs[i],
-            )?
-            .is_err()
-            {
-                return Ok(Err(()));
-            }
-        }
-        Ok(Ok(()))
-    }
 }
 
 impl VidScheme for AvidMGF2Scheme {
@@ -186,33 +161,46 @@ impl VidScheme for AvidMGF2Scheme {
             .collect();
         let shares: Vec<_> = ranges
             .into_iter()
-            .enumerate()
-            .map(|(i, range)| AvidMGF2Share {
-                index: i as u32,
-                content: RawAvidMGF2Share {
-                    range: range.clone(),
-                    payload: shares[range.clone()].to_vec(),
-                    // TODO(Chengyu): switch to batch proof generation
-                    mt_proofs: range
-                        .map(|k| {
-                            mt.lookup(k as u64)
-                                .expect_ok()
-                                .expect("MT lookup shouldn't fail")
-                                .1
-                        })
-                        .collect::<Vec<_>>(),
-                },
+            .map(|range| AvidMGF2Share {
+                range: range.clone(),
+                payload: shares[range.clone()].to_vec(),
+                // TODO(Chengyu): switch to batch proof generation
+                mt_proofs: range
+                    .map(|k| {
+                        mt.lookup(k as u64)
+                            .expect_ok()
+                            .expect("MT lookup shouldn't fail")
+                            .1
+                    })
+                    .collect::<Vec<_>>(),
             })
             .collect();
         Ok((commit, shares))
     }
 
     fn verify_share(
-        param: &Self::Param,
+        _param: &Self::Param,
         commit: &Self::Commit,
         share: &Self::Share,
     ) -> VidResult<crate::VerificationResult> {
-        Self::verify_internal(param, commit, &share.content)
+        if !share.validate() {
+            return Err(VidError::InvalidShare);
+        }
+        for (i, index) in share.range.clone().enumerate() {
+            let payload_digest = HasherNode::from(sha3::Keccak256::digest(&share.payload[i]));
+            // TODO(Chengyu): switch to batch verification
+            if MerkleTree::verify(
+                commit.commit,
+                index as u64,
+                payload_digest,
+                &share.mt_proofs[i],
+            )?
+            .is_err()
+            {
+                return Ok(Err(()));
+            }
+        }
+        Ok(Ok(()))
     }
 
     fn recover(
@@ -223,10 +211,10 @@ impl VidScheme for AvidMGF2Scheme {
         let original_count = param.recovery_threshold;
         let recovery_count = param.total_weights - param.recovery_threshold;
         // Find the first non-empty share
-        let Some(first_share) = shares.iter().find(|s| !s.content.payload.is_empty()) else {
+        let Some(first_share) = shares.iter().find(|s| !s.payload.is_empty()) else {
             return Err(VidError::InsufficientShares);
         };
-        let shard_bytes = first_share.content.payload[0].len();
+        let shard_bytes = first_share.payload[0].len();
 
         let mut decoder = reed_solomon_simd::ReedSolomonDecoder::new(
             original_count,
@@ -235,10 +223,7 @@ impl VidScheme for AvidMGF2Scheme {
         )?;
         let mut original_shares = vec![None; original_count];
         for share in shares {
-            let share = &share.content;
-            if share.range.len() != share.payload.len()
-                || share.payload.iter().any(|p| p.len() != shard_bytes)
-            {
+            if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
                 return Err(VidError::InvalidShare);
             }
             for (i, index) in share.range.clone().enumerate() {
@@ -329,7 +314,7 @@ pub mod tests {
                 let mut cumulated_weights = 0;
                 let mut cut_index = 0;
                 while cumulated_weights <= recovery_threshold {
-                    cumulated_weights += shares[cut_index].content.range.len();
+                    cumulated_weights += shares[cut_index].weight();
                     cut_index += 1;
                 }
                 let payload_recovered =
