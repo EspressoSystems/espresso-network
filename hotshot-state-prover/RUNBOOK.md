@@ -109,7 +109,7 @@ version and runs the appropriate service. The legacy service implementation can 
   `stake_table_capacity` are configured correctly across the sequencers, relay server, and the prover.
 - **Contract Error:** Check logs for `ProverError::ContractError`. Ensure the provider urls are valid and the contract
   address is correct. If there's an error code, search it in the
-  [bindings](../contracts/rust/adapter/src/bindings/lightclientv2.rs) for further debugging information.
+  [bindings](../contracts/rust/adapter/src/bindings/lightclientv3.rs) for further debugging information.
 - **Gas Price Too High:** Check logs for `ProverError::GasPriceTooHigh`. Adjust the `max_gas_price` in the configuration
   or wait for the gas price to drop.
 - **Proof Generation Failure, Epoch Already Started:** These usually indicate a configuration issue.

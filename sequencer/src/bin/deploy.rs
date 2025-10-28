@@ -435,7 +435,7 @@ async fn main() -> anyhow::Result<()> {
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
-        .rpc_url(opt.rpc_url.to_string());
+        .rpc_url(opt.rpc_url.clone());
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
     }

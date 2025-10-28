@@ -3,14 +3,12 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase, no-console */
 
-import "./RewardClaimTestBase.sol";
+import "./RewardClaim.Base.t.sol";
 
+/// forge-config: quick.fuzz.runs = 1
 contract RewardClaimProofFuzzTest is RewardClaimTestBase {
-    function testFuzz_ValidProofs_AlwaysSucceed(uint8 numAccounts, uint64 seed) public {
-        vm.assume(numAccounts > 0 && numAccounts <= 1000);
-
-        console.log("Fuzzing valid proofs with seed:", seed);
-        console.log("Number of accounts:", numAccounts);
+    function testFuzz_ValidProofs_AlwaysSucceed(uint256 numAccounts, uint64 seed) public {
+        numAccounts = bound(numAccounts, 1, 1000);
 
         (uint256 authRoot, RewardClaimTestCase[] memory fixtures) =
             getFixturesWithSeed(numAccounts, seed);
@@ -28,11 +26,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         }
     }
 
-    function testFuzz_RandomProof_AlwaysFails(bytes memory randomAuthData) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, 0);
+    function testFuzz_RandomAuthData_AlwaysFails(bytes memory randomAuthData, uint64 seed) public {
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
-
-        RewardClaimTestCase memory validCase = fixtures[0];
 
         validateTestCase(validCase, authRoot);
 
@@ -41,25 +37,48 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         rewardClaim.claimRewards(validCase.lifetimeRewards, randomAuthData);
     }
 
-    function testFuzz_MalformedAuthData_AlwaysReverts(bytes memory malformedData) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, 0);
+    function testFuzz_RandomProof_ValidAuthRootInputs_AlwaysFails(
+        bytes32[160] memory randomProof,
+        uint64 seed
+    ) public {
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory testCase = fixtures[0];
+        validateTestCase(validCase, authRoot);
 
-        validateTestCase(testCase, authRoot);
+        (, bytes32[7] memory validAuthRootInputs) =
+            abi.decode(validCase.authData, (bytes32[160], bytes32[7]));
 
-        vm.prank(testCase.account);
-        vm.expectRevert();
-        rewardClaim.claimRewards(testCase.lifetimeRewards, malformedData);
+        bytes memory invalidAuthData = abi.encode(randomProof, validAuthRootInputs);
+
+        vm.prank(validCase.account);
+        vm.expectRevert(IRewardClaim.InvalidAuthRoot.selector);
+        rewardClaim.claimRewards(validCase.lifetimeRewards, invalidAuthData);
     }
 
-    function testFuzz_TruncatedAuthData_AlwaysReverts(uint256 truncateAt) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, 0);
+    function testFuzz_ValidProof_RandomAuthRootInputs_AlwaysFails(
+        bytes32[7] memory randomAuthRootInputs,
+        uint64 seed
+    ) public {
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory testCase = fixtures[0];
-        vm.assume(truncateAt < testCase.authData.length);
+        validateTestCase(validCase, authRoot);
+
+        (bytes32[160] memory validProof,) =
+            abi.decode(validCase.authData, (bytes32[160], bytes32[7]));
+
+        bytes memory invalidAuthData = abi.encode(validProof, randomAuthRootInputs);
+
+        vm.prank(validCase.account);
+        vm.expectRevert(IRewardClaim.InvalidAuthRoot.selector);
+        rewardClaim.claimRewards(validCase.lifetimeRewards, invalidAuthData);
+    }
+
+    function testFuzz_TruncatedAuthData_AlwaysReverts(uint256 truncateAt, uint64 seed) public {
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        truncateAt %= testCase.authData.length;
+        lightClient.setAuthRoot(authRoot);
 
         validateTestCase(testCase, authRoot);
 
@@ -74,19 +93,12 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     }
 
     function testFuzz_ValidProof_WrongAmount_Fails(uint256 wrongAmount, uint64 seed) public {
-        console.log("Fuzzing wrong amount with seed:", seed);
-
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        vm.assume(wrongAmount > 0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        vm.assume(wrongAmount != testCase.lifetimeRewards);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory testCase = fixtures[0];
-        vm.assume(wrongAmount != testCase.lifetimeRewards);
-        vm.assume(wrongAmount > 0);
-
         validateTestCase(testCase, authRoot);
-
-        console.log("Valid amount:", testCase.lifetimeRewards);
-        console.log("Wrong amount:", wrongAmount);
 
         vm.prank(testCase.account);
         vm.expectRevert();
@@ -94,19 +106,12 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     }
 
     function testFuzz_ValidProof_WrongSender_Fails(address wrongSender, uint64 seed) public {
-        console.log("Fuzzing wrong sender with seed:", seed);
-
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        vm.assume(wrongSender != address(0));
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        vm.assume(wrongSender != testCase.account);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory testCase = fixtures[0];
-        vm.assume(wrongSender != testCase.account);
-        vm.assume(wrongSender != address(0));
-
         validateTestCase(testCase, authRoot);
-
-        console.log("Valid account:", testCase.account);
-        console.log("Wrong sender:", wrongSender);
 
         vm.prank(wrongSender);
         vm.expectRevert(IRewardClaim.InvalidAuthRoot.selector);
@@ -117,16 +122,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         public
     {
         vm.assume(xorMask != 0);
-
-        console.log("Fuzzing byte manipulation with seed:", seed);
-        console.log("Byte index:", byteIndex);
-        console.log("XOR mask:", uint256(xorMask));
-
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        byteIndex %= testCase.authData.length;
         lightClient.setAuthRoot(authRoot);
-
-        RewardClaimTestCase memory testCase = fixtures[0];
-        vm.assume(byteIndex < testCase.authData.length);
 
         validateTestCase(testCase, authRoot);
 
@@ -138,9 +136,8 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         rewardClaim.claimRewards(testCase.lifetimeRewards, corruptedAuthData);
     }
 
-    /// forge-config: default.fuzz.runs = 1
-    function testFuzz_EveryBitFlip_AlwaysFails(uint8 numAccounts, uint64 seed) public {
-        vm.assume(numAccounts > 0 && numAccounts <= 50);
+    function testFuzz_EveryBitFlip_AlwaysFails(uint256 numAccounts, uint64 seed) public {
+        numAccounts = bound(numAccounts, 1, 50);
 
         (uint256 authRoot, RewardClaimTestCase[] memory fixtures) =
             getFixturesWithSeed(numAccounts, seed);
@@ -150,15 +147,21 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
 
         validateTestCase(testCase, authRoot);
 
+        // This is a reference, but we don't need the original anymore
+        bytes memory corruptAuthData = testCase.authData;
+
         vm.pauseGasMetering();
-        for (uint256 byteIndex = 0; byteIndex < testCase.authData.length; byteIndex++) {
+        for (uint256 byteIndex = 0; byteIndex < corruptAuthData.length; byteIndex++) {
             for (uint256 bitIndex = 0; bitIndex < 8; bitIndex++) {
-                bytes memory corruptedAuthData = testCase.authData;
-                corruptedAuthData[byteIndex] ^= bytes1(uint8(1 << bitIndex));
+                bytes1 mask = bytes1(uint8(1 << bitIndex));
+                corruptAuthData[byteIndex] ^= mask;
 
                 vm.prank(testCase.account);
                 vm.expectRevert();
-                rewardClaim.claimRewards(testCase.lifetimeRewards, corruptedAuthData);
+                rewardClaim.claimRewards(testCase.lifetimeRewards, corruptAuthData);
+
+                // Reuse same memory for corruptions to avoid expensive copies in the loop
+                corruptAuthData[byteIndex] ^= mask;
             }
         }
         vm.resumeGasMetering();

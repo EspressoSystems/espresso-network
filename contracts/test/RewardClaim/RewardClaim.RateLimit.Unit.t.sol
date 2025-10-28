@@ -5,7 +5,7 @@
 pragma solidity ^0.8.28;
 
 import "./RewardClaim.t.sol";
-import "../src/interfaces/IRewardClaim.sol";
+import "../../src/interfaces/IRewardClaim.sol";
 
 // Conventions:
 // - Use checkLimitEnforced() helper for verifying limit exceeded
@@ -104,13 +104,13 @@ contract RewardClaimRateLimitTest is RewardClaimTest {
     }
 
     function testFuzz_ClaimWithinLimit(uint256 amount) public {
-        vm.assume(amount > 0 && amount <= DAILY_LIMIT);
+        amount = bound(amount, 1, DAILY_LIMIT);
 
         claim(amount);
     }
 
     function testFuzz_ExceedsLimit(uint256 amount) public {
-        vm.assume(amount > DAILY_LIMIT && amount < type(uint256).max / 2);
+        amount = bound(amount, DAILY_LIMIT + 1, type(uint256).max / 2);
 
         vm.prank(claimer);
         vm.expectRevert();

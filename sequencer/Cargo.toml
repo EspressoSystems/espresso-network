@@ -17,10 +17,11 @@ required-features = ["testing", "embedded-db"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee", "pos", "drb-and-header"]
+default = ["fee", "pos", "drb-and-header", "da-upgrade"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
+    "light-client/testing",
     "sequencer-utils/testing",
     "hotshot-query-service/testing",
 ]
@@ -29,6 +30,7 @@ embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 fee = []
 pos = []
 drb-and-header = []
+da-upgrade = []
 
 [dependencies]
 
@@ -45,10 +47,8 @@ byteorder = "1"
 hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
 
 # CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.0", package = "cdn-broker", features = [
-    "global-permits",
-] }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.0", package = "cdn-marshal" }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = { workspace = true }
@@ -73,6 +73,8 @@ hotshot-task-impls = { workspace = true }
 # Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
+
+light-client = { workspace = true }
 
 include_dir = "0.7"
 indexmap = { workspace = true }
@@ -113,6 +115,7 @@ strum = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
@@ -141,6 +144,7 @@ reqwest = { workspace = true }
 test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
+light-client = { workspace = true, features = ["testing"] }
 sequencer = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 

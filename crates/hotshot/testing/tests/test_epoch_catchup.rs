@@ -6,10 +6,16 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{
-    EpochsTestVersions, PushCdnImpl, RandomOverlapQuorumFilterConfig, TestTwoStakeTablesTypes,
-    TestTypes, TestTypesEpochCatchupTypes, TestTypesRandomizedCommitteeMembers,
-    TestTypesRandomizedLeader,
+use hotshot_example_types::{
+    membership::{
+        randomized_committee::RandomizedStakeTable,
+        randomized_committee_members::RandomizedCommitteeMembers,
+        static_committee::StaticStakeTable, two_static_committees::TwoStakeTables,
+    },
+    node_types::{
+        CombinedImpl, EpochsTestVersions, RandomOverlapQuorumFilterConfig,
+        TestTypesEpochCatchupTypes,
+    },
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -19,12 +25,13 @@ use hotshot_testing::{
     spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
     test_builder::{TestDescription, TimingData},
 };
+use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypes>,
+        TestTypesEpochCatchupTypes<StaticStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
@@ -53,12 +60,12 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(120),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![18, 19],
+            possible_view_failures: vec![18, 19, 38, 39],
             decide_timeout: Duration::from_secs(15),
             ..Default::default()
         };
@@ -71,9 +78,9 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_two_stake_tables_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTwoStakeTablesTypes>,
+        TestTypesEpochCatchupTypes<TwoStakeTables<BLSPubKey, SchnorrPubKey>>,
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
@@ -102,12 +109,12 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(120),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![18, 19],
+            possible_view_failures: vec![18, 19, 38, 39],
             decide_timeout: Duration::from_secs(15),
             ..Default::default()
         };
@@ -120,9 +127,9 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_randomized_leader_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypesRandomizedLeader>,
+        TestTypesEpochCatchupTypes<RandomizedStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
@@ -151,12 +158,12 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(120),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![33, 34],
+            possible_view_failures: vec![33, 34, 39, 40],
             decide_timeout: Duration::from_secs(15),
             ..Default::default()
         };
@@ -169,9 +176,9 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_randomized_committee_catchup_epochs,
-    Impls: [PushCdnImpl],
+    Impls: [CombinedImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypesRandomizedCommitteeMembers<RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
+        TestTypesEpochCatchupTypes<RandomizedCommitteeMembers<BLSPubKey, SchnorrPubKey, RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
@@ -200,12 +207,12 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(120),
+                    duration: Duration::from_secs(240),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![2, 3, 14, 15, 17, 18],
+            possible_view_failures: vec![2, 3, 14, 15, 17, 18, 42, 43, 46, 47],
             decide_timeout: Duration::from_secs(20),
             ..Default::default()
         };

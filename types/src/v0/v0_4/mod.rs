@@ -15,13 +15,15 @@ pub use super::v0_1::{
 };
 
 pub use super::v0_3::{
-    AvidMNsProof, AvidMNsProofV1, AvidMTxProof, ChainConfig, ResolvableChainConfig,
+    AvidMIncorrectEncodingNsProof, AvidMNsProof, AvidMTxProof, ChainConfig, ResolvableChainConfig,
 };
 
 pub const VERSION: Version = Version { major: 0, minor: 4 };
 
 mod header;
 mod state;
+mod state_cert;
 
 pub use header::*;
 pub use state::*;
+pub use state_cert::*;

@@ -1,0 +1,307 @@
+// SPDX-License-Identifier: Unlicensed
+
+/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file */
+
+pragma solidity ^0.8.0;
+
+import "forge-std/Test.sol";
+import { Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
+import { Options } from "openzeppelin-foundry-upgrades/Options.sol";
+
+import { LightClient as LC } from "../src/LightClient.sol";
+import { LightClientV2 as LCV2 } from "../src/LightClientV2.sol";
+import { LightClientV3 as LCV3 } from "../src/LightClientV3.sol";
+
+/// @title OpenZeppelin Upgrades Library Storage Safety Tests
+/// @notice Production-grade storage layout validation using OpenZeppelin's battle-tested library
+/// @dev This approach is MUCH better than manual storage comparison
+contract LightClientUpgradeSafetyTest is Test {
+    
+    /// @notice Validate upgrade from V1 to V2
+    /// @dev Uses OpenZeppelin's validateUpgrade which checks:
+    ///      - Storage layout compatibility
+    ///      - Initialization safety
+    ///      - Constructor usage
+    ///      - Delegatecall usage
+    ///      - Selfdestruct usage
+    function test_ValidateUpgrade_V1ToV2() public {
+        // This will FAIL if there are ANY storage layout issues
+        // Much more comprehensive than manual checks
+        Upgrades.validateUpgrade(
+            "LightClient.sol",
+            "LightClientV2.sol",
+            Options({
+                referenceContract: "LightClient.sol",
+                unsafeAllow: "",
+                unsafeAllowRenames: false,
+                unsafeSkipStorageCheck: false,
+                constructorData: "",
+                defender: DefenderOptions({
+                    useDefenderDeploy: false,
+                    skipVerifySourceCode: false,
+                    relayerId: "",
+                    licenseType: "",
+                    skipLicenseType: false,
+                    salt: bytes32(0),
+                    upgradeApprovalProcessId: ""
+                })
+            })
+        );
+    }
+    
+    /// @notice Validate upgrade from V2 to V3
+    function test_ValidateUpgrade_V2ToV3() public {
+        Upgrades.validateUpgrade(
+            "LightClientV2.sol",
+            "LightClientV3.sol",
+            Options({
+                referenceContract: "LightClientV2.sol",
+                unsafeAllow: "",
+                unsafeAllowRenames: false,
+                unsafeSkipStorageCheck: false,
+                constructorData: "",
+                defender: DefenderOptions({
+                    useDefenderDeploy: false,
+                    skipVerifySourceCode: false,
+                    relayerId: "",
+                    licenseType: "",
+                    skipLicenseType: false,
+                    salt: bytes32(0),
+                    upgradeApprovalProcessId: ""
+                })
+            })
+        );
+    }
+    
+    /// @notice Validate direct upgrade from V1 to V3 (if allowed)
+    function test_ValidateUpgrade_V1ToV3() public {
+        Upgrades.validateUpgrade(
+            "LightClient.sol",
+            "LightClientV3.sol",
+            Options({
+                referenceContract: "LightClient.sol",
+                unsafeAllow: "",
+                unsafeAllowRenames: false,
+                unsafeSkipStorageCheck: false,
+                constructorData: "",
+                defender: DefenderOptions({
+                    useDefenderDeploy: false,
+                    skipVerifySourceCode: false,
+                    relayerId: "",
+                    licenseType: "",
+                    skipLicenseType: false,
+                    salt: bytes32(0),
+                    upgradeApprovalProcessId: ""
+                })
+            })
+        );
+    }
+    
+    /// @notice Validate implementation contract is upgrade-safe
+    /// @dev Checks for common upgrade issues in the implementation
+    function test_ValidateImplementation_V3() public {
+        Upgrades.validateImplementation("LightClientV3.sol", Options({
+            referenceContract: "",
+            unsafeAllow: "",
+            unsafeAllowRenames: false,
+            unsafeSkipStorageCheck: false,
+            constructorData: "",
+            defender: DefenderOptions({
+                useDefenderDeploy: false,
+                skipVerifySourceCode: false,
+                relayerId: "",
+                licenseType: "",
+                skipLicenseType: false,
+                salt: bytes32(0),
+                upgradeApprovalProcessId: ""
+            })
+        }));
+    }
+    
+    /// @notice Full upgrade simulation from V1 to V3
+    /// @dev This tests the complete upgrade path with actual deployment
+    function test_FullUpgradeSimulation_V1ToV3() public {
+        // Deploy V1 with proxy
+        address proxy = Upgrades.deployUUPSProxy(
+            "LightClient.sol",
+            abi.encodeCall(
+                LC.initialize,
+                (
+                    LC.LightClientState({
+                        viewNum: 0,
+                        blockHeight: 0,
+                        blockCommRoot: BN254.ScalarField.wrap(0)
+                    }),
+                    LC.StakeTableState({
+                        threshold: 0,
+                        blsKeyComm: BN254.ScalarField.wrap(0),
+                        schnorrKeyComm: BN254.ScalarField.wrap(0),
+                        amountComm: BN254.ScalarField.wrap(0)
+                    }),
+                    1 days,
+                    address(this)
+                )
+            )
+        );
+        
+        // Verify V1 deployed
+        (uint8 majorVersion,,) = LC(proxy).getVersion();
+        assertEq(majorVersion, 1);
+        
+        // Upgrade to V2
+        Upgrades.upgradeProxy(
+            proxy,
+            "LightClientV2.sol",
+            abi.encodeCall(LCV2.initializeV2, (10, 12)),
+            msg.sender
+        );
+        
+        // Verify V2 upgraded
+        (majorVersion,,) = LCV2(proxy).getVersion();
+        assertEq(majorVersion, 2);
+        
+        // Upgrade to V3
+        Upgrades.upgradeProxy(
+            proxy,
+            "LightClientV3.sol",
+            abi.encodeCall(LCV3.initializeV3, ()),
+            msg.sender
+        );
+        
+        // Verify V3 upgraded
+        (majorVersion,,) = LCV3(proxy).getVersion();
+        assertEq(majorVersion, 3);
+        
+        // Verify storage preserved
+        assertEq(LCV3(proxy).blocksPerEpoch(), 10);
+    }
+}
+
+/// @title Upgrade Safety with Deployed Contracts
+/// @notice Tests against actual deployed contracts using fork testing
+contract LightClientUpgradeSafety_DeployedTest is Test {
+    
+    /// @notice Test upgrade safety against deployed Sepolia contract
+    function test_ValidateUpgrade_AgainstDeployedSepolia() public {
+        // Skip if not forking
+        if (block.chainid != 11155111) {
+            vm.skip(true);
+        }
+        
+        address deployedProxy = 0x303872BB82a191771321d4828888920100d0b3e4;
+        
+        // Get current implementation
+        address currentImpl = Upgrades.getImplementationAddress(deployedProxy);
+        console.log("Current implementation:", currentImpl);
+        
+        // Validate upgrade to V3
+        // This checks the ACTUAL deployed contract's storage layout
+        Upgrades.validateUpgrade(
+            currentImpl,
+            "LightClientV3.sol",
+            Options({
+                referenceContract: "",
+                unsafeAllow: "",
+                unsafeAllowRenames: false,
+                unsafeSkipStorageCheck: false,
+                constructorData: "",
+                defender: DefenderOptions({
+                    useDefenderDeploy: false,
+                    skipVerifySourceCode: false,
+                    relayerId: "",
+                    licenseType: "",
+                    skipLicenseType: false,
+                    salt: bytes32(0),
+                    upgradeApprovalProcessId: ""
+                })
+            })
+        );
+        
+        console.log("[PASS] Upgrade to V3 is SAFE for Sepolia deployment");
+    }
+    
+    /// @notice Test upgrade safety against deployed Mainnet contract
+    function test_ValidateUpgrade_AgainstDeployedMainnet() public {
+        // Skip if not forking mainnet
+        if (block.chainid != 1) {
+            vm.skip(true);
+        }
+        
+        address deployedProxy = 0x303872BB82a191771321d4828888920100d0b3e4; // Update with actual mainnet address
+        
+        // Get current implementation
+        address currentImpl = Upgrades.getImplementationAddress(deployedProxy);
+        console.log("Current implementation:", currentImpl);
+        
+        // Validate upgrade to V3
+        Upgrades.validateUpgrade(
+            currentImpl,
+            "LightClientV3.sol",
+            Options({
+                referenceContract: "",
+                unsafeAllow: "",
+                unsafeAllowRenames: false,
+                unsafeSkipStorageCheck: false,
+                constructorData: "",
+                defender: DefenderOptions({
+                    useDefenderDeploy: false,
+                    skipVerifySourceCode: false,
+                    relayerId: "",
+                    licenseType: "",
+                    skipLicenseType: false,
+                    salt: bytes32(0),
+                    upgradeApprovalProcessId: ""
+                })
+            })
+        );
+        
+        console.log("[PASS] Upgrade to V3 is SAFE for Mainnet deployment");
+    }
+    
+    /// @notice Full upgrade test on Sepolia fork
+    /// @dev This tests the ACTUAL upgrade on a fork of the live network
+    function test_FullUpgradeOnSepoliaFork() public {
+        // Skip if not forking
+        if (block.chainid != 11155111) {
+            vm.skip(true);
+        }
+        
+        address deployedProxy = 0x303872BB82a191771321d4828888920100d0b3e4;
+        
+        // Get admin/owner
+        address admin = LC(deployedProxy).owner();
+        
+        // Get current version
+        (uint8 currentMajor,,) = LC(deployedProxy).getVersion();
+        console.log("Current version:", currentMajor);
+        
+        // Perform upgrade as admin
+        vm.startPrank(admin);
+        
+        Upgrades.upgradeProxy(
+            deployedProxy,
+            "LightClientV3.sol",
+            abi.encodeCall(LCV3.initializeV3, ()),
+            admin
+        );
+        
+        vm.stopPrank();
+        
+        // Verify upgrade succeeded
+        (uint8 newMajor,,) = LCV3(deployedProxy).getVersion();
+        assertEq(newMajor, 3);
+        console.log("[PASS] Upgraded to version:", newMajor);
+        
+        // Verify storage preserved
+        uint64 blocksPerEpoch = LCV3(deployedProxy).blocksPerEpoch();
+        console.log("Blocks per epoch preserved:", blocksPerEpoch);
+        assertTrue(blocksPerEpoch > 0, "Storage should be preserved");
+    }
+}
+
+// Import BN254 for the test
+import { BN254 } from "bn254/BN254.sol";
+
+// Import defender options
+import { DefenderOptions } from "openzeppelin-foundry-upgrades/Options.sol";
+

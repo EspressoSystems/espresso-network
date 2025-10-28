@@ -421,7 +421,10 @@ pub mod mock {
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
-    use hotshot_types::{data::ViewNumber, stake_table::HSStakeTable};
+    use hotshot_types::{
+        data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
+        stake_table::HSStakeTable,
+    };
     use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
@@ -543,6 +546,14 @@ pub mod mock {
             _reward_merkle_tree_root: RewardMerkleCommitmentV1,
             _accounts: &[RewardAccountV1],
         ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+            anyhow::bail!("unimplemented")
+        }
+
+        async fn try_fetch_state_cert(
+            &self,
+            _retry: usize,
+            _epoch: u64,
+        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
             anyhow::bail!("unimplemented")
         }
 

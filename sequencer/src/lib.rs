@@ -4,6 +4,7 @@ pub mod context;
 pub mod genesis;
 mod proposal_fetcher;
 mod request_response;
+pub mod state_cert;
 
 mod external_event_handler;
 pub mod options;
@@ -571,7 +572,6 @@ where
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
-            coordinator.membership().clone(),
             gossip_config,
             request_response_config,
             libp2p_bind_address,
@@ -918,6 +918,7 @@ pub mod testing {
                     let mut contracts = Contracts::new();
                     let args = DeployerArgsBuilder::default()
                         .deployer(deployer.clone())
+                        .rpc_url(self.l1_url.clone())
                         .mock_light_client(true)
                         .genesis_lc_state(genesis_state)
                         .genesis_st_state(genesis_stake)

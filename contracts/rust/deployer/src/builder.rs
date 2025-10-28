@@ -7,7 +7,9 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use derive_builder::Builder;
+use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
+use url::Url;
 
 use crate::{
     encode_function_call,
@@ -28,6 +30,7 @@ use crate::{
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
 /// - `deployer`: deployer's wallet provider
+/// - `rpc_url`: RPC URL for the L1 network
 /// - `token_recipient`: initial token holder, same as deployer if None.
 /// - `mock_light_client`: flag to indicate whether deploying mocked contract
 /// - `genesis_lc_state`: Genesis light client state
@@ -62,6 +65,7 @@ use crate::{
 #[builder(setter(strip_option))]
 pub struct DeployerArgs<P: Provider + WalletProvider> {
     deployer: P,
+    rpc_url: Url,
     #[builder(default)]
     token_recipient: Option<Address>,
     #[builder(default)]
@@ -70,8 +74,6 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     use_multisig: bool,
     #[builder(default)]
     dry_run: bool,
-    #[builder(default)]
-    rpc_url: String,
     #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
     #[builder(default)]
@@ -197,7 +199,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     upgrade_esp_token_v2_multisig_owner(
                         provider,
                         contracts,
-                        self.rpc_url.clone(),
+                        self.rpc_url.to_string(),
                         Some(self.dry_run),
                     )
                     .await?;
@@ -290,7 +292,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             epoch_start_block,
                         },
                         use_mock,
-                        rpc_url,
+                        rpc_url.to_string(),
                         Some(dry_run),
                     )
                     .await?;
@@ -318,7 +320,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         contracts,
                         use_mock,
-                        rpc_url,
+                        rpc_url.to_string(),
                         Some(dry_run),
                     )
                     .await?;
@@ -384,12 +386,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let multisig_pauser = self.multisig_pauser.context(
                     "Multisig pauser address must be set for the upgrade to StakeTableV2",
                 )?;
+                let l1_client = L1Client::new(vec![self.rpc_url.clone()])?;
                 tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
                 if use_multisig {
                     upgrade_stake_table_v2_multisig_owner(
                         provider,
+                        l1_client,
                         contracts,
-                        self.rpc_url.clone(),
+                        self.rpc_url.to_string(),
                         self.multisig.context(
                             "Multisig address must be set when upgrading to --use-multisig flag \
                              is present",
@@ -399,8 +403,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
                 } else {
-                    crate::upgrade_stake_table_v2(provider, contracts, multisig_pauser, admin)
-                        .await?;
+                    crate::upgrade_stake_table_v2(
+                        provider,
+                        l1_client,
+                        contracts,
+                        multisig_pauser,
+                        admin,
+                    )
+                    .await?;
 
                     let addr = contracts
                         .address(Contract::StakeTableProxy)

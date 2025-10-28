@@ -1050,7 +1050,7 @@ async fn validate_next_stake_table_hash(
     let next_stake_table_hash = epoch_membership
         .stake_table_hash()
         .await
-        .ok_or(ProposalValidationError::NextStakeTableNotFound)?;
+        .ok_or(ProposalValidationError::NextStakeTableHashNotFound)?;
     let Some(proposed_next_stake_table_hash) = proposed_header.next_stake_table_hash() else {
         return Err(ProposalValidationError::NextStakeTableHashNotFound);
     };
@@ -1338,7 +1338,7 @@ mod test {
 
     use super::*;
     use crate::{
-        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, BlockSize, FeeAccountProof,
+        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, v0_5, BlockSize, FeeAccountProof,
         FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
     };
 
@@ -1382,6 +1382,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V5(parent) => Header::V5(v0_5::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1409,6 +1415,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V4(header) => Header::V4(v0_4::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V5(header) => Header::V5(v0_5::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1444,6 +1455,11 @@ mod test {
                     ..parent.clone()
                 }),
                 Header::V4(parent) => Header::V4(v0_4::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..parent.clone()
+                }),
+                Header::V5(parent) => Header::V5(v0_5::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..parent.clone()
@@ -2015,6 +2031,11 @@ mod test {
                 ..header
             }),
             Header::V4(header) => Header::V4(v0_4::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
+            Header::V5(header) => Header::V5(v0_5::Header {
                 builder_signature: Some(sig),
                 fee_info: FeeInfo::new(account, data),
                 ..header

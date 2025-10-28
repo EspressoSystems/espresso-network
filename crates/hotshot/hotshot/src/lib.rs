@@ -16,7 +16,7 @@ use hotshot_types::{
     drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
@@ -245,7 +245,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         consensus_metrics: ConsensusMetricsValue,
@@ -269,6 +269,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let (internal_tx, mut internal_rx) = internal_channel;
         let (mut external_tx, mut external_rx) = external_channel;
 
+        membership_coordinator
+            .set_external_channel(external_rx.clone())
+            .await;
+
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
             V::Base::VERSION,
@@ -282,12 +286,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
 
+        let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
+            cert.data.new_version
+        } else {
+            V::Base::VERSION
+        };
+
         debug!("Setting DRB difficulty selector in membership");
         let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
 
         membership_coordinator
             .set_drb_difficulty_selector(drb_difficulty_selector)
             .await;
+
+        for da_committee in &config.da_committees {
+            if current_version >= da_committee.start_version {
+                membership_coordinator
+                    .membership()
+                    .write()
+                    .await
+                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
+            }
+        }
 
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
@@ -494,13 +514,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 let (validated_state, state_delta) =
                     TYPES::ValidatedState::genesis(&self.instance_state);
 
-                let qc = Arc::new(
-                    QuorumCertificate2::genesis::<V>(
-                        &validated_state,
-                        self.instance_state.as_ref(),
-                    )
-                    .await,
-                );
+                let qc = QuorumCertificate2::genesis::<V>(
+                    &validated_state,
+                    self.instance_state.as_ref(),
+                )
+                .await;
 
                 broadcast_event(
                     Event {
@@ -513,7 +531,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                                 None,
                                 None,
                             )]),
-                            qc,
+                            committing_qc: Arc::new(CertificatePair::non_epoch_change(qc)),
+                            deciding_qc: None,
                             block_size: None,
                         },
                     },

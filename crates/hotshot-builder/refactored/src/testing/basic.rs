@@ -18,7 +18,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
     event::LeafInfo,
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::{CertificatePair, QuorumCertificate2},
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
@@ -225,7 +225,8 @@ async fn test_pruning() {
                     vid_share: None,
                     state_cert: None,
                 }]),
-                qc: Arc::new(mock_qc),
+                committing_qc: Arc::new(CertificatePair::non_epoch_change(mock_qc.clone())),
+                deciding_qc: None,
                 block_size: None,
             },
         })
