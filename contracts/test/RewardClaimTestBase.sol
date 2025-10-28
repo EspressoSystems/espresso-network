@@ -27,7 +27,6 @@ contract RewardClaimTestBase is Test {
     struct RewardFixtureParams {
         uint256 numAccounts;
         uint64 seed;
-        uint256 amount;
     }
 
     function setUp() public virtual {
@@ -80,39 +79,35 @@ contract RewardClaimTestBase is Test {
         internal
         returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
     {
-        string[] memory cmds = new string[](5);
+        string[] memory cmds = new string[](4);
         cmds[0] = "diff-test";
         cmds[1] = "gen-reward-fixture";
         cmds[2] = vm.toString(params.numAccounts);
         cmds[3] = vm.toString(params.seed);
-        cmds[4] = vm.toString(params.amount);
         bytes memory result = vm.ffi(cmds);
         (authRoot, fixtures) = abi.decode(result, (uint256, RewardClaimTestCase[]));
+    }
+
+    function getFixture(uint64 seed)
+        internal
+        returns (uint256 authRoot, RewardClaimTestCase memory fixture)
+    {
+        RewardClaimTestCase[] memory fixtures;
+        (authRoot, fixtures) = getRewardFixture(RewardFixtureParams({ numAccounts: 1, seed: seed }));
+        fixture = fixtures[0];
     }
 
     function getFixtures(uint256 numAccounts)
         internal
         returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
     {
-        return
-            getRewardFixture(RewardFixtureParams({ numAccounts: numAccounts, seed: 0, amount: 0 }));
+        return getRewardFixture(RewardFixtureParams({ numAccounts: numAccounts, seed: 0 }));
     }
 
     function getFixturesWithSeed(uint256 numAccounts, uint64 seed)
         internal
         returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
     {
-        return getRewardFixture(
-            RewardFixtureParams({ numAccounts: numAccounts, seed: seed, amount: 0 })
-        );
-    }
-
-    function getFixturesWithAmount(uint256 numAccounts, uint256 amount)
-        internal
-        returns (uint256 authRoot, RewardClaimTestCase[] memory fixtures)
-    {
-        return getRewardFixture(
-            RewardFixtureParams({ numAccounts: numAccounts, seed: 0, amount: amount })
-        );
+        return getRewardFixture(RewardFixtureParams({ numAccounts: numAccounts, seed: seed }));
     }
 }

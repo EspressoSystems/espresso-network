@@ -97,7 +97,7 @@ enum Action {
     EpochCompute,
     /// Compute two updates in two first and second epoch epochs
     FirstAndSecondEpochUpdate,
-    /// Generate reward claim test fixtures with configurable accounts, amounts, and seeds
+    /// Generate reward claim test fixtures with configurable accounts and seeds
     GenRewardFixture,
     /// Evolve reward merkle tree state for invariant testing
     EvolveRewardState,
@@ -594,15 +594,12 @@ fn main() {
             );
         },
         Action::GenRewardFixture => {
-            if cli.args.len() != 3 {
-                panic!("Should provide arg1=numAccounts, arg2=seed, arg3=amount");
+            if cli.args.len() != 2 {
+                panic!("Should provide arg1=numAccounts, arg2=seed");
             }
 
             let num_accounts = cli.args[0].parse::<usize>().unwrap();
             let seed = cli.args[1].parse::<u64>().unwrap();
-            let amount = cli.args[2].parse::<U256>().unwrap();
-
-            let use_random_amounts = amount == U256::ZERO;
 
             let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
             let mut rng = StdRng::seed_from_u64(seed);
@@ -617,11 +614,7 @@ fn main() {
 
             for &account in &accounts {
                 let reward_account = RewardAccountV2::from(account);
-                let reward_amount = if use_random_amounts {
-                    RewardAmount::from(rng.gen::<u64>())
-                } else {
-                    RewardAmount(amount)
-                };
+                let reward_amount = RewardAmount::from(rng.gen::<u64>());
                 tree.update(reward_account, reward_amount).unwrap();
             }
 
@@ -642,18 +635,14 @@ fn main() {
 
             let mut fixtures: Vec<(Address, U256, Bytes)> = Vec::new();
             for &account in &accounts {
-                if amount == U256::ZERO && !use_random_amounts {
-                    fixtures.push((account, U256::ZERO, Bytes::new()));
-                } else {
-                    let proof = RewardAccountProofV2::prove(&tree, account).unwrap();
-                    let query_data: RewardAccountQueryDataV2 = proof.into();
-                    let claim_input = query_data.to_reward_claim_input().unwrap();
-                    fixtures.push((
-                        account,
-                        claim_input.lifetime_rewards,
-                        claim_input.auth_data.into(),
-                    ));
-                }
+                let proof = RewardAccountProofV2::prove(&tree, account).unwrap();
+                let query_data: RewardAccountQueryDataV2 = proof.into();
+                let claim_input = query_data.to_reward_claim_input().unwrap();
+                fixtures.push((
+                    account,
+                    claim_input.lifetime_rewards,
+                    claim_input.auth_data.into(),
+                ));
             }
 
             let res = (auth_root_u256, fixtures);

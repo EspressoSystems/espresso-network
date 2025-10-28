@@ -25,11 +25,10 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         }
     }
 
-    function testFuzz_RandomAuthData_AlwaysFails(bytes memory randomAuthData) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, 0);
+    function testFuzz_RandomAuthData_AlwaysFails(bytes memory randomAuthData, uint64 seed) public {
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory validCase = fixtures[0];
         validateTestCase(validCase, authRoot);
 
         vm.prank(validCase.account);
@@ -41,10 +40,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         bytes32[160] memory randomProof,
         uint64 seed
     ) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory validCase = fixtures[0];
         validateTestCase(validCase, authRoot);
 
         (, bytes32[7] memory validAuthRootInputs) =
@@ -61,10 +59,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         bytes32[7] memory randomAuthRootInputs,
         uint64 seed
     ) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory validCase = fixtures[0];
         validateTestCase(validCase, authRoot);
 
         (bytes32[160] memory validProof,) =
@@ -77,12 +74,10 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
         rewardClaim.claimRewards(validCase.lifetimeRewards, invalidAuthData);
     }
 
-    function testFuzz_TruncatedAuthData_AlwaysReverts(uint256 truncateAt) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, 0);
-        lightClient.setAuthRoot(authRoot);
-
-        RewardClaimTestCase memory testCase = fixtures[0];
+    function testFuzz_TruncatedAuthData_AlwaysReverts(uint256 truncateAt, uint64 seed) public {
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
         vm.assume(truncateAt < testCase.authData.length);
+        lightClient.setAuthRoot(authRoot);
 
         validateTestCase(testCase, authRoot);
 
@@ -97,10 +92,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     }
 
     function testFuzz_ValidProof_WrongAmount_Fails(uint256 wrongAmount, uint64 seed) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory testCase = fixtures[0];
         vm.assume(wrongAmount != testCase.lifetimeRewards);
         vm.assume(wrongAmount > 0);
 
@@ -112,10 +106,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     }
 
     function testFuzz_ValidProof_WrongSender_Fails(address wrongSender, uint64 seed) public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory testCase = fixtures[0];
         vm.assume(wrongSender != testCase.account);
         vm.assume(wrongSender != address(0));
 
@@ -131,10 +124,9 @@ contract RewardClaimProofFuzzTest is RewardClaimTestBase {
     {
         vm.assume(xorMask != 0);
 
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixturesWithSeed(1, seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
-        RewardClaimTestCase memory testCase = fixtures[0];
         vm.assume(byteIndex < testCase.authData.length);
 
         validateTestCase(testCase, authRoot);
