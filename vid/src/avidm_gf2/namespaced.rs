@@ -194,7 +194,7 @@ impl NsAvidMGF2Scheme {
             return Err(VidError::InsufficientShares);
         }
         if ns_index >= common.ns_lens.len()
-            || shares.iter().any(|share| share.contains_ns(ns_index))
+            || !shares.iter().all(|share| share.contains_ns(ns_index))
         {
             return Err(VidError::IndexOutOfBound);
         }
