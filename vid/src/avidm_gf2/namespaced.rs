@@ -117,10 +117,6 @@ impl NsAvidMGF2Scheme {
                 .map_err(|err| VidError::Internal(err.into()))?
                 .commitment(),
         };
-        // let ns_commits: Vec<_> = ns_commits
-        //     .into_iter()
-        //     .map(|comm| AvidMGF2Commit { commit: comm })
-        //     .collect();
         let mut shares = vec![NsAvidMGF2Share::default(); disperses[0].len()];
         shares.iter_mut().for_each(|share| {
             share.index = disperses[0][0].index;
@@ -220,10 +216,9 @@ pub mod tests {
         let ns_table = [(0usize..15), (15..48)];
         let payload_byte_len = ns_lens.iter().sum();
 
-        // more items as a function of the above
-
         let mut rng = jf_utils::test_rng();
 
+        // more items as a function of the above
         let weights: Vec<u32> = (0..num_storage_nodes)
             .map(|_| rng.next_u32() % 5 + 1)
             .collect();

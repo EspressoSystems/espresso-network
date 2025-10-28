@@ -1,6 +1,6 @@
 //! This module implements the AVID-M scheme over GF2
 
-use std::ops::Range;
+use std::{ops::Range, vec};
 
 use anyhow::anyhow;
 use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme};
@@ -16,7 +16,7 @@ pub mod namespaced;
 pub mod proofs;
 
 /// Merkle tree scheme used in the VID
-pub type MerkleTree =
+pub(crate) type MerkleTree =
     jf_merkle_tree::hasher::HasherMerkleTree<sha3::Keccak256, HasherNode<sha3::Keccak256>>;
 type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
 type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
@@ -46,7 +46,7 @@ impl AvidMGF2Param {
     }
 }
 
-/// Share type to be distributed among the parties.
+/// The internal VID Share type
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RawAvidMGF2Share {
     /// Range of this share in the encoded payload.
@@ -59,7 +59,7 @@ pub struct RawAvidMGF2Share {
     mt_proofs: Vec<MerkleProof>,
 }
 
-/// VID Share type
+/// VID Share type to be distributed among the parties.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidMGF2Share {
     /// Index number of the given share.
@@ -81,18 +81,22 @@ impl AsRef<[u8]> for AvidMGF2Commit {
     }
 }
 
-impl AsRef<[u8; 32]> for AvidMGF2Commit {
-    fn as_ref(&self) -> &[u8; 32] {
-        unsafe { ::core::slice::from_raw_parts((self as *const Self) as *const u8, 32) }
-            .try_into()
-            .unwrap()
-    }
-}
-
 impl AvidMGF2Scheme {
     /// Setup an instance for AVID-M scheme
     pub fn setup(recovery_threshold: usize, total_weights: usize) -> VidResult<AvidMGF2Param> {
         AvidMGF2Param::new(recovery_threshold, total_weights)
+    }
+
+    fn bit_padding(payload: &[u8], payload_len: usize) -> VidResult<Vec<u8>> {
+        if payload_len < payload.len() + 1 {
+            return Err(VidError::Argument(
+                "Payload length is too large to fit in the given payload length".to_string(),
+            ));
+        }
+        let mut padded = vec![0u8; payload_len];
+        padded[..payload.len()].copy_from_slice(payload);
+        padded[payload.len()] = 1u8;
+        Ok(padded)
     }
 
     fn raw_disperse(
@@ -101,14 +105,12 @@ impl AvidMGF2Scheme {
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
         let original_count = param.recovery_threshold;
         let recovery_count = param.total_weights - param.recovery_threshold;
-        // Appending an 1u8 to the end of the payload as an implicit commit to the payload byte length.
+        // Bit padding, we append an 1u8 to the end of the payload.
         let mut shard_bytes = (payload.len() + 1).div_ceil(original_count);
         if shard_bytes % 2 == 1 {
             shard_bytes += 1;
         }
-        let mut payload = payload.to_vec();
-        payload.push(1u8);
-        payload.resize(shard_bytes * original_count, 0u8);
+        let payload = Self::bit_padding(payload, shard_bytes * original_count)?;
         let original = payload
             .chunks(shard_bytes)
             .map(|chunk| chunk.to_owned())
@@ -137,6 +139,7 @@ impl AvidMGF2Scheme {
         }
         for (i, index) in share.range.clone().enumerate() {
             let payload_digest = HasherNode::from(sha3::Keccak256::digest(&share.payload[i]));
+            // TODO(Chengyu): switch to batch verification
             if MerkleTree::verify(
                 commit.commit,
                 index as u64,
@@ -189,6 +192,7 @@ impl VidScheme for AvidMGF2Scheme {
                 content: RawAvidMGF2Share {
                     range: range.clone(),
                     payload: shares[range.clone()].to_vec(),
+                    // TODO(Chengyu): switch to batch proof generation
                     mt_proofs: range
                         .map(|k| {
                             mt.lookup(k as u64)
@@ -287,14 +291,14 @@ pub mod tests {
     #[test]
     fn round_trip() {
         // play with these items
-        let params_list = [4, 9, 16];
+        let num_storage_nodes_list = [4, 9, 16];
         let payload_byte_lens = [1, 31, 32, 500];
 
         // more items as a function of the above
 
         let mut rng = jf_utils::test_rng();
 
-        for num_storage_nodes in params_list {
+        for num_storage_nodes in num_storage_nodes_list {
             let weights: Vec<u32> = (0..num_storage_nodes)
                 .map(|_| rng.next_u32() % 5 + 1)
                 .collect();
