@@ -4,11 +4,11 @@ genesis_version = "0.2"
 epoch_height = 3000
 drb_difficulty = 5000000000
 drb_upgrade_difficulty = 5000000000
-epoch_start_block = 12001
+epoch_start_block = 6001
 
 [[da_committees]]
 start_version = "0.4"
-start_epoch = 10
+start_epoch = 5
 
 [[da_committees.committee]]
 state_ver_key = "SCHNORR_VER_KEY~SH_6UHYUqQYsJEHKxSSmKZxXYApnLKho21-0aUSi0xmDxqm7ooRNpI5xpFdHSQReY1n0g4w9SIKjJK4HG92NIKc"
@@ -22,6 +22,20 @@ state_ver_key = "SCHNORR_VER_KEY~Vgs-osonoQBj8GGb4erBqK6G2v0Q3qk21Pb16B1h9RfKm6N
 
 [da_committees.committee.stake_table_entry]
 stake_key = "BLS_VER_KEY~qwEP63srzoRpSf7ahV27nz8JL90W5q3KhyPJhTY75Sir9JiHkF2JQBZ_1iJlTNOfprZ-cXh7GB4irI00hvExFiSQbTPomSRUnFxugn5I5FbOT7vxiXZiZ3pEhFbzFqAHCY57RtaPbqFBNmMzlueUUtxF0Cf-Sy3uVcAaWF7TB6Jy"
+stake_amount = "0x1"
+
+[[da_committees.committee]]
+state_ver_key = "SCHNORR_VER_KEY~rCGxwXIrWN1QbYXykJgDw4c1a0vNCglqbSTeevaZcSX_vDiOl0ncKIhbsDhASx0EaWX67ZgaXOoCq2V87cpXCNw"
+
+[da_committees.committee.stake_table_entry]
+stake_key = "BLS_VER_KEY~OgoV0DKrVMKYbGrnun5P6QGLicYtu-YAfmd-jmMjGQbr5L1nBUgOu-iOrnFiQIKQzB7hD_7N7VYP8OJCOeU_GOlEJDpNFJEUrn636VB1hqc2xXUrTy9nr6pf-IBQSOQnBu-DynNfdfWl79kJ3mPGLUnLrEZxzmx_rX5mbbzHfplw"
+stake_amount = "0x1"
+
+[[da_committees.committee]]
+state_ver_key = "SCHNORR_VER_KEY~7nMR1Q6NekFNRqGdYlahjDrU-53laZ8CZeSK6UMOZAyVAK662M9m9-a4Z-XqB9lfqIDIkSdf7E9Egk_KDfDlJ9o"
+
+[da_committees.committee.stake_table_entry]
+stake_key = "BLS_VER_KEY~epsA2EWk47kIH9LJAXFaHmkV7Z5w1WVCVW9OxbUt_AagVOVHW_d234iIRW6daMzNG2smomQm7JatnCcAVenEBUz3qBMh6yZ45W5unxRcn7cqXWLz0lsXFlexuoZuGPUaj3zxCiLZ8d357kFvxMxMssRapfr0E_G1byeN9nOQNKRp"
 stake_amount = "0x1"
 
 #da_committees = [
