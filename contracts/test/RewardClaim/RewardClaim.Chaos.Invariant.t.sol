@@ -26,7 +26,7 @@ contract RewardClaimHandler is RewardClaimTestBase {
 
     AccountState[] public rewardState;
     RewardClaimTestCase[] public lastFixtures;
-    mapping(address => uint256) public totalClaimed;
+    mapping(address account => uint256 amount) public totalClaimed;
     uint256 public totalDailyClaims;
     uint256 public totalClaimedAllAccounts;
     uint256 public initialSupply;

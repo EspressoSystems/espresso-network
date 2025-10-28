@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
+/* solhint-disable func-name-mixedcase, no-console */
+
 import "forge-std/Test.sol";
 import "forge-std/StdInvariant.sol";
 import { console } from "forge-std/console.sol";
@@ -15,7 +17,7 @@ contract RewardClaimSimpleHandler is RewardClaimTestBase {
     AccountState[] public rewardState;
     RewardClaimTestCase public currentFixture;
 
-    mapping(uint256 => uint256) public claimsByDay;
+    mapping(uint256 day => uint256 amount) public claimsByDay;
 
     uint256 public numValidClaims;
     uint256 public numDoubleClaims;
