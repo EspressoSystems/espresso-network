@@ -19,6 +19,7 @@ extend-exclude = [
   "data/initial_stake_table.toml",
   "data/genesis/staging.toml",
   "data/genesis/staging-proposer.toml",
+  "data/genesis/staging-new.toml",
 ]
 
 [default.extend-words]
