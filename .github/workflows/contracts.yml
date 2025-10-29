@@ -77,7 +77,7 @@ jobs:
           - test-type: invariant
             command: "just contracts-test-invariant"
             nix-env: ""
-            with-diff-test: false
+            with-diff-test: true
           - test-type: fuzz
             command: "just contracts-test-fuzz"
             nix-env: ""

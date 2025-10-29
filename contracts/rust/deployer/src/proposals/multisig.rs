@@ -586,10 +586,10 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 
     if !dry_run {
         tracing::info!(
-            "EspTokenProxy upgrade proposal sent. Send this link to the signers to \
+                "EspTokenProxy upgrade proposal sent. Send this link to the signers to \
                  sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-            owner_addr
-        );
+                owner_addr
+            );
     }
 
     Ok(result)

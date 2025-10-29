@@ -4,10 +4,10 @@
 
 pragma solidity ^0.8.28;
 
-import "./RewardClaim.t.sol";
+import "./RewardClaimMock.t.sol";
 
-contract RewardClaimPauseTest is RewardClaimTest {
-    function test_Pause() public {
+contract RewardClaimPauseTest is RewardClaimMockTest {
+    function test_claim_FailsIfPaused() public {
         vm.prank(pauser);
         rewardClaim.pause();
 
@@ -16,7 +16,7 @@ contract RewardClaimPauseTest is RewardClaimTest {
         rewardClaim.claimRewards(1, "");
     }
 
-    function test_Pause_Unpause() public {
+    function test_claim_SucceedsIfUnpaused() public {
         vm.prank(pauser);
         rewardClaim.pause();
 
@@ -26,7 +26,7 @@ contract RewardClaimPauseTest is RewardClaimTest {
         claim(1);
     }
 
-    function test_Pause_RevertsNonPauser() public {
+    function test_pause_RevertsNonPauser() public {
         bytes32 pauserRole = rewardClaim.PAUSER_ROLE();
         vm.prank(claimer);
         vm.expectRevert(
@@ -37,7 +37,7 @@ contract RewardClaimPauseTest is RewardClaimTest {
         rewardClaim.pause();
     }
 
-    function test_Unpause_RevertsNonPauser() public {
+    function test_unpause_RevertsNonPauser() public {
         vm.prank(pauser);
         rewardClaim.pause();
 
@@ -49,14 +49,5 @@ contract RewardClaimPauseTest is RewardClaimTest {
             )
         );
         rewardClaim.unpause();
-    }
-
-    function test_Claim_RevertsPaused() public {
-        vm.prank(pauser);
-        rewardClaim.pause();
-
-        vm.prank(claimer);
-        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
-        rewardClaim.claimRewards(1, "");
     }
 }

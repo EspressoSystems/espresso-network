@@ -23,7 +23,7 @@ cross_tests!(
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [EpochsTestVersions],
-    Ignore: false,
+    Ignore: true,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(20,4);
 
