@@ -3,9 +3,9 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase */
 
-import "./RewardClaim.Base.t.sol";
+import "./RewardClaim.t.sol";
 
-contract RewardClaimProofVerificationTest is RewardClaimTestBase {
+contract RewardClaimProofVerificationTest is RewardClaimTest {
     function test_ValidProof_SingleAccount_Succeeds() public {
         (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
         lightClient.setAuthRoot(authRoot);

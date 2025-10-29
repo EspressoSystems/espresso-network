@@ -7,7 +7,6 @@ pragma solidity ^0.8.28;
 import "forge-std/Test.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "../mocks/MockRewardClaim.sol";
 import "../../src/RewardClaim.sol";
 
 contract MockERC20 is ERC20 {
@@ -28,7 +27,7 @@ contract RewardClaimInitializeTest is Test {
         pauser = makeAddr("pauser");
         lc = makeAddr("lc");
         supply = 100;
-        impl = address(new MockRewardClaim());
+        impl = address(new RewardClaim());
     }
 
     function prepare(uint256 tokenSupply, address _owner, address _lightClient, address _pauser)
@@ -89,8 +88,8 @@ contract RewardClaimInitializeTest is Test {
         (bytes memory initData) = prepare(supply, owner, lc, pauser);
 
         ERC1967Proxy proxy = new ERC1967Proxy(impl, initData);
-        MockRewardClaim rewardClaim = MockRewardClaim(payable(address(proxy)));
+        RewardClaim rewardClaim = RewardClaim(payable(address(proxy)));
 
-        assertEq(rewardClaim.dailyLimit(), 1);
+        assertEq(rewardClaim.dailyLimitWei(), 1);
     }
 }

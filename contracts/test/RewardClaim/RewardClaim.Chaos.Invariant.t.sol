@@ -3,11 +3,11 @@ pragma solidity ^0.8.28;
 
 /* solhint-disable func-name-mixedcase, no-console */
 
-import "./RewardClaim.Base.t.sol";
+import "./RewardClaim.t.sol";
 import "forge-std/StdInvariant.sol";
 import "forge-std/console.sol";
 
-contract RewardClaimHandler is RewardClaimTestBase {
+contract RewardClaimHandler is RewardClaimTest {
     struct AccountState {
         address account;
         uint256 lifetimeRewards;
@@ -43,7 +43,7 @@ contract RewardClaimHandler is RewardClaimTestBase {
         initialSupply = espToken.totalSupply();
 
         vm.prank(rewardClaim.owner());
-        rewardClaim.setDailyLimit(1000 ether);
+        rewardClaim.setDailyLimit(300); // 3%
     }
 
     function evolveState(
@@ -107,7 +107,7 @@ contract RewardClaimHandler is RewardClaimTestBase {
 
             totalClaimAttempts++;
 
-            bool shouldExceedLimit = totalDailyClaims + amountToClaim > rewardClaim.dailyLimit();
+            bool shouldExceedLimit = totalDailyClaims + amountToClaim > rewardClaim.dailyLimitWei();
 
             if (shouldExceedLimit) {
                 dailyLimitHits++;
@@ -129,7 +129,7 @@ contract RewardClaimHandler is RewardClaimTestBase {
                 // exceed the daily limit. We check here rather than in invariant_* because the
                 // limit can be reduced below totalDailyClaims by admin (valid), but claims must
                 // always respect the limit at the time they execute.
-                assertLe(totalDailyClaims, rewardClaim.dailyLimit());
+                assertLe(totalDailyClaims, rewardClaim.dailyLimitWei());
 
                 vm.prank(testCase.account);
                 vm.expectRevert(IRewardClaim.AlreadyClaimed.selector);
@@ -147,11 +147,10 @@ contract RewardClaimHandler is RewardClaimTestBase {
     }
 
     function updateDailyLimit(uint256 limitSeed) public {
-        uint256 totalSupply = espToken.totalSupply();
-        uint256 maxLimit = (totalSupply * rewardClaim.MAX_DAILY_LIMIT_PERCENTAGE()) / 100e18;
-        uint256 newLimit = _bound(limitSeed, 100, maxLimit);
+        uint256 maxBasisPoints = rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS();
+        uint256 basisPoints = _bound(limitSeed, 1, maxBasisPoints);
         vm.prank(rewardClaim.owner());
-        rewardClaim.setDailyLimit(newLimit);
+        rewardClaim.setDailyLimit(basisPoints);
         stats.updateDailyLimit.ok++;
     }
 

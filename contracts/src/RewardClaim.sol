@@ -35,18 +35,28 @@ contract RewardClaim is
     /// @notice Tracks total lifetime rewards claimed by each address
     mapping(address claimer => uint256 claimed) public claimedRewards;
 
-    /// @notice Maximum amount that can be claimed per day across all claimers
-    /// @dev Daily limits provide defense-in-depth security: in the unlikely event
-    /// an exploit for the merkle proof verification is discovered, at most the
-    /// daily limit can be minted before the contract is paused by the PAUSER_ROLE.
-    /// This offers a second layer of protection beyond cryptographic verification.
-    uint256 public dailyLimit;
+    /// @notice Maximum amount (in Wei) that can be claimed per day across all claimers
+    ///
+    /// @dev Daily limits provide defense-in-depth security: in the unlikely event an exploit for
+    /// the merkle proof verification is discovered, at most the daily limit can be minted before
+    /// the contract is paused by the PAUSER_ROLE. This offers a second layer of protection beyond
+    /// cryptographic verification.
+    ///
+    /// @dev This parameter is intentionally kept non-dynamic such that inflating the token
+    /// `totalSupply` will not inflate the value of this limiting parameter.
+    uint256 public dailyLimitWei;
 
-    /// @notice Maximum daily limit as percentage of total supply (5% = 5000000000000000000)
+    /// @notice Basis points used when daily limit was last set (for reference only)
+    /// @dev This is a snapshot of the basis points parameter from the last setDailyLimit call.
+    /// As total supply changes, this value becomes outdated and no longer represents the actual
+    /// percentage that dailyLimitWei represents relative to current supply.
+    uint256 public lastSetDailyLimitBasisPoints;
+
+    /// @notice Maximum daily limit as percentage of total supply in basis points (500 = 5%)
     /// @dev Hardcoded to prevent setting dangerously high limits without a contract upgrade.
     /// Increasing this value further would require upgrading the contract, which is
     /// intentional to ensure careful consideration and governance of security parameters.
-    uint256 public constant MAX_DAILY_LIMIT_PERCENTAGE = 5e18; // 5% in 18 decimal fixed point
+    uint256 public constant MAX_DAILY_LIMIT_BASIS_POINTS = 500; // 5%
 
     /// @notice Current day number (days since epoch)
     uint256 private _currentDay;
@@ -77,6 +87,9 @@ contract RewardClaim is
     /// @notice Attempting to set daily limit above the maximum allowed percentage
     error DailyLimitTooHigh();
 
+    /// @notice Attempting to set daily limit to the current value
+    error NoChangeRequired();
+
     /// @notice Total ESP token supply is zero during initialization
     error ZeroTotalSupply();
 
@@ -101,6 +114,7 @@ contract RewardClaim is
     /// @dev Sets daily limit to 1% of total ESP token supply
     function initialize(address _owner, address _espToken, address _lightClient, address _pauser)
         external
+        virtual
         initializer
     {
         // NOTE: __Ownable_init checks _owner != address(0)
@@ -112,7 +126,9 @@ contract RewardClaim is
         uint256 totalSupply = EspTokenV2(_espToken).totalSupply();
         require(totalSupply > 0, ZeroTotalSupply());
 
-        uint256 _dailyLimit = totalSupply / 100;
+        // Set initial daily limit to 1% (100 basis points) of total supply
+        uint256 initialBps = 100; // 1%
+        uint256 _dailyLimit = (totalSupply * initialBps) / 10000;
         require(_dailyLimit > 0, ZeroDailyLimit());
 
         __Ownable_init(_owner);
@@ -127,42 +143,60 @@ contract RewardClaim is
         espToken = EspTokenV2(_espToken);
         lightClient = LightClientV3(_lightClient);
 
-        dailyLimit = _dailyLimit;
+        dailyLimitWei = _dailyLimit;
+        lastSetDailyLimitBasisPoints = initialBps;
         _currentDay = block.timestamp / 1 days;
     }
 
-    function pause() external onlyRole(PAUSER_ROLE) {
+    function pause() external virtual onlyRole(PAUSER_ROLE) {
         _pause();
     }
 
-    function unpause() external onlyRole(PAUSER_ROLE) {
+    function unpause() external virtual onlyRole(PAUSER_ROLE) {
         _unpause();
     }
 
     /// @notice Updates the daily limit
-    /// @param newLimit New daily limit in wei, must be greater than zero and less than max
-    /// @dev nonReentrant protects against reentrancy during the external call to
-    /// espToken.totalSupply(). While unlikely to be exploited, this provides defense-in-depth
-    /// security for critical security parameters.
-    function setDailyLimit(uint256 newLimit) external onlyOwner nonReentrant {
+    ///
+    /// @notice This function computes an absolute daily limit in Wei by multiplying the supplied
+    /// basis points with the current total supply of ESP tokens.
+    ///
+    /// @param basisPoints Daily limit as basis points of current total supply (1-500 for 0.01%-5%)
+    ///
+    /// @dev nonReentrant protects against reentrancy during the external call to `totalSupply`.
+    /// @dev Unlikely to be exploited: we are calling our token, but the token is upgradable.
+    /// @dev DO NOT REMOVE: Added for defense-in-depth.
+    function setDailyLimit(uint256 basisPoints) external virtual onlyOwner nonReentrant {
+        require(basisPoints > 0, ZeroDailyLimit());
+        require(basisPoints <= MAX_DAILY_LIMIT_BASIS_POINTS, DailyLimitTooHigh());
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
         require(newLimit > 0, ZeroDailyLimit());
-        uint256 maxLimit = (espToken.totalSupply() * MAX_DAILY_LIMIT_PERCENTAGE) / 100e18;
-        require(newLimit <= maxLimit, DailyLimitTooHigh());
-        emit DailyLimitUpdated(dailyLimit, newLimit);
-        dailyLimit = newLimit;
+
+        // Due to computation based on current total supply, the new limit is very unlikely to be
+        // equal to the old limit. Likely an operator error, therefore revert.
+        require(newLimit != dailyLimitWei, NoChangeRequired());
+
+        emit DailyLimitUpdated(dailyLimitWei, newLimit);
+        dailyLimitWei = newLimit;
+        lastSetDailyLimitBasisPoints = basisPoints;
     }
 
     /// @notice Claim all unclaimed staking rewards
     /// @param lifetimeRewards Total earned lifetime rewards for the user
     /// @param authData Authentication data from Espresso query service
     ///
-    /// @dev nonReentrant is not strictly necessary (claimedRewards updated before
-    /// external call, and re-entrancy would change msg.sender making proof
-    /// verification fail), but makes the security properties much simpler to
-    /// reason about. DO NOT REMOVE: intentionally kept for defense-in-depth and
-    /// code clarity. See RewardClaim.Reentrancy.Unit.t.sol for regression test.
+    /// @dev nonReentrant is not strictly necessary:
+    ///
+    /// - claimedRewards updated before external call
+    /// - re-entrancy would change msg.sender making proof verification fail
+    /// - we are calling _our_ token
+    ///
+    /// @dev The token is upgradable, the modifier makes re-entrancy simpler to reason about.
+    /// @dev DO NOT REMOVE: added for defense-in-depth and clarity.
+    /// @dev See RewardClaim.Reentrancy.Unit.t.sol for regression test.
     function claimRewards(uint256 lifetimeRewards, bytes calldata authData)
         external
+        virtual
         whenNotPaused
         nonReentrant
     {
@@ -191,19 +225,19 @@ contract RewardClaim is
         return (1, 0, 0);
     }
 
-    function _enforceDailyLimit(uint256 amount) internal {
+    function _enforceDailyLimit(uint256 amount) internal virtual {
         uint256 today = block.timestamp / 1 days;
         if (today != _currentDay) {
             _currentDay = today;
             _claimedToday = 0;
         }
         _claimedToday += amount;
-        if (_claimedToday > dailyLimit) {
+        if (_claimedToday > dailyLimitWei) {
             revert DailyLimitExceeded();
         }
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         emit Upgrade(newImplementation);
     }
 

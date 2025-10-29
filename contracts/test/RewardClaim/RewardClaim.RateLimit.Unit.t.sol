@@ -4,13 +4,13 @@
 
 pragma solidity ^0.8.28;
 
-import "./RewardClaim.t.sol";
+import "./RewardClaimMock.t.sol";
 import "../../src/interfaces/IRewardClaim.sol";
 
 // Conventions:
 // - Use checkLimitEnforced() helper for verifying limit exceeded
 // - Tests verifying limit exceeded should exceed by exactly 1 wei for precision
-contract RewardClaimRateLimitTest is RewardClaimTest {
+contract RewardClaimRateLimitTest is RewardClaimMockTest {
     function checkLimitEnforced(address user, uint256 lifetimeRewards) internal {
         vm.prank(user);
         vm.expectRevert(IRewardClaim.DailyLimitExceeded.selector);
@@ -67,9 +67,10 @@ contract RewardClaimRateLimitTest is RewardClaimTest {
         claim(DAILY_LIMIT);
         checkLimitEnforced(claimer, DAILY_LIMIT + 1);
 
-        uint256 newLimit = DAILY_LIMIT * 2;
+        uint256 basisPoints = 200; // 2%
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
         vm.prank(owner);
-        rewardClaim.setDailyLimit(newLimit);
+        rewardClaim.setDailyLimit(basisPoints);
 
         claim(newLimit);
         checkLimitEnforced(claimer, newLimit + 1);
@@ -90,9 +91,10 @@ contract RewardClaimRateLimitTest is RewardClaimTest {
     function test_DecreasedLimit_AppliesNextDay() public {
         claim(DAILY_LIMIT);
 
-        uint256 newLimit = DAILY_LIMIT / 2;
+        uint256 basisPoints = 50; // 0.5%
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
         vm.prank(owner);
-        rewardClaim.setDailyLimit(newLimit);
+        rewardClaim.setDailyLimit(basisPoints);
 
         checkLimitEnforced(claimer, DAILY_LIMIT + 1);
 
