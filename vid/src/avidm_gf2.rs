@@ -10,9 +10,9 @@ use sha2::Digest;
 
 use crate::{VidError, VidResult, VidScheme};
 
-/// Namespaced AvidMGF2 scheme
+/// Namespaced AvidmGf2 scheme
 pub mod namespaced;
-/// Namespace proofs for AvidMGF2 scheme
+/// Namespace proofs for AvidmGf2 scheme
 pub mod proofs;
 
 /// Merkle tree scheme used in the VID
@@ -22,19 +22,19 @@ type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
 type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 
 /// Dummy struct for AVID-M scheme over GF2
-pub struct AvidMGF2Scheme;
+pub struct AvidmGf2Scheme;
 
 /// VID Parameters
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AvidMGF2Param {
+pub struct AvidmGf2Param {
     /// Total weights of all storage nodes
     pub total_weights: usize,
     /// Minimum collective weights required to recover the original payload.
     pub recovery_threshold: usize,
 }
 
-impl AvidMGF2Param {
-    /// Construct a new [`AvidMGF2Param`].
+impl AvidmGf2Param {
+    /// Construct a new [`AvidmGf2Param`].
     pub fn new(recovery_threshold: usize, total_weights: usize) -> VidResult<Self> {
         if recovery_threshold == 0 || total_weights < recovery_threshold {
             return Err(VidError::InvalidParam);
@@ -48,7 +48,7 @@ impl AvidMGF2Param {
 
 /// VID Share type to be distributed among the parties.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AvidMGF2Share {
+pub struct AvidmGf2Share {
     /// Range of this share in the encoded payload.
     range: Range<usize>,
     /// Actual share content.
@@ -59,7 +59,7 @@ pub struct AvidMGF2Share {
     mt_proofs: Vec<MerkleProof>,
 }
 
-impl AvidMGF2Share {
+impl AvidmGf2Share {
     /// Get the weight of this share
     pub fn weight(&self) -> usize {
         self.range.len()
@@ -73,21 +73,21 @@ impl AvidMGF2Share {
 
 /// VID Commitment type
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AvidMGF2Commit {
+pub struct AvidmGf2Commit {
     /// VID commitment is the Merkle tree root
     pub commit: MerkleCommit,
 }
 
-impl AsRef<[u8]> for AvidMGF2Commit {
+impl AsRef<[u8]> for AvidmGf2Commit {
     fn as_ref(&self) -> &[u8] {
         self.commit.as_ref()
     }
 }
 
-impl AvidMGF2Scheme {
+impl AvidmGf2Scheme {
     /// Setup an instance for AVID-M scheme
-    pub fn setup(recovery_threshold: usize, total_weights: usize) -> VidResult<AvidMGF2Param> {
-        AvidMGF2Param::new(recovery_threshold, total_weights)
+    pub fn setup(recovery_threshold: usize, total_weights: usize) -> VidResult<AvidmGf2Param> {
+        AvidmGf2Param::new(recovery_threshold, total_weights)
     }
 
     fn bit_padding(payload: &[u8], payload_len: usize) -> VidResult<Vec<u8>> {
@@ -103,7 +103,7 @@ impl AvidMGF2Scheme {
     }
 
     fn raw_disperse(
-        param: &AvidMGF2Param,
+        param: &AvidmGf2Param,
         payload: &[u8],
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
         let original_count = param.recovery_threshold;
@@ -130,10 +130,10 @@ impl AvidMGF2Scheme {
     }
 }
 
-impl VidScheme for AvidMGF2Scheme {
-    type Param = AvidMGF2Param;
-    type Share = AvidMGF2Share;
-    type Commit = AvidMGF2Commit;
+impl VidScheme for AvidmGf2Scheme {
+    type Param = AvidmGf2Param;
+    type Share = AvidmGf2Share;
+    type Commit = AvidmGf2Commit;
 
     fn commit(param: &Self::Param, payload: &[u8]) -> VidResult<Self::Commit> {
         let (mt, _) = Self::raw_disperse(param, payload)?;
@@ -148,7 +148,7 @@ impl VidScheme for AvidMGF2Scheme {
         payload: &[u8],
     ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
         let (mt, shares) = Self::raw_disperse(param, payload)?;
-        let commit = AvidMGF2Commit {
+        let commit = AvidmGf2Commit {
             commit: mt.commitment(),
         };
         let ranges: Vec<_> = distribution
@@ -161,7 +161,7 @@ impl VidScheme for AvidMGF2Scheme {
             .collect();
         let shares: Vec<_> = ranges
             .into_iter()
-            .map(|range| AvidMGF2Share {
+            .map(|range| AvidmGf2Share {
                 range: range.clone(),
                 payload: shares[range.clone()].to_vec(),
                 // TODO(Chengyu): switch to batch proof generation
@@ -270,7 +270,7 @@ impl VidScheme for AvidMGF2Scheme {
 pub mod tests {
     use rand::{seq::SliceRandom, RngCore};
 
-    use super::AvidMGF2Scheme;
+    use super::AvidmGf2Scheme;
     use crate::VidScheme;
 
     #[test]
@@ -289,7 +289,7 @@ pub mod tests {
                 .collect();
             let total_weights: u32 = weights.iter().sum();
             let recovery_threshold = total_weights.div_ceil(3) as usize;
-            let params = AvidMGF2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
+            let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
             for payload_byte_len in payload_byte_lens {
                 let payload = {
@@ -299,13 +299,13 @@ pub mod tests {
                 };
 
                 let (commit, mut shares) =
-                    AvidMGF2Scheme::disperse(&params, &weights, &payload).unwrap();
+                    AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
 
                 assert_eq!(shares.len(), num_storage_nodes);
 
                 // verify shares
                 shares.iter().for_each(|share| {
-                    assert!(AvidMGF2Scheme::verify_share(&params, &commit, share)
+                    assert!(AvidmGf2Scheme::verify_share(&params, &commit, share)
                         .is_ok_and(|r| r.is_ok()))
                 });
 
@@ -318,7 +318,7 @@ pub mod tests {
                     cut_index += 1;
                 }
                 let payload_recovered =
-                    AvidMGF2Scheme::recover(&params, &commit, &shares[..cut_index]).unwrap();
+                    AvidmGf2Scheme::recover(&params, &commit, &shares[..cut_index]).unwrap();
                 assert_eq!(payload_recovered, payload);
             }
         }

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     avidm_gf2::{
-        namespaced::{NsAvidMGF2Commit, NsAvidMGF2Common, NsAvidMGF2Scheme},
-        AvidMGF2Scheme, MerkleProof, MerkleTree,
+        namespaced::{NsAvidmGf2Commit, NsAvidmGf2Common, NsAvidmGf2Scheme},
+        AvidmGf2Scheme, MerkleProof, MerkleTree,
     },
     VerificationResult, VidError, VidResult, VidScheme,
 };
@@ -25,10 +25,10 @@ pub struct NsProof {
     pub ns_proof: MerkleProof,
 }
 
-impl NsAvidMGF2Scheme {
+impl NsAvidmGf2Scheme {
     /// Generate a proof of inclusion for a namespace payload.
     pub fn namespace_proof(
-        common: &NsAvidMGF2Common,
+        common: &NsAvidmGf2Common,
         payload: &[u8],
         ns_index: usize,
     ) -> VidResult<NsProof> {
@@ -62,11 +62,11 @@ impl NsAvidMGF2Scheme {
 
     /// Verify a namespace proof against a namespaced VID commitment.
     pub fn verify_namespace_proof(
-        commit: &NsAvidMGF2Commit,
-        common: &NsAvidMGF2Common,
+        commit: &NsAvidmGf2Commit,
+        common: &NsAvidmGf2Common,
         proof: &NsProof,
     ) -> VidResult<VerificationResult> {
-        let ns_commit = AvidMGF2Scheme::commit(&common.param, &proof.ns_payload)?;
+        let ns_commit = AvidmGf2Scheme::commit(&common.param, &proof.ns_payload)?;
         Ok(MerkleTree::verify(
             &commit.commit,
             proof.ns_index as u64,
@@ -78,41 +78,41 @@ impl NsAvidMGF2Scheme {
 
 #[cfg(test)]
 mod tests {
-    use crate::avidm_gf2::{namespaced::NsAvidMGF2Scheme, AvidMGF2Scheme};
+    use crate::avidm_gf2::{namespaced::NsAvidmGf2Scheme, AvidmGf2Scheme};
 
     #[test]
     fn test_ns_proof() {
-        let param = AvidMGF2Scheme::setup(5usize, 10usize).unwrap();
+        let param = AvidmGf2Scheme::setup(5usize, 10usize).unwrap();
         let payload = vec![1u8; 100];
         let ns_table = vec![(0..10), (10..21), (21..33), (33..48), (48..100)];
         let (commit, common) =
-            NsAvidMGF2Scheme::commit(&param, &payload, ns_table.clone()).unwrap();
+            NsAvidmGf2Scheme::commit(&param, &payload, ns_table.clone()).unwrap();
 
         for (i, _) in ns_table.iter().enumerate() {
-            let proof = NsAvidMGF2Scheme::namespace_proof(&common, &payload, i).unwrap();
+            let proof = NsAvidmGf2Scheme::namespace_proof(&common, &payload, i).unwrap();
             assert!(
-                NsAvidMGF2Scheme::verify_namespace_proof(&commit, &common, &proof)
+                NsAvidmGf2Scheme::verify_namespace_proof(&commit, &common, &proof)
                     .unwrap()
                     .is_ok()
             );
         }
-        let mut proof = NsAvidMGF2Scheme::namespace_proof(&common, &payload, 1).unwrap();
+        let mut proof = NsAvidmGf2Scheme::namespace_proof(&common, &payload, 1).unwrap();
         proof.ns_index = 0;
         assert!(
-            NsAvidMGF2Scheme::verify_namespace_proof(&commit, &common, &proof)
+            NsAvidmGf2Scheme::verify_namespace_proof(&commit, &common, &proof)
                 .unwrap()
                 .is_err()
         );
         proof.ns_index = 1;
         proof.ns_payload[0] = 0u8;
         assert!(
-            NsAvidMGF2Scheme::verify_namespace_proof(&commit, &common, &proof)
+            NsAvidmGf2Scheme::verify_namespace_proof(&commit, &common, &proof)
                 .unwrap()
                 .is_err()
         );
         proof.ns_index = 100;
         assert!(
-            NsAvidMGF2Scheme::verify_namespace_proof(&commit, &common, &proof)
+            NsAvidmGf2Scheme::verify_namespace_proof(&commit, &common, &proof)
                 .unwrap()
                 .is_err()
         );
