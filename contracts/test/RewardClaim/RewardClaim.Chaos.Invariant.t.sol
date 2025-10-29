@@ -149,6 +149,12 @@ contract RewardClaimHandler is RewardClaimTest {
     function updateDailyLimit(uint256 limitSeed) public {
         uint256 maxBasisPoints = rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS();
         uint256 basisPoints = _bound(limitSeed, 1, maxBasisPoints);
+
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        if (newLimit == rewardClaim.dailyLimitWei()) {
+            return;
+        }
+
         vm.prank(rewardClaim.owner());
         rewardClaim.setDailyLimit(basisPoints);
         stats.updateDailyLimit.ok++;
