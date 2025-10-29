@@ -34,7 +34,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
@@ -366,14 +366,36 @@ impl Inner {
         Ok(())
     }
 
+    fn parse_decided_leaf(
+        &self,
+        bytes: &[u8],
+    ) -> anyhow::Result<(Leaf2, CertificatePair<SeqTypes>)> {
+        // Old versions of the software did not store the next epoch QC. Without knowing which
+        // version this file was created with, we can simply try parsing both ways and then
+        // reconstruct a certificate pair with or without the next epoch QC.
+        match bincode::deserialize(bytes) {
+            Ok((leaf, cert)) => Ok((leaf, cert)),
+            Err(err) => {
+                tracing::warn!(
+                    "error parsing decided leaf, maybe file was created without next epoch QC? \
+                     {err}"
+                );
+                let (leaf, qc) =
+                    bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(bytes)
+                        .context("parsing decided leaf")?;
+                Ok((leaf, CertificatePair::non_epoch_change(qc)))
+            },
+        }
+    }
+
     /// Generate events based on persisted decided leaves.
     ///
     /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
     /// within these view ranges have been processed by the event consumer.
     async fn generate_decide_events(
-        &self,
+        &mut self,
         view: ViewNumber,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -387,9 +409,7 @@ impl Inner {
 
             let bytes =
                 fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
-            let (mut leaf, qc) =
-                bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(&bytes)
-                    .context(format!("parsing decided leaf {}", path.display()))?;
+            let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // Include the VID share if available.
             let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
@@ -398,7 +418,7 @@ impl Inner {
             }
 
             // Move the state cert to the finalized dir if it exists.
-            let state_cert = self.finalized_state_cert(v)?;
+            let state_cert = self.store_finalized_state_cert(v)?;
 
             // Fill in the full block payload using the DA proposals we had persisted.
             if let Some(proposal) = self.load_da_proposal(v)? {
@@ -421,7 +441,7 @@ impl Inner {
                 delta: Default::default(),
             };
 
-            leaves.insert(v, (info, qc));
+            leaves.insert(v, (info, cert));
         }
 
         // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
@@ -437,28 +457,31 @@ impl Inner {
 
         let mut intervals = vec![];
         let mut current_interval = None;
-        for (view, (leaf, qc)) in leaves {
+        for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            // Insert the deciding QC at the appropriate position, with the last decide event in the
-            // chain.
-            let qc2 = if let Some(deciding_qc) = &deciding_qc {
-                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
-            } else {
-                None
-            };
+            {
+                // Insert the deciding QC at the appropriate position, with the last decide event in the
+                // chain.
+                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                    (deciding_qc.view_number() == cert.view_number() + 1)
+                        .then_some(deciding_qc.clone())
+                } else {
+                    None
+                };
 
-            consumer
-                .handle_event(&Event {
-                    view_number: view,
-                    event: EventType::Decide {
-                        committing_qc: Arc::new(qc),
-                        deciding_qc: qc2,
-                        leaf_chain: Arc::new(vec![leaf]),
-                        block_size: None,
-                    },
-                })
-                .await?;
+                consumer
+                    .handle_event(&Event {
+                        view_number: view,
+                        event: EventType::Decide {
+                            committing_qc: Arc::new(cert),
+                            deciding_qc,
+                            leaf_chain: Arc::new(vec![leaf]),
+                            block_size: None,
+                        },
+                    })
+                    .await?;
+            }
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
                     // If we have a chain of consecutive leaves, extend the current interval of
@@ -528,15 +551,13 @@ impl Inner {
             for (_, path) in view_files(self.decided_leaf2_path())? {
                 let bytes =
                     fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
-                let (leaf2, qc2) =
-                    bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(&bytes)
-                        .context(format!("parsing decided leaf {}", path.display()))?;
+                let (leaf, cert) = self.parse_decided_leaf(&bytes)?;
                 if let Some((anchor_leaf, _)) = &anchor {
-                    if leaf2.view_number() > anchor_leaf.view_number() {
-                        anchor = Some((leaf2, qc2));
+                    if leaf.view_number() > anchor_leaf.view_number() {
+                        anchor = Some((leaf, cert.qc().clone()));
                     }
                 } else {
-                    anchor = Some((leaf2, qc2));
+                    anchor = Some((leaf, cert.qc().clone()));
                 }
             }
 
@@ -564,8 +585,8 @@ impl Inner {
         Ok(None)
     }
 
-    fn finalized_state_cert(
-        &self,
+    fn store_finalized_state_cert(
+        &mut self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let dir_path = self.state_cert_dir_path();
@@ -604,7 +625,15 @@ impl Inner {
             .join(epoch.to_string())
             .with_extension("txt");
 
-        fs::write(&finalized_file_path, &bytes).context(format!(
+        self.replace(
+            &finalized_file_path,
+            |_| Ok(true),
+            |mut file| {
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+        .context(format!(
             "finalizing light client state update certificate file for epoch {epoch:?}"
         ))?;
 
@@ -665,8 +694,8 @@ impl SequencerPersistence for Persistence {
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -688,13 +717,22 @@ impl SequencerPersistence for Persistence {
             let view = leaf.view_number().u64();
             let bytes = bincode::serialize(&(leaf, qc))?;
             let new_file = path.join(view.to_string()).with_extension("txt");
-            fs::write(new_file, bytes).context(format!("writing anchor leaf file {view}"))?;
+            inner
+                .replace(
+                    &new_file,
+                    |_| Ok(true),
+                    |mut file| {
+                        file.write_all(&bytes)?;
+                        Ok(())
+                    },
+                )
+                .context(format!("writing anchor leaf file {view}"))?;
 
             // Now we can remove the old file.
             fs::remove_file(&legacy_path).context("removing legacy anchor leaf file")?;
         }
 
-        for (info, qc2) in leaf_chain {
+        for (info, cert) in leaf_chain {
             let view = info.leaf.view_number().u64();
             let file_path = path.join(view.to_string()).with_extension("txt");
             inner.replace(
@@ -706,7 +744,7 @@ impl SequencerPersistence for Persistence {
                     Ok(false)
                 },
                 |mut file| {
-                    let bytes = bincode::serialize(&(&info.leaf.clone(), qc2))?;
+                    let bytes = bincode::serialize(&(&info.leaf, cert))?;
                     file.write_all(&bytes)?;
                     Ok(())
                 },
@@ -1198,7 +1236,7 @@ impl SequencerPersistence for Persistence {
                 .context(format!("parsing decided leaf {}", path.display()))?;
 
             let leaf2: Leaf2 = leaf.into();
-            let qc2 = qc.to_qc2();
+            let cert = CertificatePair::non_epoch_change(qc.to_qc2());
 
             let new_leaf_path = new_leaf_dir.join(view.to_string()).with_extension("txt");
 
@@ -1209,7 +1247,7 @@ impl SequencerPersistence for Persistence {
                     Ok(false)
                 },
                 |mut file| {
-                    let bytes = bincode::serialize(&(&leaf2.clone(), qc2))?;
+                    let bytes = bincode::serialize(&(&leaf2.clone(), cert))?;
                     file.write_all(&bytes)?;
                     Ok(())
                 },
@@ -1569,7 +1607,7 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.epoch_root_block_header_dir_path();
 
         fs::create_dir_all(dir_path.clone())
@@ -1579,9 +1617,18 @@ impl SequencerPersistence for Persistence {
             bincode::serialize(&block_header).context("serialize block header")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        fs::write(file_path, block_header_bytes).context(format!(
-            "writing epoch root block header file for epoch {epoch:?}"
-        ))?;
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |mut file| {
+                    file.write_all(&block_header_bytes)?;
+                    Ok(())
+                },
+            )
+            .context(format!(
+                "writing epoch root block header file for epoch {epoch:?}"
+            ))?;
 
         Ok(())
     }
@@ -1590,7 +1637,7 @@ impl SequencerPersistence for Persistence {
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         // let epoch = state_cert.epoch;
         let view = state_cert.light_client_state.view_number;
         let dir_path = inner.state_cert_dir_path();
@@ -1602,9 +1649,18 @@ impl SequencerPersistence for Persistence {
             .context("serialize light client state update certificate")?;
 
         let file_path = dir_path.join(view.to_string()).with_extension("txt");
-        fs::write(file_path, bytes).context(format!(
-            "writing light client state update certificate file for view {view:?}"
-        ))?;
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |mut file| {
+                    file.write_all(&bytes)?;
+                    Ok(())
+                },
+            )
+            .context(format!(
+                "writing light client state update certificate file for view {view:?}"
+            ))?;
 
         Ok(())
     }
@@ -1708,6 +1764,68 @@ impl SequencerPersistence for Persistence {
         }
 
         Ok(result)
+    }
+
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.finalized_state_cert_dir_path();
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        if !file_path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&file_path).context(format!(
+            "reading light client state update certificate {}",
+            file_path.display()
+        ))?;
+
+        let cert = bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(&bytes)
+            .or_else(|error| {
+                tracing::info!(
+                    %error,
+                    path = %file_path.display(),
+                    "Failed to deserialize LightClientStateUpdateCertificateV2"
+                );
+
+                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
+                    .map(Into::into)
+                    .with_context(|| {
+                        format!(
+                            "Failed to deserialize with v1 and v2. path='{}'. error: {error}",
+                            file_path.display()
+                        )
+                    })
+            })?;
+
+        Ok(Some(cert))
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.finalized_state_cert_dir_path();
+
+        fs::create_dir_all(&dir_path)
+            .context(format!("creating state cert dir {}", dir_path.display()))?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let bytes = bincode::serialize(&cert)
+            .context("serializing light client state update certificate")?;
+
+        fs::write(&file_path, bytes).context(format!(
+            "writing light client state update certificate {}",
+            file_path.display()
+        ))?;
+
+        Ok(())
     }
 
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
@@ -1873,10 +1991,17 @@ impl MembershipPersistence for Persistence {
                 continue;
             }
 
-            let file = File::create(&file_path).context("Failed to create event file")?;
-            let writer = BufWriter::new(file);
+            inner
+                .replace(
+                    &file_path,
+                    |_| Ok(true),
+                    |file| {
+                        let writer = BufWriter::new(file);
 
-            serde_json::to_writer_pretty(writer, &event)
+                        serde_json::to_writer_pretty(writer, &event)?;
+                        Ok(())
+                    },
+                )
                 .context("Failed to write event to file")?;
         }
 
@@ -2006,7 +2131,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         all_validators: ValidatorMap,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.read().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.stake_table_dir_path();
         let validators_dir = dir_path.join("validators");
 
@@ -2017,12 +2142,20 @@ impl MembershipPersistence for Persistence {
         // Path = validators/epoch_<number>.json
         let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
 
-        let file = File::create(&file_path)
-            .with_context(|| format!("Failed to create validator file: {file_path:?}"))?;
-        let writer = BufWriter::new(file);
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |file| {
+                    let writer = BufWriter::new(file);
 
-        serde_json::to_writer_pretty(writer, &all_validators)
-            .with_context(|| format!("Failed to serialize validators for epoch {epoch}"))?;
+                    serde_json::to_writer_pretty(writer, &all_validators).with_context(|| {
+                        format!("Failed to serialize validators for epoch {epoch}")
+                    })?;
+                    Ok(())
+                },
+            )
+            .with_context(|| format!("Failed to write validator file: {file_path:?}"))?;
 
         Ok(())
     }

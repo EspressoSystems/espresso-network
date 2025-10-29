@@ -1275,4 +1275,73 @@ mod test {
         assert_eq!(genesis.header.chain_config.max_block_size, 5000.into());
         assert_eq!(genesis.chain_config.max_block_size, 30000.into());
     }
+
+    #[test]
+    fn test_genesis_da_committees() {
+        let toml = toml! {
+            base_version = "0.1"
+            upgrade_version = "0.2"
+            genesis_version = "0.2"
+            epoch_height = 20
+            drb_difficulty = 10
+            drb_upgrade_difficulty = 20
+            epoch_start_block = 1
+            stake_table_capacity = 200
+
+            [stake_table]
+            capacity = 10
+
+            [chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
+            [l1_finalized]
+            number = 64
+            timestamp = "0x123def"
+            hash = "0x80f5dd11f2bdda2814cb1ad94ef30a47de02cf28ad68c89e104c00c4e51bb7a5"
+
+            [header]
+            timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 33
+            max_block_size = 5000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
+            [[da_committees]]
+            start_version = "0.4"
+            start_epoch = 10
+            committee = [
+                { stake_table_entry = { stake_key = "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U", stake_amount = "0x1"}, state_ver_key = "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE"},
+                { stake_table_entry = { stake_key = "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U", stake_amount = "0x1"}, state_ver_key = "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE"}
+            ]
+        }
+        .to_string();
+
+        let genesis = toml::from_str::<Genesis>(&toml).unwrap();
+
+        let da_committees = genesis
+            .da_committees
+            .expect("DA committees should be present");
+        assert_eq!(da_committees.len(), 1);
+
+        let da_committee = &da_committees[0];
+
+        assert_eq!(da_committee.start_version, Version { major: 0, minor: 4 });
+        assert_eq!(da_committee.start_epoch, 10);
+        assert_eq!(da_committee.committee.len(), 2);
+        assert_eq!(
+            da_committee.committee[0].stake_table_entry.stake_amount,
+            U256::from(1)
+        );
+        assert_eq!(
+            da_committee.committee[1].stake_table_entry.stake_amount,
+            U256::from(1)
+        );
+    }
 }

@@ -14,6 +14,7 @@ extend-exclude = [
   "crates/hotshot/types/src/light_client.rs",
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
+  "sequencer/src/genesis.rs",
   "data/insta_snapshots",
   "data/initial_stake_table.toml",
   "data/genesis/staging.toml",

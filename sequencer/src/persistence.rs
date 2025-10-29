@@ -65,7 +65,8 @@ mod tests {
         light_client::StateKeyPair,
         message::{convert_proposal, Proposal, UpgradeLock},
         simple_certificate::{
-            NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+            CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
+            UpgradeCertificate,
         },
         simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
         traits::{
@@ -692,7 +693,9 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                leaf_chain.iter().map(|(leaf, qc)| (leaf, (*qc).clone())),
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change((*qc).clone()))),
                 None,
                 &consumer,
             )
@@ -758,7 +761,10 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                vec![(&leaf_info(leaves[3].clone()), qcs[3].clone())],
+                vec![(
+                    &leaf_info(leaves[3].clone()),
+                    CertificatePair::non_epoch_change(qcs[3].clone()),
+                )],
                 None,
                 &consumer,
             )
@@ -781,7 +787,7 @@ mod tests {
         else {
             panic!("expected decide event, got {:?}", events[0]);
         };
-        assert_eq!(**committing_qc, qcs[3]);
+        assert_eq!(*committing_qc.qc(), qcs[3]);
         assert_eq!(leaf_chain.len(), 1);
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);
@@ -1020,7 +1026,9 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(1),
-                leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
                 None,
                 &FailConsumer,
             )
@@ -1068,7 +1076,9 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
                 None,
                 &consumer,
             )
@@ -1792,13 +1802,15 @@ mod tests {
 
         let mut deciding_qc = qc2.clone();
         deciding_qc.view_number += 1;
-        let deciding_qc = Arc::new(deciding_qc);
 
         // Decide the first leaf, but fail to generate a decide event.
         storage
             .append_decided_leaves(
                 ViewNumber::new(0),
-                [(&leaf_info(leaf0.clone()), qc0)],
+                [(
+                    &leaf_info(leaf0.clone()),
+                    CertificatePair::non_epoch_change(qc0),
+                )],
                 None,
                 &FailConsumer,
             )
@@ -1812,8 +1824,13 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                [(&leaf_info(leaf2.clone()), qc2)],
-                Some(deciding_qc.clone()),
+                [(
+                    &leaf_info(leaf2.clone()),
+                    CertificatePair::non_epoch_change(qc2),
+                )],
+                Some(Arc::new(CertificatePair::non_epoch_change(
+                    deciding_qc.clone(),
+                ))),
                 &consumer,
             )
             .await
@@ -1844,6 +1861,6 @@ mod tests {
         };
         assert_eq!(leaf_chain2.len(), 1);
         assert_eq!(leaf_chain2[0].leaf, leaf2);
-        assert_eq!(*deciding_qc2, Some(deciding_qc));
+        assert_eq!(deciding_qc2.as_ref().unwrap().qc(), &deciding_qc);
     }
 }
