@@ -204,6 +204,21 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref().get_stake_table_current().await
     }
 
+    /// Get the DA stake table for a given epoch
+    async fn get_da_stake_table(
+        &self,
+        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        self.as_ref().get_da_stake_table(epoch).await
+    }
+
+    /// Get the DA stake table for the current epoch if not provided
+    async fn get_da_stake_table_current(
+        &self,
+    ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
+        self.as_ref().get_da_stake_table_current().await
+    }
+
     /// Get all the validators
     async fn get_validators(
         &self,
@@ -277,6 +292,49 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         Ok(StakeTableWithEpochNumber {
             epoch,
             stake_table: self.get_stake_table(epoch).await?,
+        })
+    }
+
+    /// Get the DA stake table for a given epoch
+    async fn get_da_stake_table(
+        &self,
+        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        let highest_epoch = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .cur_epoch()
+            .await
+            .map(|e| e + 1);
+        if epoch > highest_epoch {
+            return Err(anyhow::anyhow!(
+                "requested DA stake table for epoch {epoch:?} is beyond the current epoch + 1 \
+                 {highest_epoch:?}"
+            ));
+        }
+        let mem = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .stake_table_for_epoch(epoch)
+            .await?;
+
+        Ok(mem.da_stake_table().await.0)
+    }
+
+    /// Get the DA stake table for the current epoch and return it along with the epoch number
+    async fn get_da_stake_table_current(
+        &self,
+    ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
+        let epoch = self.consensus().await.read().await.cur_epoch().await;
+
+        Ok(StakeTableWithEpochNumber {
+            epoch,
+            stake_table: self.get_da_stake_table(epoch).await?,
         })
     }
 
