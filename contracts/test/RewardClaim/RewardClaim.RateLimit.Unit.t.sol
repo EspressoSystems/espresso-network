@@ -67,9 +67,10 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         claim(DAILY_LIMIT);
         checkLimitEnforced(claimer, DAILY_LIMIT + 1);
 
-        uint256 newLimit = DAILY_LIMIT * 2;
+        uint256 basisPoints = 200; // 2%
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
         vm.prank(owner);
-        rewardClaim.setDailyLimit(newLimit);
+        rewardClaim.setDailyLimit(basisPoints);
 
         claim(newLimit);
         checkLimitEnforced(claimer, newLimit + 1);
@@ -90,9 +91,10 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
     function test_DecreasedLimit_AppliesNextDay() public {
         claim(DAILY_LIMIT);
 
-        uint256 newLimit = DAILY_LIMIT / 2;
+        uint256 basisPoints = 50; // 0.5%
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
         vm.prank(owner);
-        rewardClaim.setDailyLimit(newLimit);
+        rewardClaim.setDailyLimit(basisPoints);
 
         checkLimitEnforced(claimer, DAILY_LIMIT + 1);
 

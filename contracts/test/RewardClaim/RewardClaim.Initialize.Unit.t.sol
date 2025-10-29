@@ -90,6 +90,6 @@ contract RewardClaimInitializeTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(impl, initData);
         RewardClaim rewardClaim = RewardClaim(payable(address(proxy)));
 
-        assertEq(rewardClaim.dailyLimit(), 1);
+        assertEq(rewardClaim.dailyLimitWei(), 1);
     }
 }

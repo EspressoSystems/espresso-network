@@ -49,7 +49,7 @@ contract RewardClaimMockTest is Test {
         vm.prank(owner);
         espToken.initializeV2(address(rewardClaim));
 
-        assertEq(rewardClaim.dailyLimit(), DAILY_LIMIT);
+        assertEq(rewardClaim.dailyLimitWei(), DAILY_LIMIT);
     }
 
     function claim(uint256 lifetimeRewards) internal {

@@ -10,25 +10,26 @@ import { OwnableUpgradeable } from
 
 contract RewardClaimAdminTest is RewardClaimTest {
     function test_SetDailyLimit_Success() public {
-        uint256 currentLimit = rewardClaim.dailyLimit();
-        uint256 newLimit = currentLimit * 2;
+        uint256 currentLimit = rewardClaim.dailyLimitWei();
+        uint256 basisPoints = 200; // 2%
+        uint256 expectedLimit = (espToken.totalSupply() * basisPoints) / 10000;
 
         vm.prank(owner);
         vm.expectEmit();
-        emit RewardClaim.DailyLimitUpdated(currentLimit, newLimit);
-        rewardClaim.setDailyLimit(newLimit);
+        emit RewardClaim.DailyLimitUpdated(currentLimit, expectedLimit);
+        rewardClaim.setDailyLimit(basisPoints);
 
-        assertEq(rewardClaim.dailyLimit(), newLimit);
+        assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
     }
 
     function test_SetDailyLimit_RevertsNonOwner() public {
         address attacker = makeAddr("attacker");
-        uint256 newLimit = rewardClaim.dailyLimit() + 1;
+        uint256 basisPoints = 200; // 2%
         vm.prank(attacker);
         vm.expectRevert(
             abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, attacker)
         );
-        rewardClaim.setDailyLimit(newLimit);
+        rewardClaim.setDailyLimit(basisPoints);
     }
 
     function test_SetDailyLimit_RevertsZero() public {
@@ -38,29 +39,28 @@ contract RewardClaimAdminTest is RewardClaimTest {
     }
 
     function test_SetDailyLimit_RevertsNoChangeRequired() public {
-        uint256 currentLimit = rewardClaim.dailyLimit();
+        uint256 basisPoints = 100; // 1% - same as initial value
         vm.prank(owner);
         vm.expectRevert(RewardClaim.NoChangeRequired.selector);
-        rewardClaim.setDailyLimit(currentLimit);
+        rewardClaim.setDailyLimit(basisPoints);
     }
 
     function test_SetDailyLimit_SuccessAtMaxBound() public {
-        uint256 currentLimit = rewardClaim.dailyLimit();
-        uint256 totalSupply = espToken.totalSupply();
-        uint256 maxLimit = (totalSupply * rewardClaim.MAX_DAILY_LIMIT_PERCENTAGE()) / 100e18;
+        uint256 currentLimit = rewardClaim.dailyLimitWei();
+        uint256 maxBasisPoints = rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS();
+        uint256 expectedLimit = (espToken.totalSupply() * maxBasisPoints) / 10000;
 
         vm.prank(owner);
         vm.expectEmit();
-        emit RewardClaim.DailyLimitUpdated(currentLimit, maxLimit);
-        rewardClaim.setDailyLimit(maxLimit);
+        emit RewardClaim.DailyLimitUpdated(currentLimit, expectedLimit);
+        rewardClaim.setDailyLimit(maxBasisPoints);
 
-        assertEq(rewardClaim.dailyLimit(), maxLimit);
+        assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
     }
 
     function test_SetDailyLimit_RevertsAboveMaxBound() public {
-        uint256 totalSupply = espToken.totalSupply();
-        uint256 maxLimit = (totalSupply * rewardClaim.MAX_DAILY_LIMIT_PERCENTAGE()) / 100e18;
-        uint256 tooHigh = maxLimit + 1;
+        uint256 maxBasisPoints = rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS();
+        uint256 tooHigh = maxBasisPoints + 1;
 
         vm.prank(owner);
         vm.expectRevert(RewardClaim.DailyLimitTooHigh.selector);
@@ -68,6 +68,6 @@ contract RewardClaimAdminTest is RewardClaimTest {
     }
 
     function test_SetDailyLimit_MaxPercentageIs5Percent() public view {
-        assertEq(rewardClaim.MAX_DAILY_LIMIT_PERCENTAGE(), 5e18);
+        assertEq(rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS(), 500);
     }
 }
