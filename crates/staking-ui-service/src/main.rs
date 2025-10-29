@@ -4,22 +4,17 @@ use async_lock::RwLock;
 use clap::Parser;
 use staking_ui_service::{
     Result,
-    input::l1::{self, PersistentSnapshot, RpcStream},
+    input::l1::{self, PersistentSnapshot, RpcStream, options::L1ClientOptions},
     persistence::sql,
     types::common::Address,
 };
-use tide_disco::Url;
 
 /// The backend service for the Espresso Network Staking UI.
 #[derive(Debug, Parser)]
 struct Options {
-    /// HTTP endpoints for L1 RPC services.
-    #[clap(long, env = "ESPRESSO_STAKING_SERVICE_L1_HTTP", value_delimiter = ',')]
-    l1_http: Vec<Url>,
-
-    /// WebSockets endpoints for L1 RPC services.
-    #[clap(long, env = "ESPRESSO_STAKING_SERVICE_L1_WS", value_delimiter = ',')]
-    l1_ws: Vec<Url>,
+    /// L1 client options.
+    #[clap(flatten)]
+    l1_options: L1ClientOptions,
 
     /// Address of deployed stake table contract.
     #[clap(long, env = "ESPRESSO_STAKING_SERVICE_STAKE_TABLE")]
@@ -32,7 +27,7 @@ struct Options {
 
 impl Options {
     async fn run(self) -> Result<()> {
-        let l1_input = RpcStream::new(&self.l1_http, &self.l1_ws).await?;
+        let l1_input = RpcStream::new(self.l1_options).await?;
         let storage = sql::Persistence::new(&self.storage).await?;
 
         // Get genesis state.

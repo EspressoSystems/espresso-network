@@ -21,7 +21,10 @@ use crate::{
     },
 };
 
+pub mod options;
 mod rpc_stream;
+pub mod switching_transport;
+
 pub use rpc_stream::RpcStream;
 
 /// In-memory state populated by the L1 input source.
