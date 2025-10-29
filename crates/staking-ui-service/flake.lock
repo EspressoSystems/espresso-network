@@ -50,6 +50,43 @@
         "type": "github"
       }
     },
+    "flake-utils_2": {
+      "locked": {
+        "lastModified": 1644229661,
+        "narHash": "sha256-1YdnJAsNy69bpcjuoKdOYQX0YxZBiCYZo4Twxerqv7k=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "3cecb5b042f7f209c56ffd8371b2711a290ec797",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "foundry-nix": {
+      "inputs": {
+        "flake-utils": "flake-utils_2",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1758100230,
+        "narHash": "sha256-sARl8NpG4ifzhd7j5D04A5keJIf0zkP1XYIuDEkzXb4=",
+        "owner": "shazow",
+        "repo": "foundry.nix",
+        "rev": "e632b06dc759e381ef04f15ff9541f889eda6013",
+        "type": "github"
+      },
+      "original": {
+        "owner": "shazow",
+        "repo": "foundry.nix",
+        "rev": "e632b06dc759e381ef04f15ff9541f889eda6013",
+        "type": "github"
+      }
+    },
     "git-hooks": {
       "inputs": {
         "flake-compat": "flake-compat_2",
@@ -113,6 +150,7 @@
       "inputs": {
         "flake-compat": "flake-compat",
         "flake-utils": "flake-utils",
+        "foundry-nix": "foundry-nix",
         "git-hooks": "git-hooks",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"

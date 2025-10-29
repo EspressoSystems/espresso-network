@@ -14,6 +14,9 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+  inputs.foundry-nix.url = "github:shazow/foundry.nix/e632b06dc759e381ef04f15ff9541f889eda6013";
+  inputs.foundry-nix.inputs.nixpkgs.follows = "nixpkgs";
+
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -28,6 +31,7 @@
   outputs =
     { self
     , nixpkgs
+    , foundry-nix
     , rust-overlay
     , flake-utils
     , git-hooks
@@ -52,6 +56,7 @@
 
       overlays = [
         (import rust-overlay)
+        foundry-nix.overlay
         (final: prev: {
           prek-as-pre-commit = final.runCommand "prek-as-pre-commit" { } ''
             mkdir -p $out/bin
@@ -153,6 +158,7 @@
             prek-as-pre-commit # compat to allow running pre-commit
             entr
             nodePackages.prettier
+            foundry-bin
           ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ++ pre-commit.enabledPackages;
           shellHook = ''
