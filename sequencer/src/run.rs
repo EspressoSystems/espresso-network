@@ -54,6 +54,19 @@ pub async fn main() -> anyhow::Result<()> {
             )
             .await
         },
+        #[cfg(feature = "da-upgrade")]
+        (espresso_types::DaUpgradeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DaUpgradeVersion,
+                    espresso_types::DaUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
         #[cfg(all(feature = "pos", feature = "drb-and-header"))]
         (
             espresso_types::EpochVersion::VERSION,
