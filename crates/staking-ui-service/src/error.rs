@@ -1,0 +1,94 @@
+use std::fmt::{self, Display, Formatter};
+
+use serde::{Deserialize, Serialize};
+use tide_disco::StatusCode;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Error {
+    message: String,
+    status: StatusCode,
+}
+
+impl Error {
+    /// Extend an error message with additional context, keeping the same status.
+    pub fn context(self, context: impl Display) -> Self {
+        Self {
+            message: format!("{context}: {}", self.message),
+            status: self.status,
+        }
+    }
+
+    /// Stock error message for when a requested object is not found and not known to have ever
+    /// existed.
+    ///
+    /// This corresponds to a generic error message with status code 404. It is generally best
+    /// practice to extend the error message with more specific information using
+    /// [`context`](Self::context).
+    ///
+    /// This should be used for requests that cannot possibly be satisfied (e.g. asking for an
+    /// unknown block hash, or a block number greater than the latest head). For requests that may
+    /// have been satisfiable but for which the data has since been deleted from the server by
+    /// garbage collection, prefer [`gone`](Self::gone).
+    pub fn not_found() -> Self {
+        Self {
+            message: "not found".to_string(),
+            status: StatusCode::NOT_FOUND,
+        }
+    }
+
+    /// Stock error message for when a requested object may have existed but has been deleted.
+    ///
+    /// This corresponds to a generic error message with status code 410. It is generally best
+    /// practice to extend the error message with more specific information using
+    /// [`context`](Self::context).
+    ///
+    /// This should be used for requests for objects that once existed but are no longer stored on
+    /// the server (e.g. requests for very old blocks). For requests for objects that may never have
+    /// existed, prefer [`gone`](Self::not_found).
+    pub fn gone() -> Self {
+        Self {
+            message: "permanently deleted".to_string(),
+            status: StatusCode::GONE,
+        }
+    }
+
+    /// An error internal to the service.
+    ///
+    /// This can either indicate an internal consistency error, or a transient failure of some inner
+    /// component that is out of the client's control.
+    pub fn internal() -> Self {
+        Self {
+            message: "internal error".to_string(),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.status, self.message)
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl tide_disco::Error for Error {
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        Self { message, status }
+    }
+
+    fn status(&self) -> StatusCode {
+        self.status
+    }
+}
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+macro_rules! ensure {
+    ($cond:expr, $err:expr) => {
+        if !$cond {
+            return Err($err);
+        }
+    };
+}
+pub(crate) use ensure;

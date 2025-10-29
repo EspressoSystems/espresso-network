@@ -11,10 +11,14 @@ fix *args:
     cargo clippy --fix {{args}}
 
 lint *args:
-    cargo clippy {{args}} -- -D warnings
+    cargo clippy --all-targets {{args}} -- -D warnings
 
 build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}
 
 test *args:
     cargo nextest run --locked --workspace --verbose {{args}}
+
+coverage:
+    cargo llvm-cov nextest
+    cargo llvm-cov report --html

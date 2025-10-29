@@ -29,6 +29,19 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Test
-        run: just test --no-tests=warn
+        run: cargo llvm-cov --no-report nextest
         timeout-minutes: 20
+
+      - name: Coverage Report
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      
+      - name: Coveralls upload
+        uses: coverallsapp/github-action@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: lcov.info
+          fail-on-error: false

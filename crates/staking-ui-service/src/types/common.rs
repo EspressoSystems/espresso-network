@@ -1,7 +1,5 @@
 //! Primitive types.
 
-use std::cmp::Ordering;
-
 use serde::{Deserialize, Serialize};
 
 pub use alloy::primitives::{Address, BlockHash, U256};
@@ -17,30 +15,14 @@ pub type Timestamp = u64;
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Ratio(f32);
 
-// We enforce that a ratio is never infinite or NaN, so the comparison caveats for the underlying
-// floating point type do not apply for `Ratio`.
-impl Eq for Ratio {}
-
-impl Ord for Ratio {
-    fn cmp(&self, other: &Self) -> Ordering {
-        if self < other {
-            Ordering::Less
-        } else if self > other {
-            Ordering::Greater
-        } else {
-            Ordering::Equal
-        }
-    }
-}
-
-impl PartialOrd for Ratio {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+impl Ratio {
+    pub fn new(num: usize, den: usize) -> Self {
+        Self((num as f32) / (den as f32))
     }
 }
 
 /// An entry in the full node set.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct NodeSetEntry {
     /// Node's Ethereum address.
     pub address: Address,
@@ -56,7 +38,7 @@ pub struct NodeSetEntry {
 }
 
 /// Information about an L1 block.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct L1BlockInfo {
     /// The block number
     pub number: u64,
@@ -69,8 +51,11 @@ pub struct L1BlockInfo {
 }
 
 /// Minimal information needed to identify an L1 block and check for reorgs.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct L1BlockId {
+    /// The block number.
+    pub number: u64,
+
     /// The hash of this block.
     pub hash: BlockHash,
 
@@ -79,7 +64,7 @@ pub struct L1BlockId {
 }
 
 /// Information about the exiting of a node from the node set.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NodeExit {
     /// The exiting node.
     pub address: Address,
@@ -92,7 +77,7 @@ pub struct NodeExit {
 }
 
 /// Information about the current "time" on the Espresso chain.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct EpochAndBlock {
     /// The current epoch of the Espresso chain
     pub epoch: u64,
@@ -105,7 +90,7 @@ pub struct EpochAndBlock {
 }
 
 /// An entry in the active node set.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ActiveNodeSetEntry {
     /// The node's address.
     pub address: Address,
@@ -118,7 +103,7 @@ pub struct ActiveNodeSetEntry {
 }
 
 /// A general participation percentage change for a node.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ParticipationChange {
     /// The address of the node whose participation percentage is changing.
     pub address: Address,
@@ -128,7 +113,7 @@ pub struct ParticipationChange {
 }
 
 /// A single delegation from a particular user to a particular node.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Delegation {
     /// The user delegating.
     pub delegator: Address,
@@ -144,7 +129,7 @@ pub struct Delegation {
 }
 
 /// A withdrawal of stake that is waiting to be claimed.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PendingWithdrawal {
     /// The owner of the pending stake.
     pub delegator: Address,
@@ -162,7 +147,7 @@ pub struct PendingWithdrawal {
 }
 
 /// A completed withdrawal.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Withdrawal {
     /// The owner of the withdrawn stake.
     pub delegator: Address,
