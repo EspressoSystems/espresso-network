@@ -9566,13 +9566,17 @@ dependencies = [
  "hotshot-contract-adapter",
  "im",
  "parking_lot",
+ "portpicker",
  "serde",
+ "surf-disco",
  "tagged-base64",
  "test-log",
  "tide-disco",
  "tokio",
+ "toml",
  "tower-service",
  "tracing",
+ "vbs",
 ]
 
 [[package]]

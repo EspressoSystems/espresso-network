@@ -26,6 +26,7 @@ mod rpc_stream;
 pub mod switching_transport;
 
 pub use rpc_stream::RpcStream;
+pub(crate) mod testing;
 
 /// In-memory state populated by the L1 input source.
 #[derive(Clone, Debug)]
@@ -186,7 +187,10 @@ impl<S: L1Persistence> State<S> {
     /// Unless there is some catastrophic error, this future will never resolve. It is best spawned
     /// as a background task.
     #[instrument(skip(state, stream))]
-    pub async fn subscribe(state: Arc<RwLock<Self>>, mut stream: impl ResettableStream) {
+    pub async fn subscribe(
+        state: Arc<RwLock<Self>>,
+        mut stream: impl ResettableStream,
+    ) -> Result<()> {
         while let Some(block) = stream.next().await {
             // Retry on any errors until we have successfully handled this input.
             loop {
@@ -198,7 +202,7 @@ impl<S: L1Persistence> State<S> {
                 }
             }
         }
-        tracing::error!("L1 block stream ended unexpectedly");
+        Err(Error::internal().context("L1 block stream ended unexpectedly"))
     }
 
     /// Handle a single block input from L1.
@@ -397,8 +401,6 @@ impl BlockData {
     }
 
     fn next(&self, input: &BlockInput) -> Self {
-        #![allow(unused_mut)]
-
         // Cloning entire state in order to apply updates and get the new state. This is cheap
         // thanks to the magic of immutable data structures.
         let mut node_set = self.node_set.clone();
@@ -549,206 +551,23 @@ pub trait L1Persistence: Send {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        pin::Pin,
-        task::{Context, Poll},
-        time::{Duration, Instant},
+    use std::time::{Duration, Instant};
+
+    use espresso_types::validators_from_l1_events;
+    use tide_disco::{Error as _, StatusCode};
+
+    use super::{
+        testing::{
+            FailStorage, MemoryStorage, VecStream, block_id, empty_wallet, make_node,
+            random_block_input,
+        },
+        *,
     };
 
-    use alloy::primitives::keccak256;
-    use espresso_types::v0::validators_from_l1_events;
-    use tagged_base64::TaggedBase64;
-    use tide_disco::{Error as _, StatusCode};
-    use tokio::{task::spawn, time::sleep};
-
-    use crate::types::common::{Delegation, NodeSetEntry, Ratio};
-
-    use super::*;
-
-    /// Easy-setup storage that just uses memory.
-    #[derive(Clone, Debug, Default)]
-    struct MemoryStorage {
-        snapshot: Arc<RwLock<Option<PersistentSnapshot>>>,
-    }
-
-    impl L1Persistence for MemoryStorage {
-        async fn finalized_snapshot(&self) -> Result<Option<PersistentSnapshot>> {
-            Ok(self.snapshot.read().await.clone())
-        }
-
-        async fn save_genesis(&self, snapshot: PersistentSnapshot) -> Result<()> {
-            *self.snapshot.write().await = Some(snapshot);
-            Ok(())
-        }
-
-        async fn apply_events(
-            &self,
-            block: L1BlockId,
-            timestamp: Timestamp,
-            node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
-            wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
-        ) -> Result<()> {
-            let mut lock = self.snapshot.write().await;
-            let snapshot = lock.get_or_insert(PersistentSnapshot::genesis(block_id(0), 0));
-
-            for diff in node_set_diff {
-                apply_node_set_diff(&mut snapshot.node_set, &diff);
-            }
-            for (address, diff) in wallets_diff {
-                apply_wallet_diff(&mut snapshot.wallets, address, &diff);
-            }
-            snapshot.block = block;
-            snapshot.timestamp = timestamp;
-
-            Ok(())
-        }
-    }
-
-    /// Storage that always fails.
-    #[derive(Clone, Copy, Debug, Default)]
-    struct FailStorage;
-
-    impl L1Persistence for FailStorage {
-        async fn finalized_snapshot(&self) -> Result<Option<PersistentSnapshot>> {
-            Err(Error::catch_all(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "FailStorage".into(),
-            ))
-        }
-
-        async fn save_genesis(&self, _snapshot: PersistentSnapshot) -> Result<()> {
-            Err(Error::catch_all(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "FailStorage".into(),
-            ))
-        }
-
-        async fn apply_events(
-            &self,
-            _block: L1BlockId,
-            _timestamp: Timestamp,
-            _node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
-            _wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
-        ) -> Result<()> {
-            Err(Error::catch_all(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "FailStorage".into(),
-            ))
-        }
-    }
-
-    /// Resettable stream that yields a predefined list of inputs.
-    #[derive(Clone, Debug)]
-    struct VecStream {
-        inputs: Vec<BlockInput>,
-        reorg: Option<Vec<BlockInput>>,
-        pos: usize,
-        panic_at_end: bool,
-    }
-
-    impl Default for VecStream {
-        fn default() -> Self {
-            Self {
-                inputs: vec![],
-                reorg: None,
-                pos: 0,
-                panic_at_end: true,
-            }
-        }
-    }
-
-    impl VecStream {
-        /// Emulate an infinite stream.
-        ///
-        /// The resulting stream will block indefinitely when it reaches the end of its predefined
-        /// input sequence.
-        fn infinite() -> Self {
-            Self {
-                panic_at_end: false,
-                ..Default::default()
-            }
-        }
-
-        /// Append a new L1 block input to be yielded by the stream.
-        fn push(&mut self, input: BlockInput) {
-            self.inputs.push(input);
-        }
-
-        /// Provide an alternative sequence of inputs to yield after the stream is reset.
-        fn with_reorg(mut self, inputs: Vec<BlockInput>) -> Self {
-            self.reorg = Some(inputs);
-            self
-        }
-    }
-
-    impl Stream for VecStream {
-        type Item = BlockInput;
-
-        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-            if self.pos >= self.inputs.len() {
-                if self.panic_at_end {
-                    // Most tests expect to never hit the end of the predefined input sequence. If
-                    // we do, panic and fail the test.
-                    panic!("reached end of predefined input stream");
-                } else {
-                    // In some cases, we want to emulate the realistic behavior of an L1 stream,
-                    // which is blocking when no more blocks are readily available.
-                    tracing::warn!("reached end of predefined input stream, blocking indefinitely");
-                    return Poll::Pending;
-                }
-            }
-
-            let poll = Poll::Ready(Some(self.inputs[self.pos].clone()));
-            self.pos += 1;
-            poll
-        }
-    }
-
-    impl ResettableStream for VecStream {
-        async fn reset(&mut self, number: u64) {
-            tracing::info!(number, "reset");
-            self.pos = self
-                .inputs
-                .iter()
-                .position(|input| input.block.number == number + 1)
-                .unwrap_or_else(|| panic!("cannot reset to unknown block height {number}"));
-            if let Some(reorg) = self.reorg.take() {
-                self.inputs = reorg;
-            }
-        }
-    }
-
-    /// Generate a block ID for testing.
-    fn block_id(number: u64) -> L1BlockId {
-        let parent = keccak256(number.saturating_sub(1).to_le_bytes());
-        let hash = keccak256(number.to_le_bytes());
-        L1BlockId {
-            number,
-            hash,
-            parent,
-        }
-    }
-
-    /// Generate a test L1 block with no staking-related data.
-    fn empty_block(number: u64) -> BlockData {
-        let block = block_id(number);
-        let timestamp = 12 * number;
-        BlockData {
-            block,
-            timestamp,
-            node_set: FullNodeSetSnapshot {
-                nodes: Default::default(),
-                l1_block: L1BlockInfo {
-                    number,
-                    hash: block.hash,
-                    timestamp,
-                },
-            },
-            node_set_update: Some(Default::default()),
-            wallets: Default::default(),
-            wallets_update: Some(Default::default()),
-        }
-    }
+    use crate::{
+        input::l1::testing::subscribe_until,
+        types::common::{Delegation, Ratio},
+    };
 
     /// Generate a test [`State`] from a list of L1 blocks.
     fn from_blocks<S: Default>(blocks: impl IntoIterator<Item = BlockData>) -> State<S> {
@@ -766,44 +585,11 @@ mod test {
         state
     }
 
-    /// Generate an arbitrary node for testing.
-    fn make_node(i: usize) -> NodeSetEntry {
-        let address = Address::random();
-        let staking_key = TaggedBase64::new("KEY", &i.to_le_bytes()).unwrap();
-        NodeSetEntry {
-            address,
-            staking_key,
-            stake: i.try_into().unwrap(),
-            commission: Ratio::new(5, 100),
-        }
-    }
-
-    /// Generate an empty wallet snapshot for testing.
-    fn empty_wallet(l1_block: L1BlockInfo) -> WalletSnapshot {
-        WalletSnapshot {
-            l1_block,
-            nodes: Default::default(),
-            pending_exits: Default::default(),
-            pending_undelegations: Default::default(),
-            claimed_rewards: Default::default(),
-        }
-    }
-
-    /// Generate a random L1 input for testing.
-    fn random_block_input(number: u64) -> BlockInput {
-        BlockInput {
-            block: block_id(number),
-            finalized: block_id(0),
-            timestamp: 12 * number,
-            events: vec![], // TODO generate random events
-        }
-    }
-
     #[test_log::test]
     fn test_gc() {
         for finalized in 0..3 {
             tracing::info!(finalized, "test garbage collection");
-            let blocks = (0..3).map(empty_block).collect::<Vec<_>>();
+            let blocks = (0..3).map(BlockData::empty).collect::<Vec<_>>();
             let mut state = from_blocks::<MemoryStorage>(blocks.clone());
 
             state.garbage_collect(finalized as u64);
@@ -818,7 +604,7 @@ mod test {
 
     #[test_log::test]
     fn test_api_l1_block() {
-        let block = empty_block(1);
+        let block = BlockData::empty(1);
         let state = from_blocks::<MemoryStorage>([block.clone()]);
 
         // Query for old block.
@@ -836,10 +622,10 @@ mod test {
 
     #[test_log::test]
     fn test_api_node_set() {
-        let mut finalized = empty_block(0);
+        let mut finalized = BlockData::empty(0);
         finalized.node_set_update = None;
 
-        let mut block = empty_block(1);
+        let mut block = BlockData::empty(1);
         let node = make_node(0);
         block.node_set.nodes.push_back(node.clone());
         block.node_set_update = Some(vec![FullNodeSetDiff::NodeUpdate(node)]);
@@ -847,7 +633,7 @@ mod test {
         let state = from_blocks::<MemoryStorage>([finalized.clone(), block.clone()]);
 
         // Query for unknown block.
-        let unknown = empty_block(2).block.hash;
+        let unknown = BlockData::empty(2).block.hash;
         let err = state.full_node_set(unknown).unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         let err = state.full_node_set_update(unknown).unwrap_err();
@@ -871,7 +657,7 @@ mod test {
 
     #[test_log::test]
     fn test_api_wallet() {
-        let mut finalized = empty_block(0);
+        let mut finalized = BlockData::empty(0);
         finalized.wallets_update = None;
 
         let address = Address::random();
@@ -886,7 +672,7 @@ mod test {
             ..empty_wallet(finalized.block_info())
         };
 
-        let mut block = empty_block(1);
+        let mut block = BlockData::empty(1);
         block.wallets.insert(address, wallet.clone());
         block
             .wallets_update
@@ -907,7 +693,7 @@ mod test {
         let state = from_blocks::<MemoryStorage>([finalized.clone(), block.clone()]);
 
         // Query for unknown block.
-        let unknown = empty_block(2).block.hash;
+        let unknown = BlockData::empty(2).block.hash;
         let err = state.wallet(address, unknown).unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         let err = state.wallet_update(address, unknown).unwrap_err();
@@ -951,7 +737,7 @@ mod test {
 
     #[test_log::test]
     fn test_replay_consistency() {
-        let mut block = empty_block(0);
+        let mut block = BlockData::empty(0);
         let mut events = vec![];
 
         let inputs = (0..100).map(random_block_input);
@@ -981,7 +767,7 @@ mod test {
 
     #[test_log::test]
     fn test_large_state() {
-        let mut block = empty_block(0);
+        let mut block = BlockData::empty(0);
 
         // Realistically large state: 500 registered validators, 10000 delegators, each delegating
         // to 10 different nodes.
@@ -1023,7 +809,7 @@ mod test {
         let stream = &mut VecStream::default();
 
         // Start with just the finalized state.
-        let state = RwLock::new(from_blocks::<MemoryStorage>([empty_block(0)]));
+        let state = RwLock::new(from_blocks::<MemoryStorage>([BlockData::empty(0)]));
 
         // Apply blocks without finalizing a new block.
         for input in &inputs {
@@ -1073,7 +859,7 @@ mod test {
         let stream = &mut VecStream::default();
 
         // Start with just the finalized state.
-        let state = RwLock::new(from_blocks::<FailStorage>([empty_block(0)]));
+        let state = RwLock::new(from_blocks::<FailStorage>([BlockData::empty(0)]));
 
         // Apply blocks without finalizing a new block.
         for input in &inputs {
@@ -1103,20 +889,12 @@ mod test {
         }
 
         // Start with just the finalized state.
-        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([empty_block(0)])));
+        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([
+            BlockData::empty(0),
+        ])));
 
         // Process the updates in `stream`.
-        let task = spawn(State::subscribe(state.clone(), stream));
-
-        // Wait for the processing task to catch up.
-        let state = loop {
-            sleep(Duration::from_millis(100)).await;
-            let state = state.read().await;
-            if state.blocks.len() >= 3 {
-                task.abort();
-                break state;
-            }
-        };
+        let state = subscribe_until(&state, stream, |state| state.blocks.len() >= 3).await;
         assert_eq!(state.blocks.len(), 3);
         assert_eq!(state.blocks_by_hash.len(), 3);
         for i in 0..3 {
@@ -1144,20 +922,12 @@ mod test {
         stream = stream.with_reorg(inputs);
 
         // Start with just the finalized state.
-        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([empty_block(0)])));
+        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([
+            BlockData::empty(0),
+        ])));
 
         // Process the updates in `stream`.
-        let task = spawn(State::subscribe(state.clone(), stream));
-
-        // Wait for the processing task to catch up.
-        let state = loop {
-            sleep(Duration::from_millis(100)).await;
-            let state = state.read().await;
-            if state.blocks.len() >= 5 {
-                task.abort();
-                break state;
-            }
-        };
+        let state = subscribe_until(&state, stream, |state| state.blocks.len() >= 5).await;
         assert_eq!(state.blocks.len(), 5);
         assert_eq!(state.blocks_by_hash.len(), 5);
         for i in 0..5 {
@@ -1187,20 +957,12 @@ mod test {
         stream = stream.with_reorg(inputs.clone());
 
         // Start with just the genesis state.
-        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([empty_block(0)])));
+        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([
+            BlockData::empty(0),
+        ])));
 
         // Process the updates in `stream`.
-        let task = spawn(State::subscribe(state.clone(), stream));
-
-        // Wait for the processing task to catch up.
-        let state = loop {
-            sleep(Duration::from_millis(100)).await;
-            let state = state.read().await;
-            if state.blocks.len() >= 4 {
-                task.abort();
-                break state;
-            }
-        };
+        let state = subscribe_until(&state, stream, |state| state.blocks.len() >= 4).await;
 
         // We should have garbage collected block 0 after block 1 became finalized.
         assert_eq!(state.blocks.len(), 4);
@@ -1243,15 +1005,8 @@ mod test {
             storage.finalized_snapshot().await.unwrap().unwrap(),
             genesis
         );
-        let task = spawn(State::subscribe(state.clone(), stream));
-        let state = loop {
-            sleep(Duration::from_millis(100)).await;
-            let state = state.read().await;
-            if state.blocks[0].block.number == 1 {
-                task.abort();
-                break state;
-            }
-        };
+        let state =
+            subscribe_until(&state, stream, |state| state.blocks[0].block.number == 1).await;
         assert_eq!(state.blocks.len(), 2);
         assert_eq!(
             storage.finalized_snapshot().await.unwrap().unwrap().block,
@@ -1271,15 +1026,7 @@ mod test {
         let mut stream = VecStream::infinite();
         stream.push(random_block_input(2));
         let state = Arc::new(RwLock::new(state));
-        let task = spawn(State::subscribe(state.clone(), stream));
-        let state = loop {
-            sleep(Duration::from_millis(100)).await;
-            let state = state.read().await;
-            if state.blocks.len() >= 2 {
-                task.abort();
-                break state;
-            }
-        };
+        let state = subscribe_until(&state, stream, |state| state.blocks.len() >= 2).await;
         assert_eq!(state.blocks.len(), 2);
         assert_eq!(state.blocks[0].block, block_id(1));
         assert_eq!(state.blocks[1].block, block_id(2));

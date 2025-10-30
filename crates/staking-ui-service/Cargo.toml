@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-alloy = { version = "1.0", features = ["provider-ws", "json-rpc", "node-bindings"] }
+alloy = { version = "1.0", features = [
+    "provider-ws",
+    "json-rpc",
+    "node-bindings",
+] }
 async-lock = "3.0"
 clap = { version = "4.4", features = ["derive", "env"] }
 cld = "0.5"
@@ -15,13 +19,17 @@ hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-
 im = { version = "15", features = ["serde"] }
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
+surf-disco = "0.9"
 tagged-base64 = "0.4"
 tide-disco = "0.9"
 tokio = "1"
+toml = "0.8"
 tower-service = "0.3"
 tracing = "0.1"
+vbs = "0.1"
 
 [dev-dependencies]
+portpicker = "0.1"
 test-log = { version = "0.2", features = [
     "color",
     "trace",

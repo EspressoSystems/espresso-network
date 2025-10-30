@@ -2,8 +2,9 @@ use std::{path::PathBuf, process::exit, sync::Arc};
 
 use async_lock::RwLock;
 use clap::Parser;
+use futures::{FutureExt, future::try_join_all};
 use staking_ui_service::{
-    Result,
+    Result, app,
     input::l1::{self, PersistentSnapshot, RpcStream, options::L1ClientOptions},
     persistence::sql,
     types::common::Address,
@@ -23,6 +24,10 @@ struct Options {
     /// Location for persistent storage.
     #[clap(long, env = "ESPRESSO_STAKING_SERVICE_STORAGE")]
     storage: PathBuf,
+
+    /// Port for the HTTP server.
+    #[clap(short, long, env = "ESPRESSO_SATKING_SERVICE_PORT")]
+    port: u16,
 }
 
 impl Options {
@@ -34,8 +39,18 @@ impl Options {
         let (id, timestamp) = l1_input.genesis(self.stake_table).await?;
         let genesis = PersistentSnapshot::genesis(id, timestamp);
 
-        let l1_state = Arc::new(RwLock::new(l1::State::new(storage, genesis).await?));
-        l1::State::subscribe(l1_state, l1_input).await;
+        // Create server state.
+        let l1 = Arc::new(RwLock::new(l1::State::new(storage, genesis).await?));
+        let app = app::State::new(l1.clone());
+
+        // Create tasks that will run in parallel.
+        let l1_task = l1::State::subscribe(l1, l1_input);
+        let http_task = app.serve(self.port);
+
+        // Run all tasks. Terminate if any background task fails (they should all run forever, but
+        // if one does fail it is better to loudly crash than to continue running in some weird
+        // state).
+        try_join_all([l1_task.boxed(), http_task.boxed()]).await?;
         Ok(())
     }
 }

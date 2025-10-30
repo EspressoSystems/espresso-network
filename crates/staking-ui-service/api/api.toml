@@ -1,0 +1,52 @@
+[meta]
+FORMAT_VERSION = "0.1.0"
+NAME = ""
+DESCRIPTION = """
+Stake table and delegation information.
+
+This API provides information about the current stake table, the delegators and nodes therein, and
+pending rewards and withdrawals. It is designed to serve the Espresso staking UI.
+
+# Types
+
+The following types are referenced by the endpoint descriptions below.
+
+## `L1BlockId`
+
+```json
+{
+    "hash": Hex,
+    "parent": Hex,
+    "number": integer
+}
+```
+
+## `Hex`
+
+Any valid `0x`-prefixed hex string.
+"""
+
+[route.l1_block_latest]
+PATH = ["/l1/block/latest"]
+DOC = """
+Get the latest L1 head.
+
+# Returns
+
+`L1BlockId`
+"""
+
+[route.l1_block]
+PATH = ["/l1/block/:number"]
+":number" = "Integer"
+DOC = """
+Get the requested L1 block.
+
+L1 block information is generally available from any block from the most recent finalized block up
+to the current head. Requests for older blocks may return `410 Gone`. Requests for blocks that have
+not yet been produced will return `404 Not Found`.
+
+# Returns
+
+`L1BlockId`
+"""

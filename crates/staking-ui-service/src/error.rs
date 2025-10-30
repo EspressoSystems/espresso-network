@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use serde::{Deserialize, Serialize};
-use tide_disco::StatusCode;
+use tide_disco::{RequestError, StatusCode};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Error {
@@ -62,6 +62,14 @@ impl Error {
             status: StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
+
+    /// An error arising from the client's request.
+    pub fn bad_request() -> Self {
+        Self {
+            message: "bad request".to_string(),
+            status: StatusCode::BAD_REQUEST,
+        }
+    }
 }
 
 impl Display for Error {
@@ -82,7 +90,32 @@ impl tide_disco::Error for Error {
     }
 }
 
-pub type Result<T> = core::result::Result<T, Error>;
+impl From<RequestError> for Error {
+    fn from(err: RequestError) -> Self {
+        Self::bad_request().context(err)
+    }
+}
+
+pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+/// Extension functions for converting other result types into [`Result`].
+pub trait ResultExt {
+    type Ok;
+
+    /// Wrap an error with an HTTP status code, preserving the original error context.
+    fn context(self, f: impl FnOnce() -> Error) -> Result<Self::Ok>;
+}
+
+impl<T, E> ResultExt for Result<T, E>
+where
+    E: std::error::Error,
+{
+    type Ok = T;
+
+    fn context(self, f: impl FnOnce() -> Error) -> Result<<Self as ResultExt>::Ok> {
+        self.map_err(|err| f().context(err))
+    }
+}
 
 macro_rules! ensure {
     ($cond:expr, $err:expr) => {
