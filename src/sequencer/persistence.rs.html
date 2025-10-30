@@ -1299,7 +1299,7 @@
 <a href=#1299 id=1299 data-nosnippet>1299</a>
 <a href=#1300 id=1300 data-nosnippet>1300</a>        <span class="comment">// Fetch events from stake table fetcher and compare with persisted data
 <a href=#1301 id=1301 data-nosnippet>1301</a>        </span><span class="kw">let </span>fetched_events = stake_table_fetcher
-<a href=#1302 id=1302 data-nosnippet>1302</a>            .fetch_events(stake_table_contract, block)
+<a href=#1302 id=1302 data-nosnippet>1302</a>            .fetch_and_store_stake_table_events(stake_table_contract, block)
 <a href=#1303 id=1303 data-nosnippet>1303</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#1304 id=1304 data-nosnippet>1304</a>        <span class="macro">assert_eq!</span>(fetched_events, events);
 <a href=#1305 id=1305 data-nosnippet>1305</a>
