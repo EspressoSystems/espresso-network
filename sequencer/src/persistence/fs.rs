@@ -2307,6 +2307,7 @@ fn epoch_files(
     }))
 }
 
+#[cfg(test)]
 mod test {
     use std::marker::PhantomData;
 
