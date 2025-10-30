@@ -761,14 +761,21 @@ impl Fetcher {
         .instrument(span)
     }
 
-    pub async fn fetch_events(
+    /// Get `StakeTable` at specific l1 block height.
+    /// This function fetches and processes various events (ValidatorRegistered, ValidatorExit,
+    /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
+    /// contract's initialization block to the provided `to_block` value.
+    /// Events are fetched in chunks and retries are implemented for failed requests.
+    /// Only new events fetched from L1 are stored in persistence.
+    pub async fn fetch_and_store_stake_table_events(
         &self,
         contract: Address,
         to_block: u64,
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        let persistence_lock = self.persistence.lock().await;
-        let (read_l1_offset, persistence_events) = persistence_lock.load_events(to_block).await?;
-        drop(persistence_lock);
+        let (read_l1_offset, persistence_events) = {
+            let persistence_lock = self.persistence.lock().await;
+            persistence_lock.load_events(to_block).await?
+        };
 
         tracing::info!("loaded events from storage to_block={to_block:?}");
 
@@ -802,6 +809,21 @@ impl Fetcher {
         )
         .await?;
 
+        // Store only the new events fetched from L1 contract
+        if !contract_events.is_empty() {
+            tracing::info!(
+                "storing {} new events in storage to_block={to_block:?}",
+                contract_events.len()
+            );
+            {
+                let persistence_lock = self.persistence.lock().await;
+                persistence_lock
+                    .store_events(to_block, contract_events.clone())
+                    .await
+                    .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
+            }
+        }
+
         let mut events = match from_block {
             Some(_) => persistence_events
                 .into_iter()
@@ -824,6 +846,71 @@ impl Fetcher {
         Ok(events)
     }
 
+    /// Validate a stake table event.
+    ///
+    /// Returns:
+    /// - `Ok(true)` if the event is valid and should be processed
+    /// - `Ok(false)` if the event should be skipped (non-fatal error)
+    /// - `Err(StakeTableError)` if a fatal error occurs
+    fn validate_event(event: &StakeTableV2Events, log: &Log) -> Result<bool, StakeTableError> {
+        match event {
+            StakeTableV2Events::ValidatorRegisteredV2(evt) => {
+                if let Err(err) = evt.authenticate() {
+                    tracing::warn!(
+                        %err,
+                        "Failed to authenticate ValidatorRegisteredV2 event: {}",
+                        log.display()
+                    );
+                    return Ok(false);
+                }
+            },
+            StakeTableV2Events::ConsensusKeysUpdatedV2(evt) => {
+                if let Err(err) = evt.authenticate() {
+                    tracing::warn!(
+                        %err,
+                        "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
+                        log.display()
+                    );
+                    return Ok(false);
+                }
+            },
+            StakeTableV2Events::CommissionUpdated(CommissionUpdated {
+                validator,
+                newCommission,
+                ..
+            }) => {
+                if *newCommission > COMMISSION_BASIS_POINTS {
+                    return Err(StakeTableError::InvalidCommission(
+                        *validator,
+                        *newCommission,
+                    ));
+                }
+            },
+            _ => {},
+        }
+
+        Ok(true)
+    }
+
+    /// Break a block range into fixed-size chunks.
+    fn block_range_chunks(
+        from_block: u64,
+        to_block: u64,
+        chunk_size: u64,
+    ) -> impl Iterator<Item = (u64, u64)> {
+        let mut start = from_block;
+        let end = to_block;
+        std::iter::from_fn(move || {
+            let chunk_end = min(start + chunk_size - 1, end);
+            if chunk_end < start {
+                return None;
+            }
+            let chunk = (start, chunk_end);
+            start = chunk_end + 1;
+            Some(chunk)
+        })
+    }
+
     /// Fetch all stake table events from L1
     pub async fn fetch_events_from_contract(
         l1_client: L1Client,
@@ -833,6 +920,7 @@ impl Fetcher {
     ) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
         let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
         let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
+        let retry_delay = l1_client.options().l1_retry_delay;
         // get the block number when the contract was initialized
         // to avoid fetching events from block number 0
         let from_block = match from_block {
@@ -850,7 +938,7 @@ impl Fetcher {
                                 );
                             }
                             tracing::warn!(%err, "Failed to retrieve initial block, retrying...");
-                            sleep(l1_client.options().l1_retry_delay).await;
+                            sleep(retry_delay).await;
                         },
                     }
                 }
@@ -860,20 +948,8 @@ impl Fetcher {
         // To avoid making large RPC calls, divide the range into smaller chunks.
         // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
         // default value  is `10000` if env variable is not set
-        let mut start = from_block;
-        let end = to_block;
         let chunk_size = l1_client.options().l1_events_max_block_range;
-        let chunks = std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
-        });
-
-        let retry_delay = l1_client.options().l1_retry_delay;
+        let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
 
         let mut events = vec![];
 
@@ -911,76 +987,23 @@ impl Fetcher {
             )
             .await;
 
-            for log in logs {
-                let event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)?;
+            let chunk_events = logs
+                .into_iter()
+                .filter_map(|log| {
+                    let event =
+                        StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+                    match Self::validate_event(&event, &log) {
+                        Ok(true) => Some(Ok((event, log))),
+                        Ok(false) => None,
+                        Err(e) => Some(Err(e)),
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-                match &event {
-                    StakeTableV2Events::ValidatorRegisteredV2(event) => {
-                        if let Err(err) = event.authenticate() {
-                            tracing::warn!(
-                                %err,
-                                "Failed to authenticate ValidatorRegisteredV2 event: {}",
-                                log.display()
-                            );
-                            continue;
-                        }
-                    },
-
-                    StakeTableV2Events::ConsensusKeysUpdatedV2(event) => {
-                        if let Err(err) = event.authenticate() {
-                            tracing::warn!(
-                                %err,
-                                "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
-                                log.display()
-                            );
-                            continue;
-                        }
-                    },
-                    StakeTableV2Events::CommissionUpdated(CommissionUpdated {
-                        validator,
-                        newCommission,
-                        ..
-                    }) => {
-                        if *newCommission > COMMISSION_BASIS_POINTS {
-                            return Err(StakeTableError::InvalidCommission(
-                                *validator,
-                                *newCommission,
-                            ));
-                        }
-                    },
-                    _ => {},
-                }
-
-                events.push((event, log.clone()));
-            }
+            events.extend(chunk_events);
         }
 
         sort_stake_table_events(events).map_err(Into::into)
-    }
-
-    /// Get `StakeTable` at specific l1 block height.
-    /// This function fetches and processes various events (ValidatorRegistered, ValidatorExit,
-    /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
-    /// contract's initialization block to the provided `to_block` value.
-    /// Events are fetched in chunks to and retries are implemented for failed requests.
-    pub async fn fetch_and_store_stake_table_events(
-        &self,
-        contract: Address,
-        to_block: u64,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        let events = self.fetch_events(contract, to_block).await?;
-
-        tracing::info!("storing events in storage to_block={to_block:?}");
-
-        {
-            let persistence_lock = self.persistence.lock().await;
-            persistence_lock
-                .store_events(to_block, events.clone())
-                .await
-                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
-        }
-
-        Ok(events)
     }
 
     // Only used by staking CLI which doesn't have persistence
