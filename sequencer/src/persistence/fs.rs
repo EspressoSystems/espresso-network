@@ -2307,7 +2307,6 @@ fn epoch_files(
     }))
 }
 
-#[cfg(test)]
 mod test {
     use std::marker::PhantomData;
 
@@ -2384,6 +2383,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
@@ -2406,6 +2406,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
@@ -2433,6 +2434,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
@@ -2455,6 +2457,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
