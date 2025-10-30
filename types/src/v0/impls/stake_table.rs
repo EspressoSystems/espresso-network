@@ -2742,7 +2742,7 @@ mod tests {
         let register1 = ValidatorRegisteredV2::from(&val1).into();
         let deregister1 = ValidatorExit::from(&val1).into();
         let register2 = ValidatorRegisteredV2::from(&val2).into();
-        let events = vec![register1, deregister1, register2];
+        let events = [register1, deregister1, register2];
         let error = validators_from_l1_events(events.iter().cloned()).unwrap_err();
         assert_matches!(error, StakeTableError::ValidatorAlreadyExited(addr) if addr == account);
     }
