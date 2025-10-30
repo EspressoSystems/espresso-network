@@ -179,7 +179,7 @@ fn sort_stake_table_events(
     Ok(events)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct StakeTableState {
     validators: ValidatorMap,
     validator_exits: HashSet<Address>,
@@ -240,7 +240,8 @@ impl StakeTableState {
         self.validators
     }
 
-    pub fn apply_event(&mut self, event: StakeTableEvent) -> ApplyEventResult<()> {
+    pub fn apply_event(&self, event: StakeTableEvent) -> ApplyEventResult<Self> {
+        let mut new_state = self.clone();
         match event {
             StakeTableEvent::Register(ValidatorRegistered {
                 account,
@@ -251,29 +252,31 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = blsVk.into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
 
-                if self.validator_exits.contains(&account) {
+                if new_state.validator_exits.contains(&account) {
                     return Err(StakeTableError::ValidatorAlreadyExited(account));
                 }
 
-                let entry = self.validators.entry(account);
+                let entry = new_state.validators.entry(account);
                 if let indexmap::map::Entry::Occupied(_) = entry {
                     return Err(StakeTableError::AlreadyRegistered(account));
                 }
 
                 // The stake table contract enforces that each bls key is only used once.
-                if !self.used_bls_keys.insert(stake_table_key) {
+                if new_state.used_bls_keys.contains(&stake_table_key) {
                     return Err(StakeTableError::BlsKeyAlreadyUsed(
                         stake_table_key.to_string(),
                     ));
                 }
 
                 // The stake table v1 contract does *not* enforce that each schnorr key is only used once.
-                // We need to clone here because we need to both insert into the set and use the key later
-                if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
+                if new_state.used_schnorr_keys.contains(&state_ver_key) {
                     return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
                     )));
                 }
+
+                new_state.used_bls_keys.insert(stake_table_key);
+                new_state.used_schnorr_keys.insert(state_ver_key.clone());
 
                 entry.or_insert(Validator {
                     account,
@@ -303,28 +306,31 @@ impl StakeTableState {
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
                 // Reject if validator already exited
-                if self.validator_exits.contains(&account) {
+                if new_state.validator_exits.contains(&account) {
                     return Err(StakeTableError::ValidatorAlreadyExited(account));
                 }
 
-                let entry = self.validators.entry(account);
+                let entry = new_state.validators.entry(account);
                 if let indexmap::map::Entry::Occupied(_) = entry {
                     return Err(StakeTableError::AlreadyRegistered(account));
                 }
 
                 // The stake table v2 contract enforces that each bls key is only used once.
-                if !self.used_bls_keys.insert(stake_table_key) {
+                if new_state.used_bls_keys.contains(&stake_table_key) {
                     return Err(StakeTableError::BlsKeyAlreadyUsed(
                         stake_table_key.to_string(),
                     ));
                 }
 
                 // The stake table v2 contract enforces schnorr key is only used once.
-                if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
+                if new_state.used_schnorr_keys.contains(&state_ver_key) {
                     return Err(StakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
                     ));
                 }
+
+                new_state.used_bls_keys.insert(stake_table_key);
+                new_state.used_schnorr_keys.insert(state_ver_key.clone());
 
                 entry.or_insert(Validator {
                     account,
@@ -337,10 +343,12 @@ impl StakeTableState {
             },
 
             StakeTableEvent::Deregister(exit) => {
-                self.validator_exits.insert(exit.validator);
-                self.validators
-                    .shift_remove(&exit.validator)
-                    .ok_or(StakeTableError::ValidatorNotFound(exit.validator))?;
+                if !new_state.validators.contains_key(&exit.validator) {
+                    return Err(StakeTableError::ValidatorNotFound(exit.validator));
+                }
+
+                new_state.validator_exits.insert(exit.validator);
+                new_state.validators.shift_remove(&exit.validator);
             },
 
             StakeTableEvent::Delegate(delegated) => {
@@ -350,7 +358,7 @@ impl StakeTableState {
                     amount,
                 } = delegated;
 
-                let val = self
+                let val = new_state
                     .validators
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
@@ -375,7 +383,7 @@ impl StakeTableState {
                     amount,
                 } = undelegated;
 
-                let val = self
+                let val = new_state
                     .validators
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
@@ -406,15 +414,14 @@ impl StakeTableState {
                     schnorrVK,
                 } = update;
 
-                let validator = self
-                    .validators
-                    .get_mut(&account)
-                    .ok_or(StakeTableError::ValidatorNotFound(account))?;
-
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
-                if !self.used_bls_keys.insert(stake_table_key) {
+                if !new_state.validators.contains_key(&account) {
+                    return Err(StakeTableError::ValidatorNotFound(account));
+                }
+
+                if new_state.used_bls_keys.contains(&stake_table_key) {
                     return Err(StakeTableError::BlsKeyAlreadyUsed(
                         stake_table_key.to_string(),
                     ));
@@ -422,12 +429,19 @@ impl StakeTableState {
 
                 // The stake table v1 contract does *not* enforce that each schnorr key is only used once,
                 // therefore it's possible to have multiple validators with the same schnorr key.
-                if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
+                if new_state.used_schnorr_keys.contains(&state_ver_key) {
                     return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
                     )));
                 }
 
+                new_state.used_bls_keys.insert(stake_table_key);
+                new_state.used_schnorr_keys.insert(state_ver_key.clone());
+
+                let validator = new_state
+                    .validators
+                    .get_mut(&account)
+                    .ok_or(StakeTableError::ValidatorNotFound(account))?;
                 validator.stake_table_key = stake_table_key;
                 validator.state_ver_key = state_ver_key;
             },
@@ -446,28 +460,34 @@ impl StakeTableState {
                     ..
                 } = update;
 
-                let validator = self
-                    .validators
-                    .get_mut(&account)
-                    .ok_or(StakeTableError::ValidatorNotFound(account))?;
-
                 let stake_table_key: BLSPubKey = blsVK.into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
+                if !new_state.validators.contains_key(&account) {
+                    return Err(StakeTableError::ValidatorNotFound(account));
+                }
+
                 // The stake table contract enforces that each bls key is only used once.
-                if !self.used_bls_keys.insert(stake_table_key) {
+                if new_state.used_bls_keys.contains(&stake_table_key) {
                     return Err(StakeTableError::BlsKeyAlreadyUsed(
                         stake_table_key.to_string(),
                     ));
                 }
 
                 // The stake table v2 contract enforces that each schnorr key is only used once
-                if !self.used_schnorr_keys.insert(state_ver_key.clone()) {
+                if new_state.used_schnorr_keys.contains(&state_ver_key) {
                     return Err(StakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
                     ));
                 }
 
+                new_state.used_bls_keys.insert(stake_table_key);
+                new_state.used_schnorr_keys.insert(state_ver_key.clone());
+
+                let validator = new_state
+                    .validators
+                    .get_mut(&account)
+                    .ok_or(StakeTableError::ValidatorNotFound(account))?;
                 validator.stake_table_key = stake_table_key;
                 validator.state_ver_key = state_ver_key;
             },
@@ -487,7 +507,7 @@ impl StakeTableState {
                 // commission increase rates and leave this enforcement to the
                 // stake table contract.
 
-                let val = self
+                let val = new_state
                     .validators
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
@@ -496,7 +516,7 @@ impl StakeTableState {
             },
         }
 
-        Ok(Ok(()))
+        Ok(Ok(new_state))
     }
 }
 
@@ -506,13 +526,15 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     let mut state = StakeTableState::new();
     for event in events {
         match state.apply_event(event.clone()) {
-            Ok(Ok(())) => (), // Event successfully applied
+            Ok(Ok(new_state)) => {
+                // Event successfully applied
+                state = new_state;
+            },
             Ok(Err(expected_err)) => {
-                // expected error, continue
+                // Expected error, dont change the state
                 tracing::warn!("Expected error while applying event {event:?}: {expected_err}");
             },
             Err(err) => {
-                // stop processing due to fatal error
                 tracing::error!("Fatal error in applying event {event:?}: {err}");
                 return Err(err);
             },
@@ -524,42 +546,51 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 
 /// Select active validators
 ///
-/// Removes the validators without stake and selects the top 100 staked validators.
+/// Filters out validators without stake and selects the top 100 staked validators.
+/// Returns a new ValidatorMap containing only the selected validators.
 pub(crate) fn select_active_validator_set(
-    validators: &mut ValidatorMap,
-) -> Result<(), StakeTableError> {
+    validators: &ValidatorMap,
+) -> Result<ValidatorMap, StakeTableError> {
     let total_validators = validators.len();
 
-    // Remove invalid validators first
-    validators.retain(|address, validator| {
-        if validator.delegators.is_empty() {
-            tracing::info!("Validator {address:?} does not have any delegator");
-            return false;
-        }
+    // Filter out validators with no delegators or zero stake
+    let valid_validators: ValidatorMap = validators
+        .iter()
+        .filter(|(address, validator)| {
+            if validator.delegators.is_empty() {
+                tracing::info!("Validator {address:?} does not have any delegator");
+                return false;
+            }
 
-        if validator.stake.is_zero() {
-            tracing::info!("Validator {address:?} does not have any stake");
-            return false;
-        }
+            if validator.stake.is_zero() {
+                tracing::info!("Validator {address:?} does not have any stake");
+                return false;
+            }
 
-        true
-    });
+            true
+        })
+        .map(|(addr, val)| (*addr, val.clone()))
+        .collect();
 
     tracing::debug!(
         total_validators,
-        filtered = validators.len(),
+        filtered = valid_validators.len(),
         "Filtered out invalid validators"
     );
 
-    if validators.is_empty() {
+    if valid_validators.is_empty() {
         tracing::warn!("Validator selection failed: no validators passed minimum criteria");
         return Err(StakeTableError::NoValidValidators);
     }
 
-    let maximum_stake = validators.values().map(|v| v.stake).max().ok_or_else(|| {
-        tracing::error!("Could not compute maximum stake from filtered validators");
-        StakeTableError::MissingMaximumStake
-    })?;
+    let maximum_stake = valid_validators
+        .values()
+        .map(|v| v.stake)
+        .max()
+        .ok_or_else(|| {
+            tracing::error!("Could not compute maximum stake from filtered validators");
+            StakeTableError::MissingMaximumStake
+        })?;
 
     let minimum_stake = maximum_stake
         .checked_div(U256::from(VID_TARGET_TOTAL_STAKE))
@@ -568,7 +599,7 @@ pub(crate) fn select_active_validator_set(
             StakeTableError::MinimumStakeOverflow
         })?;
 
-    let mut valid_stakers: Vec<_> = validators
+    let mut valid_stakers: Vec<_> = valid_validators
         .iter()
         .filter(|(_, v)| v.stake >= minimum_stake)
         .map(|(addr, v)| (*addr, v.stake))
@@ -586,16 +617,18 @@ pub(crate) fn select_active_validator_set(
         valid_stakers.truncate(100);
     }
 
-    // Retain only the selected validators
     let selected_addresses: HashSet<_> = valid_stakers.iter().map(|(addr, _)| *addr).collect();
-    validators.retain(|address, _| selected_addresses.contains(address));
+    let selected_validators: ValidatorMap = valid_validators
+        .into_iter()
+        .filter(|(address, _)| selected_addresses.contains(address))
+        .collect();
 
     tracing::info!(
-        final_count = validators.len(),
+        final_count = selected_validators.len(),
         "Selected active validator set"
     );
 
-    Ok(())
+    Ok(selected_validators)
 }
 
 #[derive(Clone, Debug)]
@@ -610,8 +643,7 @@ pub(crate) fn validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> Result<ValidatorSet, StakeTableError> {
     let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
-    let mut active_validators = all_validators.clone();
-    select_active_validator_set(&mut active_validators)?;
+    let active_validators = select_active_validator_set(&all_validators)?;
 
     let validator_set = ValidatorSet {
         all_validators,
@@ -2697,16 +2729,17 @@ mod tests {
 
         let minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
 
-        select_active_validator_set(&mut validators).expect("Failed to select validators");
+        let selected_validators =
+            select_active_validator_set(&validators).expect("Failed to select validators");
         assert!(
-            validators.len() <= 100,
+            selected_validators.len() <= 100,
             "validators len is {}, expected at most 100",
-            validators.len()
+            selected_validators.len()
         );
 
         let mut selected_validators_highest_stake = alloy::primitives::U256::ZERO;
         // Ensure every validator in the final selection is above or equal to minimum stake
-        for (address, validator) in &validators {
+        for (address, validator) in &selected_validators {
             assert!(
                 validator.stake >= minimum_stake,
                 "Validator {:?} has stake below minimum: {}",
@@ -2799,7 +2832,7 @@ mod tests {
             StakeTableContractVersion::V2 => StakeTableEvent::RegisterV2((&validator).into()),
         };
 
-        assert!(state.apply_event(event).unwrap().is_ok());
+        state = state.apply_event(event).unwrap().unwrap();
 
         let stored = state.validators.get(&validator.account).unwrap();
         assert_eq!(stored.account, validator.account);
@@ -2809,25 +2842,25 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_validator_already_registered(#[case] version: StakeTableContractVersion) {
-        let mut stake_table_state = StakeTableState::new();
+        let stake_table_state = StakeTableState::new();
 
         let test_validator = TestValidator::random();
 
         // First registration attempt using the specified contract version
-        let first_registration_result =
+        let stake_table_state =
             match version {
                 StakeTableContractVersion::V1 => stake_table_state
                     .apply_event(StakeTableEvent::Register((&test_validator).into())),
                 StakeTableContractVersion::V2 => stake_table_state
                     .apply_event(StakeTableEvent::RegisterV2((&test_validator).into())),
-            };
-
-        // Expect the first registration to succeed
-        assert!(first_registration_result.unwrap().is_ok());
+            }
+            .unwrap()
+            .unwrap(); // Expect the first registration to succeed
 
         // attempt using V1 registration (should fail with AlreadyRegistered)
-        let v1_already_registered_result =
-            stake_table_state.apply_event(StakeTableEvent::Register((&test_validator).into()));
+        let v1_already_registered_result = stake_table_state
+            .clone()
+            .apply_event(StakeTableEvent::Register((&test_validator).into()));
 
         pretty_assertions::assert_matches!(
            v1_already_registered_result,  Err(StakeTableError::AlreadyRegistered(account))
@@ -2849,7 +2882,7 @@ mod tests {
 
     #[test]
     fn test_register_validator_v2_auth_fails() {
-        let mut state = StakeTableState::new();
+        let state = StakeTableState::new();
         let mut val = TestValidator::random();
         val.bls_sig = Default::default();
         let event = StakeTableEvent::RegisterV2((&val).into());
@@ -2867,10 +2900,10 @@ mod tests {
         let val = TestValidator::random();
 
         let reg = StakeTableEvent::Register((&val).into());
-        state.apply_event(reg).unwrap().unwrap();
+        state = state.apply_event(reg).unwrap().unwrap();
 
         let dereg = StakeTableEvent::Deregister((&val).into());
-        assert!(state.apply_event(dereg).unwrap().is_ok());
+        state = state.apply_event(dereg).unwrap().unwrap();
         assert!(!state.validators.contains_key(&val.account));
     }
 
@@ -2878,7 +2911,7 @@ mod tests {
     fn test_delegate_and_undelegate() {
         let mut state = StakeTableState::new();
         let val = TestValidator::random();
-        state
+        state = state
             .apply_event(StakeTableEvent::Register((&val).into()))
             .unwrap()
             .unwrap();
@@ -2890,7 +2923,7 @@ mod tests {
             validator: val.account,
             amount,
         });
-        assert!(state.apply_event(delegate_event).unwrap().is_ok());
+        state = state.apply_event(delegate_event).unwrap().unwrap();
 
         let validator = state.validators.get(&val.account).unwrap();
         assert_eq!(validator.delegators.get(&delegator).cloned(), Some(amount));
@@ -2900,7 +2933,7 @@ mod tests {
             validator: val.account,
             amount,
         });
-        assert!(state.apply_event(undelegate_event).unwrap().is_ok());
+        state = state.apply_event(undelegate_event).unwrap().unwrap();
         let validator = state.validators.get(&val.account).unwrap();
         assert!(!validator.delegators.contains_key(&delegator));
     }
@@ -2913,7 +2946,7 @@ mod tests {
         let val = TestValidator::random();
 
         // Always register first using V1 to simulate upgrade scenarios
-        state
+        state = state
             .apply_event(StakeTableEvent::Register((&val).into()))
             .unwrap()
             .unwrap();
@@ -2925,7 +2958,7 @@ mod tests {
             StakeTableContractVersion::V2 => StakeTableEvent::KeyUpdateV2((&new_keys).into()),
         };
 
-        assert!(state.apply_event(event).unwrap().is_ok());
+        state = state.apply_event(event).unwrap().unwrap();
 
         let updated = state.validators.get(&val.account).unwrap();
         assert_eq!(updated.stake_table_key, new_keys.bls_vk.into());
@@ -2942,7 +2975,7 @@ mod tests {
         val2.account = Address::random();
 
         let event2 = StakeTableEvent::Register((&val2).into());
-        assert!(state.apply_event(event1).unwrap().is_ok());
+        state = state.apply_event(event1).unwrap().unwrap();
         let result = state.apply_event(event2);
 
         let expected_bls_key = BLSPubKey::from(val.bls_vk).to_string();
@@ -2966,7 +2999,7 @@ mod tests {
         val2.bls_vk = val2.randomize_keys().bls_vk;
 
         let event2 = StakeTableEvent::Register((&val2).into());
-        assert!(state.apply_event(event1).unwrap().is_ok());
+        state = state.apply_event(event1).unwrap().unwrap();
         let result = state.apply_event(event2);
 
         let schnorr: SchnorrPubKey = val.schnorr_vk.into();
@@ -2999,7 +3032,7 @@ mod tests {
         let event1 = StakeTableEvent::RegisterV2((&val1).into());
         let event2 = StakeTableEvent::KeyUpdateV2((&val2).into());
 
-        assert!(state.apply_event(event1).unwrap().is_ok());
+        state = state.apply_event(event1).unwrap().unwrap();
         let result = state.apply_event(event2);
 
         let schnorr: SchnorrPubKey = val1.schnorr_vk.into();
@@ -3016,7 +3049,7 @@ mod tests {
         let mut state = StakeTableState::new();
         let validator = TestValidator::random();
         let event = StakeTableEvent::Register((&validator).into());
-        assert!(state.apply_event(event).unwrap().is_ok());
+        state = state.apply_event(event).unwrap().unwrap();
 
         let deregister_event = StakeTableEvent::Deregister((&validator).into());
         assert!(state.apply_event(deregister_event).unwrap().is_ok());
@@ -3030,7 +3063,7 @@ mod tests {
 
         // Register the validator first
         let registration_event = ValidatorRegistered::from(&validator).into();
-        stake_table
+        stake_table = stake_table
             .apply_event(registration_event)
             .unwrap()
             .unwrap();
@@ -3043,7 +3076,10 @@ mod tests {
             newCommission: COMMISSION_BASIS_POINTS, // Exactly at the limit
         }
         .into();
-        assert!(stake_table.apply_event(valid_commission_event).is_ok());
+        stake_table = stake_table
+            .apply_event(valid_commission_event)
+            .unwrap()
+            .unwrap();
 
         let invalid_commission = COMMISSION_BASIS_POINTS + 1;
         let invalid_commission_event = CommissionUpdated {
@@ -3069,7 +3105,7 @@ mod tests {
         let mut state = StakeTableState::new();
         let validator = TestValidator::random();
         let account = validator.account;
-        state
+        state = state
             .apply_event(StakeTableEvent::Register((&validator).into()))
             .unwrap()
             .unwrap();
@@ -3097,7 +3133,7 @@ mod tests {
         let mut state = StakeTableState::new();
         let validator = TestValidator::random();
         let account = validator.account;
-        state
+        state = state
             .apply_event(StakeTableEvent::Register((&validator).into()))
             .unwrap()
             .unwrap();
@@ -3108,7 +3144,7 @@ mod tests {
             validator: account,
             amount: U256::from(10u64),
         });
-        state.apply_event(event).unwrap().unwrap();
+        state = state.apply_event(event).unwrap().unwrap();
 
         let result = state.apply_event(StakeTableEvent::Undelegate(Undelegated {
             delegator,
