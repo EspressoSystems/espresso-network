@@ -44,7 +44,7 @@ runs:
       name: Generate Docker Metadata
       id: metadata
       with:
-        images: ghcr.io/espressosystems/timeboost
+        images: ghcr.io/espressosystems/staking-ui-service
         flavor: |
           latest=true
           suffix=-${{ inputs.platform }},onlatest=true
