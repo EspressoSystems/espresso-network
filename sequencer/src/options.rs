@@ -524,6 +524,9 @@ impl ModuleArgs {
                 SequencerModule::Explorer(m) => {
                     curr = m.add(&mut modules.explorer, &mut provided)?
                 },
+                SequencerModule::LightClient(m) => {
+                    curr = m.add(&mut modules.light_client, &mut provided)?
+                },
             }
         }
 
@@ -558,6 +561,7 @@ module!("catchup", api::options::Catchup, requires: "http");
 module!("config", api::options::Config, requires: "http");
 module!("hotshot-events", api::options::HotshotEvents, requires: "http");
 module!("explorer", api::options::Explorer, requires: "http", "storage-sql");
+module!("light-client", api::options::LightClient, requires: "http", "storage-sql");
 
 #[derive(Clone, Debug, Args)]
 struct Module<Options: ModuleInfo> {
@@ -638,6 +642,13 @@ enum SequencerModule {
     ///
     /// This module requires the http and storage-sql modules to be started.
     Explorer(Module<api::options::Explorer>),
+    /// Run the light client API module.
+    ///
+    /// This module provides data and proofs necessary for an untrusting light client to retrieve
+    /// and verify Espresso data from this server.
+    ///
+    /// This module requires the http and storage-sql modules to be started.
+    LightClient(Module<api::options::LightClient>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -652,4 +663,5 @@ pub struct Modules {
     pub config: Option<api::options::Config>,
     pub hotshot_events: Option<api::options::HotshotEvents>,
     pub explorer: Option<api::options::Explorer>,
+    pub light_client: Option<api::options::LightClient>,
 }

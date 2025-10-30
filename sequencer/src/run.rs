@@ -29,6 +29,44 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
+        #[cfg(all(feature = "fee", feature = "da-upgrade"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => run(
+            genesis,
+            modules,
+            opt,
+            SequencerVersions::<espresso_types::FeeVersion, espresso_types::DaUpgradeVersion>::new(
+            ),
+        )
+        .await,
+        #[cfg(all(feature = "drb-and-header", feature = "da-upgrade"))]
+        (
+            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
+            espresso_types::DaUpgradeVersion::VERSION,
+        ) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                    espresso_types::DaUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
+        #[cfg(feature = "da-upgrade")]
+        (espresso_types::DaUpgradeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DaUpgradeVersion,
+                    espresso_types::DaUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
         #[cfg(all(feature = "pos", feature = "drb-and-header"))]
         (
             espresso_types::EpochVersion::VERSION,
@@ -244,6 +282,9 @@ where
             }
             if let Some(explorer) = modules.explorer {
                 http_opt = http_opt.explorer(explorer);
+            }
+            if let Some(light_client) = modules.light_client {
+                http_opt = http_opt.light_client(light_client);
             }
             if let Some(config) = modules.config {
                 http_opt = http_opt.config(config);

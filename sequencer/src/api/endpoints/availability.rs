@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use espresso_types::{NamespaceId, NsProof, PubKey};
+use espresso_types::{NamespaceId, NsProof, PubKey, StateCertQueryDataV1, StateCertQueryDataV2};
 use futures::{
     future::{try_join_all, FutureExt, TryFutureExt},
     join,
@@ -17,6 +17,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::VidShare,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{network::ConnectedNetwork, node_implementation::Versions},
     vid::avidm::AvidMShare,
 };
@@ -27,7 +28,10 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     api::{
-        data_source::{RequestResponseDataSource, SequencerDataSource},
+        data_source::{
+            RequestResponseDataSource, SequencerDataSource, StateCertDataSource,
+            StateCertFetchingDataSource,
+        },
         StorageState,
     },
     SeqTypes, SequencerApiVersion, SequencerPersistence,
@@ -282,6 +286,46 @@ where
     .try_flatten_stream()
 }
 
+async fn get_state_cert<S>(
+    state: &S,
+    epoch: u64,
+    timeout: Duration,
+) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, availability::Error>
+where
+    S: ReadState,
+    S::State: StateCertDataSource + StateCertFetchingDataSource<SeqTypes> + Sync,
+{
+    // Try to get from local storage first
+    let state_cert = state
+        .read(|state| state.get_state_cert_by_epoch(epoch).boxed())
+        .await
+        .map_err(|e| availability::Error::Custom {
+            message: format!("Failed to get state cert: {e}"),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+
+    match state_cert {
+        Some(cert) => Ok(cert),
+        None => {
+            // Not found locally, try to fetch from peers
+            let cert = state
+                .read(|state| state.request_state_cert(epoch, timeout).boxed())
+                .await?;
+
+            // Store the fetched certificate
+            state
+                .read(|state| state.insert_state_cert(epoch, cert.clone()).boxed())
+                .await
+                .map_err(|e| availability::Error::Custom {
+                    message: format!("Failed to store state cert: {e}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?;
+
+            Ok(cert)
+        },
+    }
+}
+
 // TODO (abdul): replace snafu with `this_error` in  hotshot query service
 // Snafu has been replaced by `this_error` everywhere.
 // However, the query service still uses snafu
@@ -387,6 +431,24 @@ where
             .boxed()
         })?;
     }
+
+    api.at("get_state_cert", move |req, state| {
+        async move {
+            let epoch: u64 = req.integer_param("epoch")?;
+            let cert = get_state_cert(state, epoch, timeout).await?;
+            Ok(StateCertQueryDataV1::from(StateCertQueryDataV2(cert)))
+        }
+        .boxed()
+    })?;
+
+    api.at("get_state_cert_v2", move |req, state| {
+        async move {
+            let epoch: u64 = req.integer_param("epoch")?;
+            let cert = get_state_cert(state, epoch, timeout).await?;
+            Ok(StateCertQueryDataV2(cert))
+        }
+        .boxed()
+    })?;
 
     Ok(api)
 }

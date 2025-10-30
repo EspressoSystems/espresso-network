@@ -19,8 +19,8 @@ use hotshot_types::{
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::HSStakeTable,
     traits::{
@@ -268,6 +268,28 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch the state certificate for a given epoch without retrying on transient errors.
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>;
+
+    /// Fetch the state certificate for a given epoch, retrying on transient errors.
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                provider
+                    .try_fetch_state_cert(retry, epoch)
+                    .map_err(|err| err.context(format!("fetching state cert for epoch {epoch}")))
+                    .boxed()
+            })
+            .await
+    }
+
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
     fn is_local(&self) -> bool;
 
@@ -444,6 +466,21 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        (**self).try_fetch_state_cert(retry, epoch).await
+    }
+
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        (**self).fetch_state_cert(epoch).await
+    }
+
     fn backoff(&self) -> &BackoffParams {
         (**self).backoff()
     }
@@ -574,6 +611,19 @@ pub trait SequencerPersistence:
     async fn load_state_cert(
         &self,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    /// Get a state certificate for an epoch.
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    /// Insert a state certificate for a given epoch.
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
 
     /// Load the latest known consensus state.
     ///
@@ -757,7 +807,7 @@ pub trait SequencerPersistence:
                 std::iter::once((**committing_qc).clone())
                     // Moving backwards in the chain, each leaf corresponds with the subsequent
                     // leaf's justify QC.
-                    .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc())),
+                    .chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(&leaf.leaf))),
             );
 
             if let Err(err) = self
@@ -800,8 +850,8 @@ pub trait SequencerPersistence:
     async fn append_decided_leaves(
         &self,
         decided_view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 

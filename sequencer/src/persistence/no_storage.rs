@@ -23,8 +23,8 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate,
+        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::metrics::Metrics,
     vote::HasViewNumber,
@@ -66,8 +66,8 @@ impl SequencerPersistence for NoStorage {
     async fn append_decided_leaves(
         &self,
         view_number: ViewNumber,
-        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<QuorumCertificate2<SeqTypes>>>,
+        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let leaves = leaves
@@ -286,6 +286,21 @@ impl SequencerPersistence for NoStorage {
         &self,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         Ok(None)
+    }
+
+    async fn get_state_cert_by_epoch(
+        &self,
+        _epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        Ok(None)
+    }
+
+    async fn insert_state_cert(
+        &self,
+        _epoch: u64,
+        _cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}

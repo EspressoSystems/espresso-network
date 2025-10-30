@@ -3,12 +3,12 @@ pragma solidity ^0.8.28;
 
 import "forge-std/Test.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import "./mocks/MockRewardClaim.sol";
-import "../src/EspTokenV2.sol";
+import "../mocks/MockRewardClaim.sol";
+import "../../src/EspTokenV2.sol";
 
 // Conventions:
 // - Use claim() or claimAs() helpers for successful claims (validates events and balances)
-contract RewardClaimTest is Test {
+contract RewardClaimMockTest is Test {
     MockRewardClaim public rewardClaim;
     EspTokenV2 public espToken;
     address public owner;
@@ -49,7 +49,7 @@ contract RewardClaimTest is Test {
         vm.prank(owner);
         espToken.initializeV2(address(rewardClaim));
 
-        assertEq(rewardClaim.dailyLimit(), DAILY_LIMIT);
+        assertEq(rewardClaim.dailyLimitWei(), DAILY_LIMIT);
     }
 
     function claim(uint256 lifetimeRewards) internal {

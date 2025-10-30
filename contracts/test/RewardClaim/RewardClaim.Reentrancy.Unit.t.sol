@@ -6,46 +6,30 @@ pragma solidity ^0.8.28;
 
 import "forge-std/Test.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { ReentrancyGuardUpgradeable } from
     "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import "./mocks/MockRewardClaim.sol";
-import "../src/interfaces/IRewardClaim.sol";
+import "../../src/RewardClaim.sol";
 
-contract MaliciousEspToken is ERC20 {
-    IRewardClaim public rewardClaim;
-    bool private _reentered;
-
-    constructor() ERC20("ESP", "ESP") {
-        _mint(msg.sender, 1_000_000);
-    }
-
-    function initializeV2(address _rewardClaim) external {
-        rewardClaim = IRewardClaim(_rewardClaim);
-    }
-
-    function mint(address, uint256 amount) public {
-        if (!_reentered) {
-            _reentered = true;
-            rewardClaim.claimRewards(0, "");
-        }
-        _mint(msg.sender, amount);
+contract MinimalToken {
+    function totalSupply() external pure returns (uint256) {
+        return 1_000_000;
     }
 }
 
 contract RewardClaimReentrancyTest is Test {
-    MockRewardClaim public rewardClaim;
-    MaliciousEspToken public token;
+    RewardClaim public rewardClaim;
+    bytes32 constant REENTRANCY_SLOT =
+        0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00;
+    uint256 constant ENTERED = 2;
 
     function setUp() public {
         address owner = address(this);
+        MinimalToken token = new MinimalToken();
 
-        token = new MaliciousEspToken();
-
-        rewardClaim = MockRewardClaim(
+        rewardClaim = RewardClaim(
             address(
                 new ERC1967Proxy(
-                    address(new MockRewardClaim()),
+                    address(new RewardClaim()),
                     abi.encodeWithSignature(
                         "initialize(address,address,address,address)",
                         owner,
@@ -56,8 +40,6 @@ contract RewardClaimReentrancyTest is Test {
                 )
             )
         );
-
-        token.initializeV2(address(rewardClaim));
     }
 
     // @dev Regression test to ensure nonReentrant modifier remains on claimRewards().
@@ -65,8 +47,21 @@ contract RewardClaimReentrancyTest is Test {
     // developers from removing the modifier thinking "we trust the token" or
     // "this is unnecessary gas overhead". The modifier makes security properties
     // simpler to reason about and is intentionally kept.
-    function test_ReentrancyBlocked() public {
+    function test_ClaimRewards_ReentrancyBlocked() public {
+        vm.store(address(rewardClaim), REENTRANCY_SLOT, bytes32(ENTERED));
+
         vm.expectRevert(ReentrancyGuardUpgradeable.ReentrancyGuardReentrantCall.selector);
         rewardClaim.claimRewards(1, "");
+    }
+
+    // @dev Regression test to ensure nonReentrant modifier remains on setDailyLimit().
+    // This protects against reentrancy during the external call to espToken.totalSupply().
+    // While unlikely to be exploited, this provides defense-in-depth security for critical
+    // security parameters and prevents future developers from removing the modifier.
+    function test_SetDailyLimit_ReentrancyBlocked() public {
+        vm.store(address(rewardClaim), REENTRANCY_SLOT, bytes32(ENTERED));
+
+        vm.expectRevert(ReentrancyGuardUpgradeable.ReentrancyGuardReentrantCall.selector);
+        rewardClaim.setDailyLimit(100);
     }
 }

@@ -7,13 +7,13 @@ use async_trait::async_trait;
 use committable::Commitment;
 use data_source::{
     CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
-    SubmitDataSource,
+    StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
 use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
-    v0::traits::SequencerPersistence,
+    v0::traits::{SequencerPersistence, StateCatchup},
     v0_3::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
         Validator,
@@ -37,9 +37,10 @@ use hotshot_types::{
     event::{Event, LegacyEvent},
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType, Versions},
     },
     vid::avidm::{init_avidm_param, AvidMScheme},
     vote::HasViewNumber,
@@ -62,6 +63,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
+    state_cert::{validate_state_cert, StateCertFetchError},
     state_signature::StateSigner,
     SeqTypes, SequencerApiVersion, SequencerContext,
 };
@@ -69,6 +71,7 @@ use crate::{
 pub mod data_source;
 pub mod endpoints;
 pub mod fs;
+pub mod light_client;
 pub mod options;
 pub mod sql;
 mod update;
@@ -369,6 +372,19 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 }
 
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
+    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D, V>
+{
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
+        self.as_ref().request_state_cert(epoch, timeout).await
+    }
+}
+
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
 {
@@ -470,6 +486,150 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             }
         }
         .boxed()
+    }
+}
+
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
+    StateCertFetchingDataSource<SeqTypes> for ApiState<N, P, V>
+{
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
+        tracing::info!("fetching state certificate for epoch={epoch}");
+        let consensus = self.consensus().await;
+        let consensus_read = consensus.read().await;
+
+        let current_epoch = consensus_read.cur_epoch().await;
+
+        // // The highest epoch we can have a state certificate for is current_epoch + 1
+        // // Check if requested epoch is beyond the highest possible epoch
+        let highest_epoch = current_epoch.map(|e| e.u64() + 1);
+
+        if Some(epoch) > highest_epoch {
+            return Err(StateCertFetchError::Other(anyhow::anyhow!(
+                "requested state certificate for epoch {epoch} is beyond the highest possible \
+                 epoch {highest_epoch:?}"
+            )));
+        }
+
+        // Get the stake table for validation
+        let coordinator = consensus_read.membership_coordinator.clone();
+        if let Err(err) = coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
+            .await
+        {
+            tracing::warn!(
+                "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
+            );
+
+            coordinator
+                .wait_for_catchup(EpochNumber::new(epoch))
+                .await
+                .map_err(|e| {
+                    StateCertFetchError::Other(
+                        anyhow::Error::new(e)
+                            .context(format!("failed to catch up for stake table epoch={epoch}")),
+                    )
+                })?;
+        }
+
+        let membership = coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
+            .await
+            .map_err(|e| {
+                StateCertFetchError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("failed to get stake table for epoch={epoch}")),
+                )
+            })?;
+
+        let stake_table = membership.stake_table().await;
+
+        drop(consensus_read);
+        drop(consensus);
+
+        let state_catchup = self
+            .sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .node_state()
+            .state_catchup
+            .clone();
+
+        let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(epoch)).await;
+
+        match result {
+            Err(_) => Err(StateCertFetchError::FetchError(anyhow::anyhow!(
+                "timeout while fetching state cert for epoch {epoch}"
+            ))),
+            Ok(Ok(cert)) => {
+                // Validation errors should be mapped to ValidationError
+                validate_state_cert(&cert, &stake_table).map_err(|e| {
+                    StateCertFetchError::ValidationError(e.context(format!(
+                        "state certificate validation failed for epoch={epoch}"
+                    )))
+                })?;
+
+                tracing::info!("fetched and validated state certificate for epoch {epoch}");
+                Ok(cert)
+            },
+            Ok(Err(e)) => Err(StateCertFetchError::FetchError(
+                e.context(format!("failed to fetch state cert for epoch {epoch}")),
+            )),
+        }
+    }
+}
+
+// Thin wrapper implementations that delegate to persistence
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence> StateCertDataSource
+    for StorageState<N, P, D, V>
+{
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        self.as_ref().get_state_cert_by_epoch(epoch).await
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        self.as_ref().insert_state_cert(epoch, cert).await
+    }
+}
+
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCertDataSource
+    for ApiState<N, P, V>
+{
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let consensus = self.consensus().await;
+        let consensus_lock = consensus.read().await;
+        let persistence = consensus_lock.storage();
+
+        persistence.get_state_cert_by_epoch(epoch).await
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let consensus = self.consensus().await;
+        let consensus_lock = consensus.read().await;
+        let persistence = consensus_lock.storage();
+
+        persistence.insert_state_cert(epoch, cert).await
     }
 }
 
@@ -719,6 +879,21 @@ impl<
 
         Ok(tree)
     }
+
+    #[tracing::instrument(skip(self))]
+    async fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        let consensus = self.as_ref().consensus().await;
+        let consensus_lock = consensus.read().await;
+        let persistence = consensus_lock.storage();
+
+        persistence
+            .get_state_cert_by_epoch(epoch)
+            .await?
+            .context(format!("state cert for epoch {epoch} not found"))
+    }
 }
 
 impl<N, V, P> NodeStateDataSource for ApiState<N, P, V>
@@ -876,6 +1051,15 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             ))?;
 
         retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
+    }
+
+    async fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.get_state_cert_by_epoch(epoch)
+            .await?
+            .context(format!("state cert not found for epoch {epoch}"))
     }
 }
 
@@ -1241,6 +1425,7 @@ pub mod test_helpers {
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
                 .expect("StakeTableProxy address not found");
+
             StakingTransactions::create(
                 l1_url.clone(),
                 &deployer,
@@ -1717,7 +1902,7 @@ mod api_tests {
         },
         event::LeafInfo,
         message::Proposal,
-        simple_certificate::QuorumCertificate2,
+        simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
@@ -2001,7 +2186,7 @@ mod api_tests {
             qc.view_number = leaf.view_number();
             qc.data.leaf_commit = Committable::commit(&leaf);
             justify_qc = qc.clone();
-            chain1.push((leaf.clone(), qc.clone()));
+            chain1.push((leaf.clone(), CertificatePair::non_epoch_change(qc.clone())));
 
             // Include a quorum proposal for each leaf.
             let quorum_proposal_signature =
@@ -2092,13 +2277,13 @@ mod api_tests {
 
         // Check that the leaves were moved to archive storage, along with payload and VID
         // information.
-        for (leaf, qc) in chain1.iter().chain(&chain2) {
+        for (leaf, cert) in chain1.iter().chain(&chain2) {
             tracing::info!(height = leaf.height(), "check archive");
             let qd = data_source.get_leaf(leaf.height() as usize).await.await;
             let stored_leaf: Leaf2 = qd.leaf().clone();
             let stored_qc = qd.qc().clone();
             assert_eq!(&stored_leaf, leaf);
-            assert_eq!(&stored_qc, qc);
+            assert_eq!(&stored_qc, cert.qc());
 
             data_source
                 .get_block(leaf.height() as usize)
@@ -2178,7 +2363,10 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 leaf.view_number(),
-                [(&leaf_info(leaf.clone()), qc.clone())],
+                [(
+                    &leaf_info(leaf.clone()),
+                    CertificatePair::non_epoch_change(qc.clone()),
+                )],
                 None,
                 &consumer,
             )
@@ -2211,7 +2399,10 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 leaf.view_number(),
-                [(&leaf_info(leaf.clone()), qc)],
+                [(
+                    &leaf_info(leaf.clone()),
+                    CertificatePair::non_epoch_change(qc),
+                )],
                 None,
                 &consumer,
             )
@@ -2242,6 +2433,10 @@ mod test {
         time::Duration,
     };
 
+    use ::light_client::{
+        consensus::leaf::LeafProof,
+        testing::{EpochChangeQuorum, LegacyVersion},
+    };
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
@@ -2262,7 +2457,7 @@ mod test {
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
-        SequencerVersions, ValidatedState,
+        SequencerVersions, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -2278,8 +2473,8 @@ mod test {
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{
-            BlockQueryData, BlockSummaryQueryData, LeafQueryData, StateCertQueryDataV1,
-            StateCertQueryDataV2, TransactionQueryData, VidCommonQueryData,
+            BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
+            VidCommonQueryData,
         },
         data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         explorer::TransactionSummariesResponse,
@@ -2327,6 +2522,7 @@ mod test {
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
+        persistence,
         persistence::no_storage,
         testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
@@ -2974,8 +3170,10 @@ mod test {
             .await
             .build();
 
+        let chain_config_genesis = ValidatedState::default().chain_config.resolve().unwrap();
         let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
-        tracing::debug!(?chain_config_upgrade);
+        assert_ne!(chain_config_genesis, chain_config_upgrade);
+        tracing::debug!(?chain_config_genesis, ?chain_config_upgrade);
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::from(options::Http {
@@ -3021,25 +3219,34 @@ mod test {
 
             tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
             if view_number > wanted_view {
-                let states: Vec<_> = network
-                    .peers
+                tracing::info!(?view_number, ?upgrade.new_version_first_view, "passed upgrade view");
+                let states = join_all(
+                    network
+                        .peers
+                        .iter()
+                        .map(|peer| async { peer.consensus().read().await.decided_state().await }),
+                )
+                .await;
+                let leaves = join_all(
+                    network
+                        .peers
+                        .iter()
+                        .map(|peer| async { peer.consensus().read().await.decided_leaf().await }),
+                )
+                .await;
+                let configs: Vec<ChainConfig> = states
                     .iter()
-                    .map(|peer| async { peer.consensus().read().await.decided_state().await })
+                    .map(|state| state.chain_config.resolve().unwrap())
                     .collect();
 
-                let configs: Option<Vec<ChainConfig>> = join_all(states)
-                    .await
-                    .iter()
-                    .map(|state| state.chain_config.resolve())
-                    .collect();
-
-                tracing::debug!(?configs, "`ChainConfig`s for nodes");
-                if let Some(configs) = configs {
-                    for config in configs {
-                        assert_eq!(config, chain_config_upgrade);
-                    }
-                    break; // if assertion did not panic, the test was successful, so we exit the loop
+                tracing::info!(?leaves, ?configs, "post upgrade state");
+                for config in configs {
+                    assert_eq!(config, chain_config_upgrade);
                 }
+                for leaf in leaves {
+                    assert_eq!(leaf.block_header().version(), upgrade_version);
+                }
+                break;
             }
             sleep(Duration::from_millis(200)).await;
         }
@@ -3317,20 +3524,20 @@ mod test {
             views.insert(view_number.u64());
 
             if let hotshot::types::EventType::Decide { committing_qc, .. } = event.event {
-                assert!(committing_qc.data.epoch.is_some(), "epochs are live");
-                assert!(committing_qc.data.block_number.is_some());
+                assert!(committing_qc.epoch().is_some(), "epochs are live");
+                assert!(committing_qc.block_number().is_some());
 
-                let epoch = committing_qc.data.epoch.unwrap().u64();
+                let epoch = committing_qc.epoch().unwrap().u64();
                 epochs.insert(epoch);
 
                 tracing::debug!(
                     "Got decide: epoch: {:?}, block: {:?} ",
                     epoch,
-                    committing_qc.data.block_number
+                    committing_qc.block_number()
                 );
 
                 let expected_epoch =
-                    epoch_from_block_number(committing_qc.data.block_number.unwrap(), epoch_height);
+                    epoch_from_block_number(committing_qc.block_number().unwrap(), epoch_height);
                 tracing::debug!("expected epoch: {expected_epoch}, qc epoch: {epoch}");
 
                 assert_eq!(expected_epoch, epoch);
@@ -5782,6 +5989,7 @@ mod test {
         // Get the state cert for the epoch 3 to 5
         for i in 3..=TEST_EPOCHS {
             // v2
+
             let state_query_data_v2 = client
                 .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
                 .send()
@@ -5823,6 +6031,133 @@ mod test {
             let state_cert_v1 = state_query_data_v1.0.clone();
             tracing::info!("state_cert_v1: {state_cert_v1:?}");
             assert_eq!(state_query_data_v1, state_query_data_v2.into());
+        }
+    }
+
+    /// Test state certificate catchup functionality by simulating a node that falls behind and needs
+    /// to catch up. This test starts a 5-node network with epoch height 10, waits for 3 epochs to
+    /// pass, then removes and restarts node 0 with a fresh storage. The
+    /// restarted node catches up for the missing state certificates.
+
+    #[rstest]
+    #[case(PosVersionV3::new())]
+    #[case(PosVersionV4::new())]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub(crate) async fn test_state_cert_catchup<Ver: Versions>(#[case] versions: Ver) {
+        const EPOCH_HEIGHT: u64 = 10;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+        let state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, versions).await;
+
+        let mut events = network.peers[2].event_stream().await;
+        // Wait until at least 5 epochs have passed
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
+
+        // Remove peer 0 and restart it with the query module enabled.
+        // Adding an additional node to the test network is not straight forward,
+        // as the keys have already been initialized in the config above.
+        // So, we remove this node and re-add it using the same index.
+        network.peers.remove(0);
+
+        let new_storage: hotshot_query_service::data_source::sql::testing::TmpDb =
+            SqlDataSource::create_storage().await;
+        let new_persistence: persistence::sql::Options =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
+
+        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        tracing::info!("node_0_port {node_0_port}");
+        let opt = Options::with_port(node_0_port).query_sql(
+            Query {
+                peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+            },
+            tmp_options(&new_storage),
+        );
+        let node_0 = opt
+            .clone()
+            .serve(|metrics, consumer, storage| {
+                let cfg = network.cfg.clone();
+                let new_persistence = new_persistence.clone();
+                let state = state.clone();
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            new_persistence.clone(),
+                            Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                                Default::default(),
+                                &NoMetrics,
+                            )),
+                            storage,
+                            &*metrics,
+                            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            versions,
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let mut events = node_0.event_stream().await;
+        // Wait until at least 5 epochs have passed
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 5).await;
+
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(60))).await;
+
+        for epoch in 3..=5 {
+            let state_cert = client
+                .get::<StateCertQueryDataV2<SeqTypes>>(&format!(
+                    "availability/state-cert-v2/{epoch}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(state_cert.0.epoch.u64(), epoch);
         }
     }
 
@@ -6449,5 +6784,140 @@ mod test {
         }
 
         network.server.shut_down().await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_completeness() {
+        // Run the through a protocol upgrade and epoch change, then check that we are able to get a
+        // correct light client proof for every finalized leaf.
+
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 200;
+
+        let upgrade_version = EpochVersion::version();
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(321)
+            .set_upgrades(upgrade_version)
+            .await
+            .build();
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                SqlDataSource::options(&storage[0], Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let _network = TestNetwork::new(
+            config,
+            SequencerVersions::<LegacyVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        // Wait for the upgrade to take effect.
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe()
+            .await
+            .unwrap();
+        let (upgrade_height, first_epoch) = loop {
+            let leaf: LeafQueryData<SeqTypes> = leaves.next().await.unwrap().unwrap();
+            if leaf.header().version() < EpochVersion::version() {
+                tracing::info!(version = %leaf.header().version(), height = leaf.header().height(), view = ?leaf.leaf().view_number(), "waiting for epoch upgrade");
+                continue;
+            }
+            break (leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT).unwrap());
+        };
+        tracing::info!(upgrade_height, ?first_epoch, "epochs enabled");
+
+        // Wait for two epoch changes (so we get to the first epoch that actually uses the stake
+        // table).
+        let mut epoch_heights = [0; 2];
+        for (i, epoch_height) in epoch_heights.iter_mut().enumerate() {
+            let desired_epoch = first_epoch + (i as u64);
+            *epoch_height = loop {
+                let leaf = leaves.next().await.unwrap().unwrap();
+                let epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
+                if epoch > desired_epoch {
+                    tracing::info!(
+                        height = leaf.height(),
+                        ?desired_epoch,
+                        ?epoch,
+                        "changed epoch"
+                    );
+                    break leaf.height();
+                }
+                tracing::info!(
+                    ?desired_epoch,
+                    height = leaf.header().height(),
+                    view = ?leaf.leaf().view_number(),
+                    "waiting for epoch change"
+                );
+            };
+        }
+
+        // Wait a few more blocks.
+        let neighborhood = 2;
+        let max_block = epoch_heights[1] + neighborhood;
+        loop {
+            let leaf = leaves.next().await.unwrap().unwrap();
+            if leaf.height() >= max_block {
+                break;
+            }
+            tracing::info!(max_block, height = leaf.height(), "waiting for block");
+        }
+
+        // Check light client. Querying every single block is too slow, so we'll check a few blocks
+        // around various critical points:
+        let heights =
+        // * The first few blocks, including genesis
+            (0..=neighborhood)
+        // * A few blocks just before and after the upgrade
+            .chain(upgrade_height-neighborhood..upgrade_height+neighborhood)
+        // * A few blocks just before and after the first epoch change
+            .chain(epoch_heights[0]-neighborhood..epoch_heights[0] + neighborhood)
+        // * A few blocks just before and after the stake table comes into effect
+            .chain(epoch_heights[1]-neighborhood..max_block);
+
+        let quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
+        for i in heights {
+            tracing::info!(i, "check leaf");
+            let leaf: LeafQueryData<SeqTypes> = client
+                .get(&format!("availability/leaf/{i}"))
+                .send()
+                .await
+                .unwrap();
+            tracing::debug!(?leaf, "expected leaf");
+            let leaf_proof: LeafProof = client
+                .get(&format!("light-client/leaf/{i}"))
+                .send()
+                .await
+                .unwrap();
+            tracing::debug!(?leaf_proof, "fetched proof");
+            assert_eq!(leaf_proof.verify(&quorum, None).await.unwrap(), leaf);
+        }
     }
 }

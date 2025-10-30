@@ -8,7 +8,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::RewardMerkleTreeV1,
     v0_4::RewardMerkleTreeV2,
-    BlockMerkleTree, PubKey,
+    BlockMerkleTree, PubKey, SeqTypes,
 };
 use futures::{
     channel::oneshot,
@@ -34,7 +34,7 @@ use super::{
         provider, CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
         SequencerDataSource, StateSignatureDataSource, SubmitDataSource,
     },
-    endpoints, fs, sql,
+    endpoints, fs, light_client, sql,
     update::ApiEventConsumer,
     ApiState, StorageState,
 };
@@ -58,6 +58,7 @@ pub struct Options {
     pub config: Option<Config>,
     pub hotshot_events: Option<HotshotEvents>,
     pub explorer: Option<Explorer>,
+    pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
 }
@@ -73,6 +74,7 @@ impl From<Http> for Options {
             config: None,
             hotshot_events: None,
             explorer: None,
+            light_client: None,
             storage_fs: None,
             storage_sql: None,
         }
@@ -132,6 +134,12 @@ impl Options {
     /// Add an explorer API module.
     pub fn explorer(mut self, opt: Explorer) -> Self {
         self.explorer = Some(opt);
+        self
+    }
+
+    /// Add a light client API module.
+    pub fn light_client(mut self, opt: LightClient) -> Self {
+        self.light_client = Some(opt);
         self
     }
 
@@ -457,6 +465,14 @@ impl Options {
             self.init_hotshot_events_module(&mut app)?;
         }
 
+        // Initialize light client API if enabled.
+        if self.light_client.is_some() {
+            register_api("light-client", &mut app, move |ver| {
+                light_client::define_api::<_, SequencerApiVersion>(Default::default(), ver)
+                    .context("failed to define light client api")
+            })?;
+        }
+
         tasks.spawn(
             "API server",
             self.listen(self.http.port, app, SequencerApiVersion::instance()),
@@ -525,8 +541,7 @@ impl Options {
     fn init_hotshot_events_module<S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
     where
         S: 'static + Send + Sync + ReadState,
-        S::State:
-            Send + Sync + hotshot_events_service::events_source::EventsSource<crate::SeqTypes>,
+        S::State: Send + Sync + hotshot_events_service::events_source::EventsSource<SeqTypes>,
     {
         tracing::info!("Initializing HotShot events API at /hotshot-events");
         register_api("hotshot-events", app, move |ver| {
@@ -629,6 +644,10 @@ pub struct HotshotEvents;
 /// Options for the explorer API module.
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct Explorer;
+
+/// Options for the light client API module.
+#[derive(Parser, Clone, Copy, Debug, Default)]
+pub struct LightClient;
 
 /// Registers two versions (v0 and v1) of the same API module under the given path.
 fn register_api<E, S, F, ModuleError, ModuleVersion>(
