@@ -7,7 +7,7 @@ use jf_utils::canonical;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    avid_m::{
+    avidm::{
         config::AvidMConfig,
         namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
         AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, MerkleProof, MerkleTree, F,
@@ -300,7 +300,7 @@ mod tests {
     use rand::{seq::SliceRandom, Rng};
 
     use crate::{
-        avid_m::{
+        avidm::{
             config::AvidMConfig,
             namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
             proofs::AvidMBadEncodingProof,
