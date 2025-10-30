@@ -127,10 +127,12 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             })
                             .collect();
 
+                        let heights = leaves.keys().collect::<Vec<_>>();
+
                         let Some(leaf) = leaves.get(&requested_height) else {
                             tracing::error!(
                                 "Block at height {requested_height} not found in storage.\n\n \
-                                 stored leaves: {leaves:?}"
+                                 stored leaf heights: {heights:?}"
                             );
                             continue;
                         };
