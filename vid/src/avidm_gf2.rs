@@ -3,10 +3,12 @@
 use std::{ops::Range, vec};
 
 use anyhow::anyhow;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme};
 use jf_utils::canonical;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use tagged_base64::tagged;
 
 use crate::{VidError, VidResult, VidScheme};
 
@@ -72,7 +74,20 @@ impl AvidmGf2Share {
 }
 
 /// VID Commitment type
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Hash,
+    CanonicalSerialize,
+    CanonicalDeserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+)]
+#[tagged("AvidmGf2Commit")]
+#[repr(C)]
 pub struct AvidmGf2Commit {
     /// VID commitment is the Merkle tree root
     pub commit: MerkleCommit,
