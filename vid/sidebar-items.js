@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["VidError"],"mod":["avid_m","utils"],"trait":["VidScheme"],"type":["VerificationResult","VidResult"]};
+window.SIDEBAR_ITEMS = {"enum":["VidError"],"mod":["avidm","avidm_gf2","utils"],"trait":["VidScheme"],"type":["VerificationResult","VidResult"]};

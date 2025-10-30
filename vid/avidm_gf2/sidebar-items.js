@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["namespaced","proofs"],"struct":["AvidmGf2Commit","AvidmGf2Param","AvidmGf2Scheme","AvidmGf2Share"],"type":["MerkleCommit","MerkleProof","MerkleTree"]};
