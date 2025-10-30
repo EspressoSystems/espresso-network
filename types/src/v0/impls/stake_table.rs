@@ -236,8 +236,12 @@ impl StakeTableState {
         }
     }
 
-    pub fn get_validators(self) -> ValidatorMap {
+    pub fn into_validators(self) -> ValidatorMap {
         self.validators
+    }
+
+    pub fn validators(&self) -> &ValidatorMap {
+        &self.validators
     }
 
     pub fn apply_event(&mut self, event: StakeTableEvent) -> ApplyEventResult<()> {
@@ -519,7 +523,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
         }
     }
     let commit = state.commit();
-    Ok((state.get_validators(), commit))
+    Ok((state.into_validators(), commit))
 }
 
 /// Select active validators
