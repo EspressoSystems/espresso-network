@@ -961,6 +961,7 @@ impl BlockHeader<SeqTypes> for Header {
                     UpgradeType::Fee { chain_config } => chain_config,
                     UpgradeType::Epoch { chain_config } => chain_config,
                     UpgradeType::DrbAndHeader { chain_config } => chain_config,
+                    UpgradeType::Da { chain_config } => chain_config,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }
