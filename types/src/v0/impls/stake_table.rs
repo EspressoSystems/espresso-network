@@ -505,6 +505,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 ) -> Result<(ValidatorMap, StakeTableHash), StakeTableError> {
     let mut state = StakeTableState::new();
     for event in events {
+        let now = Instant::now();
         match state.apply_event(event.clone()) {
             Ok(Ok(())) => (), // Event successfully applied
             Ok(Err(expected_err)) => {
@@ -517,6 +518,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 return Err(err);
             },
         }
+        let duration = now.elapsed();
+        tracing::error!("Time taken to apply event {event:?}: {duration:?}");
     }
     let now = Instant::now();
     let commit = state.commit();
