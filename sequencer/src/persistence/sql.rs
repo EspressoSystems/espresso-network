@@ -70,8 +70,9 @@ use itertools::Itertools;
 use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
-    catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
-    SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
+    catchup::SqlStateCatchup,
+    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
 
 /// Options for Postgres-backed persistence.
@@ -1100,8 +1101,13 @@ impl SequencerPersistence for Persistence {
             tracing::info!("config not found");
             return Ok(None);
         };
-        let config = row.try_get("config")?;
-        Ok(serde_json::from_value(config)?)
+        let bytes: Vec<u8> = row.try_get("config")?;
+
+        let json = serde_json::from_slice(&bytes).context("config file is not valid JSON")?;
+        let json = migrate_network_config(json).context("migration of network config failed")?;
+        let config = serde_json::from_value(json).context("malformed config file")?;
+
+        Ok(Some(config))
     }
 
     async fn save_config(&self, cfg: &NetworkConfig) -> anyhow::Result<()> {
