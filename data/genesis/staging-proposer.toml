@@ -1,6 +1,6 @@
 base_version = "0.4"
 upgrade_version = "0.5"
-genesis_version = "0.2"
+genesis_version = "0.4"
 epoch_height = 3000
 drb_difficulty = 5000000000
 drb_upgrade_difficulty = 5000000000
@@ -45,6 +45,7 @@ base_fee = "1 wei"
 max_block_size = "1mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
+stake_table_contract = "0xed1db453c3156ff3155a97ad217b3087d5dc5f6e"
 
 [l1_finalized]
 number = 0
