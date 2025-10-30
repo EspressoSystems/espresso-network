@@ -1,1 +1,0 @@
-searchState.loadedDescShard("state_relay_server", 0, "Returns the argument unchanged.\nCalls <code>U::from(self)</code>.\nPort to run the server on.\nURL of a sequencer node that is currently providing the …\nStake table capacity for the prover circuit")

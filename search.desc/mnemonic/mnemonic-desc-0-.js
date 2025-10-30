@@ -1,1 +1,0 @@
-searchState.loadedDescShard("mnemonic", 0, "")

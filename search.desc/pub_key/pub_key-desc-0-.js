@@ -1,1 +1,0 @@
-searchState.loadedDescShard("pub_key", 0, "Get the public key corresponding to a private key.\nReturns the argument unchanged.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nCalls <code>U::from(self)</code>.\nThe private key to get the public key for.")

@@ -1,1 +1,0 @@
-searchState.loadedDescShard("reset_storage", 0, "Reset file system storage.\nReset the persistent storage of a sequencer.\nReset SQL storage.\nReturns the argument unchanged.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nCalls <code>U::from(self)</code>.")

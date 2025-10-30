@@ -1,1 +1,0 @@
-searchState.loadedDescShard("dev_cdn", 0, "The following is the main <code>Broker</code> binary, which just …\nA minified development version of the CDN\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nThe port we should be accessible on")

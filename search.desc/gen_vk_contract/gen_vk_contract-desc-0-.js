@@ -1,1 +1,0 @@
-searchState.loadedDescShard("gen_vk_contract", 0, "This executable generates the solidity files with …\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nindicate if it’s for the mock verification key")
