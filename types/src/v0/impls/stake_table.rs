@@ -518,7 +518,10 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
             },
         }
     }
+    let now = Instant::now();
     let commit = state.commit();
+    let duration = now.elapsed();
+    tracing::error!("Time taken to commit stake table: {duration:?}");
     Ok((state.get_validators(), commit))
 }
 
