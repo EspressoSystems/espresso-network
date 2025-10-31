@@ -25,8 +25,8 @@ use crate::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
-    v0_3::RewardAmount,
-    EpochCommittees, ValidatorMap,
+    v0_3::{RewardAmount, Validator},
+    EpochCommittees, PubKey, ValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -121,6 +121,23 @@ impl MembershipPersistence for NoStorage {
     )> {
         bail!("unimplemented")
     }
+
+    async fn store_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        bail!("unimplemented")
+    }
 }
 
 impl NodeState {
@@ -170,7 +187,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -202,7 +219,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -232,7 +249,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -327,7 +344,7 @@ impl Default for NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -404,7 +421,10 @@ pub mod mock {
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
-    use hotshot_types::{data::ViewNumber, stake_table::HSStakeTable};
+    use hotshot_types::{
+        data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
+        stake_table::HSStakeTable,
+    };
     use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
@@ -526,6 +546,14 @@ pub mod mock {
             _reward_merkle_tree_root: RewardMerkleCommitmentV1,
             _accounts: &[RewardAccountV1],
         ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+            anyhow::bail!("unimplemented")
+        }
+
+        async fn try_fetch_state_cert(
+            &self,
+            _retry: usize,
+            _epoch: u64,
+        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
             anyhow::bail!("unimplemented")
         }
 

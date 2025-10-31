@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use alloy::{
     hex,
     hex::ToHexExt,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, B256, U256},
     sol_types::SolValue,
 };
 use ark_bn254::{Bn254, Fq, Fr, G1Affine, G2Affine};
@@ -9,13 +11,19 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ed_on_bn254::{EdwardsConfig as EdOnBn254Config, Fq as FqEd254};
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
-use ark_std::rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
+use ark_std::rand::{rngs::StdRng, seq::SliceRandom as _, Rng, RngCore, SeedableRng};
 use clap::{Parser, ValueEnum};
+use espresso_types::{
+    v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
+    v0_3::RewardAmount,
+    v0_4::{RewardAccountQueryDataV2, REWARD_MERKLE_TREE_V2_HEIGHT},
+};
 use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_to_field};
 use hotshot_state_prover::v3::mock_ledger::{
     gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
 };
 use hotshot_types::utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root};
+use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use jf_pcs::prelude::Commitment;
 use jf_plonk::{
     proof_system::{
@@ -31,6 +39,27 @@ use jf_signature::{
     schnorr::KeyPair as SchnorrKeyPair,
 };
 use sha3::Keccak256;
+
+// TODO: remove this once we no longer have a conflict due to `alloy` and `ark` `rand` version.
+trait RandomCompat: Sized {
+    fn random_with(rng: &mut impl RngCore) -> Self;
+}
+
+impl RandomCompat for U256 {
+    fn random_with(rng: &mut impl RngCore) -> Self {
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+        U256::from_be_bytes(bytes)
+    }
+}
+
+impl RandomCompat for Address {
+    fn random_with(rng: &mut impl RngCore) -> Self {
+        let mut bytes = [0u8; 20];
+        rng.fill(&mut bytes);
+        Address::from(bytes)
+    }
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about=None)]
@@ -91,6 +120,10 @@ enum Action {
     EpochCompute,
     /// Compute two updates in two first and second epoch epochs
     FirstAndSecondEpochUpdate,
+    /// Generate reward claim test fixtures with configurable accounts and seeds
+    GenRewardFixture,
+    /// Evolve reward merkle tree state for invariant testing
+    EvolveRewardState,
 }
 
 #[allow(clippy::type_complexity)]
@@ -582,6 +615,158 @@ fn main() {
                     .abi_encode_params()
                     .encode_hex()
             );
+        },
+        Action::GenRewardFixture => {
+            if cli.args.len() != 2 {
+                panic!("Should provide arg1=numAccounts, arg2=seed");
+            }
+
+            let num_accounts = cli.args[0].parse::<usize>().unwrap();
+            let seed = cli.args[1].parse::<u64>().unwrap();
+
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            let accounts: Vec<Address> = (0..num_accounts)
+                .map(|_| {
+                    let mut bytes = [0u8; 20];
+                    rng.fill(&mut bytes);
+                    Address::from(bytes)
+                })
+                .collect();
+
+            for &account in &accounts {
+                let reward_account = RewardAccountV2::from(account);
+                let reward_amount = RewardAmount::from(rng.gen::<u64>());
+                tree.update(reward_account, reward_amount).unwrap();
+            }
+
+            let commitment = tree.commitment();
+            let reward_commitment: B256 = commitment.digest().into();
+            let auth_root_fields: [B256; 8] = [
+                reward_commitment,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+            ];
+            let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+            let auth_root_u256: U256 = auth_root.into();
+
+            let mut fixtures: Vec<(Address, U256, Bytes)> = Vec::new();
+            for &account in &accounts {
+                let proof = RewardAccountProofV2::prove(&tree, account).unwrap();
+                let query_data: RewardAccountQueryDataV2 = proof.into();
+                let claim_input = query_data.to_reward_claim_input().unwrap();
+                fixtures.push((
+                    account,
+                    claim_input.lifetime_rewards,
+                    claim_input.auth_data.into(),
+                ));
+            }
+
+            let res = (auth_root_u256, fixtures);
+            println!("{}", res.abi_encode_params().encode_hex());
+        },
+        Action::EvolveRewardState => {
+            if cli.args.len() != 6 {
+                panic!(
+                    "Should provide arg1=currentState, arg2=seed, arg3=numAccountsToAdd, \
+                     arg4=numAccountsToUpdate, arg5=maxRewardIncrement, arg6=numFixtures"
+                );
+            }
+
+            let state_vec =
+                <Vec<(Address, U256)>>::abi_decode(&hex::decode(&cli.args[0]).unwrap()).unwrap();
+            let seed = cli.args[1].parse::<u64>().unwrap();
+            let num_add = cli.args[2].parse::<usize>().unwrap();
+            let num_update = cli.args[3].parse::<usize>().unwrap();
+            let max_reward_increment = cli.args[4].parse::<U256>().unwrap();
+            let num_fixtures = cli.args[5].parse::<usize>().unwrap();
+
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut state: HashMap<Address, U256> = state_vec.into_iter().collect();
+
+            // Randomly select existing accounts to update
+            let existing_accounts: Vec<Address> = state.keys().copied().collect();
+            let num_to_update = num_update.min(existing_accounts.len());
+            let accounts_to_update: Vec<Address> = existing_accounts
+                .choose_multiple(&mut rng, num_to_update)
+                .copied()
+                .collect();
+
+            // Update existing accounts
+            for account in accounts_to_update {
+                let amount = if max_reward_increment > U256::ZERO {
+                    (U256::random_with(&mut rng) % max_reward_increment) + U256::from(1)
+                } else {
+                    U256::from(1)
+                };
+                *state.get_mut(&account).unwrap() += amount;
+            }
+
+            // Add new accounts
+            for _ in 0..num_add {
+                let account = Address::random_with(&mut rng);
+                let amount = if max_reward_increment > U256::ZERO {
+                    (U256::random_with(&mut rng) % max_reward_increment) + U256::from(1)
+                } else {
+                    U256::from(1)
+                };
+                state.insert(account, amount);
+            }
+
+            // Build tree from final state
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            for (account, lifetime_rewards) in &state {
+                let reward_account = RewardAccountV2::from(*account);
+                tree.update(reward_account, RewardAmount(*lifetime_rewards))
+                    .unwrap();
+            }
+
+            let commitment = tree.commitment();
+            let reward_commitment: B256 = commitment.digest().into();
+            let auth_root_fields: [B256; 8] = [
+                reward_commitment,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO,
+            ];
+            let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+            let auth_root_u256: U256 = auth_root.into();
+
+            // Generate fixtures for a random subset of accounts
+            let all_accounts: Vec<Address> = state.keys().copied().collect();
+            let num_fixtures_bounded = num_fixtures.min(all_accounts.len());
+            let selected_accounts: Vec<Address> = all_accounts
+                .choose_multiple(&mut rng, num_fixtures_bounded)
+                .copied()
+                .collect();
+
+            let fixtures: Vec<(Address, U256, Bytes)> = selected_accounts
+                .iter()
+                .map(|account| {
+                    let proof = RewardAccountProofV2::prove(&tree, *account).unwrap();
+                    let query_data: RewardAccountQueryDataV2 = proof.into();
+                    let claim_input = query_data.to_reward_claim_input().unwrap();
+                    (
+                        *account,
+                        claim_input.lifetime_rewards,
+                        claim_input.auth_data.into(),
+                    )
+                })
+                .collect();
+
+            let state_vec: Vec<(Address, U256)> = state.into_iter().collect();
+            let res = (auth_root_u256, state_vec, fixtures);
+            println!("{}", res.abi_encode_params().encode_hex());
         },
     };
 }

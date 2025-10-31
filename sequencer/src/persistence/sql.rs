@@ -16,8 +16,10 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy},
-    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
+    v0_3::{
+        EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy, Validator,
+    },
+    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     StakeTableHash, ValidatorMap,
 };
 use futures::stream::StreamExt;
@@ -54,7 +56,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
@@ -65,7 +67,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
-use sqlx::{query, Executor, Row};
+use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
     catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
@@ -119,7 +121,7 @@ pub struct SqliteOptions {
         env = "ESPRESSO_SEQUENCER_STORAGE_PATH",
         value_parser = build_sqlite_path
     )]
-    pub(crate) path: Option<PathBuf>,
+    pub(crate) path: PathBuf,
 }
 
 pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
@@ -319,9 +321,7 @@ impl From<SqliteOptions> for Config {
     fn from(opt: SqliteOptions) -> Self {
         let mut cfg = Config::default();
 
-        if let Some(path) = opt.path {
-            cfg = cfg.db_path(path);
-        }
+        cfg = cfg.db_path(opt.path);
 
         cfg = cfg.max_connections(20);
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
@@ -354,7 +354,18 @@ impl From<SqliteOptions> for Options {
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
-            ..Default::default()
+            uri: None,
+            prune: false,
+            pruning: Default::default(),
+            consensus_pruning: Default::default(),
+            fetch_rate_limit: None,
+            active_fetch_delay: None,
+            chunk_fetch_delay: None,
+            archive: false,
+            lightweight: false,
+            min_connections: 0,
+            types_migration_batch_size: None,
+            pool: None,
         }
     }
 }
@@ -416,9 +427,7 @@ impl TryFrom<&Options> for Config {
                 "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
             ));
 
-            if let Some(path) = &opt.sqlite_options.path {
-                cfg = cfg.db_path(path.clone());
-            }
+            cfg = cfg.db_path(opt.sqlite_options.path.clone());
         }
 
         if opt.prune {
@@ -485,6 +494,12 @@ pub struct PruningOptions {
     /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
     pages: Option<u64>,
+}
+
+impl Default for PruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
 }
 
 impl From<PruningOptions> for PrunerCfg {
@@ -579,6 +594,12 @@ pub struct ConsensusPruningOptions {
     target_usage: u64,
 }
 
+impl Default for ConsensusPruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
+}
+
 #[async_trait]
 impl PersistenceOptions for Options {
     type Persistence = Persistence;
@@ -651,7 +672,11 @@ impl Persistence {
         tx.commit().await
     }
 
-    async fn generate_decide_events(&self, consumer: &impl EventConsumer) -> anyhow::Result<()> {
+    async fn generate_decide_events(
+        &self,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &impl EventConsumer,
+    ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
             .db
             .read()
@@ -676,12 +701,14 @@ impl Persistence {
                 Some(v) => v + 1,
                 None => 0,
             };
+            tracing::debug!(?from_view, "generate decide event");
 
             let mut parent = None;
-            let mut rows =
-                query("SELECT leaf, qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view")
-                    .bind(from_view)
-                    .fetch(tx.as_mut());
+            let mut rows = query(
+                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
+            )
+            .bind(from_view)
+            .fetch(tx.as_mut());
             let mut leaves = vec![];
             let mut final_qc = None;
             while let Some(row) = rows.next().await {
@@ -699,6 +726,12 @@ impl Persistence {
                 let leaf = bincode::deserialize::<Leaf2>(&leaf_data)?;
                 let qc_data: Vec<u8> = row.get("qc");
                 let qc = bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&qc_data)?;
+                let next_epoch_qc = match row.get::<Option<Vec<u8>>, _>("next_epoch_qc") {
+                    Some(bytes) => {
+                        Some(bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)?)
+                    },
+                    None => None,
+                };
                 let height = leaf.block_header().block_number();
 
                 // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
@@ -716,7 +749,7 @@ impl Persistence {
                 }
                 parent = Some(height);
                 leaves.push(leaf);
-                final_qc = Some(qc);
+                final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
             }
             drop(rows);
 
@@ -823,18 +856,35 @@ impl Persistence {
                 })
                 .collect();
 
-            // Generate decide event for the consumer.
-            tracing::debug!(?to_view, ?final_qc, ?leaf_chain, "generating decide event");
-            consumer
-                .handle_event(&Event {
-                    view_number: to_view,
-                    event: EventType::Decide {
-                        leaf_chain: Arc::new(leaf_chain),
-                        qc: Arc::new(final_qc),
-                        block_size: None,
-                    },
-                })
-                .await?;
+            {
+                // Generate decide event for the consumer.
+                tracing::debug!(
+                    ?from_view,
+                    ?to_view,
+                    ?final_qc,
+                    ?leaf_chain,
+                    "generating decide event"
+                );
+                // Insert the deciding QC at the appropriate position, with the last decide event in
+                // the chain.
+                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                    (deciding_qc.view_number() == final_qc.view_number() + 1)
+                        .then_some(deciding_qc.clone())
+                } else {
+                    None
+                };
+                consumer
+                    .handle_event(&Event {
+                        view_number: to_view,
+                        event: EventType::Decide {
+                            leaf_chain: Arc::new(leaf_chain),
+                            committing_qc: Arc::new(final_qc),
+                            deciding_qc,
+                            block_size: None,
+                        },
+                    })
+                    .await?;
+            }
 
             let mut tx = self.db.write().await?;
 
@@ -1067,12 +1117,13 @@ impl SequencerPersistence for Persistence {
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let values = leaf_chain
             .into_iter()
-            .map(|(info, qc2)| {
+            .map(|(info, cert)| {
                 // The leaf may come with a large payload attached. We don't care about this payload
                 // because we already store it separately, as part of the DA proposal. Storing it
                 // here contributes to load on the DB for no reason, so we remove it before
@@ -1080,10 +1131,14 @@ impl SequencerPersistence for Persistence {
                 let mut leaf = info.leaf.clone();
                 leaf.unfill_block_payload();
 
-                let view = qc2.view_number.u64() as i64;
+                let view = cert.view_number().u64() as i64;
                 let leaf_bytes = bincode::serialize(&leaf)?;
-                let qc_bytes = bincode::serialize(&qc2)?;
-                Ok((view, leaf_bytes, qc_bytes))
+                let qc_bytes = bincode::serialize(cert.qc())?;
+                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                    Some(qc) => Some(bincode::serialize(qc)?),
+                    None => None,
+                };
+                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -1091,13 +1146,18 @@ impl SequencerPersistence for Persistence {
         // event consumer later fails, there is no need to abort the storage of the leaves.
         let mut tx = self.db.write().await?;
 
-        tx.upsert("anchor_leaf2", ["view", "leaf", "qc"], ["view"], values)
-            .await?;
+        tx.upsert(
+            "anchor_leaf2",
+            ["view", "leaf", "qc", "next_epoch_qc"],
+            ["view"],
+            values,
+        )
+        .await?;
         tx.commit().await?;
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
         // need.
-        if let Err(err) = self.generate_decide_events(consumer).await {
+        if let Err(err) = self.generate_decide_events(deciding_qc, consumer).await {
             // GC/event processing failure is not an error, since by this point we have at least
             // managed to persist the decided leaves successfully, and GC will just run again at the
             // next decide. Log an error but do not return it.
@@ -2319,6 +2379,64 @@ impl SequencerPersistence for Persistence {
         Ok(Some(cert))
     }
 
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let Some(row) = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query("SELECT state_cert FROM finalized_state_cert WHERE epoch = $1")
+                    .bind(epoch as i64),
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let bytes: Vec<u8> = row.get("state_cert");
+
+        let cert = match bincode::deserialize(&bytes) {
+            Ok(cert) => cert,
+            Err(err) => {
+                tracing::info!(
+                    error = %err,
+                    "Failed to deserialize state certificate with v2. attempting with v1"
+                );
+
+                let v1_cert =
+                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
+                        .with_context(|| {
+                        format!("Failed to deserialize using both v1 and v2. error: {err}")
+                    })?;
+
+                v1_cert.into()
+            },
+        };
+
+        Ok(Some(cert))
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let bytes = bincode::serialize(&cert)
+            .with_context(|| format!("Failed to serialize state cert for epoch {epoch}"))?;
+
+        let mut tx = self.db.write().await?;
+
+        tx.upsert(
+            "finalized_state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(epoch as i64, bytes)],
+        )
+        .await
+    }
+
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         let rows = self
             .db
@@ -2410,8 +2528,8 @@ impl MembershipPersistence for Persistence {
         let mut tx = self.db.read().await?;
 
         let rows = match query_as::<(i64, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)>(
-            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root ORDER BY \
-             epoch DESC LIMIT $1",
+            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
+             stake is NOT NULL ORDER BY epoch DESC LIMIT $1",
         )
         .bind(limit as i64)
         .fetch_all(tx.as_mut())
@@ -2624,6 +2742,70 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+
+        if all_validators.is_empty() {
+            return Ok(());
+        }
+
+        let mut query_builder =
+            QueryBuilder::new("INSERT INTO stake_table_validators (epoch, address, validator) ");
+
+        query_builder.push_values(all_validators, |mut b, (address, validator)| {
+            let validator_json =
+                serde_json::to_value(&validator).expect("cannot serialize validator to json");
+            b.push_bind(epoch.u64() as i64)
+                .push_bind(address.to_string())
+                .push_bind(validator_json);
+        });
+
+        query_builder
+            .push(" ON CONFLICT (epoch, address) DO UPDATE SET validator = EXCLUDED.validator");
+
+        let query = query_builder.build();
+
+        query.execute(tx.as_mut()).await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        let mut tx = self.db.read().await?;
+
+        // Use LOWER(address) in ORDER BY to ensure consistent ordering for SQlite and Postgres.
+        // Postgres sorts text case sensitively by default, while SQLite sorts case insensitively.
+        // Applying LOWER() makes the result consistent.
+        let rows = query(
+            "SELECT address, validator
+         FROM stake_table_validators
+         WHERE epoch = $1
+         ORDER BY LOWER(address) ASC
+         LIMIT $2 OFFSET $3",
+        )
+        .bind(epoch.u64() as i64)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(tx.as_mut())
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let validator_json: serde_json::Value = row.try_get("validator")?;
+                serde_json::from_value::<Validator<PubKey>>(validator_json).map_err(Into::into)
+            })
+            .collect()
     }
 }
 
@@ -2866,10 +3048,7 @@ mod testing {
 
             #[cfg(feature = "embedded-db")]
             {
-                SqliteOptions {
-                    path: Some(db.path()),
-                }
-                .into()
+                SqliteOptions { path: db.path() }.into()
             }
         }
     }
@@ -3226,7 +3405,7 @@ mod test {
         // the target, because of the minimum retention.
         tracing::info!("decide view 1");
         storage
-            .append_decided_leaves(data_view + 1, [], &NullEventConsumer)
+            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert_eq!(
@@ -3246,7 +3425,7 @@ mod test {
         // retention) so it gets pruned.
         tracing::info!("decide view 2");
         storage
-            .append_decided_leaves(data_view + 2, [], &NullEventConsumer)
+            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);

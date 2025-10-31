@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf2, NetworkConfig, StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
+    Leaf2, NetworkConfig, PubKey, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -23,10 +23,11 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate,
+        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::metrics::Metrics,
+    vote::HasViewNumber,
 };
 
 use crate::{NodeType, SeqTypes, ViewNumber};
@@ -65,7 +66,8 @@ impl SequencerPersistence for NoStorage {
     async fn append_decided_leaves(
         &self,
         view_number: ViewNumber,
-        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let leaves = leaves
@@ -73,12 +75,21 @@ impl SequencerPersistence for NoStorage {
             .map(|(info_ref, qc)| (info_ref.clone(), qc))
             .collect::<Vec<_>>();
         for (leaf_info, qc) in leaves {
+            // Insert the deciding QC at the appropriate position, with the last decide event in the
+            // chain.
+            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
+            } else {
+                None
+            };
+
             consumer
                 .handle_event(&Event {
                     view_number,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
-                        qc: Arc::new(qc),
+                        committing_qc: Arc::new(qc),
+                        deciding_qc,
                         block_size: None,
                     },
                 })
@@ -277,6 +288,21 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn get_state_cert_by_epoch(
+        &self,
+        _epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        Ok(None)
+    }
+
+    async fn insert_state_cert(
+        &self,
+        _epoch: u64,
+        _cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
@@ -318,6 +344,23 @@ impl MembershipPersistence for NoStorage {
         Vec<(EventKey, StakeTableEvent)>,
     )> {
         Ok((None, Vec::new()))
+    }
+
+    async fn store_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _all_validators: ValidatorMap,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+        Ok(Default::default())
     }
 }
 

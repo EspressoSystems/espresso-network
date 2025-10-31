@@ -18,3 +18,6 @@ pub mod storage_types;
 
 /// add a delay to async functions
 pub mod testable_delay;
+
+/// Implementations for test memberships
+pub mod membership;

@@ -19,14 +19,16 @@ pub mod traits;
 mod txproof;
 mod utils;
 pub use header::Header;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::mock;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::testing;
 #[allow(unused_imports)]
-pub(crate) use impls::active_validator_set_from_l1_events;
+pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
     get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
-#[cfg(any(test, feature = "testing"))]
-pub use impls::{mock, testing};
 pub use nsproof::*;
 pub use txproof::*;
 pub use utils::*;
@@ -42,7 +44,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5);
     };
 }
 
@@ -127,7 +129,9 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
+pub use v0_3::StateCertQueryDataV1;
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
+pub use v0_4::StateCertQueryDataV2;
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
@@ -182,6 +186,10 @@ pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
+pub type DaUpgradeVersion = StaticVersion<0, 5>;
+
+/// The highest protocol version supported by this version of the software.
+pub type MaxSupportedVersion = DaUpgradeVersion;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
@@ -195,7 +203,7 @@ pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
 pub use self::impls::{NodeState, RewardDistributor, UpgradeMap, ValidatedState, ValidatorMap};
 pub use crate::{
-    v0::impls::StakeTableHash,
+    v0::impls::{StakeTableHash, StakeTableState},
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
         NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,

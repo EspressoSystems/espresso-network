@@ -9,13 +9,12 @@ use alloy::{
     rpc::types::TransactionReceipt,
 };
 use anyhow::{anyhow, Context, Result};
-use espresso_types::SeqTypes;
+use espresso_types::{SeqTypes, StateCertQueryDataV1};
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_query_service::availability::StateCertQueryDataV1;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
@@ -32,7 +31,7 @@ use hotshot_types::{
     },
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
-use jf_relation::Circuit as _;
+use jf_relation_compat::Circuit as _;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
 use time::ext::InstantExt;

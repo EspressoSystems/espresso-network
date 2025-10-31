@@ -43,7 +43,7 @@ use crate::{
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{self, RewardMerkleCommitmentV2},
-    BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
+    v0_5, BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
     FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
     NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
@@ -96,6 +96,11 @@ impl Committable for Header {
                 .u64_field("version_minor", 4)
                 .field("fields", fields.commit())
                 .finalize(),
+            Self::V5(fields) => RawCommitmentBuilder::new(&Self::tag())
+                .u64_field("version_major", 0)
+                .u64_field("version_minor", 5)
+                .field("fields", fields.commit())
+                .finalize(),
         }
     }
 
@@ -125,6 +130,11 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V4(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 4 }),
+                fields: fields.clone(),
+            }
+            .serialize(serializer),
+            Self::V5(fields) => VersionedHeader {
+                version: EitherOrVersion::Version(Version { major: 0, minor: 5 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -177,6 +187,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 5 }) => Ok(Header::V5(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -209,6 +223,9 @@ impl<'de> Deserialize<'de> for Header {
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(Version { major: 0, minor: 4 }) => Ok(Header::V4(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 5 }) => Ok(Header::V5(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -269,6 +286,7 @@ impl Header {
             Self::V2(_) => Version { major: 0, minor: 2 },
             Self::V3(_) => Version { major: 0, minor: 3 },
             Self::V4(_) => Version { major: 0, minor: 4 },
+            Self::V5(_) => Version { major: 0, minor: 5 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -361,6 +379,24 @@ impl Header {
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
             }),
+            (0, 5) => Self::V5(v0_5::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                fee_info: fee_info[0], // NOTE this is asserted to exist above
+                builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root: reward_merkle_tree_root_v2,
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -370,7 +406,7 @@ impl Header {
 
     pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
         match self {
-            Self::V4(fields) => fields.next_stake_table_hash,
+            Self::V4(fields) | Self::V5(fields) => fields.next_stake_table_hash,
             _ => None,
         }
     }
@@ -384,6 +420,7 @@ macro_rules! field {
             Self::V2(data) => &data.$name,
             Self::V3(data) => &data.$name,
             Self::V4(data) => &data.$name,
+            Self::V5(data) => &data.$name,
         }
     };
 }
@@ -395,6 +432,7 @@ macro_rules! field_mut {
             Self::V2(data) => &mut data.$name,
             Self::V3(data) => &mut data.$name,
             Self::V4(data) => &mut data.$name,
+            Self::V5(data) => &mut data.$name,
         }
     };
 }
@@ -600,6 +638,26 @@ impl Header {
                     .unwrap_or_default(),
                 next_stake_table_hash,
             }),
+            (0, 5) => Self::V5(v0_5::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head: l1.head,
+                l1_finalized: l1.finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                total_reward_distributed: reward_distributor
+                    .map(|r| r.total_distributed())
+                    .unwrap_or_default(),
+                next_stake_table_hash,
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -642,6 +700,7 @@ impl Header {
             Self::V2(fields) => v0_3::ResolvableChainConfig::from(&fields.chain_config),
             Self::V3(fields) => fields.chain_config,
             Self::V4(fields) => fields.chain_config,
+            Self::V5(fields) => fields.chain_config,
         }
     }
 
@@ -659,6 +718,7 @@ impl Header {
             Self::V2(fields) => fields.timestamp,
             Self::V3(fields) => fields.timestamp,
             Self::V4(fields) => fields.timestamp,
+            Self::V5(fields) => fields.timestamp,
         }
     }
 
@@ -668,6 +728,7 @@ impl Header {
             Self::V2(fields) => fields.timestamp * 1_000,
             Self::V3(fields) => fields.timestamp * 1_000,
             Self::V4(fields) => fields.timestamp_millis.u64(),
+            Self::V5(fields) => fields.timestamp_millis.u64(),
         }
     }
 
@@ -683,6 +744,10 @@ impl Header {
                 fields.timestamp = timestamp;
             },
             Self::V4(fields) => {
+                fields.timestamp = timestamp;
+                fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
+            },
+            Self::V5(fields) => {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
@@ -788,6 +853,7 @@ impl Header {
             Self::V2(fields) => vec![fields.fee_info],
             Self::V3(fields) => vec![fields.fee_info],
             Self::V4(fields) => vec![fields.fee_info],
+            Self::V5(fields) => vec![fields.fee_info],
         }
     }
 
@@ -800,6 +866,7 @@ impl Header {
             Self::V2(_) => Either::Left(empty_reward_merkle_tree.commitment()),
             Self::V3(fields) => Either::Left(fields.reward_merkle_tree_root),
             Self::V4(fields) => Either::Right(fields.reward_merkle_tree_root),
+            Self::V5(fields) => Either::Right(fields.reward_merkle_tree_root),
         }
     }
 
@@ -821,13 +888,14 @@ impl Header {
             Self::V2(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V5(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
 
     pub fn total_reward_distributed(&self) -> Option<RewardAmount> {
         match self {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
-            Self::V4(fields) => Some(fields.total_reward_distributed),
+            Self::V4(fields) | Self::V5(fields) => Some(fields.total_reward_distributed),
         }
     }
 }
@@ -893,6 +961,7 @@ impl BlockHeader<SeqTypes> for Header {
                     UpgradeType::Fee { chain_config } => chain_config,
                     UpgradeType::Epoch { chain_config } => chain_config,
                     UpgradeType::DrbAndHeader { chain_config } => chain_config,
+                    UpgradeType::Da { chain_config } => chain_config,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }
@@ -1152,7 +1221,7 @@ impl BlockHeader<SeqTypes> for Header {
     fn auth_root(&self) -> anyhow::Result<B256> {
         match self {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(B256::ZERO),
-            Header::V4(header) => {
+            Header::V4(header) | Header::V5(header) => {
                 // Temporary placeholder values for future fields
                 let placeholder_1 = B256::ZERO;
                 let placeholder_2 = B256::ZERO;

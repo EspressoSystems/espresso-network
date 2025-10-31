@@ -25,12 +25,12 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
+use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
 use hotshot_example_types::node_types::TestVersions;
 use hotshot_query_service::{
     availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryDataV1,
-        StateCertQueryDataV2, TransactionQueryData, TransactionWithProofQueryData,
-        VidCommonQueryData,
+        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
+        TransactionWithProofQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
     VidCommon,
@@ -57,7 +57,6 @@ use vbs::{
 };
 
 use crate::{
-    active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{EventKey, RewardAmount, StakeTableEvent},
@@ -65,9 +64,9 @@ use crate::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    Transaction, ValidatedState,
+    validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
+    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
+    SeqTypes, StakeTableHash, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -157,8 +156,8 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
         .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
         .unwrap();
 
-    let avid_m_param = init_avidm_param(10).unwrap();
-    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avid_m_param));
+    let avidm_param = init_avidm_param(10).unwrap();
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avidm_param));
     let transactions = proof
         .as_ref()
         .unwrap()
@@ -219,9 +218,10 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    let (_, hash) =
-        active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
-    hash
+    validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+        .unwrap()
+        .stake_table_hash
+        .unwrap()
 }
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
@@ -609,8 +609,8 @@ async fn test_vid_common_v0_query_data() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v1_query_data() {
     let header = reference_header(Version { major: 0, minor: 1 }).await;
-    let avid_m_param = init_avidm_param(10).unwrap();
-    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avid_m_param));
+    let avidm_param = init_avidm_param(10).unwrap();
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avidm_param));
 
     reference_test_without_committable("v1", "vid_common_v1", &vid);
 }
@@ -624,10 +624,10 @@ async fn test_transaction_query_data() {
         .enumerate()
         .enumerate()
         .map(|(i, (index, _))| {
-            let avid_m_param = init_avidm_param(10).unwrap();
+            let avidm_param = init_avidm_param(10).unwrap();
             let vid = VidCommonQueryData::<SeqTypes>::new(
                 block.header().clone(),
-                VidCommon::V1(avid_m_param),
+                VidCommon::V1(avidm_param),
             );
 
             let tx = block.transaction(&index).unwrap();
@@ -691,9 +691,7 @@ async fn test_reward_proof_endpoint_serialization() {
         insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
     });
 
-    let reward_claim_input = reward_proof
-        .to_reward_claim_input(Default::default())
-        .unwrap();
+    let reward_claim_input = reward_proof.to_reward_claim_input().unwrap();
 
     settings.bind(|| {
         insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);

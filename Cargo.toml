@@ -29,6 +29,7 @@ members = [
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
+    "light-client",
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
@@ -87,7 +88,13 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
 [workspace.dependencies]
-alloy = { version = "1.0", features = ["provider-ws", "json-rpc", "signer-mnemonic", "node-bindings", "getrandom"] }
+alloy = { version = "1.0", features = [
+    "provider-ws",
+    "json-rpc",
+    "signer-mnemonic",
+    "node-bindings",
+    "getrandom",
+] }
 anyhow = "^1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
@@ -170,40 +177,45 @@ hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
 
+espresso-types = { path = "types" }
+light-client = { path = "light-client" }
+
 # VID import
 vid = { path = "vid", features = ["parallel", "keccak256"] }
 
 bytesize = "1.3"
 # committable = "0.2"
-committable = { git = "https://github.com/EspressoSystems/commit.git", features = ["ark-serialize"] }
+committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
+    "ark-serialize",
+] }
 derivative = "2.2"
 itertools = "0.12"
+jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.2", features = [
+    "std",
+    "parallel",
+] }
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.2.0" }
-jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.1.0", features = [
+jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.2.0", features = [
     "std",
 ] }
 jf-pcs = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-pcs-v0.3.0", features = [
     "std",
     "parallel",
 ] }
-jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.6.0", features = [
+jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.7.0", features = [
     "test-apis",
 ] }
 jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-relation-v0.5.0", features = [
     "std",
 ] }
-jf-rescue = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-rescue-v0.2.0", features = [
+jf-rescue = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-rescue-v0.3.0", features = [
     "std",
     "parallel",
 ] }
-jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.3.0", features = [
+jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.4.0", features = [
     "std",
 ] }
 jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-utils-v0.5.0" }
-jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.1", features = [
-    "std",
-    "parallel",
-] }
 libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [
     "macros",
     "autonat",
@@ -239,8 +251,11 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 tagged-base64 = "0.4.1"
 tempfile = "3.10"
-test-log = { version = "0.2", features = ["color", "trace"], default-features = false }
-thiserror = "1.0.69"
+test-log = { version = "0.2", features = [
+    "color",
+    "trace",
+], default-features = false }
+thiserror = "2"
 tide-disco = "0.9.4"
 time = "0.3"
 toml = "0.8"
@@ -251,6 +266,11 @@ vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
+
+# Push CDN imports
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.1", package = "cdn-broker", features = ["global-permits"] }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.1", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.1", package = "cdn-marshal" }
 
 [workspace.lints.clippy]
 # may prevent accidental deadlocks from holding guards over match statments
@@ -282,6 +302,8 @@ opt-level = 0
 [profile.test.package.hotshot-testing]
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
+opt-level = 3
+[profile.test.package.jf-merkle-tree]
 opt-level = 3
 
 # Geared towards building our docker images for local development

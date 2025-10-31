@@ -9,7 +9,7 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
     let start = Instant::now();
     dotenvy::dotenv()?;
 
-    let testing = TestConfig::new(requirements.clone()).await.unwrap();
+    let testing = TestConfig::new(requirements.clone()).await?;
 
     println!("Waiting on readiness");
     let _ = testing.readiness().await?;

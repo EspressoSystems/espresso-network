@@ -14,7 +14,7 @@ use espresso_types::{
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
-use futures::future::Future;
+use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, VidCommonQueryData},
@@ -26,6 +26,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
@@ -41,7 +42,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{persistence, SeqTypes, SequencerApiVersion};
+use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -155,6 +156,28 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn previous_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    fn get_all_validators(
+        &self,
+        epoch: <T as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
+}
+
+// Thin wrapper trait to access persistence methods from API handlers
+#[async_trait]
+pub(crate) trait StateCertDataSource {
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {
@@ -276,16 +299,29 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV1>>;
+
+    fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 }
 
-#[async_trait]
 pub trait RequestResponseDataSource<Types: NodeType> {
-    async fn request_vid_shares(
+    fn request_vid_shares(
         &self,
         block_number: u64,
         vid_common_data: VidCommonQueryData<Types>,
         duration: Duration,
-    ) -> anyhow::Result<Vec<VidShare>>;
+    ) -> impl Future<Output = BoxFuture<'static, anyhow::Result<Vec<VidShare>>>> + Send;
+}
+
+#[async_trait]
+pub trait StateCertFetchingDataSource<Types: NodeType> {
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
 }
 
 #[cfg(any(test, feature = "testing"))]

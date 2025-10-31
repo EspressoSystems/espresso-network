@@ -58,7 +58,7 @@ use itertools::Itertools;
 use options::Modules;
 use portpicker::pick_unused_port;
 use run::init_with_storage;
-use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
 use tokio::{
@@ -587,10 +587,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
-                let EventType::Decide { qc, .. } = event.event else {
+                let EventType::Decide {
+                    committing_qc: qc, ..
+                } = event.event
+                else {
                     continue;
                 };
-                if qc.data.epoch >= Some(epoch) {
+                if qc.epoch() >= Some(epoch) {
                     tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }
@@ -668,6 +671,7 @@ impl TestNetwork {
                 .into_iter()
                 .collect(),
             genesis_version: Version { major: 0, minor: 1 },
+            da_committees: None,
         };
 
         let node_params = (0..da_nodes + regular_nodes)
@@ -832,6 +836,7 @@ impl TestNetwork {
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
             .deployer(deployer.clone())
+            .rpc_url(l1_url.clone())
             .mock_light_client(true)
             .genesis_lc_state(genesis_state)
             .genesis_st_state(genesis_stake)
@@ -867,7 +872,7 @@ impl TestNetwork {
 
         tracing::info!(?stake_table_address, ?token_addr);
 
-        setup_stake_table_contract_for_test(
+        StakingTransactions::create(
             l1_url.clone(),
             &deployer,
             stake_table_address,
@@ -875,7 +880,10 @@ impl TestNetwork {
             delegation_config,
         )
         .await
-        .expect("stake table setup failed");
+        .expect("stake table setup failed")
+        .apply_all()
+        .await
+        .expect("send all txns failed");
 
         self.anvil
             .anvil_set_interval_mining(1)
