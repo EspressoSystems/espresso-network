@@ -45,24 +45,14 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - uses: rui314/setup-mold@v1
 
-      - name: Checkout memstop 
-        uses: actions/checkout@v4
-        with:
-          repository: surban/memstop
-          path: memstop
-      
-      - name: Install memstop
-        run: |
-          cd memstop
-          sudo make install
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       # NOTE: no rust cache, these tests are very slow anyway
 
+
       - name: Build slow test
-        run: MEMSTOP_PERCENT=50 LD_PRELOAD=/usr/local/lib/memstop.so just nextest --features embedded-db --no-run
+        run: just nextest --features embedded-db --no-run
 
       - name: Run slow test
         run: just nextest --features embedded-db --no-fail-fast
