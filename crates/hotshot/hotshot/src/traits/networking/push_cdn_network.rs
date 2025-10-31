@@ -274,7 +274,7 @@ impl<K: SignatureKey + 'static> PushCdnNetwork<K> {
             .send_broadcast_message(vec![topic as u8], message)
             .await
         {
-            return Err(NetworkError::MessageReceiveError(format!(
+            return Err(NetworkError::MessageSendError(format!(
                 "failed to send broadcast message: {err}"
             )));
         };
