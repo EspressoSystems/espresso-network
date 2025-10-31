@@ -37,7 +37,7 @@ cross_tests!(
             ..TestDescription::default()
         };
 
-        let node_configs = vec![
+        let node_configs = [
             ValidatorConfig::generated_from_seed_indexed(
                 [0u8; 32],
                 0,
@@ -110,7 +110,7 @@ cross_tests!(
             ..TestDescription::default()
         };
 
-        let node_configs = vec![
+        let node_configs = [
             ValidatorConfig::generated_from_seed_indexed(
                 [0u8; 32],
                 0,
@@ -183,7 +183,7 @@ cross_tests!(
             ..TestDescription::default()
         };
 
-        let node_configs = vec![
+        let node_configs = [
             ValidatorConfig::generated_from_seed_indexed(
                 [0u8; 32],
                 0,
