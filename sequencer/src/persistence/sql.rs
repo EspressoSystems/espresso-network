@@ -1101,9 +1101,8 @@ impl SequencerPersistence for Persistence {
             tracing::info!("config not found");
             return Ok(None);
         };
-        let bytes: Vec<u8> = row.try_get("config")?;
+        let json = row.try_get("config")?;
 
-        let json = serde_json::from_slice(&bytes).context("config file is not valid JSON")?;
         let json = migrate_network_config(json).context("migration of network config failed")?;
         let config = serde_json::from_value(json).context("malformed config file")?;
 
