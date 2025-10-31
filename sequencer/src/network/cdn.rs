@@ -100,6 +100,7 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 pub struct ProductionDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
     type User = UserDefQuic<TYPES>;
+    type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
@@ -107,11 +108,20 @@ impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
 
 /// The user definition for the Push CDN.
 /// Uses the Quic protocol and untrusted middleware.
-/// RM TODO: Remove this, switching to TCP+TLS singularly when everyone has updated
+/// RM TODO: Remove this, switching to TCP singularly when everyone has updated
 pub struct UserDefQuic<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for UserDefQuic<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
     type Protocol = Quic;
+    type MessageHook = NoMessageHook;
+}
+
+/// The user definition for the Push CDN.
+/// Uses the TCP protocol and untrusted middleware.
+pub struct UserDefTcp<TYPES: NodeType>(PhantomData<TYPES>);
+impl<TYPES: NodeType> ConnectionDef for UserDefTcp<TYPES> {
+    type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -124,14 +134,14 @@ impl<TYPES: NodeType> ConnectionDef for BrokerDef<TYPES> {
     type MessageHook = NoMessageHook;
 }
 
-/// The client definition for the Push CDN. Uses the Quic
+/// The client definition for the Push CDN. Uses the TCP
 /// protocol and no middleware. Differs from the user
 /// definition in that is on the client-side.
 #[derive(Clone)]
 pub struct ClientDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -140,6 +150,7 @@ impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
 pub struct TestingDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for TestingDef<TYPES> {
     type User = UserDefQuic<TYPES>;
+    type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;
