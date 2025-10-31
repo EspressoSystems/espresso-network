@@ -22,7 +22,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_LOG: info,libp2p=off,node=error
   NEXTEST_PROFILE: slow
-  CARGO_BUILD_JOBS: "3"
+  # Prevent OOM error on public github runner (has total 4 CPUs)
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   slow-tests-sqlite:
