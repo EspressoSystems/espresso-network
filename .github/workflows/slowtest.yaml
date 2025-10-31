@@ -22,11 +22,17 @@ env:
   CARGO_TERM_COLOR: always
   RUST_LOG: info,libp2p=off,node=error
   NEXTEST_PROFILE: slow
+  CARGO_BUILD_JOBS: "3"
 
 jobs:
   slow-tests-sqlite:
     runs-on: ubuntu-latest
     steps:
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -61,6 +67,12 @@ jobs:
   slow-tests-postgres:
     runs-on: ubuntu-latest
     steps:
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
         with:
