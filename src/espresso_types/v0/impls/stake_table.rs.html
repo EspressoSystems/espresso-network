@@ -2769,7 +2769,7 @@
 <a href=#2769 id=2769 data-nosnippet>2769</a>        <span class="kw">let </span>register1 = ValidatorRegisteredV2::from(<span class="kw-2">&amp;</span>val1).into();
 <a href=#2770 id=2770 data-nosnippet>2770</a>        <span class="kw">let </span>deregister1 = ValidatorExit::from(<span class="kw-2">&amp;</span>val1).into();
 <a href=#2771 id=2771 data-nosnippet>2771</a>        <span class="kw">let </span>register2 = ValidatorRegisteredV2::from(<span class="kw-2">&amp;</span>val2).into();
-<a href=#2772 id=2772 data-nosnippet>2772</a>        <span class="kw">let </span>events = <span class="macro">vec!</span>[register1, deregister1, register2];
+<a href=#2772 id=2772 data-nosnippet>2772</a>        <span class="kw">let </span>events = [register1, deregister1, register2];
 <a href=#2773 id=2773 data-nosnippet>2773</a>        <span class="kw">let </span>error = validators_from_l1_events(events.iter().cloned()).unwrap_err();
 <a href=#2774 id=2774 data-nosnippet>2774</a>        <span class="macro">assert_matches!</span>(error, StakeTableError::ValidatorAlreadyExited(addr) <span class="kw">if </span>addr == account);
 <a href=#2775 id=2775 data-nosnippet>2775</a>    }
