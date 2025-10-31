@@ -287,6 +287,31 @@ jobs:
   test-go-sdk:
     runs-on: ubuntu-latest
     steps:
+      # This job runs out of disk space
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Make more disk space available on public runner
+        run: |
+          # rmz seems to be faster at deleting files than rm
+          cargo binstall -y --version 2.2.0 rmz
+          sudo mv /home/runner/.cargo/bin/rmz /usr/local/bin/rmz
+
+          echo "Available storage before:"
+          sudo df -h
+          echo
+          sudo rmz -f /usr/share/dotnet
+          sudo rmz -f /usr/share/swift
+          sudo rmz -f /usr/share/gradle-*
+          sudo rmz -f /usr/share/az_*
+          sudo rmz -f /usr/local/lib/android
+          sudo rmz -f /opt/ghc
+          sudo rmz -f /opt/az
+          sudo rmz -f /opt/pipx
+          sudo rmz -f /opt/google
+          sudo rmz -f /opt/microsoft
+          echo "Available storage after:"
+          sudo df -h
+          echo
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
