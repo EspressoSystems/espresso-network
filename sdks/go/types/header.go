@@ -66,6 +66,7 @@ type DaProposalDataWrapper = common_types.DaProposalDataWrapper
 type DAProposalData = common_types.DAProposalData
 type Metadata = common_types.Metadata
 type BlockPayload = common_types.BlockPayload
+type PayloadQueryData = common_types.PayloadQueryData
 type BuilderCommitment = common_types.BuilderCommitment
 
 var NewU256 = common_types.NewU256

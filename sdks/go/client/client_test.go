@@ -11,6 +11,7 @@ import (
 
 	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
+	"github.com/EspressoSystems/espresso-network/sdks/go/verification"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 )
@@ -86,6 +87,25 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	require.NotNil(t, nsTxData)
 	require.Equal(t, nsTxData.Transaction.Payload, tx.Payload)
 	require.Equal(t, nsTxData.Transaction.Namespace, tx.Namespace)
+
+	payloadStream, err := client.StreamPayloads(ctx, 1)
+	require.NoError(t, err)
+
+	for {
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Second)
+		blockData, err := payloadStream.Next(timeoutCtx)
+		cancel()
+		require.NoError(t, err)
+		require.NotNil(t, blockData)
+		if blockData.Height == nsTxData.BlockHeight {
+			txns, err := verification.DecodePayload(blockData.BlockPayload)
+			require.NoError(t, err)
+			require.NotNil(t, txns)
+			require.Equal(t, txns[0].Payload, tx.Payload)
+			require.Equal(t, txns[0].Namespace, tx.Namespace)
+			break
+		}
+	}
 }
 
 func runDevNode(ctx context.Context, tmpDir string) func() {
