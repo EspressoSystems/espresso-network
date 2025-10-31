@@ -84,7 +84,7 @@ anvil *args:
 
 nextest *args:
     # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
-    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --verbose {{args}}
+    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --exclude hotshot-examples --verbose {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
