@@ -22,11 +22,18 @@ env:
   CARGO_TERM_COLOR: always
   RUST_LOG: info,libp2p=off,node=error
   NEXTEST_PROFILE: slow
+  # Prevent OOM error on public github runner (has total 4 CPUs)
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   slow-tests-sqlite:
     runs-on: ubuntu-latest
     steps:
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -43,7 +50,7 @@ jobs:
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
-      - uses: rui314/setup-mold@v1
+      # - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -61,6 +68,12 @@ jobs:
   slow-tests-postgres:
     runs-on: ubuntu-latest
     steps:
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -76,7 +89,7 @@ jobs:
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
-      - uses: rui314/setup-mold@v1
+      # - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
