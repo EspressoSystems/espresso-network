@@ -317,6 +317,24 @@ func (c *MultipleNodesClient) StreamTransactionsInNamespace(ctx context.Context,
 	}, nil
 }
 
+func (c *MultipleNodesClient) StreamPayloads(ctx context.Context, height uint64) (Stream[types.PayloadQueryData], error) {
+
+	workingStreams := []Stream[types.PayloadQueryData]{}
+	for _, node := range c.nodes {
+		stream, err := node.StreamPayloads(ctx, height)
+		if err != nil {
+			return nil, err
+		}
+
+		workingStreams = append(workingStreams, stream)
+	}
+
+	return &MultiplexedStream[types.PayloadQueryData]{
+		nStreams:       len(c.nodes),
+		workingStreams: workingStreams,
+	}, nil
+}
+
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
 	type result struct {
 		value json.RawMessage
