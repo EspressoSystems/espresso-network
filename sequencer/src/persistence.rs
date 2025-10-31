@@ -1299,7 +1299,7 @@ mod tests {
 
         // Fetch events from stake table fetcher and compare with persisted data
         let fetched_events = stake_table_fetcher
-            .fetch_events(stake_table_contract, block)
+            .fetch_and_store_stake_table_events(stake_table_contract, block)
             .await?;
         assert_eq!(fetched_events, events);
 
