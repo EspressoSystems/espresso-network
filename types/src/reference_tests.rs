@@ -156,8 +156,8 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
         .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
         .unwrap();
 
-    let avid_m_param = init_avidm_param(10).unwrap();
-    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avid_m_param));
+    let avidm_param = init_avidm_param(10).unwrap();
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avidm_param));
     let transactions = proof
         .as_ref()
         .unwrap()
@@ -609,8 +609,8 @@ async fn test_vid_common_v0_query_data() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v1_query_data() {
     let header = reference_header(Version { major: 0, minor: 1 }).await;
-    let avid_m_param = init_avidm_param(10).unwrap();
-    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avid_m_param));
+    let avidm_param = init_avidm_param(10).unwrap();
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avidm_param));
 
     reference_test_without_committable("v1", "vid_common_v1", &vid);
 }
@@ -624,10 +624,10 @@ async fn test_transaction_query_data() {
         .enumerate()
         .enumerate()
         .map(|(i, (index, _))| {
-            let avid_m_param = init_avidm_param(10).unwrap();
+            let avidm_param = init_avidm_param(10).unwrap();
             let vid = VidCommonQueryData::<SeqTypes>::new(
                 block.header().clone(),
-                VidCommon::V1(avid_m_param),
+                VidCommon::V1(avidm_param),
             );
 
             let tx = block.transaction(&index).unwrap();
