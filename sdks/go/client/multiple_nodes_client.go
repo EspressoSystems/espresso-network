@@ -187,27 +187,62 @@ func (ms *MultiplexedStream[T]) NextRaw(ctx context.Context) (json.RawMessage, e
 	values := make(map[string]int)
 	var returnValue json.RawMessage = nil
 
+	type result struct {
+		stream   Stream[T]
+		rawValue json.RawMessage
+		err      error
+	}
+
+	results := make(chan result, len(ms.workingStreams))
+
 	for _, stream := range ms.workingStreams {
-		rawValue, err := stream.NextRaw(ctx)
-		if err != nil {
-			continue
-		}
+		go func(s Stream[T]) {
+			rawValue, err := s.NextRaw(ctx)
+			select {
+			case results <- result{stream: s, rawValue: rawValue, err: err}:
+			case <-ctx.Done():
+			}
+		}(stream)
+	}
 
-		hash, err := hashNormalizedJSON(rawValue)
-		if err != nil {
-			continue
-		}
+	// Process results
+	responseCount := 0
 
-		if _, ok := values[hash]; !ok {
-			values[hash] = 0
-		}
+	for responseCount < len(ms.workingStreams) {
+		select {
+		case res := <-results:
+			responseCount++
 
-		values[hash]++
-		if values[hash] >= majority {
-			returnValue = rawValue
-		}
+			if res.err != nil {
+				continue
+			}
 
-		newWorkingStreams = append(newWorkingStreams, stream)
+			hash, err := hashNormalizedJSON(res.rawValue)
+			if err != nil {
+				continue
+			}
+
+			if _, ok := values[hash]; !ok {
+				values[hash] = 0
+			}
+
+			values[hash]++
+			if values[hash] >= majority {
+				returnValue = res.rawValue
+				// Found majority, but continue to collect all results
+			}
+
+			newWorkingStreams = append(newWorkingStreams, res.stream)
+
+		case <-ctx.Done():
+			// Context cancelled, exit early
+			ms.workingStreams = newWorkingStreams
+			if returnValue == nil {
+				return nil, fmt.Errorf("%w: no majority", ErrPermanent)
+			} else {
+				return returnValue, nil
+			}
+		}
 	}
 
 	ms.workingStreams = newWorkingStreams
