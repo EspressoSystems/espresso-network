@@ -307,7 +307,7 @@ jobs:
           nix develop --accept-flake-config -c cargo build --bin espresso-dev-node --features testing,embedded-db
         env:
           # Do not exceed the memory limit of the public github runner during cargo build.
-          CARGO_BUILD_JOBS: "3"
+          CARGO_BUILD_JOBS: "2"
 
 
       - name: Build verification module
