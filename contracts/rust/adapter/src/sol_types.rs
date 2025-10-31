@@ -644,6 +644,66 @@ impl From<ConsensusKeysUpdatedV2> for ConsensusKeysUpdatedV2Legacy {
     }
 }
 
+impl Clone for StakeTableV2::StakeTableV2Events {
+    fn clone(&self) -> Self {
+        match self {
+            Self::ValidatorRegistered(v) => Self::ValidatorRegistered(*v),
+            Self::ValidatorRegisteredV2(v) => Self::ValidatorRegisteredV2(v.clone()),
+            Self::ValidatorExit(v) => Self::ValidatorExit(*v),
+            Self::Delegated(v) => Self::Delegated(*v),
+            Self::Undelegated(v) => Self::Undelegated(*v),
+            Self::ConsensusKeysUpdated(v) => Self::ConsensusKeysUpdated(*v),
+            Self::ConsensusKeysUpdatedV2(v) => Self::ConsensusKeysUpdatedV2(v.clone()),
+            Self::CommissionUpdated(v) => Self::CommissionUpdated(v.clone()),
+            Self::ExitEscrowPeriodUpdated(v) => Self::ExitEscrowPeriodUpdated(v.clone()),
+            Self::MaxCommissionIncreaseUpdated(v) => Self::MaxCommissionIncreaseUpdated(v.clone()),
+            Self::MinCommissionUpdateIntervalUpdated(v) => {
+                Self::MinCommissionUpdateIntervalUpdated(v.clone())
+            },
+            Self::OwnershipTransferred(v) => Self::OwnershipTransferred(v.clone()),
+            Self::Paused(v) => Self::Paused(v.clone()),
+            Self::Unpaused(v) => Self::Unpaused(v.clone()),
+            Self::Initialized(v) => Self::Initialized(v.clone()),
+            Self::RoleAdminChanged(v) => Self::RoleAdminChanged(v.clone()),
+            Self::RoleGranted(v) => Self::RoleGranted(v.clone()),
+            Self::RoleRevoked(v) => Self::RoleRevoked(v.clone()),
+            Self::Upgraded(v) => Self::Upgraded(v.clone()),
+            Self::Withdrawal(v) => Self::Withdrawal(v.clone()),
+        }
+    }
+}
+
+impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::ValidatorRegistered(_) => write!(f, "ValidatorRegistered(_)"),
+            Self::ValidatorRegisteredV2(_) => write!(f, "ValidatorRegisteredV2(_)"),
+            Self::ValidatorExit(v) => write!(f, "ValidatorExit({v:?})"),
+            Self::Delegated(v) => write!(f, "Delegated({v:?})"),
+            Self::Undelegated(v) => write!(f, "Undelegated({v:?})"),
+            Self::ConsensusKeysUpdated(_) => write!(f, "ConsensusKeysUpdated(_)"),
+            Self::ConsensusKeysUpdatedV2(_) => write!(f, "ConsensusKeysUpdatedV2(_)"),
+            Self::CommissionUpdated(v) => write!(f, "CommissionUpdated({v:?})"),
+            Self::ExitEscrowPeriodUpdated(v) => write!(f, "ExitEscrowPeriodUpdated({v:?})"),
+            Self::MaxCommissionIncreaseUpdated(v) => {
+                write!(f, "MaxCommissionIncreaseUpdated({v:?})")
+            },
+            Self::MinCommissionUpdateIntervalUpdated(v) => {
+                write!(f, "MinCommissionUpdateIntervalUpdated({v:?})")
+            },
+            Self::OwnershipTransferred(v) => write!(f, "OwnershipTransferred({v:?})"),
+            Self::Paused(v) => write!(f, "Paused({v:?})"),
+            Self::Unpaused(v) => write!(f, "Unpaused({v:?})"),
+            Self::Initialized(v) => write!(f, "Initialized({v:?})"),
+            Self::RoleAdminChanged(v) => write!(f, "RoleAdminChanged({v:?})"),
+            Self::RoleGranted(v) => write!(f, "RoleGranted({v:?})"),
+            Self::RoleRevoked(v) => write!(f, "RoleRevoked({v:?})"),
+            Self::Upgraded(v) => write!(f, "Upgraded({v:?})"),
+            Self::Withdrawal(v) => write!(f, "Withdrawal({v:?})"),
+        }
+    }
+}
+
 impl From<BN254::G2Point> for G2PointLegacy {
     fn from(v: BN254::G2Point) -> Self {
         Self {
