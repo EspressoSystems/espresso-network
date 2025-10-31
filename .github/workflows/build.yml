@@ -65,7 +65,7 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -95,7 +95,7 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: amd-${{ matrix.binary }}
           path: |
@@ -130,7 +130,7 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -158,7 +158,7 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: arm-${{ matrix.binary }}
           path: |
@@ -188,10 +188,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           pattern: amd-*
           path: target/amd64/release
@@ -232,7 +232,7 @@ jobs:
 
       - name: Upload docker image artifact (on PRs)
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
@@ -240,7 +240,7 @@ jobs:
 
       - name: Build and push docker (non-PR)
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         id: build
         with:
           context: .
@@ -263,7 +263,7 @@ jobs:
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: "digests-${{ matrix.service }}-amd64"
           path: "${{ runner.temp }}/digests/*"
@@ -296,10 +296,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           pattern: arm-*
           path: target/arm64/release
@@ -344,7 +344,7 @@ jobs:
           ls -lah "${digest_dir}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: "digests-${{ matrix.service }}-arm64"
           path: "${{ runner.temp }}/digests/*"
@@ -390,7 +390,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN  }}
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           pattern: "digests-${{ matrix.service }}-*"
           path: "${{ runner.temp }}/digests"
@@ -429,10 +429,10 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
@@ -472,7 +472,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set docker image tag for compose
         run: |
