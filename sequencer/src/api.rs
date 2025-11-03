@@ -39,6 +39,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
+        election::Membership,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeType, Versions},
     },
@@ -204,6 +205,21 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref().get_stake_table_current().await
     }
 
+    /// Get the DA stake table for a given epoch
+    async fn get_da_stake_table(
+        &self,
+        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        self.as_ref().get_da_stake_table(epoch).await
+    }
+
+    /// Get the DA stake table for the current epoch if not provided
+    async fn get_da_stake_table_current(
+        &self,
+    ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
+        self.as_ref().get_da_stake_table_current().await
+    }
+
     /// Get all the validators
     async fn get_validators(
         &self,
@@ -277,6 +293,36 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         Ok(StakeTableWithEpochNumber {
             epoch,
             stake_table: self.get_stake_table(epoch).await?,
+        })
+    }
+
+    /// Get the DA stake table for a given epoch
+    async fn get_da_stake_table(
+        &self,
+        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        Ok(self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .membership()
+            .read()
+            .await
+            .da_stake_table(epoch)
+            .0)
+    }
+
+    /// Get the DA stake table for the current epoch and return it along with the epoch number
+    async fn get_da_stake_table_current(
+        &self,
+    ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
+        let epoch = self.consensus().await.read().await.cur_epoch().await;
+
+        Ok(StakeTableWithEpochNumber {
+            epoch,
+            stake_table: self.get_da_stake_table(epoch).await?,
         })
     }
 
