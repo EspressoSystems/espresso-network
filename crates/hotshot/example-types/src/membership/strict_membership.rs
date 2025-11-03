@@ -352,7 +352,7 @@ impl<
                     "We fetched a leaf that is missing a DRB result. This should be impossible.",
                 )),
                 None => {
-                    anyhow::bail!("Failed to fetch leaf from all nodes");
+                    anyhow::bail!("Failed to fetch leaf from all nodes {drb_block_height}");
                 },
             }
         }

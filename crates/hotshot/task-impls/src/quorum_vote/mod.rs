@@ -748,7 +748,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // Check that the signature is valid
                 ensure!(
                     sender.validate(&share.signature, payload_commitment.as_ref()),
-                    error!(
+                    warn!(
                         "VID share signature is invalid, sender: {}, signature: {:?}, \
                          payload_commitment: {:?}",
                         sender, share.signature, payload_commitment

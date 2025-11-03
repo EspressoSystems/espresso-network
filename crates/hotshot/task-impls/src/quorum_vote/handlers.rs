@@ -540,7 +540,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .await;
     } else {
-        tracing::debug!(
+        tracing::error!(
             "sending vote to next quorum leader {:?}",
             vote.view_number() + 1
         );

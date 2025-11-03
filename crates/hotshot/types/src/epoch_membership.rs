@@ -271,6 +271,8 @@ where
                 }
             };
         }
+        let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
+        tracing::error!("Fetching epochs: {epochs:?}");
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
@@ -303,6 +305,7 @@ where
         let root_leaf = match self.fetch_stake_table(epoch).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
+                tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
                 self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                     .await;
                 return;
@@ -316,13 +319,14 @@ where
         .await
         {
             Ok(drb_result) => {
+                tracing::error!("Adding DRB result for epoch {epoch:?}");
                 self.membership
                     .write()
                     .await
                     .add_drb_result(epoch, drb_result);
             },
             Err(err) => {
-                tracing::warn!(
+                tracing::error!(
                     "DRB result for epoch {} missing from membership. Beginning catchup to \
                      recalculate it. Error: {}",
                     epoch,
@@ -540,6 +544,7 @@ fn spawn_catchup<T: NodeType>(
     epoch: T::Epoch,
     epoch_tx: Sender<Result<EpochMembership<T>>>,
 ) {
+    tracing::error!("Spawning catchup for epoch {epoch}");
     tokio::spawn(async move {
         coordinator.clone().catchup(epoch, epoch_tx).await;
     });
