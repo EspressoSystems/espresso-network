@@ -28,7 +28,7 @@ use tagged_base64::TaggedBase64;
 use thiserror::Error;
 use vbs::version::{StaticVersionType, Version};
 use vec1::Vec1;
-use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse, VidDisperseShare2};
+use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse, AvidMDisperseShare};
 
 use crate::{
     drb::DrbResult,
@@ -521,7 +521,7 @@ pub enum VidDisperseShare<TYPES: NodeType> {
     /// VID disperse share type for first version VID
     V0(vid_disperse::ADVZDisperseShare<TYPES>),
     /// VID disperse share type after epoch upgrade and VID upgrade
-    V1(vid_disperse::VidDisperseShare2<TYPES>),
+    V1(vid_disperse::AvidMDisperseShare<TYPES>),
 }
 
 impl<TYPES: NodeType> VidDisperseShare<TYPES> {
@@ -535,7 +535,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
                     .collect()
             },
             VidDisperse::V1(vid_disperse) => {
-                VidDisperseShare2::<TYPES>::from_vid_disperse(vid_disperse)
+                AvidMDisperseShare::<TYPES>::from_vid_disperse(vid_disperse)
                     .into_iter()
                     .map(|share| Self::V1(share))
                     .collect()
@@ -575,7 +575,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
             .into_iter()
             .map(|proposal| convert_proposal(proposal))
             .collect(),
-            VidDisperse::V1(disperse) => VidDisperseShare2::to_vid_share_proposals(
+            VidDisperse::V1(disperse) => AvidMDisperseShare::to_vid_share_proposals(
                 disperse,
                 &vid_disperse_proposal.signature,
             )
@@ -669,8 +669,8 @@ impl<TYPES: NodeType> From<vid_disperse::ADVZDisperseShare<TYPES>> for VidDisper
     }
 }
 
-impl<TYPES: NodeType> From<vid_disperse::VidDisperseShare2<TYPES>> for VidDisperseShare<TYPES> {
-    fn from(share: vid_disperse::VidDisperseShare2<TYPES>) -> Self {
+impl<TYPES: NodeType> From<vid_disperse::AvidMDisperseShare<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: vid_disperse::AvidMDisperseShare<TYPES>) -> Self {
         Self::V1(share)
     }
 }

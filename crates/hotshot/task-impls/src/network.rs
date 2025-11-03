@@ -778,7 +778,7 @@ impl<
                     }
                 } else {
                     tracing::warn!(
-                        "Epochs are enabled for view {} but didn't receive VidDisperseShare2",
+                        "Epochs are enabled for view {} but didn't receive AvidMDisperseShare",
                         proposal.data.view_number()
                     );
                     return None;
@@ -1376,7 +1376,7 @@ impl<
                         if epochs_enabled {
                             tracing::warn!(
                                 "Epochs are enabled for view {} but didn't receive \
-                                 VidDisperseShare2",
+                                 AvidMDisperseShare",
                                 data.view_number()
                             );
                             return None;

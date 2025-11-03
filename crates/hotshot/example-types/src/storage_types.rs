@@ -17,7 +17,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
         VidCommitment,
     },
@@ -43,7 +43,7 @@ type VidShares<TYPES> = BTreeMap<
 >;
 type VidShares2<TYPES> = BTreeMap<
     <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare2<TYPES>>>,
+    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, AvidMDisperseShare<TYPES>>>,
 >;
 
 #[derive(Clone, Debug)]
@@ -190,7 +190,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
 
     async fn append_vid2(
         &self,
-        proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>,
+        proposal: &Proposal<TYPES, AvidMDisperseShare<TYPES>>,
     ) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append VID proposal to storage");

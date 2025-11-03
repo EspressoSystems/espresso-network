@@ -29,7 +29,7 @@ pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal,
     },
@@ -324,7 +324,7 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Initiate VID dispersal.
     ///
     /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
-    VidDisperseMsg2(Proposal<TYPES, VidDisperseShare2<TYPES>>),
+    VidDisperseMsg2(Proposal<TYPES, AvidMDisperseShare<TYPES>>),
 }
 
 /// Messages for sequencing consensus.

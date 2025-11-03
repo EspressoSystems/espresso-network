@@ -57,9 +57,9 @@ mod tests {
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_commitment, vid_disperse::VidDisperseShare2, DaProposal2,
-            EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
-            ViewNumber,
+            ns_table::parse_ns_table, vid_commitment, vid_disperse::AvidMDisperseShare,
+            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            VidDisperseShare, ViewNumber,
         },
         event::{EventType, HotShotAction, LeafInfo},
         light_client::StateKeyPair,
@@ -446,7 +446,7 @@ mod tests {
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
         let signature = PubKey::sign(&privkey, &[]).unwrap();
-        let mut vid = VidDisperseShare2::<SeqTypes> {
+        let mut vid = AvidMDisperseShare::<SeqTypes> {
             view_number: ViewNumber::new(0),
             payload_commitment,
             share: shares[0].clone(),
@@ -942,7 +942,7 @@ mod tests {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let mut vid = VidDisperseShare2::<SeqTypes> {
+        let mut vid = AvidMDisperseShare::<SeqTypes> {
             view_number: ViewNumber::new(0),
             payload_commitment,
             share: shares[0].clone(),
@@ -1155,7 +1155,7 @@ mod tests {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = VidDisperseShare2::<SeqTypes> {
+        let vid_share = AvidMDisperseShare::<SeqTypes> {
             view_number: ViewNumber::new(0),
             payload_commitment,
             share: shares[0].clone(),

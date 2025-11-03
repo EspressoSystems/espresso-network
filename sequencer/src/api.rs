@@ -1943,7 +1943,7 @@ mod api_tests {
     };
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, DaProposal2, EpochNumber,
+            ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, DaProposal2, EpochNumber,
             QuorumProposal2, QuorumProposalWrapper, VidCommitment,
         },
         event::LeafInfo,
@@ -2248,7 +2248,7 @@ mod api_tests {
                 .unwrap();
 
             // Include VID information for each leaf.
-            let share = VidDisperseShare2::<SeqTypes> {
+            let share = AvidMDisperseShare::<SeqTypes> {
                 view_number: leaf.view_number(),
                 payload_commitment,
                 share: shares[0].clone(),

@@ -18,7 +18,7 @@ use futures::future::BoxFuture;
 use super::node_implementation::NodeType;
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
         VidCommitment, VidDisperseShare,
     },
@@ -37,8 +37,10 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
     /// Add a proposal to the stored VID proposals.
-    async fn append_vid2(&self, proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>)
-        -> Result<()>;
+    async fn append_vid2(
+        &self,
+        proposal: &Proposal<TYPES, AvidMDisperseShare<TYPES>>,
+    ) -> Result<()>;
 
     async fn append_vid_general(
         &self,

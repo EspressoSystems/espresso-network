@@ -37,7 +37,7 @@ use crate::{
 impl_has_epoch!(
     ADVZDisperse<TYPES>,
     AvidMDisperse<TYPES>,
-    VidDisperseShare2<TYPES>
+    AvidMDisperseShare<TYPES>
 );
 
 /// ADVZ dispersal data
@@ -463,7 +463,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 /// VID share and associated metadata for a single node
-pub struct VidDisperseShare2<TYPES: NodeType> {
+pub struct AvidMDisperseShare<TYPES: NodeType> {
     /// The view number for which this VID data is intended
     pub view_number: TYPES::View,
     /// The epoch number for which this VID data belongs to
@@ -480,13 +480,13 @@ pub struct VidDisperseShare2<TYPES: NodeType> {
     pub common: AvidMCommon,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare2<TYPES> {
+impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidMDisperseShare<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.view_number
     }
 }
 
-impl<TYPES: NodeType> VidDisperseShare2<TYPES> {
+impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
     /// Create a vector of `VidDisperseShare` from `VidDisperse`
     pub fn from_vid_disperse(vid_disperse: AvidMDisperse<TYPES>) -> Vec<Self> {
         vid_disperse

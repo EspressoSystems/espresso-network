@@ -48,7 +48,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
         QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
     },
@@ -1361,7 +1361,7 @@ impl SequencerPersistence for Persistence {
     }
     async fn append_vid2(
         &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         let view = proposal.data.view_number.u64();
         let payload_hash = proposal.data.payload_commitment;
@@ -3070,7 +3070,8 @@ mod test {
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, EpochNumber, QuorumProposal2,
+            ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, EpochNumber,
+            QuorumProposal2,
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
@@ -3194,7 +3195,7 @@ mod test {
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = VidDisperseShare2::<SeqTypes> {
+        let vid_share = AvidMDisperseShare::<SeqTypes> {
             view_number: ViewNumber::new(0),
             payload_commitment,
             share: shares[0].clone(),
@@ -3338,7 +3339,7 @@ mod test {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid = VidDisperseShare2::<SeqTypes> {
+        let vid = AvidMDisperseShare::<SeqTypes> {
             view_number: data_view,
             payload_commitment,
             share: shares[0].clone(),

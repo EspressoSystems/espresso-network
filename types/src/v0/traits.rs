@@ -11,7 +11,7 @@ use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
@@ -865,7 +865,7 @@ pub trait SequencerPersistence:
     // TODO: merge these two `append_vid`s
     async fn append_vid2(
         &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()>;
     async fn append_da(
         &self,
@@ -1015,7 +1015,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn append_vid2(
         &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         (**self).append_vid2(proposal).await
     }

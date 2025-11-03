@@ -26,7 +26,7 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
         QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
     },
@@ -828,7 +828,7 @@ impl SequencerPersistence for Persistence {
     }
     async fn append_vid2(
         &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let view_number = proposal.data.view_number().u64();
