@@ -67,6 +67,11 @@ jobs:
         run: just nextest --features embedded-db --no-fail-fast
         timeout-minutes: 90
 
+      - name: Show available disk space
+        if: always()
+        run: |
+          df -h
+
   slow-tests-postgres:
     runs-on: ubuntu-latest
     steps:
@@ -109,3 +114,8 @@ jobs:
       - name: Run slow test
         run: just nextest --no-fail-fast
         timeout-minutes: 90
+
+      - name: Show available disk space
+        if: always()
+        run: |
+          df -h
