@@ -27,6 +27,11 @@ jobs:
   slow-tests-sqlite:
     runs-on: ubuntu-latest
     steps:
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -48,6 +53,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # Currently fails to compile with 1.91 (probably OOM)
+      - name: Override Rust version to 1.90
+        run: rustup override set 1.90
+
       # NOTE: no rust cache, these tests are very slow anyway
 
 
@@ -61,6 +70,12 @@ jobs:
   slow-tests-postgres:
     runs-on: ubuntu-latest
     steps:
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -80,6 +95,10 @@ jobs:
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      # Currently fails to compile with 1.91 (probably OOM)
+      - name: Override Rust version to 1.90
+        run: rustup override set 1.90
 
       # NOTE: no rust cache, these tests are very slow anyway
 
