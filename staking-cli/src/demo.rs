@@ -89,6 +89,11 @@ impl fmt::Display for DelegationConfig {
     }
 }
 
+/// Validator registration info used by staking UI service tests.
+///
+/// Retrieved after calling `staking_cli::demo::create()` to get validator addresses.
+/// The staking UI service tests use these addresses to verify that registration
+/// events are correctly processed on the L1 stake table contract.
 #[derive(Clone, Debug)]
 pub struct RegistrationInfo {
     pub from: Address,
@@ -96,6 +101,11 @@ pub struct RegistrationInfo {
     pub payload: NodeSignatures,
 }
 
+/// Delegation info used by staking UI service tests.
+///
+/// Retrieved after calling `staking_cli::demo::create()` to get delegator addresses.
+/// The staking UI service tests use these addresses to verify that delegation
+/// events are correctly processed on the L1 stake table contract.
 #[derive(Clone, Debug)]
 pub struct DelegationInfo {
     pub from: Address,
@@ -324,7 +334,10 @@ impl<P: Provider + Clone> StakingTransactions<P> {
         Ok(Some(pending.assert_success().await?))
     }
 
-    /// Get the list of pending registrations
+    /// Returns pending validator registrations for staking UI service tests.
+    ///
+    /// Retrieves validator addresses that were set up by `staking_cli::demo::create()`.
+    /// Tests use these addresses to verify registration event processing.
     pub fn registrations(&self) -> Vec<RegistrationInfo> {
         self.queues
             .registration
@@ -348,7 +361,10 @@ impl<P: Provider + Clone> StakingTransactions<P> {
             .collect()
     }
 
-    /// Get the list of pending delegations
+    /// Returns pending delegations for staking UI service tests.
+    ///
+    /// Used to retrieve delegator and validator addresses after calling `staking_cli::demo::create()`.
+    /// Tests use this data to verify delegation event processing in the staking UI service.
     pub fn delegations(&self) -> Vec<DelegationInfo> {
         self.queues
             .delegations
