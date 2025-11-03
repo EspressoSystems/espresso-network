@@ -387,6 +387,18 @@ impl<P: Provider + Clone> StakingTransactions<P> {
             })
             .collect()
     }
+
+    /// Returns the provider for a given address.
+    ///
+    /// This is useful when you need to get the provider for a delegator or validator
+    /// that was created during `StakingTransactions::create()`.
+    ///
+    /// Currently this is used by staking UI service to get the provider
+    /// so that we can also undelegate stake because we need the signer that
+    /// signed the delegate transaction
+    pub fn provider(&self, address: Address) -> Option<&P> {
+        self.processor.providers.get(&address)
+    }
 }
 
 impl StakingTransactions<HttpProviderWithWallet> {
