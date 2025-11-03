@@ -90,6 +90,20 @@ impl fmt::Display for DelegationConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct RegistrationInfo {
+    pub from: Address,
+    pub commission: Commission,
+    pub payload: NodeSignatures,
+}
+
+#[derive(Clone, Debug)]
+pub struct DelegationInfo {
+    pub from: Address,
+    pub validator: Address,
+    pub amount: U256,
+}
+
+#[derive(Clone, Debug)]
 enum StakeTableTx {
     SendEth {
         to: Address,
@@ -308,6 +322,54 @@ impl<P: Provider + Clone> StakingTransactions<P> {
         };
         let pending = self.processor.send_next(tx).await?;
         Ok(Some(pending.assert_success().await?))
+    }
+
+    /// Get the list of pending registrations
+    pub fn registrations(&self) -> Vec<RegistrationInfo> {
+        self.queues
+            .registration
+            .iter()
+            .filter_map(|tx| {
+                if let StakeTableTx::RegisterValidator {
+                    from,
+                    commission,
+                    payload,
+                } = tx
+                {
+                    Some(RegistrationInfo {
+                        from: *from,
+                        commission: *commission,
+                        payload: *payload.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get the list of pending delegations
+    pub fn delegations(&self) -> Vec<DelegationInfo> {
+        self.queues
+            .delegations
+            .iter()
+            .filter_map(|tx| {
+                if let StakeTableTx::Delegate {
+                    from,
+                    validator,
+                    amount,
+                } = tx
+                {
+                    Some(DelegationInfo {
+                        from: *from,
+                        validator: *validator,
+                        amount: *amount,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
