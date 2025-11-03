@@ -7,10 +7,7 @@ use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
-use hotshot_utils::{
-    anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
-    ensure, error, line_info, log, warn,
-};
+use hotshot_utils::{anytrace::*, *};
 
 use crate::{
     data::Leaf2,
@@ -329,7 +326,11 @@ where
                     err
                 );
 
-                if let Err(err) = self.compute_drb_result(epoch, root_leaf).await {
+                let result = self.compute_drb_result(epoch, root_leaf).await;
+
+                log!(result);
+
+                if let Err(err) = result {
                     self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                         .await;
                 }
