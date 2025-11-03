@@ -53,15 +53,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Currently fails to compile with 1.91 (probably OOM)
-      - name: Override Rust version to 1.90
-        run: rustup override set 1.90
-
       # NOTE: no rust cache, these tests are very slow anyway
 
+      - name: Build binaries first
+        run: just build
 
       - name: Build slow test
         run: just nextest --features embedded-db --no-run
+        env:
+          CARGO_BUILD_JOBS: "1"
 
       - name: Run slow test
         run: just nextest --features embedded-db --no-fail-fast
@@ -96,14 +96,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Currently fails to compile with 1.91 (probably OOM)
-      - name: Override Rust version to 1.90
-        run: rustup override set 1.90
-
       # NOTE: no rust cache, these tests are very slow anyway
+
+      - name: Build binaries first
+        run: just build
 
       - name: Build slow test
         run: just nextest --no-run
+        env:
+          CARGO_BUILD_JOBS: "1"
 
       - name: Run slow test
         run: just nextest --no-fail-fast
