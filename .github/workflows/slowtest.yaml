@@ -56,7 +56,7 @@ jobs:
       # NOTE: no rust cache, these tests are very slow anyway
 
       - name: Build binaries first
-        run: cargo build --profile test
+        run: cargo build --features embedded-db --profile test
 
       - name: Build slow test
         run: just nextest --features embedded-db --no-run
