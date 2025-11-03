@@ -2585,7 +2585,7 @@ dependencies = [
 [[package]]
 name = "cdn-broker"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-compat#34a94d43395aa86f7da3f1519c2c171c6e0be5ce"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
 dependencies = [
  "cdn-proto",
  "clap 4.5.48",
@@ -2607,7 +2607,7 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.6.2"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-compat#34a94d43395aa86f7da3f1519c2c171c6e0be5ce"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
 dependencies = [
  "cdn-proto",
  "clap 4.5.48",
@@ -2623,7 +2623,7 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-compat#34a94d43395aa86f7da3f1519c2c171c6e0be5ce"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
 dependencies = [
  "cdn-proto",
  "clap 4.5.48",
@@ -2636,7 +2636,7 @@ dependencies = [
 [[package]]
 name = "cdn-proto"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-compat#34a94d43395aa86f7da3f1519c2c171c6e0be5ce"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
 dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
