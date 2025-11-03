@@ -89,6 +89,30 @@ impl fmt::Display for DelegationConfig {
     }
 }
 
+/// Validator registration info used by staking UI service tests.
+///
+/// Retrieved after calling `staking_cli::demo::create()` to get validator addresses.
+/// The staking UI service tests use these addresses to verify that registration
+/// events are correctly processed on the L1 stake table contract.
+#[derive(Clone, Debug)]
+pub struct RegistrationInfo {
+    pub from: Address,
+    pub commission: Commission,
+    pub payload: NodeSignatures,
+}
+
+/// Delegation info used by staking UI service tests.
+///
+/// Retrieved after calling `staking_cli::demo::create()` to get delegator addresses.
+/// The staking UI service tests use these addresses to verify that delegation
+/// events are correctly processed on the L1 stake table contract.
+#[derive(Clone, Debug)]
+pub struct DelegationInfo {
+    pub from: Address,
+    pub validator: Address,
+    pub amount: U256,
+}
+
 #[derive(Clone, Debug)]
 enum StakeTableTx {
     SendEth {
@@ -308,6 +332,60 @@ impl<P: Provider + Clone> StakingTransactions<P> {
         };
         let pending = self.processor.send_next(tx).await?;
         Ok(Some(pending.assert_success().await?))
+    }
+
+    /// Returns pending validator registrations for staking UI service tests.
+    ///
+    /// Retrieves validator addresses that were set up by `staking_cli::demo::create()`.
+    /// Tests use these addresses to verify registration event processing.
+    pub fn registrations(&self) -> Vec<RegistrationInfo> {
+        self.queues
+            .registration
+            .iter()
+            .filter_map(|tx| {
+                if let StakeTableTx::RegisterValidator {
+                    from,
+                    commission,
+                    payload,
+                } = tx
+                {
+                    Some(RegistrationInfo {
+                        from: *from,
+                        commission: *commission,
+                        payload: *payload.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns pending delegations for staking UI service tests.
+    ///
+    /// Used to retrieve delegator and validator addresses after calling `staking_cli::demo::create()`.
+    /// Tests use this data to verify delegation event processing in the staking UI service.
+    pub fn delegations(&self) -> Vec<DelegationInfo> {
+        self.queues
+            .delegations
+            .iter()
+            .filter_map(|tx| {
+                if let StakeTableTx::Delegate {
+                    from,
+                    validator,
+                    amount,
+                } = tx
+                {
+                    Some(DelegationInfo {
+                        from: *from,
+                        validator: *validator,
+                        amount: *amount,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
