@@ -330,11 +330,6 @@ where
                 );
 
                 if let Err(err) = self.compute_drb_result(epoch, root_leaf).await {
-                    tracing::error!(
-                        "DRB calculation for epoch {} failed . Error: {}",
-                        epoch,
-                        err
-                    );
                     self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                         .await;
                 }
@@ -480,7 +475,7 @@ where
         let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
 
         if drb_calculation_map_lock.contains(&epoch) {
-            return Err(anytrace::warn!(
+            return Err(anytrace::debug!(
                 "DRB calculation for epoch {} already in progress",
                 epoch
             ));
