@@ -48,7 +48,7 @@ jobs:
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
-      - uses: rui314/setup-mold@v1
+      # - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -91,7 +91,7 @@ jobs:
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
-      - uses: rui314/setup-mold@v1
+      # - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
