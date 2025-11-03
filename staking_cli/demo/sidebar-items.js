@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CreateTransactionsError","DelegationConfig","SetupPhase","StakeTableTx"],"fn":["stake_for_demo"],"struct":["DelegatorConfig","StakingTransactions","TransactionProcessor","TransactionQueues","ValidatorConfig"]};
+window.SIDEBAR_ITEMS = {"enum":["CreateTransactionsError","DelegationConfig","SetupPhase","StakeTableTx"],"fn":["stake_for_demo"],"struct":["DelegationInfo","DelegatorConfig","RegistrationInfo","StakingTransactions","TransactionProcessor","TransactionQueues","ValidatorConfig"]};
