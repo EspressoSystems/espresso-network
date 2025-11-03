@@ -386,9 +386,6 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 if is_epoch_transition(block_height, self.epoch_height) {
                     return Ok(());
                 }
-                if is_last_block(block_height, self.epoch_height) {
-                    return Ok(());
-                }
                 if next_view <= self.cur_view {
                     return Ok(());
                 }
