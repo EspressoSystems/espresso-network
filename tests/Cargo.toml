@@ -28,6 +28,7 @@ sequencer = { path = "../sequencer", features = ["testing"] }
 sequencer-utils = { path = "../utils" }
 staking-cli = { path = "../staking-cli" }
 surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 tokio = { workspace = true }

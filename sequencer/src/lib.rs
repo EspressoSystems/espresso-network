@@ -392,7 +392,7 @@ where
     network_config.config.stake_table_capacity = stake_table_capacity;
 
     if let Some(da_committees) = &genesis.da_committees {
-        tracing::warn!("setting da_committees from genesis");
+        tracing::warn!("setting da_committees from genesis: {da_committees:?}");
         network_config.config.da_committees = da_committees.clone();
     }
 

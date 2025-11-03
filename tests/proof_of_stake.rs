@@ -1,8 +1,15 @@
 use std::time::{Duration, Instant};
 
+use alloy::primitives::U256;
 use anyhow::Result;
 use espresso_types::SeqTypes;
+use hotshot_types::{
+    stake_table::StakeTableEntry,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    PeerConfig,
+};
 use sequencer::api::data_source::StakeTableWithEpochNumber;
+use tagged_base64::TaggedBase64;
 use url::Url;
 
 use crate::{
@@ -92,6 +99,7 @@ async fn test_native_demo_da_committee() -> Result<()> {
     assert!(false);*/
 
     let genesis_path = "data/genesis/demo-da-committees.toml";
+    //let genesis_path = "data/genesis/demo-pos-base.toml";
     let genesis = load_genesis_file(genesis_path)?;
 
     let _child = NativeDemo::run(
@@ -147,10 +155,40 @@ async fn test_native_demo_da_committee() -> Result<()> {
         ]),
     );
 
+    let entries: &[PeerConfig<SeqTypes>] = &[PeerConfig {
+        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE"),
+    },PeerConfig {
+        stake_table_entry:make_stake_table_entry("BLS_VER_KEY~4zQnaCOFJ7m95OjxeNls0QOOwWbz4rfxaL3NwmN2zSdnf8t5Nw_dfmMHq05ee8jCegw6Bn5T8inmrnGGAsQJMMWLv77nd7FJziz2ViAbXg-XGGF7o4HyzELCmypDOIYF3X2UWferFE_n72ZX0iQkUhOvYZZ7cfXToXxRTtb_mwRR"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg"),
+    },PeerConfig {
+        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~IBRoz_Q1EXvcm1pNZcmVlyYZU8hZ7qmy337ePAjEMhz8Hl2q8vWPFOd3BaLwgRS1UzAPW3z4E-XIgRDGcRBTAMZX9b_0lKYjlyTlNF2EZfNnKmvv-xJ0yurkfjiveeYEsD2l5d8q_rJJbH1iZdXy-yPEbwI0SIvQfwdlcaKw9po4"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY"),
+    },PeerConfig {
+        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~rO2PIjyY30HGfapFcloFe3mNDKMIFi6JlOLkH5ZWBSYoRm5fE2-Rm6Lp3EvmAcB5r7KFJ0c1Uor308x78r04EY_sfjcsDCWt7RSJdL4cJoD_4fSTCv_bisO8k98hs_8BtqQt8BHlPeJohpUXvcfnK8suXJETiJ6Er97pfxRbzgAL"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g"),
+    },PeerConfig {
+        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~r6b-Cwzp-b3czlt0MHmYPJIow5kMsXbrNmZsLSYg9RV49oCCO4WEeCRFR02x9bqLCa_sgNFMrIeNdEa11qNiBAohApYFIvrSa-zP5QGj3xbZaMOCrshxYit6E2TR-XsWvv6gjOrypmugjyTAth-iqQzTboSfmO9DD1-gjJIdCaD7"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw"),
+    }];
+
     // Sanity check that the demo is working
 
     assert_native_demo_works(Default::default()).await?;
-    assert_da_stake_table(Default::default()).await?;
+    assert_da_stake_table(
+        Default::default(),
+        5,
+        &[&entries[0], &entries[1], &entries[2], &entries[4]],
+    )
+    .await?;
+    assert_da_stake_table(Default::default(), 10, &[&entries[0], &entries[1]]).await?;
+    assert_da_stake_table(Default::default(), 15, &[&entries[1], &entries[2]]).await?;
+    assert_da_stake_table(
+        Default::default(),
+        20,
+        &[&entries[1], &entries[2], &entries[4]],
+    )
+    .await?;
 
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
     // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
@@ -168,11 +206,28 @@ async fn test_native_demo_da_committee() -> Result<()> {
     Ok(())
 }
 
-async fn assert_da_stake_table(requirements: TestRequirements) -> Result<()> {
+fn make_stake_table_entry(
+    pubkey: &str,
+) -> <<SeqTypes as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry {
+    StakeTableEntry {
+        stake_key: TaggedBase64::parse(pubkey).unwrap().try_into().unwrap(),
+        stake_amount: U256::from(1),
+    }
+}
+
+fn make_state_ver_key(pubkey: &str) -> <SeqTypes as NodeType>::StateSignatureKey {
+    TaggedBase64::parse(pubkey).unwrap().try_into().unwrap()
+}
+
+async fn assert_da_stake_table(
+    requirements: TestRequirements,
+    start_epoch: u64,
+    entries: &[&PeerConfig<SeqTypes>],
+) -> Result<()> {
     let start = Instant::now();
     let sequencer_api_port = dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?;
     let sequencer_url: Url = format!("http://localhost:{sequencer_api_port}").parse()?;
-    let da_stake_table_url = format!("{sequencer_url}v1/node/stake-table/current");
+    let da_stake_table_url = format!("{sequencer_url}v1/node/da-stake-table/current");
     println!("Fetching da stake table from: {}", da_stake_table_url);
 
     loop {
@@ -215,10 +270,43 @@ async fn assert_da_stake_table(requirements: TestRequirements) -> Result<()> {
             tokio::time::sleep(Duration::from_secs(1)).await;
         };
         println!(
-            "Retrieved DA stake table for epoch {:?}: {:?}",
-            da_stake_table.epoch, da_stake_table.stake_table
+            "Retrieved DA stake table for epoch {:?}, {} members: {:?}",
+            da_stake_table.epoch,
+            da_stake_table.stake_table.len(),
+            da_stake_table.stake_table
         );
 
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        let Some(response_epoch) = da_stake_table.epoch else {
+            println!("DA stake table epoch is None, waiting...");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        };
+
+        if *response_epoch < start_epoch {
+            println!(
+                "DA stake table epoch {} less than start epoch {}, waiting...",
+                response_epoch, start_epoch
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+
+        assert_eq!(
+            da_stake_table.stake_table.len(),
+            entries.len(),
+            "expected lengths of da stake tables to match. Expected: {entries:?}, Got: {:?}",
+            da_stake_table.stake_table
+        );
+
+        for entry in entries {
+            assert!(
+                da_stake_table.stake_table.iter().any(|e| entry == &e),
+                "DA stake table missing expected entry: {entry:?}. Expected entries: {entries:?}, \
+                 Got: {:?}",
+                da_stake_table.stake_table
+            );
+        }
+
+        return Ok(());
     }
 }

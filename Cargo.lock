@@ -11593,6 +11593,7 @@ dependencies = [
  "serde_json",
  "staking-cli",
  "surf-disco",
+ "tagged-base64",
  "tempfile",
  "test-log",
  "tokio",
