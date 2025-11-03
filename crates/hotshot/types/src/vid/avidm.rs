@@ -8,10 +8,10 @@
 
 use hotshot_utils::anytrace::*;
 
-pub type AvidMScheme = vid::avid_m::namespaced::NsAvidMScheme;
-pub type AvidMParam = vid::avid_m::namespaced::NsAvidMParam;
-pub type AvidMCommitment = vid::avid_m::namespaced::NsAvidMCommit;
-pub type AvidMShare = vid::avid_m::namespaced::NsAvidMShare;
+pub type AvidMScheme = vid::avidm::namespaced::NsAvidMScheme;
+pub type AvidMParam = vid::avidm::namespaced::NsAvidMParam;
+pub type AvidMCommitment = vid::avidm::namespaced::NsAvidMCommit;
+pub type AvidMShare = vid::avidm::namespaced::NsAvidMShare;
 pub type AvidMCommon = AvidMParam;
 
 pub fn init_avidm_param(total_weight: usize) -> Result<AvidMParam> {
