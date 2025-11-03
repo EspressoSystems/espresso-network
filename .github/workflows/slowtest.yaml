@@ -50,10 +50,14 @@ jobs:
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
-      # - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      # Currently fails to compile with 1.91 (probably OOM)
+      - name: Override Rust version to 1.90
+        run: rustup override set 1.90
 
       # NOTE: no rust cache, these tests are very slow anyway
 
@@ -89,10 +93,14 @@ jobs:
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
-      # - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      # Currently fails to compile with 1.91 (probably OOM)
+      - name: Override Rust version to 1.90
+        run: rustup override set 1.90
 
       # NOTE: no rust cache, these tests are very slow anyway
 
