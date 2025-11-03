@@ -8,7 +8,7 @@ epoch_start_block = 1
 
 [[da_committees]]
 start_version = "0.5"
-start_epoch = 112
+start_epoch = 114
 
 [[da_committees.committee]]
 state_ver_key = "SCHNORR_VER_KEY~SH_6UHYUqQYsJEHKxSSmKZxXYApnLKho21-0aUSi0xmDxqm7ooRNpI5xpFdHSQReY1n0g4w9SIKjJK4HG92NIKc"
