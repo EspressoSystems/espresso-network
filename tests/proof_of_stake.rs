@@ -182,7 +182,12 @@ async fn test_native_demo_da_committee() -> Result<()> {
     )
     .await?;
     assert_da_stake_table(Default::default(), 10, &[&entries[0], &entries[1]]).await?;
-    assert_da_stake_table(Default::default(), 15, &[&entries[1], &entries[2]]).await?;
+    assert_da_stake_table(
+        Default::default(),
+        15,
+        &[&entries[0], &entries[1], &entries[2]],
+    )
+    .await?;
     assert_da_stake_table(
         Default::default(),
         20,
