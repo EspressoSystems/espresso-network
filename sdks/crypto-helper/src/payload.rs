@@ -133,7 +133,7 @@ pub unsafe extern "C" fn decode_payload(
 /// by this library.
 ///
 /// # Safety
-/// Caller promised this is was allocated by us,
+/// Caller promised this was allocated by us,
 #[no_mangle]
 pub unsafe extern "C" fn free_transaction_vec_result(result: DecodingResult) {
     // Free the error string if present

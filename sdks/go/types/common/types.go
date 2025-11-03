@@ -492,7 +492,7 @@ type PayloadQueryData struct {
 	BlockPayload *BlockPayload `json:"data"`
 }
 
-func (b *BuilderCommitment) ToTaggedSting() (string, error) {
+func (b *BuilderCommitment) ToTaggedString() (string, error) {
 	tagged, err := tagged_base64.New("BUILDER_COMMITMENT", b[:])
 	if err != nil {
 		return "", err
