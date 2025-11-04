@@ -41,6 +41,7 @@ jobs:
           haskell: true
           large-packages: false
           docker-images: false
+          swap-storage: false
 
       # These tests need the `anvil` binary provided by foundry
       - name: Install Foundry
@@ -84,6 +85,7 @@ jobs:
           haskell: true
           large-packages: false
           docker-images: false
+          swap-storage: false
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
