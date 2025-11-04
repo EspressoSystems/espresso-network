@@ -85,9 +85,32 @@ async fn test_native_demo_drb_header() -> Result<()> {
     Ok(())
 }
 
+fn make_private_key(
+    pubkey: &str,
+) -> <<SeqTypes as NodeType>::SignatureKey as SignatureKey>::PrivateKey {
+    TaggedBase64::parse(pubkey).unwrap().try_into().unwrap()
+}
+
+fn make_private_state_key(
+    pubkey: &str,
+) -> <<SeqTypes as NodeType>::StateSignatureKey as hotshot_types::traits::signature_key::StateSignatureKey>::StatePrivateKey{
+    TaggedBase64::parse(pubkey).unwrap().try_into().unwrap()
+}
+
 /// Checks if the native works if started on the PoS/Epoch version
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_demo_da_committee() -> Result<()> {
+    /*let pubkey = hotshot_types::signature_key::BLSPubKey::from_private(&make_private_key(
+        "BLS_SIGNING_KEY~lNDh4Pn-pTAyzyprOAFdXHwhrKhEwqwtMtkD3CZF4x3o",
+    ));
+    println!("pubkey: {}", pubkey);
+
+    let pubkey = hotshot_types::signature_key::BLSPubKey::from_private(&make_private_state_key(
+        "SCHNORR_SIGNING_KEY~HpvL0GKuLCeVkbpyRWh8XGhpSgDAel5Ehq181Qp2nAFD",
+    ));
+    println!("pubkey: {}", pubkey);
+
+    assert!(false);*/
     /*     use hotshot_types::traits::signature_key::SignatureKey;
     for i in 0..5 {
         let key1 = hotshot_types::signature_key::BLSPubKey::generated_from_seed_indexed([0; 32], i).1.to_tagged_base64().unwrap();
@@ -182,12 +205,7 @@ async fn test_native_demo_da_committee() -> Result<()> {
     )
     .await?;
     assert_da_stake_table(Default::default(), 10, &[&entries[0], &entries[1]]).await?;
-    assert_da_stake_table(
-        Default::default(),
-        15,
-        &[&entries[0], &entries[1], &entries[2]],
-    )
-    .await?;
+    assert_da_stake_table(Default::default(), 15, &[&entries[1], &entries[2]]).await?;
     assert_da_stake_table(
         Default::default(),
         20,
