@@ -20,6 +20,7 @@ concurrency:
 env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
   # Save the process compose logs
   NATIVE_DEMO_LOGS: /tmp/native-demo.log
   PC_LOG_FILE: /tmp/pc-logs.log

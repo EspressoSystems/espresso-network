@@ -39,9 +39,8 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+          large-packages: false
+          docker-images: false
 
       # These tests need the `anvil` binary provided by foundry
       - name: Install Foundry
@@ -56,13 +55,8 @@ jobs:
 
       # NOTE: no rust cache, these tests are very slow anyway
 
-      - name: Build binaries first
-        run: cargo build --features embedded-db --profile test
-
       - name: Build slow test
         run: just nextest --features embedded-db --no-run
-        env:
-          CARGO_BUILD_JOBS: "1"
 
       - name: Run slow test
         run: just nextest --features embedded-db --no-fail-fast
@@ -90,7 +84,6 @@ jobs:
           haskell: true
           large-packages: false
           docker-images: false
-          swap-storage: true
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -104,13 +97,8 @@ jobs:
 
       # NOTE: no rust cache, these tests are very slow anyway
 
-      - name: Build binaries first
-        run: cargo build --profile test
-
       - name: Build slow test
         run: just nextest --no-run
-        env:
-          CARGO_BUILD_JOBS: "1"
 
       - name: Run slow test
         run: just nextest --no-fail-fast

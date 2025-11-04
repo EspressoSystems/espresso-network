@@ -35,6 +35,7 @@ concurrency:
 env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   build-amd:
