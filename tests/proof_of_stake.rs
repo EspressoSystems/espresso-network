@@ -101,13 +101,15 @@ fn make_private_state_key(
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_demo_da_committee() -> Result<()> {
     /*let pubkey = hotshot_types::signature_key::BLSPubKey::from_private(&make_private_key(
-        "BLS_SIGNING_KEY~lNDh4Pn-pTAyzyprOAFdXHwhrKhEwqwtMtkD3CZF4x3o",
+        "BLS_SIGNING_KEY~FTAq-zib6oUVGSOdIlgntYB1IelS0vK6icYW8Z8OUySv",
     ));
     println!("pubkey: {}", pubkey);
 
-    let pubkey = hotshot_types::signature_key::BLSPubKey::from_private(&make_private_state_key(
-        "SCHNORR_SIGNING_KEY~HpvL0GKuLCeVkbpyRWh8XGhpSgDAel5Ehq181Qp2nAFD",
-    ));
+    let pubkey = hotshot_types::light_client::StateKeyPair::from_sign_key(make_private_state_key(
+        "SCHNORR_SIGNING_KEY~4YXyoT7ZxwXcU0_J6NH9ziGLrG0jShNCtGJIZ7a0yQBr",
+    ))
+    .0
+    .ver_key();
     println!("pubkey: {}", pubkey);
 
     assert!(false);*/
@@ -132,67 +134,67 @@ async fn test_native_demo_da_committee() -> Result<()> {
                 "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
                 // process compose runs from the root of the repo
                 genesis_path.to_string(),
-            ),
-            // These keys are generated with generated_from_seed_indexed and are the private side to the keys in demo-da-committees.toml
-            // TODO: Grab the default keys from .env and make public keys to put in demo-da-committees instead
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_0".to_string(),
-                "BLS_SIGNING_KEY~lNDh4Pn-pTAyzyprOAFdXHwhrKhEwqwtMtkD3CZF4x3o".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0".to_string(),
-                "SCHNORR_SIGNING_KEY~HpvL0GKuLCeVkbpyRWh8XGhpSgDAel5Ehq181Qp2nAFD".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_1".to_string(),
-                "BLS_SIGNING_KEY~-DO72m_SFl6NQMYknm05FYpPEklkeqz-B3g2mFdbuS83".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1".to_string(),
-                "SCHNORR_SIGNING_KEY~45YyRVukvS11jD742ESpdofgvNram9qXEcEbWJMZnAII".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_2".to_string(),
-                "BLS_SIGNING_KEY~LY0x6w5BheYvEI3ro3g39NU-qwoYQRKc4ObCqc1yoC4S".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2".to_string(),
-                "SCHNORR_SIGNING_KEY~MsqAFOzgc5RUvoB3sVRLKJmcgCST-x_fThnhiU0tTwEN".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_3".to_string(),
-                "BLS_SIGNING_KEY~w4jERAaQfBdCdmlStEgj8PfIJJOWmCvbsL2wckpTfCbo".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3".to_string(),
-                "SCHNORR_SIGNING_KEY~_vCBzmTgY32OZIkteql1y2knVqI7Jx68GvU_2117ggB4".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_4".to_string(),
-                "BLS_SIGNING_KEY~FTAq-zib6oUVGSOdIlgntYB1IelS0vK6icYW8Z8OUySv".to_string(),
-            ),
-            (
-                "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4".to_string(),
-                "SCHNORR_SIGNING_KEY~O-7qlIsA5O9lD5tdwAqkit-AksJQ_hBAXAni_GCqTgVt".to_string(),
-            ),
+            ), /*
+               // These keys are generated with generated_from_seed_indexed and are the private side to the keys in demo-da-committees.toml
+               // TODO: Grab the default keys from .env and make public keys to put in demo-da-committees instead
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_0".to_string(),
+                   "BLS_SIGNING_KEY~lNDh4Pn-pTAyzyprOAFdXHwhrKhEwqwtMtkD3CZF4x3o".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0".to_string(),
+                   "SCHNORR_SIGNING_KEY~HpvL0GKuLCeVkbpyRWh8XGhpSgDAel5Ehq181Qp2nAFD".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_1".to_string(),
+                   "BLS_SIGNING_KEY~-DO72m_SFl6NQMYknm05FYpPEklkeqz-B3g2mFdbuS83".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1".to_string(),
+                   "SCHNORR_SIGNING_KEY~45YyRVukvS11jD742ESpdofgvNram9qXEcEbWJMZnAII".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_2".to_string(),
+                   "BLS_SIGNING_KEY~LY0x6w5BheYvEI3ro3g39NU-qwoYQRKc4ObCqc1yoC4S".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2".to_string(),
+                   "SCHNORR_SIGNING_KEY~MsqAFOzgc5RUvoB3sVRLKJmcgCST-x_fThnhiU0tTwEN".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_3".to_string(),
+                   "BLS_SIGNING_KEY~w4jERAaQfBdCdmlStEgj8PfIJJOWmCvbsL2wckpTfCbo".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3".to_string(),
+                   "SCHNORR_SIGNING_KEY~_vCBzmTgY32OZIkteql1y2knVqI7Jx68GvU_2117ggB4".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_4".to_string(),
+                   "BLS_SIGNING_KEY~FTAq-zib6oUVGSOdIlgntYB1IelS0vK6icYW8Z8OUySv".to_string(),
+               ),
+               (
+                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4".to_string(),
+                   "SCHNORR_SIGNING_KEY~O-7qlIsA5O9lD5tdwAqkit-AksJQ_hBAXAni_GCqTgVt".to_string(),
+               ),*/
         ]),
     );
 
     let entries: &[PeerConfig<SeqTypes>] = &[PeerConfig {
         stake_table_entry: make_stake_table_entry("BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~ibJCbfPOhDoURqiGLe683TDJ_KOLQCx8_Hdq43dOviSuL6WJJ_2mARKO3xA2k5zpXE3iiq4_z7mzvA-V1VXvIWw"),
     },PeerConfig {
         stake_table_entry:make_stake_table_entry("BLS_VER_KEY~4zQnaCOFJ7m95OjxeNls0QOOwWbz4rfxaL3NwmN2zSdnf8t5Nw_dfmMHq05ee8jCegw6Bn5T8inmrnGGAsQJMMWLv77nd7FJziz2ViAbXg-XGGF7o4HyzELCmypDOIYF3X2UWferFE_n72ZX0iQkUhOvYZZ7cfXToXxRTtb_mwRR"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~lNCMqH5qLthH5OXxW_Z25tLXJUqmzzhsuQ6oVuaPWhtRPmgIKSqcBoJTaEbmGZL2VfTyQNguaoQL4U_4tCA_HmI"),
     },PeerConfig {
         stake_table_entry: make_stake_table_entry("BLS_VER_KEY~IBRoz_Q1EXvcm1pNZcmVlyYZU8hZ7qmy337ePAjEMhz8Hl2q8vWPFOd3BaLwgRS1UzAPW3z4E-XIgRDGcRBTAMZX9b_0lKYjlyTlNF2EZfNnKmvv-xJ0yurkfjiveeYEsD2l5d8q_rJJbH1iZdXy-yPEbwI0SIvQfwdlcaKw9po4"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~nkFKzpLhJAafJ3LBkY_0h9OzxSyTu95Z029EUFPO4QNkeUo6DHQGTTVjxmprTA5H8jRSn73i0slJvig6dZ5kLX4"),
     },PeerConfig {
         stake_table_entry: make_stake_table_entry("BLS_VER_KEY~rO2PIjyY30HGfapFcloFe3mNDKMIFi6JlOLkH5ZWBSYoRm5fE2-Rm6Lp3EvmAcB5r7KFJ0c1Uor308x78r04EY_sfjcsDCWt7RSJdL4cJoD_4fSTCv_bisO8k98hs_8BtqQt8BHlPeJohpUXvcfnK8suXJETiJ6Er97pfxRbzgAL"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~NwYhzlWarlZHxTNvChWuf74O3fP7zIt5NdC7V8gV6w2W92JOBDkrNmKQeMGxMUke-G5HHxUjHlZEWr1m1xLjEaI"),
     },PeerConfig {
         stake_table_entry: make_stake_table_entry("BLS_VER_KEY~r6b-Cwzp-b3czlt0MHmYPJIow5kMsXbrNmZsLSYg9RV49oCCO4WEeCRFR02x9bqLCa_sgNFMrIeNdEa11qNiBAohApYFIvrSa-zP5QGj3xbZaMOCrshxYit6E2TR-XsWvv6gjOrypmugjyTAth-iqQzTboSfmO9DD1-gjJIdCaD7"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw"),
+        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~qMfMj1c1hRVTnugvz3MKNnVC5JA9jvZcV3ZCLL_J4Ap-u0i6ulGWveTk3OOelZj2-kd_WD5ojtYGWV1jHx9wCaA"),
     }];
 
     // Sanity check that the demo is working
