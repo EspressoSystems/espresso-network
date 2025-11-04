@@ -38,8 +38,8 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: false
-          docker-images: false
+          large-packages: true
+          docker-images: true
           swap-storage: true
 
       # These tests need the `anvil` binary provided by foundry
