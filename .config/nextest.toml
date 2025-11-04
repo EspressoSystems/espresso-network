@@ -1,7 +1,7 @@
 [profile.default]
 # Kill tests after 3 periods of 2m, because they are probably hanging
 slow-timeout = { period = "2m", terminate-after = 3 }
-default-filter = 'not (deps(hotshot-testing) | package(tests) | package(slow-tests))'
+default-filter = 'not (deps(hotshot-testing) | package(tests) | package(slow-tests) | package(espresso-dev-node))'
 retries = 2
 
 [[profile.default.overrides]]
@@ -47,7 +47,7 @@ threads-required = "num-test-threads"
 
 [profile.slow]
 slow-timeout = "2m"
-default-filter = 'package(slow-tests)'
+default-filter = 'package(espresso-dev-node) | package(slow-tests)'
 retries = 2
 
 [profile.all]

@@ -103,7 +103,6 @@ async fn slow_dev_node_test(
 
     let process = CargoBuild::new()
         .bin("espresso-dev-node")
-        .features("testing embedded-db")
         .current_target()
         .run()
         .unwrap()
@@ -430,7 +429,6 @@ async fn slow_dev_node_multiple_lc_providers_test() {
 
     let process = CargoBuild::new()
         .bin("espresso-dev-node")
-        .features("testing embedded-db")
         .current_target()
         .run()
         .unwrap()
