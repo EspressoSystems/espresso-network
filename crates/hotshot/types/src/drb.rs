@@ -105,6 +105,7 @@ pub async fn compute_drb_result(
     store_drb_progress: StoreDrbProgressFn,
     load_drb_progress: LoadDrbProgressFn,
 ) -> DrbResult {
+    tracing::error!("Computing DRB result for epoch {}", drb_input.epoch);
     let mut drb_input = drb_input;
 
     if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
@@ -204,6 +205,8 @@ pub async fn compute_drb_result(
         value: drb_result,
         difficulty_level: drb_input.difficulty_level,
     };
+
+    tracing::error!("DRB calculated for epoch {}", drb_input.epoch);
 
     let store_drb_progress = store_drb_progress.clone();
     tokio::spawn(async move {

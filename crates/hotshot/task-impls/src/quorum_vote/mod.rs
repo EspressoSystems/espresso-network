@@ -633,7 +633,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             for view in *self.latest_voted_view..(*new_view) {
                 let maybe_cancel_sender = self.vote_dependencies.remove(&TYPES::View::new(view));
                 if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
-                    tracing::error!("Aborting vote dependency task for view {view}");
+                    tracing::warn!("Aborting vote dependency task for view {view}");
                     let _ = maybe_cancel_sender.unwrap().try_broadcast(());
                 }
             }

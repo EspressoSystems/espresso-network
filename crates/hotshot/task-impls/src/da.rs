@@ -25,7 +25,7 @@ use hotshot_types::{
         storage::Storage,
         BlockPayload, EncodeBytes,
     },
-    utils::EpochTransitionIndicator,
+    utils::{epoch_from_block_number, is_ge_epoch_root, is_last_block, EpochTransitionIndicator},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -437,17 +437,42 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     return Ok(());
                 }
                 let consensus_reader = self.consensus.read().await;
-                let epoch_transition_indicator = if consensus_reader.is_high_qc_ge_root_block() {
-                    if self.upgrade_lock.upgraded_drb_and_header(view_number).await
-                        && consensus_reader.is_high_qc_last_block()
-                    {
-                        EpochTransitionIndicator::NotInTransition
+                let high_qc_block_number = consensus_reader.high_qc().data.block_number;
+                // We in transition if our high QC is after the epoch root block, not the last block,
+                // And we aren't in an epoch greater than the high qc's epoch.  In other words
+                // we expect to propose to both epochs if the next block after our current high QC is
+                // going to be a transition block.  We most likely will propose the high QC's block height + 1.
+                let epoch_transition_indicator =
+                    if self.upgrade_lock.epochs_enabled(view_number).await {
+                        match (high_qc_block_number, self.cur_epoch) {
+                            (Some(block_number), Some(cur_epoch)) => {
+                                let epoch = epoch_from_block_number(
+                                    block_number,
+                                    self.membership_coordinator.epoch_height,
+                                );
+                                if epoch < *cur_epoch {
+                                    // We are in a new epoch, we can't be in transition
+                                    EpochTransitionIndicator::NotInTransition
+                                } else {
+                                    if !is_last_block(
+                                        block_number,
+                                        self.membership_coordinator.epoch_height,
+                                    ) && is_ge_epoch_root(
+                                        block_number,
+                                        self.membership_coordinator.epoch_height,
+                                    ) {
+                                        EpochTransitionIndicator::InTransition
+                                    } else {
+                                        EpochTransitionIndicator::NotInTransition
+                                    }
+                                }
+                            },
+                            _ => EpochTransitionIndicator::NotInTransition,
+                        }
                     } else {
-                        EpochTransitionIndicator::InTransition
-                    }
-                } else {
-                    EpochTransitionIndicator::NotInTransition
-                };
+                        EpochTransitionIndicator::NotInTransition
+                    };
+
                 drop(consensus_reader);
 
                 let data: DaProposal2<TYPES> = DaProposal2 {

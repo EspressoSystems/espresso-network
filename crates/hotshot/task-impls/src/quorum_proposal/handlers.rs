@@ -832,6 +832,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             maybe_state_cert,
         )
         .await
+        .inspect_err(|e| tracing::error!("Failed to publish proposal: {e:?}"))
     }
 }
 
