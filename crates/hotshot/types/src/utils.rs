@@ -298,19 +298,21 @@ impl AsRef<Sha256Digest> for BuilderCommitment {
     }
 }
 
+type BincodeOpts = WithOtherTrailing<
+    WithOtherIntEncoding<
+        WithOtherEndian<WithOtherLimit<DefaultOptions, bincode::config::Infinite>, LittleEndian>,
+        FixintEncoding,
+    >,
+    RejectTrailing,
+>;
+
 /// For the wire format, we use bincode with the following options:
 ///   - No upper size limit
 ///   - Little endian encoding
 ///   - Varint encoding
 ///   - Reject trailing bytes
 #[must_use]
-pub fn bincode_opts() -> WithOtherTrailing<
-    WithOtherIntEncoding<
-        WithOtherEndian<WithOtherLimit<DefaultOptions, bincode::config::Infinite>, LittleEndian>,
-        FixintEncoding,
-    >,
-    RejectTrailing,
-> {
+pub fn bincode_opts() -> BincodeOpts {
     bincode::DefaultOptions::new()
         .with_no_limit()
         .with_little_endian()
