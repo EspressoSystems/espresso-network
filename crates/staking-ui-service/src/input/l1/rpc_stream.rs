@@ -1,17 +1,22 @@
 //! An L1 event stream based on a standard JSON-RPC server.
 
 use super::{
-    BlockInput, ResettableStream, options::L1ClientOptions, switching_transport::SwitchingTransport,
+    BlockInput, L1Event, ResettableStream, options::L1ClientOptions,
+    switching_transport::SwitchingTransport,
 };
-use crate::types::common::{Address, Timestamp};
-use crate::{Result, types::common::L1BlockId};
+use crate::types::common::Address;
+use crate::{Error, Result, types::common::L1BlockId};
+use alloy::transports::{RpcError, TransportErrorKind};
 use alloy::{
     eips::BlockId,
     network::Ethereum,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::{client::RpcClient, types::Header},
+    rpc::types::{Filter, Header},
+    sol_types::SolEventInterface,
 };
 use futures::stream::{self, BoxStream, Stream, StreamExt};
+use hotshot_contract_adapter::sol_types::RewardClaim::RewardClaimEvents;
+use hotshot_contract_adapter::sol_types::StakeTableV2::StakeTableV2Events;
 use std::{
     pin::Pin,
     sync::Arc,
@@ -47,15 +52,11 @@ impl std::fmt::Debug for RpcStream {
 }
 
 impl RpcStreamBuilder {
-    /// Create a new builder from L1 client options.
+    /// Create a new builder from L1 client options and contract addresses.
     fn new(options: L1ClientOptions) -> Result<Self> {
-        let http_urls = options.http_providers.clone();
-        let transport = SwitchingTransport::new(options.clone(), http_urls)?;
-        let rpc_client = RpcClient::new(transport.clone(), false);
-        let provider = Arc::new(RootProvider::new(rpc_client));
-
+        let (provider, transport) = options.provider()?;
         Ok(Self {
-            provider,
+            provider: Arc::new(provider),
             transport,
             options,
         })
@@ -107,17 +108,19 @@ impl RpcStreamBuilder {
             .await
             .map_err(|err| {
                 tracing::warn!("Failed to connect WebSockets provider: {err:#}");
-                crate::Error::internal().context(format!("Failed to connect: {err}"))
+                Error::internal().context(format!("Failed to connect: {err}"))
             })?;
 
         let block_stream = ws.subscribe_blocks().await.map_err(|err| {
             tracing::warn!("Failed to subscribe to blocks: {err:#}");
-            crate::Error::internal().context(format!("Failed to subscribe using ws: {err}"))
+            Error::internal().context(format!("Failed to subscribe using ws: {err}"))
         })?;
         tracing::info!(%url, "Successfully connected to WebSocket provider and subscribed to blocks");
 
         let retry_delay = self.options.l1_retry_delay;
         let provider = self.provider.clone();
+        let stake_table_address = self.options.stake_table_address;
+        let reward_contract_address = self.options.reward_contract_address;
 
         let provider_for_fetch = provider.clone();
         let block_stream = block_stream.into_stream();
@@ -140,8 +143,14 @@ impl RpcStreamBuilder {
         .then(move |head| {
             let provider = provider_for_fetch.clone();
             async move {
-                let finalized = fetch_finalized(&provider, retry_delay).await;
-                block_to_input(head, finalized)
+                create_block_input(
+                    head,
+                    &provider,
+                    retry_delay,
+                    stake_table_address,
+                    reward_contract_address,
+                )
+                .await
             }
         })
         .boxed())
@@ -155,15 +164,15 @@ impl RpcStreamBuilder {
             .provider
             .watch_blocks()
             .await
-            .map_err(|err| {
-                crate::Error::internal().context(format!("Failed to watch blocks: {err}"))
-            })?
+            .map_err(|err| Error::internal().context(format!("Failed to watch blocks: {err}")))?
             .with_poll_interval(self.options.l1_polling_interval)
             .into_stream();
 
         let provider = self.provider.clone();
         let retry_delay = self.options.l1_retry_delay;
         let switch_notify = self.transport.switch_notify.clone();
+        let stake_table_address = self.options.stake_table_address;
+        let reward_contract_address = self.options.reward_contract_address;
 
         let provider_for_fetch = provider.clone();
         let poller_stream = poller.map(stream::iter).flatten();
@@ -207,8 +216,14 @@ impl RpcStreamBuilder {
         .then(move |head| {
             let provider = provider.clone();
             async move {
-                let finalized = fetch_finalized(&provider, retry_delay).await;
-                block_to_input(head, finalized)
+                create_block_input(
+                    head,
+                    &provider,
+                    retry_delay,
+                    stake_table_address,
+                    reward_contract_address,
+                )
+                .await
             }
         })
         .boxed())
@@ -260,11 +275,6 @@ impl RpcStream {
         let builder = RpcStreamBuilder::new(options)?;
         Ok(builder.build().await)
     }
-
-    /// Get the Espresso stake table genesis block.
-    pub async fn genesis(&self, _stake_table: Address) -> Result<(L1BlockId, Timestamp)> {
-        todo!()
-    }
 }
 
 impl Stream for RpcStream {
@@ -299,10 +309,37 @@ impl ResettableStream for RpcStream {
 /// Fetch finalized block with retry logic.
 async fn fetch_finalized(
     provider: &Arc<RootProvider<Ethereum>>,
+    head: &Header,
     retry_delay: Duration,
 ) -> L1BlockId {
     loop {
         match provider.get_block(BlockId::finalized()).await {
+            Ok(Some(block)) if block.number() >= head.number => {
+                // The finalized block should always trail the head. This might not be the case if
+                // we are catching up, in which case `head` might actually be an old block. In this
+                // case just use the block before head as the "latest" finalized block; since it is
+                // older than the true finalized block, it must be finalized itself.
+                tracing::info!(
+                    ?head,
+                    ?block,
+                    "head is older than finalized block, returning head's parent"
+                );
+                match provider.get_block(head.parent_hash.into()).await {
+                    Ok(Some(block)) => {
+                        return L1BlockId {
+                            number: block.header.number,
+                            hash: block.header.hash,
+                            parent: block.header.parent_hash,
+                        };
+                    }
+                    Ok(None) => {
+                        tracing::warn!("head's parent is None, will retry");
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to fetch head's parent: {err:#}");
+                    }
+                }
+            }
             Ok(Some(block)) => {
                 return L1BlockId {
                     number: block.header.number,
@@ -401,26 +438,196 @@ async fn fetch_missing_blocks(
     headers
 }
 
-/// Convert header and finalized block to BlockInput.
-fn block_to_input(head: Header, finalized: L1BlockId) -> BlockInput {
-    let block = L1BlockId {
-        number: head.number,
-        hash: head.hash,
-        parent: head.parent_hash,
-    };
+/// Try to fetch and decode events for a given header.
+/// Returns Ok(events, header) on success, Err on failure.
+async fn try_get_events_from_header(
+    provider: &RootProvider<Ethereum>,
+    header: &Header,
+    stake_table_address: Address,
+    reward_contract_address: Address,
+) -> Result<(Vec<L1Event>, Header), RpcError<TransportErrorKind>> {
+    // Check bloom filter with header
+    let has_logs = header.logs_bloom.contains_raw_log(stake_table_address, &[])
+        || header
+            .logs_bloom
+            .contains_raw_log(reward_contract_address, &[]);
+
+    if !has_logs {
+        return Ok((Vec::new(), header.clone()));
+    }
+
+    // try fetching the events with the block hash
+    let filter = Filter::new()
+        .at_block_hash(header.hash)
+        .address(vec![stake_table_address, reward_contract_address]);
+
+    let logs = provider.get_logs(&filter).await?;
+
+    // Decode events from logs
+    let mut events = Vec::new();
+    let block_number = header.number;
+
+    for log in logs {
+        // Try to decode stake table event
+        if log.address() == stake_table_address {
+            let st_event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to decode stake table event at block {block_number}, tx {:?}: {e:?}",
+                        log.transaction_hash
+                    );
+                });
+            // Try to convert to StakeTableEvent. Some events like `Upgraded`` are not relevant
+            // to the staking state and can be skipped.
+            if let Ok(event) = st_event.try_into() {
+                events.push(L1Event::StakeTable(Arc::new(event)));
+            }
+            continue;
+        }
+
+        // Try to decode reward claim event
+        if log.address() == reward_contract_address {
+            let event = RewardClaimEvents::decode_raw_log(log.topics(), &log.data().data)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to decode reward claim event at block {block_number}, tx {:?}: {e:?}",
+                     log.transaction_hash
+                    );
+                });
+            events.push(L1Event::Reward(Arc::new(event)));
+            continue;
+        }
+    }
+
+    Ok((events, header.clone()))
+}
+
+/// Fetch events from L1 for a specific block with retry logic.
+/// Returns the events and the header which may differ from input header due to reorg.
+async fn fetch_block_events(
+    provider: &RootProvider<Ethereum>,
+    header: &Header,
+    stake_table_address: Address,
+    reward_contract_address: Address,
+    retry_delay: Duration,
+) -> (Vec<L1Event>, Header) {
+    const MAX_HASH_RETRIES: u32 = 3;
+
+    // Try fetching the events with the block hash
+    for attempt in 1..=MAX_HASH_RETRIES {
+        match try_get_events_from_header(
+            provider,
+            header,
+            stake_table_address,
+            reward_contract_address,
+        )
+        .await
+        {
+            Ok((events, header)) => return (events, header),
+            Err(err) => {
+                if attempt == MAX_HASH_RETRIES {
+                    tracing::warn!(
+                        block = header.number,
+                        hash = ?header.hash,
+                        "Failed to fetch logs by hash after {MAX_HASH_RETRIES} attempts: {err}, falling back to fetch by block number"
+                    );
+                } else {
+                    sleep(retry_delay).await;
+                }
+            }
+        }
+    }
+
+    // Fall back to fetching by block number
+    let block_number = header.number;
+    loop {
+        // Refetch the header on each retry, even if get_logs() call failed,
+        // in case the RPC is still returning the old block
+        let new_header = match provider.get_block(BlockId::number(block_number)).await {
+            Ok(Some(block)) => block.header,
+            Ok(None) => {
+                tracing::warn!("Block {block_number} not found, retrying...");
+                sleep(retry_delay).await;
+                continue;
+            }
+            Err(err) => {
+                tracing::warn!("Failed to fetch block {block_number}: {err}, retrying...");
+                sleep(retry_delay).await;
+                continue;
+            }
+        };
+
+        match try_get_events_from_header(
+            provider,
+            &new_header,
+            stake_table_address,
+            reward_contract_address,
+        )
+        .await
+        {
+            Ok((events, header)) => return (events, header),
+            Err(err) => {
+                tracing::warn!(
+                    block = block_number,
+                    hash = ?new_header.hash,
+                    "Failed to fetch logs: {err}, retrying..."
+                );
+                sleep(retry_delay).await;
+            }
+        }
+    }
+}
+
+/// Fetch all necessary data and construct a BlockInput.
+async fn create_block_input(
+    head: Header,
+    provider: &Arc<RootProvider<Ethereum>>,
+    retry_delay: Duration,
+    stake_table_address: Address,
+    reward_contract_address: Address,
+) -> BlockInput {
+    // Fetch events for the block. The returned header may differ from the input header
+    // if a reorg occurred, we get the new header for the same block number
+    // with potentially different hash
+    let (events, header) = fetch_block_events(
+        provider,
+        &head,
+        stake_table_address,
+        reward_contract_address,
+        retry_delay,
+    )
+    .await;
+
+    let finalized = fetch_finalized(provider, &header, retry_delay).await;
 
     BlockInput {
-        block,
+        block: L1BlockId {
+            number: header.number,
+            hash: header.hash,
+            parent: header.parent_hash,
+        },
         finalized,
-        timestamp: head.timestamp,
-        events: vec![],
+        timestamp: header.timestamp,
+        events,
     }
 }
 #[cfg(test)]
 mod tests {
+    use crate::input::l1::testing::ContractDeployment;
+
     use super::*;
-    use alloy::node_bindings::Anvil;
+    use alloy::providers::ext::AnvilApi;
+    use alloy::sol_types::SolEvent;
+    use alloy::{node_bindings::Anvil, providers::ProviderBuilder};
+    use committable::Committable;
+    use espresso_types::v0::StakeTableState;
     use futures::StreamExt;
+    use hotshot_contract_adapter::sol_types::StakeTableV2::{
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+        ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
+    };
+    use staking_cli::demo::DelegationConfig;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_rpc_stream_with_anvil() {
@@ -429,6 +636,8 @@ mod tests {
 
         let options = L1ClientOptions {
             http_providers: vec![url],
+            stake_table_address: Address::ZERO,
+            reward_contract_address: Address::ZERO,
             ..Default::default()
         };
 
@@ -455,6 +664,8 @@ mod tests {
         let options = L1ClientOptions {
             http_providers: vec![http_url],
             l1_ws_provider: Some(vec![ws_url]),
+            stake_table_address: Address::ZERO,
+            reward_contract_address: Address::ZERO,
             ..Default::default()
         };
 
@@ -487,6 +698,8 @@ mod tests {
         let options = L1ClientOptions {
             http_providers: vec![http_url1.clone(), http_url2.clone()],
             l1_retry_delay: Duration::from_millis(100),
+            stake_table_address: Address::ZERO,
+            reward_contract_address: Address::ZERO,
             ..Default::default()
         };
 
@@ -600,6 +813,8 @@ mod tests {
 
         let options = L1ClientOptions {
             http_providers: vec![url],
+            stake_table_address: Address::ZERO,
+            reward_contract_address: Address::ZERO,
             ..Default::default()
         };
 
@@ -622,6 +837,8 @@ mod tests {
         let options = L1ClientOptions {
             http_providers: vec![http_url],
             l1_ws_provider: Some(vec![ws_url]),
+            stake_table_address: Address::ZERO,
+            reward_contract_address: Address::ZERO,
             ..Default::default()
         };
 
@@ -629,5 +846,315 @@ mod tests {
         println!("Testing WebSocket stream reset");
 
         test_reset_logic(&mut stream).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_deploy_contracts_helper() {
+        let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let rpc_url: Url = anvil.endpoint().parse().unwrap();
+
+        let deployment = ContractDeployment::deploy(rpc_url.clone())
+            .await
+            .expect("Failed to deploy contracts");
+
+        let stake_table = deployment.stake_table_addr;
+        let token = deployment.token_addr;
+        let reward_claim = deployment.reward_claim_addr;
+
+        assert_ne!(
+            stake_table,
+            Address::ZERO,
+            "Stake table address should not be zero"
+        );
+        assert_ne!(token, Address::ZERO, "Token address should not be zero");
+        assert_ne!(
+            reward_claim,
+            Address::ZERO,
+            "Reward claim address should not be zero"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_events_basic() {
+        let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let rpc_url: Url = anvil.endpoint().parse().unwrap();
+
+        let deployment = ContractDeployment::deploy(rpc_url).await.unwrap();
+
+        let validators = ContractDeployment::create_test_validators(2);
+
+        let options = L1ClientOptions {
+            http_providers: vec![deployment.rpc_url.clone()],
+            stake_table_address: deployment.stake_table_addr,
+            reward_contract_address: deployment.reward_claim_addr,
+            ..Default::default()
+        };
+
+        let mut stream = RpcStream::new(options).await.unwrap();
+
+        let _receipts = deployment
+            .register_validators(validators, DelegationConfig::VariableAmounts)
+            .await
+            .expect("Failed to register validators");
+
+        let mut found_stake_event = false;
+        'outer: for _ in 0..20 {
+            let block_input = stream.next().await.expect("Stream ended unexpectedly");
+
+            for event in &block_input.events {
+                match event {
+                    L1Event::StakeTable(_) => {
+                        found_stake_event = true;
+                        break 'outer;
+                    }
+                    L1Event::Reward(_) => {}
+                }
+            }
+        }
+
+        assert!(
+            found_stake_event,
+            "Should have found at least one stake event from validator registration"
+        );
+    }
+
+    /// Test that verifies events correctness
+    /// - Spawns a background task that performs random stake table operations (register, delegate, etc.)
+    /// - Processes 150 blocks through the RPC stream, applying events to a StakeTableState
+    /// - Stops the background task and fetches all events using a range query directly from the endpoint
+    /// - Applies the queried events to a fresh StakeTableState
+    /// - Compares the state commit of both states they must match
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_events() {
+        let anvil = Anvil::new()
+            .block_time(1)
+            .args(["--slots-in-an-epoch", "0"])
+            .spawn();
+        let rpc_url: Url = anvil.endpoint().parse().unwrap();
+
+        let deployment = ContractDeployment::deploy(rpc_url.clone()).await.unwrap();
+
+        let options = L1ClientOptions {
+            http_providers: vec![rpc_url.clone()],
+            stake_table_address: deployment.stake_table_addr,
+            reward_contract_address: deployment.reward_claim_addr,
+            ..Default::default()
+        };
+
+        // Create the rpc stream BEFORE starting the background task.
+        // because we are not handling the snapshots here so  the stream starts processing blocks
+        // and then events begin appearing in those blocks.
+        let mut stream = RpcStream::new(options.clone()).await.unwrap();
+
+        let background_task = deployment.spawn_task();
+
+        let mut stake_table_state_from_stream = StakeTableState::new();
+        let start_block = 1u64;
+        let mut end_block = start_block;
+
+        for _i in 1..=150 {
+            let block_input = stream.next().await.expect("Stream ended unexpectedly");
+            end_block = block_input.block.number;
+
+            println!("Block {}", block_input.block.number);
+
+            for event in &block_input.events {
+                match event {
+                    L1Event::StakeTable(stake_event) => {
+                        println!("Stream event: {stake_event:?}");
+                        let result =
+                            stake_table_state_from_stream.apply_event((**stake_event).clone());
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => {
+                                println!("Expected error: {e:?}");
+                            }
+                            Err(err) => {
+                                panic!("Critical stake table error: {err:?}");
+                            }
+                        }
+                    }
+                    L1Event::Reward(_) => {}
+                }
+            }
+        }
+
+        drop(background_task);
+
+        println!(
+            "Fetching events from blocks {start_block} to {end_block} directly from rpc provider"
+        );
+
+        let provider = ProviderBuilder::new().connect_http(rpc_url.clone());
+
+        let filter = Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+            ])
+            .address(deployment.stake_table_addr)
+            .from_block(start_block)
+            .to_block(end_block);
+
+        let logs = provider
+            .get_logs(&filter)
+            .await
+            .expect("Failed to fetch logs");
+
+        // Apply events from range query to a fresh state
+        let mut stake_table_state_from_provider = StakeTableState::new();
+
+        for log in logs {
+            let st_event =
+                StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).unwrap();
+            let event = st_event.try_into().unwrap();
+            let result = stake_table_state_from_provider.apply_event(event);
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    println!("Expected error: {err:?}");
+                }
+                Err(err) => {
+                    panic!("Critical err: {err:?}");
+                }
+            }
+        }
+
+        let stream_commit = stake_table_state_from_stream.commit();
+        let provider_commit = stake_table_state_from_provider.commit();
+
+        assert_eq!(stream_commit, provider_commit, "commit mismatch",);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_events_with_reset_from_genesis() {
+        let anvil = Anvil::new()
+            .block_time(1)
+            .args(["--slots-in-an-epoch", "0"])
+            .spawn();
+        let rpc_url: Url = anvil.endpoint().parse().unwrap();
+
+        let deployment = ContractDeployment::deploy(rpc_url.clone()).await.unwrap();
+        let background_task = deployment.spawn_task();
+
+        println!("Waiting for stake table events");
+        sleep(Duration::from_secs(150)).await;
+        drop(background_task);
+
+        let provider = ProviderBuilder::new().connect_http(rpc_url.clone());
+        provider.anvil_mine(Some(500), None).await.unwrap();
+
+        let options = L1ClientOptions {
+            http_providers: vec![rpc_url.clone()],
+            stake_table_address: deployment.stake_table_addr,
+            reward_contract_address: deployment.reward_claim_addr,
+            ..Default::default()
+        };
+        let mut stream = RpcStream::new(options.clone()).await.unwrap();
+
+        // Fetch genesis using load_genesis
+        let (genesis_block, _timestamp) =
+            crate::input::l1::provider::load_genesis(&provider, deployment.stake_table_addr)
+                .await
+                .unwrap();
+
+        println!(
+            "Fetched genesis block: number={}, hash={:?}",
+            genesis_block.number, genesis_block.hash
+        );
+
+        stream.reset(genesis_block.number).await;
+        println!("Reset stream to genesis, now processing all blocks");
+
+        // Process all blocks from genesis through the stream
+        let mut stake_table_state_from_stream = StakeTableState::new();
+        let start_block = genesis_block.number + 1;
+        let mut end_block = start_block;
+
+        for _i in 1..=650 {
+            let block_input = stream.next().await.expect("Stream ended unexpectedly");
+            end_block = block_input.block.number;
+
+            for event in &block_input.events {
+                match event {
+                    L1Event::StakeTable(stake_event) => {
+                        let result =
+                            stake_table_state_from_stream.apply_event((**stake_event).clone());
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => {
+                                println!("Expected error: {e:?}");
+                            }
+                            Err(err) => {
+                                panic!("Critical stake table error: {err:?}");
+                            }
+                        }
+                    }
+                    L1Event::Reward(_) => {}
+                }
+            }
+        }
+
+        println!(
+            "Fetching events from blocks {start_block} to {end_block} directly from rpc provider"
+        );
+
+        let filter = Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+            ])
+            .address(deployment.stake_table_addr)
+            .from_block(start_block)
+            .to_block(end_block);
+
+        let logs = provider
+            .get_logs(&filter)
+            .await
+            .expect("Failed to fetch logs");
+
+        // Apply events from range query to a fresh state
+        let mut stake_table_state_from_provider = StakeTableState::new();
+
+        for log in logs {
+            let st_event =
+                StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).unwrap();
+            let event = st_event.try_into().unwrap();
+            let result = stake_table_state_from_provider.apply_event(event);
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    println!("Expected error: {err:?}");
+                }
+                Err(err) => {
+                    panic!("Critical err: {err:?}");
+                }
+            }
+        }
+
+        // Compare the commits
+        let stream_commit = stake_table_state_from_stream.commit();
+        let provider_commit = stake_table_state_from_provider.commit();
+
+        assert_eq!(
+            stream_commit, provider_commit,
+            "Commit mismatch after reset from genesis"
+        );
     }
 }

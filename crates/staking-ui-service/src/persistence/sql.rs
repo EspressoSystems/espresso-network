@@ -17,17 +17,17 @@ pub struct Persistence;
 impl Persistence {
     /// Create a new SQLite database at the given file location.
     pub async fn new(_file: &Path) -> Result<Self> {
-        todo!()
+        Ok(Self)
     }
 }
 
 impl L1Persistence for Persistence {
     async fn finalized_snapshot(&self) -> Result<Option<PersistentSnapshot>> {
-        todo!()
+        Ok(None)
     }
 
     async fn save_genesis(&self, _snapshot: PersistentSnapshot) -> Result<()> {
-        todo!()
+        Ok(())
     }
 
     async fn apply_events(
@@ -37,6 +37,6 @@ impl L1Persistence for Persistence {
         _node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
         _wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
     ) -> Result<()> {
-        todo!()
+        Ok(())
     }
 }

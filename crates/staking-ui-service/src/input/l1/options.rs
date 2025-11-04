@@ -1,5 +1,8 @@
 //! Configuration options for Rpc Stream client.
 
+use crate::types::common::Address;
+use crate::{Result, input::l1::switching_transport::SwitchingTransport};
+use alloy::{providers::RootProvider, rpc::client::RpcClient};
 use clap::Parser;
 use std::{str::FromStr, time::Duration};
 use tide_disco::Url;
@@ -79,15 +82,41 @@ pub struct L1ClientOptions {
     /// Typically this would be a WebSockets endpoint while the main provider uses HTTP.
     #[clap(long, env = "ESPRESSO_STAKING_SERVICE_L1_WS", value_delimiter = ',')]
     pub l1_ws_provider: Option<Vec<Url>>,
+
+    /// Address of the stake table contract.
+    #[clap(long, env = "ESPRESSO_STAKING_SERVICE_STAKE_TABLE_ADDRESS")]
+    pub stake_table_address: Address,
+
+    /// Address of the reward contract.
+    #[clap(long, env = "ESPRESSO_STAKING_SERVICE_REWARD_CONTRACT_ADDRESS")]
+    pub reward_contract_address: Address,
 }
 
 impl Default for L1ClientOptions {
     fn default() -> Self {
-        Self::parse_from(std::iter::empty::<String>())
+        Self {
+            l1_retry_delay: Duration::from_secs(1),
+            l1_polling_interval: Duration::from_secs(7),
+            subscription_timeout: Duration::from_secs(120),
+            l1_frequent_failure_tolerance: Duration::from_secs(60),
+            l1_consecutive_failure_tolerance: 10,
+            l1_failover_revert: Duration::from_secs(1800),
+            l1_rate_limit_delay: None,
+            http_providers: Vec::new(),
+            l1_ws_provider: None,
+            stake_table_address: Address::ZERO,
+            reward_contract_address: Address::ZERO,
+        }
     }
 }
 
 impl L1ClientOptions {
+    pub fn provider(&self) -> Result<(RootProvider, SwitchingTransport)> {
+        let transport = SwitchingTransport::new(self.clone())?;
+        let rpc_client = RpcClient::new(transport.clone(), false);
+        Ok((RootProvider::new(rpc_client), transport))
+    }
+
     pub(super) fn rate_limit_delay(&self) -> Duration {
         self.l1_rate_limit_delay.unwrap_or(self.l1_retry_delay)
     }

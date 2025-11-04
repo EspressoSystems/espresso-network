@@ -21,8 +21,6 @@ use tower_service::Service;
 pub struct SwitchingTransport {
     /// The transport currently being used by the client
     current_transport: Arc<RwLock<SingleTransport>>,
-    /// The list of configured HTTP URLs to use for RPC requests
-    urls: Arc<Vec<Url>>,
     opt: Arc<L1ClientOptions>,
     pub(super) switch_notify: Arc<Notify>,
 }
@@ -50,9 +48,9 @@ pub(crate) struct SingleTransportStatus {
 
 impl SwitchingTransport {
     /// Create a new `SwitchingTransport` with the given options and URLs
-    pub fn new(opt: L1ClientOptions, urls: Vec<Url>) -> Result<Self> {
+    pub fn new(opt: L1ClientOptions) -> Result<Self> {
         // Return early if there were no URLs provided
-        let Some(first_url) = urls.first().cloned() else {
+        let Some(first_url) = opt.http_providers.first().cloned() else {
             return Err(crate::Error::internal().context("No valid URLs provided"));
         };
 
@@ -60,22 +58,28 @@ impl SwitchingTransport {
         let first_transport = Arc::new(RwLock::new(SingleTransport::new(&first_url, 0, None)));
 
         Ok(Self {
-            urls: Arc::new(urls),
             current_transport: first_transport,
             opt: Arc::new(opt),
             switch_notify: Arc::new(Notify::new()),
         })
     }
 
+    fn urls(&self) -> &[Url] {
+        &self.opt.http_providers
+    }
+
     fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
-        let next_index = next_gen % self.urls.len();
-        let url = self.urls[next_index].clone();
+        let next_index = next_gen % self.urls().len();
+        let url = self.urls()[next_index].clone();
         tracing::info!(%url, next_gen, "switch L1 transport");
 
-        let revert_at = if next_gen.is_multiple_of(self.urls.len()) {
+        let revert_at = if next_gen.is_multiple_of(self.urls().len()) {
             // If we are reverting to the primary transport, clear our scheduled revert time.
             None
-        } else if current_transport.generation.is_multiple_of(self.urls.len()) {
+        } else if current_transport
+            .generation
+            .is_multiple_of(self.urls().len())
+        {
             // If we are failing over from the primary transport, schedule a time to automatically
             // revert back.
             Some(Instant::now() + self.opt.l1_failover_revert)
@@ -207,7 +211,7 @@ impl Service<RequestPacket> for SwitchingTransport {
                 .should_revert(current_transport.revert_at);
             if should_revert {
                 // Switch to the next generation which maps to index 0.
-                let n = self_clone.urls.len();
+                let n = self_clone.urls().len();
                 // Rounding down to a multiple of n gives us the last generation of the primary transport.
                 let prev_primary_gen = (current_transport.generation / n) * n;
                 // Adding n jumps to the next generation.

@@ -4,6 +4,16 @@ version = "0.1.0"
 edition = "2024"
 license = "mit"
 
+[features]
+default = []
+testing = [
+    "espresso-contract-deployer",
+    "hotshot-state-prover",
+    "hotshot-types",
+    "rand",
+    "staking-cli",
+]
+
 [dependencies]
 alloy = { version = "1.0", features = [
     "provider-ws",
@@ -13,11 +23,15 @@ alloy = { version = "1.0", features = [
 async-lock = "3.0"
 clap = { version = "4.4", features = ["derive", "env"] }
 cld = "0.5"
+committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
+    "ark-serialize",
+] }
 derive_more = "2.0"
 espresso-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 futures = "0.3"
 hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 im = { version = "15", features = ["serde"] }
+log-panics = "2"
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 surf-disco = "0.9"
@@ -27,10 +41,22 @@ tokio = "1"
 toml = "0.8"
 tower-service = "0.3"
 tracing = "0.1"
+tracing-subscriber = "0.3"
 vbs = "0.1"
 
+# Testing dependencies
+espresso-contract-deployer = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
+hotshot-state-prover = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
+hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
+rand = { version = "0.8", optional = true }
+staking-cli = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
+
 [dev-dependencies]
+# Enable our own `testing` feature when building tests.
+staking-ui-service = { path = ".", features = ["testing"] }
+
 portpicker = "0.1"
+tempfile = "3"
 test-log = { version = "0.2", features = [
     "color",
     "trace",
