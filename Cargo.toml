@@ -44,7 +44,7 @@ members = [
     "vid",
 ]
 
-# All crates except sequencer-sqlite, to avoid turning on embedded-db feature
+# All crates except sequencer-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
@@ -69,7 +69,6 @@ default-members = [
     "crates/hotshot/utils",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
-    "espresso-dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",

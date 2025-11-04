@@ -835,10 +835,8 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     bind_version: ApiVer,
 ) -> anyhow::Result<()> {
     let mut app = tide_disco::App::<_, ServerError>::with_state(client_states);
-    let toml = toml::from_str::<toml::value::Value>(include_str!(
-        "../api/espresso_dev_node.toml"
-    ))
-    .map_err(io::Error::other)?;
+    let toml = toml::from_str::<toml::value::Value>(include_str!("../api/espresso_dev_node.toml"))
+        .map_err(io::Error::other)?;
 
     let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
     api.get("devinfo", move |_, _| {

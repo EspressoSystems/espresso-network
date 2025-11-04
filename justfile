@@ -98,6 +98,9 @@ test-slow *args:
     cargo nextest run --profile slow --locked -p slow-tests --features embedded-db --verbose {{args}}
     cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
+build-dev-node *args:
+    cargo build -p espresso-dev-node {{args}}
+
 test-dev-node *args:
     @echo 'Running espresso-dev-node integration tests'
     cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
