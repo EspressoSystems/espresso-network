@@ -82,10 +82,17 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
+# hotshot-testing: tested in hotshot.yml
+# sequencer-sqlite: no tests, enables embedded-db feature
+# slow-tests: slow and serial tests
+# espresso-dev-node: enables embedded-db
+nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node"
+
 nextest *args:
-    # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
-    # exclude slow-tests package - use `test-slow` for those
-    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --verbose {{args}}
+    cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
+
+nextest-archive archive-file *args:
+    cargo nextest archive --locked --workspace {{nextest_excludes}} --archive-file {{archive-file}} {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
