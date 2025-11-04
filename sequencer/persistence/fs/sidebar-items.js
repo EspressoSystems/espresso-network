@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["epoch_files","migrate_network_config","view_files"],"struct":["Inner","Options","Persistence"]};
+window.SIDEBAR_ITEMS = {"fn":["epoch_files","view_files"],"struct":["Inner","Options","Persistence"]};
