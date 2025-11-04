@@ -776,7 +776,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
                 let attempted_deserialization: M = match bincode::deserialize(rest) {
                     Ok(m) => m,
                     Err(e) => {
-                        bail!("Cannot deserialize message with state version: {v}. Error: {e}");
+                        bail!("Cannot deserialize message with stated version: {v}. Error: {e}");
                     },
                 };
 
@@ -805,7 +805,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         if actual_version != expected_version {
             return Err(error!(format!(
                 "Message has invalid version number for its view. Expected: {expected_version}, \
-                 Actual: {actual_version}, View: {view:?}"
+                 Actual: {actual_version}, View: {view:?}\n\n{deserialized_message:?}"
             )));
         };
 
