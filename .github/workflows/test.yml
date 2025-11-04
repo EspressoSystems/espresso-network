@@ -56,9 +56,6 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        # hotshot-testing is tested in hotshot.yml -> exclude
-        # sequencer-sqlite will enable embedded-db feature -> exclude
-        # slow-tests is tested in slowtest.yaml -> exclude
         run: just nextest-archive nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
