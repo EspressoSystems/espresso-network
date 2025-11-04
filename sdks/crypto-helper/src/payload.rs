@@ -31,7 +31,9 @@ pub struct DecodingResult {
 
 impl DecodingResult {
     fn err(msg: &str) -> DecodingResult {
-        let ptr = CString::new(msg).unwrap().into_raw();
+        let ptr = CString::new(msg)
+            .unwrap_or(c"<invalid error string>".to_owned())
+            .into_raw();
         DecodingResult {
             success: false,
             error: ptr,
