@@ -776,7 +776,7 @@
 <a href=#776 id=776 data-nosnippet>776</a>                <span class="kw">let </span>attempted_deserialization: M = <span class="kw">match </span>bincode::deserialize(rest) {
 <a href=#777 id=777 data-nosnippet>777</a>                    <span class="prelude-val">Ok</span>(m) =&gt; m,
 <a href=#778 id=778 data-nosnippet>778</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#779 id=779 data-nosnippet>779</a>                        <span class="macro">bail!</span>(<span class="string">"Cannot deserialize message with state version: {v}. Error: {e}"</span>);
+<a href=#779 id=779 data-nosnippet>779</a>                        <span class="macro">bail!</span>(<span class="string">"Cannot deserialize message with stated version: {v}. Error: {e}"</span>);
 <a href=#780 id=780 data-nosnippet>780</a>                    },
 <a href=#781 id=781 data-nosnippet>781</a>                };
 <a href=#782 id=782 data-nosnippet>782</a>
@@ -805,7 +805,7 @@
 <a href=#805 id=805 data-nosnippet>805</a>        </span><span class="kw">if </span>actual_version != expected_version {
 <a href=#806 id=806 data-nosnippet>806</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">error!</span>(<span class="macro">format!</span>(
 <a href=#807 id=807 data-nosnippet>807</a>                <span class="string">"Message has invalid version number for its view. Expected: {expected_version}, \
-<a href=#808 id=808 data-nosnippet>808</a>                 Actual: {actual_version}, View: {view:?}"
+<a href=#808 id=808 data-nosnippet>808</a>                 Actual: {actual_version}, View: {view:?}\n\n{deserialized_message:?}"
 <a href=#809 id=809 data-nosnippet>809</a>            </span>)));
 <a href=#810 id=810 data-nosnippet>810</a>        };
 <a href=#811 id=811 data-nosnippet>811</a>

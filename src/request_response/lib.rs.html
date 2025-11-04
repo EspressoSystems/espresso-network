@@ -26,7 +26,7 @@
 <a href=#26 id=26 data-nosnippet>26</a>    time::{sleep, timeout},
 <a href=#27 id=27 data-nosnippet>27</a>};
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>tracing::{debug, error, trace, warn};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>tracing::{debug, error, info, trace, warn};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>util::{BoundedVecDeque, NamedSemaphore, NamedSemaphoreError};
 <a href=#31 id=31 data-nosnippet>31</a>
 <a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// The data source trait. Is what we use to derive the response data for a request
@@ -565,7 +565,7 @@
 <a href=#565 id=565 data-nosnippet>565</a>        <span class="kw">match </span>permit {
 <a href=#566 id=566 data-nosnippet>566</a>            <span class="prelude-val">Ok</span>(<span class="kw-2">ref </span>permit) =&gt; permit,
 <a href=#567 id=567 data-nosnippet>567</a>            <span class="prelude-val">Err</span>(NamedSemaphoreError::PerKeyLimitReached) =&gt; {
-<a href=#568 id=568 data-nosnippet>568</a>                <span class="macro">warn!</span>(
+<a href=#568 id=568 data-nosnippet>568</a>                <span class="macro">info!</span>(
 <a href=#569 id=569 data-nosnippet>569</a>                    <span class="string">"Failed to process request from {}: too many requests from the same key are \
 <a href=#570 id=570 data-nosnippet>570</a>                     already being processed"</span>,
 <a href=#571 id=571 data-nosnippet>571</a>                    request_message.public_key
@@ -573,7 +573,7 @@
 <a href=#573 id=573 data-nosnippet>573</a>                <span class="kw">return</span>;
 <a href=#574 id=574 data-nosnippet>574</a>            },
 <a href=#575 id=575 data-nosnippet>575</a>            <span class="prelude-val">Err</span>(NamedSemaphoreError::GlobalLimitReached) =&gt; {
-<a href=#576 id=576 data-nosnippet>576</a>                <span class="macro">warn!</span>(
+<a href=#576 id=576 data-nosnippet>576</a>                <span class="macro">info!</span>(
 <a href=#577 id=577 data-nosnippet>577</a>                    <span class="string">"Failed to process request from {}: too many requests are already being \
 <a href=#578 id=578 data-nosnippet>578</a>                     processed"</span>,
 <a href=#579 id=579 data-nosnippet>579</a>                    request_message.public_key
