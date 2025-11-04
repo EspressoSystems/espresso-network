@@ -62,6 +62,8 @@ async fn main() -> Result<()> {
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
         public_advertise_endpoint: format!("127.0.0.1:{broker_public_port}"),
         public_bind_endpoint: format!("127.0.0.1:{broker_public_port}"),
+        public2_advertise_endpoint: format!("127.0.0.1:{broker_public_port}"),
+        public2_bind_endpoint: format!("127.0.0.1:{broker_public_port}"),
         private_advertise_endpoint: format!("127.0.0.1:{broker_private_port}"),
         private_bind_endpoint: format!("127.0.0.1:{broker_private_port}"),
 
@@ -83,6 +85,7 @@ async fn main() -> Result<()> {
     // Configure the marshal
     let marshal_config = MarshalConfig {
         bind_endpoint: format!("127.0.0.1:{}", args.port),
+        bind_endpoint_2: format!("127.0.0.1:{}", args.port),
         metrics_bind_endpoint: None,
         discovery_endpoint: discovery_endpoint.clone(),
         ca_cert_path: None,

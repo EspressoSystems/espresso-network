@@ -358,7 +358,9 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             // Configure the broker
             let config: BrokerConfig<TestingDef<TYPES::SignatureKey>> = BrokerConfig {
                 public_advertise_endpoint: public_address.clone(),
-                public_bind_endpoint: public_address,
+                public_bind_endpoint: public_address.clone(),
+                public2_advertise_endpoint: public_address.clone(),
+                public2_bind_endpoint: public_address,
                 private_advertise_endpoint: private_address.clone(),
                 private_bind_endpoint: private_address,
                 metrics_bind_endpoint: None,
@@ -402,6 +404,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
         let marshal_endpoint = format!("127.0.0.1:{marshal_port}");
         let marshal_config = MarshalConfig {
             bind_endpoint: marshal_endpoint.clone(),
+            bind_endpoint_2: marshal_endpoint.clone(),
             discovery_endpoint,
             metrics_bind_endpoint: None,
             ca_cert_path: None,
