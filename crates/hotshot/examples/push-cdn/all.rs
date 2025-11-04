@@ -84,7 +84,9 @@ async fn main() {
             cdn_broker::Config {
                 discovery_endpoint: discovery_endpoint.clone(),
                 public_advertise_endpoint: public_address.clone(),
-                public_bind_endpoint: public_address,
+                public_bind_endpoint: public_address.clone(),
+                public2_advertise_endpoint: public_address.clone(),
+                public2_bind_endpoint: public_address,
                 private_advertise_endpoint: private_address.clone(),
                 private_bind_endpoint: private_address,
 
@@ -123,6 +125,7 @@ async fn main() {
     // Configure the marshal
     let marshal_config = cdn_marshal::Config {
         bind_endpoint: marshal_endpoint.clone(),
+        bind_endpoint_2: marshal_endpoint.clone(),
         discovery_endpoint,
         metrics_bind_endpoint: None,
         ca_cert_path: None,

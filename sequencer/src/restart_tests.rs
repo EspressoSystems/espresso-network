@@ -1179,6 +1179,8 @@ async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
         public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
         public_bind_endpoint: format!("127.0.0.1:{public_port}"),
+        public2_advertise_endpoint: format!("127.0.0.1:{public_port}"),
+        public2_bind_endpoint: format!("127.0.0.1:{public_port}"),
         private_advertise_endpoint: format!("127.0.0.1:{private_port}"),
         private_bind_endpoint: format!("127.0.0.1:{private_port}"),
 
@@ -1208,6 +1210,7 @@ async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
 async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
     let marshal_config = MarshalConfig {
         bind_endpoint: format!("0.0.0.0:{port}"),
+        bind_endpoint_2: format!("0.0.0.0:{port}"),
         metrics_bind_endpoint: None,
         discovery_endpoint: dir.display().to_string(),
         ca_cert_path: None,

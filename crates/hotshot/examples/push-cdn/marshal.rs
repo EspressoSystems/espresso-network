@@ -29,6 +29,10 @@ struct Args {
     #[arg(short, long, default_value_t = 1737)]
     bind_port: u16,
 
+    /// The second port to bind to for connections (from users)
+    #[arg(short, long, default_value_t = 1837)]
+    bind_port_2: u16,
+
     /// The endpoint to bind to for externalizing metrics (in `IP:port` form). If not provided,
     /// metrics are not exposed.
     #[arg(short, long)]
@@ -73,6 +77,7 @@ async fn main() -> Result<()> {
     let config = Config {
         discovery_endpoint: args.discovery_endpoint,
         bind_endpoint: format!("0.0.0.0:{}", args.bind_port),
+        bind_endpoint_2: format!("0.0.0.0:{}", args.bind_port_2),
         metrics_bind_endpoint: args.metrics_bind_endpoint,
         ca_cert_path: args.ca_cert_path,
         ca_key_path: args.ca_key_path,
