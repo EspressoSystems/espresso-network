@@ -176,6 +176,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                     break;
                 },
                 Ok(Err(err)) => {
+                    tracing::debug!(id, ?score, peer = %client.url, "error from peer: {err:#}");
                     logs.push(format!(
                         "Error from peer {} with id {id} and score {score:?}: {err:#}",
                         client.url
@@ -183,6 +184,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                     requests.insert(id, false);
                 },
                 Err(_) => {
+                    tracing::debug!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
                     logs.push(format!(
                         "Error from peer {} with id {id} and score {score:?}: request timed out",
                         client.url

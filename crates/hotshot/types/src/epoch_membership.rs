@@ -320,8 +320,7 @@ where
             },
             Err(err) => {
                 tracing::warn!(
-                    "DRB result for epoch {} missing from membership. Beginning catchup to \
-                     recalculate it. Error: {}",
+                    "Recalculating missing DRB result for epoch {}. Catchup failed with error: {}",
                     epoch,
                     err
                 );
