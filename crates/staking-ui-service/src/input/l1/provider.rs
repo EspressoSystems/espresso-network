@@ -2,7 +2,8 @@
 
 use crate::{
     Error, Result,
-    types::common::{Address, L1BlockId, Timestamp},
+    input::l1::L1BlockSnapshot,
+    types::common::{Address, L1BlockId},
 };
 use alloy::{eips::BlockId, providers::Provider};
 use hotshot_contract_adapter::sol_types::StakeTableV2;
@@ -11,7 +12,7 @@ use hotshot_contract_adapter::sol_types::StakeTableV2;
 pub async fn load_genesis(
     provider: &impl Provider,
     stake_table: Address,
-) -> Result<(L1BlockId, Timestamp)> {
+) -> Result<L1BlockSnapshot> {
     let stake_table_contract = StakeTableV2::new(stake_table, provider);
 
     // Fetch the finalized block first.
@@ -55,7 +56,7 @@ pub async fn load_genesis(
         })?;
 
     // Fetch the exitEscrowPeriod at the initialized block
-    let _exit_escrow_period = stake_table_contract
+    let exit_escrow_period = stake_table_contract
         .exitEscrowPeriod()
         .block(BlockId::number(initialized_at_block))
         .call()
@@ -65,13 +66,17 @@ pub async fn load_genesis(
         })?
         .to::<u64>();
 
-    let l1_block_id = L1BlockId {
+    let id = L1BlockId {
         number: initialized_at_block,
         hash: block.header.hash,
         parent: block.header.parent_hash,
     };
 
-    Ok((l1_block_id, block.header.timestamp))
+    Ok(L1BlockSnapshot {
+        id,
+        timestamp: block.header.timestamp,
+        exit_escrow_period,
+    })
 }
 
 #[cfg(test)]
@@ -79,7 +84,9 @@ mod test {
     use alloy::{
         node_bindings::Anvil,
         providers::{ProviderBuilder, ext::AnvilApi},
+        signers::local::MnemonicBuilder,
     };
+    use staking_cli::DEV_MNEMONIC;
     use tide_disco::Url;
 
     use crate::input::l1::testing::ContractDeployment;
@@ -99,8 +106,53 @@ mod test {
 
         provider.anvil_mine(Some(50), None).await.unwrap();
 
-        let (block_id, _timestamp) = load_genesis(&provider, stake_table).await.unwrap();
+        let block = load_genesis(&provider, stake_table).await.unwrap();
 
-        assert!(block_id.number > 0, "Block number should be greater than 0");
+        assert!(block.number() > 0, "Block number should be greater than 0");
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_genesis_exit_escrow_period() {
+        let anvil = Anvil::new()
+            .args(["--slots-in-an-epoch", "0"])
+            .block_time(1)
+            .spawn();
+        let deployment = ContractDeployment::deploy(anvil.endpoint_url())
+            .await
+            .unwrap();
+        let provider = ProviderBuilder::new()
+            .wallet(
+                MnemonicBuilder::english()
+                    .phrase(DEV_MNEMONIC)
+                    .build()
+                    .unwrap(),
+            )
+            .connect_http(anvil.endpoint_url());
+
+        let stake_table_address = deployment.stake_table_addr;
+        let contract = StakeTableV2::new(stake_table_address, &provider);
+
+        // Change the exit escrow period, to verify that the genesis snapshot loads the exit escrow
+        // period from the time when the contract was initialized, not what it is now.
+        let genesis_exit_escrow_period: u64 = contract
+            .exitEscrowPeriod()
+            .call()
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let receipt = contract
+            // Add one day
+            .updateExitEscrowPeriod(genesis_exit_escrow_period + 86_400)
+            .send()
+            .await
+            .unwrap()
+            .get_receipt()
+            .await
+            .unwrap();
+        assert!(receipt.status());
+
+        let genesis = load_genesis(&provider, *contract.address()).await.unwrap();
+        assert_eq!(genesis.exit_escrow_period, genesis_exit_escrow_period);
     }
 }

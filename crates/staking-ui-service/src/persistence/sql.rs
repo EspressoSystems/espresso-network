@@ -2,12 +2,8 @@
 
 use crate::{
     Result,
-    input::l1::{L1Persistence, PersistentSnapshot},
-    types::{
-        common::{Address, L1BlockId, Timestamp},
-        global::FullNodeSetDiff,
-        wallet::WalletDiff,
-    },
+    input::l1::{L1BlockSnapshot, L1Persistence, Snapshot},
+    types::{common::Address, global::FullNodeSetDiff, wallet::WalletDiff},
 };
 use std::path::Path;
 
@@ -22,18 +18,17 @@ impl Persistence {
 }
 
 impl L1Persistence for Persistence {
-    async fn finalized_snapshot(&self) -> Result<Option<PersistentSnapshot>> {
+    async fn finalized_snapshot(&self) -> Result<Option<Snapshot>> {
         Ok(None)
     }
 
-    async fn save_genesis(&self, _snapshot: PersistentSnapshot) -> Result<()> {
+    async fn save_genesis(&self, _snapshot: Snapshot) -> Result<()> {
         Ok(())
     }
 
     async fn apply_events(
         &self,
-        _block: L1BlockId,
-        _timestamp: Timestamp,
+        _block: L1BlockSnapshot,
         _node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
         _wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
     ) -> Result<()> {

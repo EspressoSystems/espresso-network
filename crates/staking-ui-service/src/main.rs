@@ -6,7 +6,7 @@ use futures::{FutureExt, future::try_join_all};
 use log_panics::BacktraceMode;
 use staking_ui_service::{
     Result, app,
-    input::l1::{self, PersistentSnapshot, RpcStream, options::L1ClientOptions},
+    input::l1::{self, RpcStream, Snapshot, options::L1ClientOptions},
     persistence::sql,
 };
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
@@ -60,9 +60,9 @@ impl Options {
 
         // Get genesis state.
         let l1_provider = self.l1_options.provider()?.0;
-        let (id, timestamp) =
+        let genesis_block =
             l1::provider::load_genesis(&l1_provider, self.l1_options.stake_table_address).await?;
-        let genesis = PersistentSnapshot::genesis(id, timestamp);
+        let genesis = Snapshot::empty(genesis_block);
 
         let l1_input = RpcStream::new(self.l1_options).await?;
         let storage = sql::Persistence::new(&self.storage).await?;

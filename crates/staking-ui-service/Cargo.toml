@@ -9,7 +9,7 @@ default = []
 testing = [
     "espresso-contract-deployer",
     "hotshot-state-prover",
-    "hotshot-types",
+    "jf-signature",
     "rand",
     "staking-cli",
 ]
@@ -31,6 +31,7 @@ derive_more = "2.0"
 espresso-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 futures = "0.3"
 hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-network.git" }
+hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 im = { version = "15", features = ["serde"] }
 log-panics = "2"
 parking_lot = "0.12"
@@ -48,7 +49,9 @@ vbs = "0.1"
 # Testing dependencies
 espresso-contract-deployer = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
 hotshot-state-prover = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
-hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
+jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.4.0", features = [
+    "std",
+], optional = true }
 rand = { version = "0.8", optional = true }
 staking-cli = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
 

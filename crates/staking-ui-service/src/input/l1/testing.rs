@@ -1,6 +1,7 @@
 #![cfg(any(test, feature = "testing"))]
 
 use std::{
+    collections::HashSet,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -8,10 +9,11 @@ use std::{
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{U256, keccak256},
+    primitives::{FixedBytes, U256, keccak256},
     providers::{ProviderBuilder, WalletProvider},
     rpc::types::TransactionReceipt,
     signers::local::PrivateKeySigner,
+    sol_types::SolValue,
 };
 use async_lock::RwLockReadGuard;
 use espresso_contract_deployer::{
@@ -19,12 +21,23 @@ use espresso_contract_deployer::{
     network_config::light_client_genesis_from_stake_table,
 };
 use hotshot_contract_adapter::{
-    sol_types::{G1PointSol, StakeTableV2},
+    sol_types::{
+        G1PointSol,
+        StakeTableV2::{
+            self, ExitEscrowPeriodUpdated, ValidatorExit, ValidatorRegistered,
+            ValidatorRegisteredV2,
+        },
+    },
     stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
 };
 use hotshot_state_prover::v1::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
-use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use hotshot_types::{
+    light_client::{StateKeyPair, StateVerKey, hash_bytes_to_field},
+    signature_key::BLSKeyPair,
+    traits::signature_key::{SignatureKey, StateSignatureKey},
+};
+use jf_signature::{SignatureScheme, schnorr::SchnorrSignatureScheme};
+use rand::{CryptoRng, Rng, RngCore, SeedableRng, rngs::StdRng, seq::IteratorRandom};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tagged_base64::TaggedBase64;
 use tide_disco::{Error as _, StatusCode, Url};
@@ -37,38 +50,35 @@ use super::*;
 /// Easy-setup storage that just uses memory.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryStorage {
-    snapshot: Arc<RwLock<Option<PersistentSnapshot>>>,
+    snapshot: Arc<RwLock<Option<Snapshot>>>,
 }
 
 impl L1Persistence for MemoryStorage {
-    async fn finalized_snapshot(&self) -> Result<Option<PersistentSnapshot>> {
+    async fn finalized_snapshot(&self) -> Result<Option<Snapshot>> {
         Ok(self.snapshot.read().await.clone())
     }
 
-    async fn save_genesis(&self, snapshot: PersistentSnapshot) -> Result<()> {
+    async fn save_genesis(&self, snapshot: Snapshot) -> Result<()> {
         *self.snapshot.write().await = Some(snapshot);
         Ok(())
     }
 
     async fn apply_events(
         &self,
-        block: L1BlockId,
-        timestamp: Timestamp,
+        block: L1BlockSnapshot,
         node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
         wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
     ) -> Result<()> {
         let mut lock = self.snapshot.write().await;
-        let snapshot = lock.get_or_insert(PersistentSnapshot::genesis(block_id(0), 0));
+        let snapshot = lock.get_or_insert(Snapshot::empty(block_snapshot(0)));
 
         for diff in node_set_diff {
-            apply_node_set_diff(&mut snapshot.node_set, &diff);
+            snapshot.node_set.apply(&diff);
         }
         for (address, diff) in wallets_diff {
-            apply_wallet_diff(&mut snapshot.wallets, address, &diff);
+            snapshot.wallets.apply(address, &diff);
         }
         snapshot.block = block;
-        snapshot.timestamp = timestamp;
-
         Ok(())
     }
 }
@@ -78,14 +88,14 @@ impl L1Persistence for MemoryStorage {
 pub struct FailStorage;
 
 impl L1Persistence for FailStorage {
-    async fn finalized_snapshot(&self) -> Result<Option<PersistentSnapshot>> {
+    async fn finalized_snapshot(&self) -> Result<Option<Snapshot>> {
         Err(Error::catch_all(
             StatusCode::INTERNAL_SERVER_ERROR,
             "FailStorage".into(),
         ))
     }
 
-    async fn save_genesis(&self, _snapshot: PersistentSnapshot) -> Result<()> {
+    async fn save_genesis(&self, _snapshot: Snapshot) -> Result<()> {
         Err(Error::catch_all(
             StatusCode::INTERNAL_SERVER_ERROR,
             "FailStorage".into(),
@@ -94,8 +104,7 @@ impl L1Persistence for FailStorage {
 
     async fn apply_events(
         &self,
-        _block: L1BlockId,
-        _timestamp: Timestamp,
+        _block: L1BlockSnapshot,
         _node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
         _wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
     ) -> Result<()> {
@@ -198,6 +207,15 @@ pub fn block_id(number: u64) -> L1BlockId {
     }
 }
 
+/// Generate a block snapshot for testing.
+pub fn block_snapshot(number: u64) -> L1BlockSnapshot {
+    L1BlockSnapshot {
+        id: block_id(number),
+        timestamp: 12 * number,
+        exit_escrow_period: 3600,
+    }
+}
+
 /// Generate an arbitrary node for testing.
 pub fn make_node(i: usize) -> NodeSetEntry {
     let address = Address::random();
@@ -210,32 +228,208 @@ pub fn make_node(i: usize) -> NodeSetEntry {
     }
 }
 
-/// Generate an empty wallet snapshot for testing.
-pub fn empty_wallet(l1_block: L1BlockInfo) -> WalletSnapshot {
-    WalletSnapshot {
-        l1_block,
-        nodes: Default::default(),
-        pending_exits: Default::default(),
-        pending_undelegations: Default::default(),
-        claimed_rewards: Default::default(),
+/// Generate random L1 events for testing.
+///
+/// The generation process is stateful, which makes it possible to generate random events such that
+/// every generated event is "valid" given the events that came before it (e.g. no duplicate
+/// registrations, no delegations to an unregistered validator, etc.).
+#[derive(Debug)]
+pub struct EventGenerator {
+    nodes: HashSet<Address>,
+    rng: StdRng,
+    stake_table_only: bool,
+}
+
+impl Default for EventGenerator {
+    fn default() -> Self {
+        Self {
+            nodes: Default::default(),
+            rng: StdRng::from_seed(Default::default()),
+            stake_table_only: false,
+        }
     }
 }
 
-/// Generate a random L1 input for testing.
-pub fn random_block_input(number: u64) -> BlockInput {
-    // TODO populate random events
-    BlockInput::empty(number)
+impl EventGenerator {
+    /// Generate only events which are relevant to [`StakeTableState`].
+    pub fn stake_table_events() -> Self {
+        Self {
+            stake_table_only: true,
+            ..Default::default()
+        }
+    }
+}
+
+impl Iterator for EventGenerator {
+    type Item = L1Event;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Generate a random event until we get one that is possible given the current state.
+        loop {
+            // Assign each type of event a numeric code. We put stake table events first so we can
+            // easily choose to generate only stake table events.
+            const REGISTER: usize = 0;
+            const REGISTER_V2: usize = 1;
+            const DEREGISTER: usize = 2;
+
+            const MAX_STAKE_TABLE_EVENT_TYPE: usize = 3;
+
+            // Other contract events that the UI service cares about but consensus does not.
+            const EXIT_ESCROW_PERIOD_UPDATED: usize = 3;
+
+            const MAX_EVENT_TYPE: usize = 4;
+
+            // Generate the code for a random event type.
+            let max = if self.stake_table_only {
+                MAX_STAKE_TABLE_EVENT_TYPE
+            } else {
+                MAX_EVENT_TYPE
+            };
+            let event_type = self.rng.gen_range(0..max);
+
+            let event = match event_type {
+                t @ (REGISTER | REGISTER_V2) => {
+                    let event = validator_registered_event(&mut self.rng);
+
+                    // Insert the node so we can reference it in later events (like delegations).
+                    // This insert should always return `true` because with a random address, it is
+                    // vanishingly unlikely we have generated this same address before.
+                    assert!(self.nodes.insert(event.account));
+
+                    if t == REGISTER {
+                        StakeTableV2Events::ValidatorRegistered(ValidatorRegistered {
+                            account: event.account,
+                            blsVk: event.blsVK,
+                            schnorrVk: event.schnorrVK,
+                            commission: event.commission,
+                        })
+                        .into()
+                    } else {
+                        StakeTableV2Events::ValidatorRegisteredV2(event).into()
+                    }
+                }
+
+                DEREGISTER => {
+                    // Choose a random node to deregister.
+                    let Some(&node) = self.nodes.iter().choose(&mut self.rng) else {
+                        // If there are none try again.
+                        continue;
+                    };
+                    self.nodes.remove(&node);
+                    StakeTableV2Events::ValidatorExit(ValidatorExit { validator: node }).into()
+                }
+
+                EXIT_ESCROW_PERIOD_UPDATED => {
+                    // Set the exit escrow period to something random.
+                    StakeTableV2Events::ExitEscrowPeriodUpdated(ExitEscrowPeriodUpdated {
+                        newExitEscrowPeriod: self.rng.next_u64(),
+                    })
+                    .into()
+                }
+
+                _ => unreachable!(),
+            };
+            return Some(event);
+        }
+    }
+}
+
+/// Generate a valid [`ValidatorRegisteredV2`] event.
+pub fn validator_registered_event(mut rng: impl RngCore + CryptoRng) -> ValidatorRegisteredV2 {
+    let mut address_bytes = FixedBytes::<32>::default();
+    rng.fill_bytes(address_bytes.as_mut_slice());
+    let account = Address::from_word(address_bytes);
+
+    let index = rng.next_u64();
+    let (bls_vk, bls_sk) = PubKey::generated_from_seed_indexed(Default::default(), index);
+    let (schnorr_vk, schnorr_sk) =
+        StateVerKey::generated_from_seed_indexed(Default::default(), index);
+
+    let auth_msg = account.abi_encode();
+    let bls_sig = PubKey::sign(&bls_sk, &auth_msg).unwrap();
+    let schnorr_sig = SchnorrSignatureScheme::sign(
+        &(),
+        &schnorr_sk,
+        [hash_bytes_to_field(&auth_msg).unwrap()],
+        &mut rng,
+    )
+    .unwrap();
+
+    let commission = rng.gen_range(0..COMMISSION_BASIS_POINTS);
+
+    ValidatorRegisteredV2 {
+        account,
+        blsVK: bls_vk.into(),
+        schnorrVK: schnorr_vk.into(),
+        commission,
+        blsSig: G1PointSol::from(bls_sig).into(),
+        schnorrSig: StateSignatureSol::from(schnorr_sig).into(),
+    }
+}
+
+/// Generate random L1 inputs for testing.
+///
+/// The generation process is stateful, which makes it possible to generate random events in a
+/// sequence of L1 blocks such that every generated event is "valid" given the events that came
+/// before it (e.g. no duplicate registrations, no delegations to an unregistered validator, etc.).
+#[derive(derive_more::Debug)]
+pub struct InputGenerator {
+    #[debug("Iterator")]
+    events: Box<dyn Iterator<Item = L1Event>>,
+    next_block: u64,
+    rng: StdRng,
+}
+
+impl Default for InputGenerator {
+    fn default() -> Self {
+        Self::from_events(EventGenerator::default())
+    }
+}
+
+impl InputGenerator {
+    /// Generate inputs from a given sequence of events.
+    pub fn from_events(events: impl IntoIterator<Item = L1Event> + 'static) -> Self {
+        Self {
+            events: Box::new(events.into_iter()),
+            next_block: 0,
+            rng: StdRng::from_seed(Default::default()),
+        }
+    }
+}
+
+impl Iterator for InputGenerator {
+    type Item = BlockInput;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Select a realistic random number of events to include in this block.
+        let n_events = self.rng.gen_range(0..5);
+
+        // Generate block.
+        let mut input = BlockInput::empty(self.next_block);
+        for _ in 0..n_events {
+            input.events.push(self.events.next()?);
+        }
+        self.next_block += 1;
+        Some(input)
+    }
 }
 
 impl BlockInput {
     /// Create a [`BlockInput`] with no events, just L1 block information.
     pub fn empty(number: u64) -> BlockInput {
+        let block = block_snapshot(number);
         Self {
-            block: block_id(number),
+            block: block.id(),
+            timestamp: block.timestamp(),
             finalized: block_id(0),
-            timestamp: 12 * number,
             events: vec![],
         }
+    }
+
+    /// A [`BlockInput`] like `self` but with `event` added.
+    pub fn with_event(mut self, event: impl Into<L1Event>) -> Self {
+        self.events.push(event.into());
+        self
     }
 }
 
@@ -244,7 +438,7 @@ impl<S: Default> super::State<S> {
         let blocks = (start..end).map(BlockData::empty).collect::<Vec<_>>();
         let blocks_by_hash = blocks
             .iter()
-            .map(|block| (block.block.hash, block.block.number))
+            .map(|block| (block.block().hash(), block.block().number()))
             .collect();
         Self {
             blocks,
@@ -256,22 +450,10 @@ impl<S: Default> super::State<S> {
 
 impl BlockData {
     /// Generate a test L1 block with no staking-related data.
-    pub(super) fn empty(number: u64) -> Self {
-        let block = block_id(number);
-        let timestamp = 12 * number;
+    pub fn empty(number: u64) -> Self {
         Self {
-            block,
-            timestamp,
-            node_set: FullNodeSetSnapshot {
-                nodes: Default::default(),
-                l1_block: L1BlockInfo {
-                    number,
-                    hash: block.hash,
-                    timestamp,
-                },
-            },
+            state: Snapshot::empty(block_snapshot(number)),
             node_set_update: Some(Default::default()),
-            wallets: Default::default(),
             wallets_update: Some(Default::default()),
         }
     }

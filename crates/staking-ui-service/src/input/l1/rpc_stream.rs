@@ -470,18 +470,14 @@ async fn try_get_events_from_header(
     for log in logs {
         // Try to decode stake table event
         if log.address() == stake_table_address {
-            let st_event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)
+            let event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)
                 .unwrap_or_else(|e| {
                     panic!(
                         "failed to decode stake table event at block {block_number}, tx {:?}: {e:?}",
                         log.transaction_hash
                     );
                 });
-            // Try to convert to StakeTableEvent. Some events like `Upgraded`` are not relevant
-            // to the staking state and can be skipped.
-            if let Ok(event) = st_event.try_into() {
-                events.push(L1Event::StakeTable(Arc::new(event)));
-            }
+            events.push(L1Event::StakeTable(Arc::new(event)));
             continue;
         }
 
@@ -965,8 +961,8 @@ mod tests {
                 match event {
                     L1Event::StakeTable(stake_event) => {
                         println!("Stream event: {stake_event:?}");
-                        let result =
-                            stake_table_state_from_stream.apply_event((**stake_event).clone());
+                        let result = stake_table_state_from_stream
+                            .apply_event((**stake_event).clone().try_into().unwrap());
                         match result {
                             Ok(Ok(())) => {}
                             Ok(Err(e)) => {
@@ -1063,22 +1059,23 @@ mod tests {
         let mut stream = RpcStream::new(options.clone()).await.unwrap();
 
         // Fetch genesis using load_genesis
-        let (genesis_block, _timestamp) =
+        let genesis =
             crate::input::l1::provider::load_genesis(&provider, deployment.stake_table_addr)
                 .await
                 .unwrap();
 
         println!(
             "Fetched genesis block: number={}, hash={:?}",
-            genesis_block.number, genesis_block.hash
+            genesis.number(),
+            genesis.hash()
         );
 
-        stream.reset(genesis_block.number).await;
+        stream.reset(genesis.number()).await;
         println!("Reset stream to genesis, now processing all blocks");
 
         // Process all blocks from genesis through the stream
         let mut stake_table_state_from_stream = StakeTableState::new();
-        let start_block = genesis_block.number + 1;
+        let start_block = genesis.number() + 1;
         let mut end_block = start_block;
 
         for _i in 1..=650 {
@@ -1087,17 +1084,21 @@ mod tests {
 
             for event in &block_input.events {
                 match event {
-                    L1Event::StakeTable(stake_event) => {
-                        let result =
-                            stake_table_state_from_stream.apply_event((**stake_event).clone());
-                        match result {
-                            Ok(Ok(())) => {}
-                            Ok(Err(e)) => {
-                                println!("Expected error: {e:?}");
+                    L1Event::StakeTable(event) => {
+                        if let Ok(stake_table_event) = (**event).clone().try_into() {
+                            let result =
+                                stake_table_state_from_stream.apply_event(stake_table_event);
+                            match result {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    println!("Expected error: {e:?}");
+                                }
+                                Err(err) => {
+                                    panic!("Critical stake table error: {err:?}");
+                                }
                             }
-                            Err(err) => {
-                                panic!("Critical stake table error: {err:?}");
-                            }
+                        } else {
+                            tracing::info!(?event, "skipping irrelevant contract event");
                         }
                     }
                     L1Event::Reward(_) => {}

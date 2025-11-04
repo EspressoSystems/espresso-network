@@ -7,13 +7,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct WalletSnapshot {
     /// Nodes that this user is delegating to.
-    pub nodes: im::Vector<Delegation>,
+    pub nodes: Vec<Delegation>,
 
     /// Stake that has been undelegated but not yet withdrawn.
-    pub pending_undelegations: im::Vector<PendingWithdrawal>,
+    pub pending_undelegations: Vec<PendingWithdrawal>,
 
     /// Stake previously delegated to nodes that have exited.
-    pub pending_exits: im::Vector<PendingWithdrawal>,
+    pub pending_exits: Vec<PendingWithdrawal>,
 
     /// Total amount of rewards ever claimed from the contract.
     pub claimed_rewards: ESPTokenAmount,

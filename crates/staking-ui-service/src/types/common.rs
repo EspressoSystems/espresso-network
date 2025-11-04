@@ -69,9 +69,6 @@ pub struct NodeExit {
     /// The exiting node.
     pub address: Address,
 
-    /// The Espresso epoch and block at which this exit will be realized.
-    pub exit_epoch_and_block: EpochAndBlock,
-
     /// The timestamp for the exit escrow delay time.
     pub exit_time: Timestamp,
 }
@@ -123,9 +120,6 @@ pub struct Delegation {
 
     /// Amount of stake delegated by this user to this node.
     pub amount: ESPTokenAmount,
-
-    /// The estimated time that this delegation will start accumulating awards.
-    pub effective: EpochAndBlock,
 }
 
 /// A withdrawal of stake that is waiting to be claimed.
