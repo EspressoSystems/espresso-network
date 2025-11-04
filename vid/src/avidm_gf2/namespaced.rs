@@ -30,6 +30,13 @@ pub struct NsAvidmGf2Common {
     pub ns_lens: Vec<usize>,
 }
 
+impl NsAvidmGf2Common {
+    /// Return the total payload byte length
+    pub fn payload_byte_len(&self) -> usize {
+        self.ns_lens.iter().sum()
+    }
+}
+
 /// Namespaced share for each storage node, contains one [`AvidmGf2Share`] for each namespace.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq, Default)]
 pub struct NsAvidmGf2Share(pub(crate) Vec<AvidmGf2Share>);
