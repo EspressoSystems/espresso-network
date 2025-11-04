@@ -9986,6 +9986,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "async-lock 3.4.1",
+ "bitvec",
  "clap 4.5.51",
  "cld",
  "committable",

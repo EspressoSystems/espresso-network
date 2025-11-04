@@ -105,8 +105,8 @@ pub struct ActiveNodeSetEntry {
 /// A general participation percentage change for a node.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ParticipationChange {
-    /// The address of the node whose participation percentage is changing.
-    pub address: Address,
+    /// The index in the active node list of the node whose participation percentage is changing.
+    pub node: usize,
 
     /// The new participation ratio.
     pub ratio: Ratio,

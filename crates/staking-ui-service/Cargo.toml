@@ -21,6 +21,7 @@ alloy = { version = "1.0", features = [
     "node-bindings",
 ] }
 async-lock = "3.0"
+bitvec = "1"
 clap = { version = "4.4", features = ["derive", "env"] }
 cld = "0.5"
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
