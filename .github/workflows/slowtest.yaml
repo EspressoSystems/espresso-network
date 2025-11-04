@@ -25,8 +25,24 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  slow-tests-sqlite:
+  slow-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: slow-tests-sqlite
+            build-cmd: just test-slow --features embedded-db --no-run
+            run-cmd: just test-slow --features embedded-db --no-fail-fast
+          - name: slow-tests-postgres
+            build-cmd: just test-slow --no-run
+            run-cmd: just test-slow --no-fail-fast
+          - name: espresso-dev-node-tests
+            build-cmd: just test-dev-node --no-run
+            run-cmd: just test-dev-node --no-fail-fast
+
+    name: ${{ matrix.name }}
+
     steps:
       - name: Collect Workflow Telemetry
         uses: catchpoint/workflow-telemetry-action@v2
@@ -49,7 +65,7 @@ jobs:
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
-      # - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -57,53 +73,10 @@ jobs:
       # NOTE: no rust cache, these tests are very slow anyway
 
       - name: Build slow test
-        run: just nextest --features embedded-db --no-run
+        run: ${{ matrix.build-cmd }}
 
       - name: Run slow test
-        run: just nextest --features embedded-db --no-fail-fast
-        timeout-minutes: 90
-
-      - name: Show available disk space
-        if: always()
-        run: |
-          df -h
-
-  slow-tests-postgres:
-    runs-on: ubuntu-latest
-    steps:
-
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
-
-      - name: free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: false
-          swap-storage: false
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-
-      - uses: taiki-e/install-action@just
-      - uses: taiki-e/install-action@nextest
-      # - uses: rui314/setup-mold@v1
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      # NOTE: no rust cache, these tests are very slow anyway
-
-      - name: Build slow test
-        run: just nextest --no-run
-
-      - name: Run slow test
-        run: just nextest --no-fail-fast
+        run: ${{ matrix.run-cmd }}
         timeout-minutes: 90
 
       - name: Show available disk space

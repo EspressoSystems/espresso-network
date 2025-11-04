@@ -84,7 +84,8 @@ anvil *args:
 
 nextest *args:
     # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
-    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --verbose {{args}}
+    # exclude slow-tests package - use `test-slow` for those
+    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --verbose {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
@@ -94,9 +95,12 @@ test *args:
 
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile slow {{args}}
-    just nextest --profile slow {{args}}
+    cargo nextest run --profile slow --locked -p slow-tests --features embedded-db --verbose {{args}}
+    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+
+test-dev-node *args:
+    @echo 'Running espresso-dev-node integration tests'
+    cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
 test-all:
     @echo 'features: "embedded-db"'

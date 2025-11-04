@@ -56,7 +56,8 @@ jobs:
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml -> exclude
         # sequencer-sqlite will enable embedded-db feature -> exclude
-        run: cargo nextest archive --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
+        # slow-tests is tested in slowtest.yaml -> exclude
+        run: cargo nextest archive --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --archive-file nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -96,7 +97,8 @@ jobs:
 
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml -> exclude
-        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
+        # slow-tests is tested in slowtest.yaml -> exclude
+        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --exclude slow-tests --archive-file nextest-archive-sqlite.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
