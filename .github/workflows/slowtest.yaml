@@ -22,6 +22,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_LOG: info,libp2p=off,node=error
   NEXTEST_PROFILE: slow
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   slow-tests-sqlite:
