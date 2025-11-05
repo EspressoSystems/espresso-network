@@ -173,7 +173,7 @@ pub enum ProposalValidationError {
     NoEpochHeight,
     #[error("No First Epoch Configured")]
     NoFirstEpoch,
-    #[error("Total rewards mismatch: proposed header has {proposed:?} but actual is {actual}")]
+    #[error("Total rewards mismatch: proposed header has {proposed} but actual is {actual}")]
     TotalRewardsMismatch {
         proposed: RewardAmount,
         actual: RewardAmount,
@@ -978,7 +978,7 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
-        let total_rewards_distributed = if version < EpochVersion::version() {
+        let total_rewards_distributed = if version <= EpochVersion::version() {
             None
         } else if let Some(reward_distributor) = distribute_block_reward(
             instance,
