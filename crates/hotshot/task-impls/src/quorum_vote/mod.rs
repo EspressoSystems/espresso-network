@@ -736,7 +736,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();
                 // Do nothing if the VID share is old
-                tracing::trace!("Received VID share for view {view}");
+                tracing::error!("Received VID share for view {view}");
                 ensure!(
                     view > self.latest_voted_view,
                     "Received VID share for an older view."
