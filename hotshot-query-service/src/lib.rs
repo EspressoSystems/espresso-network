@@ -451,6 +451,7 @@ use vbs::version::StaticVersionType;
 pub enum VidCommon {
     V0(hotshot_types::vid::advz::ADVZCommon),
     V1(hotshot_types::vid::avidm::AvidMCommon),
+    V2(hotshot_types::vid::avidm_gf2::AvidmGf2Common),
 }
 
 pub type Payload<Types> = <Types as NodeType>::BlockPayload;

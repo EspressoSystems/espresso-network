@@ -36,6 +36,7 @@ impl NsProof {
         match common {
             VidCommon::V0(common) => Some(NsProof::V0(ADVZNsProof::new(payload, index, common)?)),
             VidCommon::V1(common) => Some(NsProof::V1(AvidMNsProof::new(payload, index, common)?)),
+            _ => todo!("unsupported VidCommon version"),
         }
     }
 

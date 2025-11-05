@@ -134,7 +134,7 @@ mod tests {
         data::{
             ns_table::parse_ns_table, vid_commitment, vid_disperse::AvidMDisperseShare,
             DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-            VidDisperseShare, ViewNumber,
+            ViewNumber,
         },
         event::{EventType, HotShotAction, LeafInfo},
         light_client::StateKeyPair,
@@ -813,11 +813,7 @@ mod tests {
         for (leaf, info) in leaves.iter().zip(consumer.leaf_chain().await.iter()) {
             assert_eq!(info.leaf, *leaf);
             let decided_vid_share = info.vid_share.as_ref().unwrap();
-            let view_number = match decided_vid_share {
-                VidDisperseShare::V0(share) => share.view_number,
-                VidDisperseShare::V1(share) => share.view_number,
-            };
-            assert_eq!(view_number, leaf.view_number());
+            assert_eq!(decided_vid_share.view_number(), leaf.view_number());
         }
 
         // The decided leaf should not have been garbage collected.
@@ -1196,11 +1192,7 @@ mod tests {
         for ((leaf, ..), info) in chain.iter().zip(leaf_chain.iter()) {
             assert_eq!(info.leaf, *leaf);
             let decided_vid_share = info.vid_share.as_ref().unwrap();
-            let view_number = match decided_vid_share {
-                VidDisperseShare::V0(share) => share.view_number,
-                VidDisperseShare::V1(share) => share.view_number,
-            };
-            assert_eq!(view_number, leaf.view_number());
+            assert_eq!(decided_vid_share.view_number(), leaf.view_number());
             assert!(info.leaf.block_payload().is_some());
         }
     }

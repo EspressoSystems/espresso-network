@@ -99,6 +99,14 @@ impl AsRef<[u8]> for AvidmGf2Commit {
     }
 }
 
+impl AsRef<[u8; 32]> for AvidmGf2Commit {
+    fn as_ref(&self) -> &[u8; 32] {
+        <Self as AsRef<[u8]>>::as_ref(self)
+            .try_into()
+            .expect("AvidmGf2Commit is always 32 bytes")
+    }
+}
+
 impl AvidmGf2Scheme {
     /// Setup an instance for AVID-M scheme
     pub fn setup(recovery_threshold: usize, total_weights: usize) -> VidResult<AvidmGf2Param> {

@@ -459,6 +459,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
                     ));
                 },
                 VidCommon::V1(v1) => v1.total_weights,
+                VidCommon::V2(v2) => v2.param.total_weights,
             };
 
             // Create the AvidM parameters from the total weight

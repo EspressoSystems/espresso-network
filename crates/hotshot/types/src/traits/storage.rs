@@ -64,6 +64,10 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
                 })
                 .await
             },
+            VidDisperseShare::V2(_share) => {
+                // TODO(Chengyu): implement when V2 is defined
+                Err(anyhow!("VID Disperse Share V2 not supported yet"))
+            },
         }
     }
     /// Add a proposal to the stored DA proposals.

@@ -102,6 +102,16 @@ impl NsAvidmGf2Scheme {
         Ok((NsAvidmGf2Commit { commit }, common))
     }
 
+    /// Check whether the namespaced commitment is consistent with the common data
+    pub fn is_consistent(commit: &NsAvidmGf2Commit, common: &NsAvidmGf2Common) -> bool {
+        let Ok(mt) =
+            MerkleTree::from_elems(None, common.ns_commits.iter().map(|commit| commit.commit))
+        else {
+            return false;
+        };
+        commit.commit == mt.commitment()
+    }
+
     /// Disperse a payload according to a distribution table and a namespace
     /// table.
     /// WARN: it assumes that the namespace table is well formed, i.e. ranges

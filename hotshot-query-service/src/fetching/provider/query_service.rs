@@ -18,6 +18,7 @@ use hotshot_types::{
     vid::{
         advz::{advz_scheme, ADVZScheme},
         avidm::{init_avidm_param, AvidMScheme},
+        avidm_gf2::AvidmGf2Scheme,
     },
 };
 use jf_advz::VidScheme;
@@ -343,6 +344,52 @@ where
                     return None;
                 }
             },
+            VidCommon::V2(common) => {
+                let bytes = payload.data().encode();
+
+                let header = self
+                    .client
+                    .get::<Header<Types>>(&format!("availability/header/{}", payload.height()))
+                    .send()
+                    .await
+                    .inspect_err(|err| {
+                        tracing::warn!(%client_url, %err, "failed to fetch header for payload. height={}", payload.height());
+                    })
+                    .ok()?;
+
+                if header.payload_commitment() != req.0 {
+                    tracing::error!(
+                        expected = %req_hash,
+                        actual = %header.payload_commitment(),
+                        %client_url,
+                        "header payload commitment mismatch (V1)"
+                    );
+                    return None;
+                }
+
+                let metadata = header.metadata().encode();
+                let commit = AvidmGf2Scheme::commit(
+                    &common.param,
+                    &bytes,
+                    ns_table::parse_ns_table(bytes.len(), &metadata),
+                )
+                .map(|(commit, _)| VidCommitment::V2(commit))
+                .inspect_err(|err| {
+                    tracing::error!(%err, %req_hash, "failed to compute AvidmGf2 commitment");
+                })
+                .ok()?;
+
+                // Compare calculated commitment with requested commitment
+                if commit != req.0 {
+                    tracing::warn!(
+                        expected = %req_hash,
+                        actual = %commit,
+                        %client_url,
+                        "commitment type mismatch for AVIDM check"
+                    );
+                    return None;
+                }
+            },
         }
 
         Some(payload.data)
@@ -482,6 +529,22 @@ where
                 VidCommitment::V1(_) => {
                     if let VidCommon::V1(common) = res.common {
                         Some(VidCommon::V1(common))
+                    } else {
+                        tracing::warn!(?req, ?res, "Expect VID common data but found None");
+                        None
+                    }
+                },
+                VidCommitment::V2(commit) => {
+                    if let VidCommon::V2(common) = res.common {
+                        if AvidmGf2Scheme::is_consistent(&commit, &common) {
+                            Some(VidCommon::V2(common))
+                        } else {
+                            tracing::error!(
+                                %client_url, ?req, ?commit, ?common,
+                                "VID V2 common data is inconsistent with commitment"
+                            );
+                            None
+                        }
                     } else {
                         tracing::warn!(?req, ?res, "Expect VID common data but found None");
                         None

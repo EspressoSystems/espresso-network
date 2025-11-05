@@ -29,7 +29,7 @@ pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
+        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare, AvidmGf2DisperseShare},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal,
     },
@@ -321,10 +321,11 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Certificate data is available
     DaCertificate2(DaCertificate2<TYPES>),
 
-    /// Initiate VID dispersal.
-    ///
-    /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
+    /// VID dispersal for AvidM Scheme.
     VidDisperseMsg2(Proposal<TYPES, AvidMDisperseShare<TYPES>>),
+
+    /// VID dispersal for AvidmGf2 Scheme.
+    VidDisperseMsg3(Proposal<TYPES, AvidmGf2DisperseShare<TYPES>>),
 }
 
 /// Messages for sequencing consensus.
@@ -432,6 +433,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     DaConsensusMessage::DaVote2(vote_message) => vote_message.view_number(),
                     DaConsensusMessage::DaCertificate2(cert) => cert.view_number,
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.view_number(),
+                    DaConsensusMessage::VidDisperseMsg3(disperse) => disperse.data.view_number(),
                 }
             },
         }
@@ -508,6 +510,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     DaConsensusMessage::DaCertificate(cert) => cert.epoch(),
                     DaConsensusMessage::VidDisperseMsg(disperse) => disperse.data.epoch(),
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.epoch(),
+                    DaConsensusMessage::VidDisperseMsg3(disperse) => disperse.data.epoch(),
                     DaConsensusMessage::DaProposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt

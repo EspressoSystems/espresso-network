@@ -23,6 +23,7 @@ impl TxProof {
             },
             VidCommon::V1(common) => AvidMTxProof::new(index, payload, common)
                 .map(|(tx, proof)| (tx, TxProof::V1(proof))),
+            _ => todo!("unsupported VidCommon version"),
         }
     }
 }

@@ -573,6 +573,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
                         },
                         DaConsensusMessage::VidDisperseMsg2(proposal) => {
+                            // TODO(Chengyu): consensus version check
                             if !self
                                 .upgrade_lock
                                 .epochs_enabled(proposal.data.view_number())
@@ -585,6 +586,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
+                            HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
+                        },
+                        DaConsensusMessage::VidDisperseMsg3(proposal) => {
+                            // TODO(Chengyu): consensus version check
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
                         },
                     },
@@ -1408,6 +1413,19 @@ impl<
                         };
                         MessageKind::Data(DataMessage::DataResponse(ResponseMessage::Found(
                             SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg2(
+                                vid_share_proposal,
+                            )),
+                        )))
+                    },
+                    VidDisperseShare::V2(data) => {
+                        // TODO(Chengyu): consensus version check
+                        let vid_share_proposal = Proposal {
+                            data,
+                            signature: proposal.signature,
+                            _pd: proposal._pd,
+                        };
+                        MessageKind::Data(DataMessage::DataResponse(ResponseMessage::Found(
+                            SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg3(
                                 vid_share_proposal,
                             )),
                         )))

@@ -620,6 +620,12 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidmGf2Disperse<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> HasEpoch<TYPES> for AvidmGf2Disperse<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.epoch
+    }
+}
+
 impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     /// Create VID dispersal from a specified membership for the target epoch.
     /// Uses the specified function to calculate share dispersal
