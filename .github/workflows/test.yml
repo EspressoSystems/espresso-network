@@ -31,12 +31,11 @@ jobs:
     name: Build test artifacts (postgres)
     runs-on: ubuntu-24.04-8core
     steps:
+      - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest,just
-
-      - uses: actions/checkout@v4
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -68,12 +67,11 @@ jobs:
     name: Build test artifacts (sqlite)
     runs-on: ubuntu-24.04-8core
     steps:
+      - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest,just
-
-      - uses: actions/checkout@v4
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -105,9 +103,8 @@ jobs:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: rui314/setup-mold@v1
-
       - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -152,9 +149,8 @@ jobs:
     name: Build sequencer-sqlite test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: rui314/setup-mold@v1
-
       - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -182,8 +178,8 @@ jobs:
     name: Build espresso-dev-node test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: rui314/setup-mold@v1
       - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -214,10 +210,9 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
+      - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: taiki-e/install-action@nextest
-
-      - uses: actions/checkout@v4
 
       - name: Install node deps
         uses: nick-fields/retry@v3
@@ -248,12 +243,11 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
+      - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
       - uses: taiki-e/install-action@nextest
-
-      - uses: actions/checkout@v4
 
       - name: Install node deps
         uses: nick-fields/retry@v3
@@ -279,6 +273,7 @@ jobs:
   test-go-sdk:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
@@ -288,8 +283,6 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
-
-      - uses: actions/checkout@v4
 
       - name: Build espresso-dev-node
         run: |
@@ -318,11 +311,10 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@nextest
       - uses: ./.github/actions/install-process-compose
-
-      - uses: actions/checkout@v4
 
       - name: Download archive
         uses: actions/download-artifact@v4
@@ -374,8 +366,8 @@ jobs:
     needs: [build-test-bins, build-test-bins-sqlite]
     runs-on: ubuntu-latest
     steps:
-      - uses: ./.github/actions/install-process-compose
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/install-process-compose
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.

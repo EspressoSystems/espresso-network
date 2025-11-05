@@ -30,11 +30,10 @@ jobs:
           - just check-features-ci
           - just check-features-ci --tests
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@cargo-hack
       - uses: taiki-e/install-action@just
-
-      - uses: actions/checkout@v4
       # Note: this job doesn't use a cache on purpose because it mostly compiles
       # the crates in this repo over and over again with different feature
       # combinations. The target directory gets really large. Adding caching

@@ -44,21 +44,17 @@ jobs:
     name: ${{ matrix.name }}
 
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
 
       - name: Collect Workflow Telemetry
         uses: catchpoint/workflow-telemetry-action@v2
         with:
           comment_on_pr: false
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-
-      - uses: taiki-e/install-action@just
-      - uses: taiki-e/install-action@nextest
-      - uses: rui314/setup-mold@v1
-
-      - uses: actions/checkout@v4
 
       # NOTE: no rust cache, these tests are very slow anyway
 
