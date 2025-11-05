@@ -376,7 +376,7 @@ jobs:
 
       - name: Move files
         run: |
-          mkdir -p target/deb ggug
+          mkdir -p target/debug
           mv test-binaries/* target/debug
           mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
