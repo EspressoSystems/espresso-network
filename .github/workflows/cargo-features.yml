@@ -31,7 +31,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
