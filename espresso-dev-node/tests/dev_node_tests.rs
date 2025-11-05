@@ -3,12 +3,15 @@ use std::{process::Child, time::Duration};
 use alloy::{
     network::EthereumWallet,
     node_bindings::{Anvil, AnvilInstance},
-    primitives::{Address, U256},
+    primitives::U256,
     providers::{Provider, ProviderBuilder},
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use committable::{Commitment, Committable};
 use escargot::CargoBuild;
+use espresso_dev_node::{
+    AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
+};
 use espresso_types::{BlockMerkleTree, Header, NamespaceProofQueryData, SeqTypes, Transaction};
 use futures::{StreamExt, TryStreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock;
@@ -20,7 +23,6 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use portpicker::pick_unused_port;
 use rand::Rng;
 use sequencer::SequencerApiVersion;
-use serde::{Deserialize, Serialize};
 use surf_disco::Client;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
@@ -34,52 +36,6 @@ pub struct BackgroundProcess(Child);
 impl Drop for BackgroundProcess {
     fn drop(&mut self) {
         self.0.kill().unwrap();
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DevInfo {
-    pub builder_url: Url,
-    pub sequencer_api_port: u16,
-    pub l1_prover_port: u16,
-    pub l1_url: Url,
-    pub l1_light_client_address: Address,
-    pub alt_chains: Vec<AltChainInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AltChainInfo {
-    pub chain_id: u64,
-    pub provider_url: Url,
-    pub light_client_address: Address,
-    pub prover_port: u16,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SetHotshotDownReqBody {
-    pub chain_id: Option<u64>,
-    pub height: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SetHotshotUpReqBody {
-    pub chain_id: u64,
-}
-
-#[derive(Debug, Clone, clap::ValueEnum)]
-enum DevNodeVersion {
-    #[value(name = "0.3")]
-    V0_3,
-    #[value(name = "0.4")]
-    V0_4,
-}
-
-impl std::fmt::Display for DevNodeVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DevNodeVersion::V0_3 => write!(f, "0.3"),
-            DevNodeVersion::V0_4 => write!(f, "0.4"),
-        }
     }
 }
 

@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    fmt,
     io::{self, Read},
     iter::{self, once},
     time::Duration,
@@ -23,6 +22,9 @@ use clap::{Parser, ValueEnum};
 use espresso_contract_deployer::{
     self as deployer, network_config::light_client_genesis_from_stake_table, Contract, Contracts,
     DeployedContracts, HttpProviderWithWallet,
+};
+use espresso_dev_node::{
+    AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
 };
 use espresso_types::{
     parse_duration, v0_3::ChainConfig, DrbAndHeaderUpgradeVersion, EpochVersion, L1ClientOptions,
@@ -72,23 +74,6 @@ enum L1Deployment {
     /// dump has to have been done on the same version of dev-node with the same
     /// configuration
     Skip,
-}
-
-#[derive(Debug, Clone, ValueEnum)]
-enum DevNodeVersion {
-    #[value(name = "0.3")]
-    V0_3,
-    #[value(name = "0.4")]
-    V0_4,
-}
-
-impl fmt::Display for DevNodeVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DevNodeVersion::V0_3 => write!(f, "0.3"),
-            DevNodeVersion::V0_4 => write!(f, "0.4"),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -907,36 +892,6 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         })?;
 
     Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DevInfo {
-    pub builder_url: Url,
-    pub sequencer_api_port: u16,
-    pub l1_prover_port: u16,
-    pub l1_url: Url,
-    pub l1_light_client_address: Address,
-    pub alt_chains: Vec<AltChainInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AltChainInfo {
-    pub chain_id: u64,
-    pub provider_url: Url,
-    pub light_client_address: Address,
-    pub prover_port: u16,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SetHotshotDownReqBody {
-    // return l1 light client address if not provided
-    pub chain_id: Option<u64>,
-    pub height: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SetHotshotUpReqBody {
-    pub chain_id: u64,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
