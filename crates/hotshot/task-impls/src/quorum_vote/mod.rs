@@ -664,7 +664,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::QuorumProposalValidated(proposal, _parent_leaf) => {
-                tracing::trace!(
+                tracing::error!(
                     "Received Proposal for view {}",
                     *proposal.data.view_number()
                 );

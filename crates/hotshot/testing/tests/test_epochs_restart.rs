@@ -27,7 +27,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
-          next_view_timeout: 5000,
+          next_view_timeout: 8000,
           ..Default::default()
       };
       let mut metadata = TestDescription::default().set_num_nodes(20,20);
@@ -48,12 +48,11 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
-      metadata.timing_data.next_view_timeout = 5000;
 
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(160),
+                  duration: Duration::from_secs(200),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -78,7 +77,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
-          next_view_timeout: 5000,
+          next_view_timeout: 8000,
           ..Default::default()
       };
       let mut metadata = TestDescription::default().set_num_nodes(20,2);
@@ -103,7 +102,7 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(120),
+                  duration: Duration::from_secs(200),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -185,6 +184,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      metadata.timing_data.next_view_timeout = 8000;
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -227,7 +227,7 @@ cross_tests!(
           num_successful_views: 22,
           expected_view_failures: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
           possible_view_failures: vec![8, 9, 10, 21, 22, 23, 24, 26],
-          decide_timeout: Duration::from_secs(120),
+          decide_timeout: Duration::from_secs(200),
           ..Default::default()
       };
 

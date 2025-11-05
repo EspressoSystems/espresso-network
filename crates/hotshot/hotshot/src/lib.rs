@@ -266,8 +266,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let anchored_leaf = initializer.anchor_leaf;
         let instance_state = initializer.instance_state;
 
-        let (internal_tx, mut internal_rx) = internal_channel;
+        let (internal_tx, internal_rx) = internal_channel;
         let (mut external_tx, mut external_rx) = external_channel;
+
+        let mut internal_rx = internal_rx.new_receiver();
 
         let network_rx = external_rx.new_receiver();
 
