@@ -55,12 +55,13 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
+    metadata.timing_data.next_view_timeout = 8000;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(140),
+                  duration: Duration::from_secs(340),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -113,12 +114,13 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
+      metadata.timing_data.next_view_timeout = 8000;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(140),
+                  duration: Duration::from_secs(340),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -171,12 +173,13 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
+        metadata.timing_data.next_view_timeout = 11111;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(140),
+                  duration: Duration::from_secs(240),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {

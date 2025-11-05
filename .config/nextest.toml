@@ -39,8 +39,8 @@ threads-required = 'num-cpus'
 
 # HotShot integration tests
 [profile.hotshot]
-retries = 2
-slow-timeout = { period = "1m", terminate-after = 3 }
+retries = 0
+slow-timeout = { period = "2m", terminate-after = 2 }
 default-filter = 'deps(hotshot-testing)'
 final-status-level = "flaky"
 threads-required = "num-test-threads"

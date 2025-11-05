@@ -26,7 +26,6 @@ use hotshot_example_types::{
 use hotshot_types::{
     constants::EVENT_CHANNEL_SIZE,
     data::Leaf2,
-    epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::convert_proposal,
     simple_certificate::{
@@ -259,11 +258,6 @@ where
                                         node.handle.hotshot.config.epoch_height,
                                     ),
                                 ));
-                                let memberships = EpochMembershipCoordinator::new(
-                                    membership,
-                                    node.handle.hotshot.config.epoch_height,
-                                    &node.handle.storage().clone(),
-                                );
 
                                 let config = node.handle.hotshot.config.clone();
 
@@ -329,7 +323,7 @@ where
                                     TestRunner::<TYPES, I, V, N>::add_node_with_config_and_channels(
                                         node_id,
                                         generated_network.clone(),
-                                        Arc::clone(memberships.membership()),
+                                        Arc::clone(&membership),
                                         initializer,
                                         config,
                                         validator_config,

@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
-    consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
+    consensus::{OuterConsensus, PayloadWithMetadata},
     data::{vid_commitment, vid_disperse::vid_total_weight, DaProposal2, PackedBundle},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
@@ -19,7 +19,6 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
-        network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
         storage::Storage,
@@ -30,7 +29,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use sha2::{Digest, Sha256};
-use tokio::{spawn, task::spawn_blocking};
+use tokio::task::spawn_blocking;
 use tracing::instrument;
 
 use crate::{
@@ -94,7 +93,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
         match event.as_ref() {
             HotShotEvent::DaProposalRecv(proposal, sender) => {
                 let sender = sender.clone();
-                tracing::debug!(
+                tracing::error!(
                     "DA proposal received for view: {}",
                     proposal.data.view_number()
                 );
@@ -128,7 +127,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     .await?;
                 ensure!(
                     view_leader_key == sender,
-                    warn!(
+                    error!(
                         "DA proposal doesn't have expected leader key for view {} \n DA proposal \
                          is: {:?}",
                         *view,
@@ -138,7 +137,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     view_leader_key.validate(&proposal.signature, &encoded_transactions_hash),
-                    warn!("Could not verify proposal.")
+                    error!("Could not verify proposal.")
                 );
 
                 broadcast_event(
@@ -148,6 +147,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 .await;
             },
             HotShotEvent::DaProposalValidated(proposal, sender) => {
+                tracing::error!(
+                    "DA proposal validated for view {}",
+                    proposal.data.view_number()
+                );
                 let cur_view = self.consensus.read().await.cur_view();
                 let view_number = proposal.data.view_number();
                 let epoch_number = proposal.data.epoch;
@@ -159,7 +162,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     cur_view <= view_number + 1,
-                    debug!(
+                    error!(
                         "Validated DA proposal for prior view but it's too old now Current view \
                          {cur_view}, DA Proposal view {}",
                         proposal.data.view_number()
@@ -181,7 +184,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     membership.has_da_stake(&self.public_key).await,
-                    debug!(
+                    error!(
                         "We were not chosen for consensus committee for view {view_number} in \
                          epoch {epoch_number:?}"
                     )
@@ -256,7 +259,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 )
                 .await?;
 
-                tracing::debug!("Sending vote to the DA leader {}", vote.view_number());
+                tracing::error!("Sending vote to the DA leader {}", vote.view_number());
 
                 broadcast_event(Arc::new(HotShotEvent::DaVoteSend(vote)), &event_stream).await;
                 let mut consensus_writer = self.consensus.write().await;
@@ -284,76 +287,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     tracing::trace!("{e:?}");
                 }
                 drop(consensus_writer);
-
-                // Optimistically calculate and update VID if we know that the primary network is down.
-                if self.network.is_primary_down() {
-                    let my_id = self.id;
-                    let consensus =
-                        OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
-                    let pk = self.private_key.clone();
-                    let public_key = self.public_key.clone();
-                    let chan = event_stream.clone();
-                    let upgrade_lock = self.upgrade_lock.clone();
-                    let next_epoch = epoch_number.map(|epoch| epoch + 1);
-
-                    let mut target_epochs = vec![];
-                    if membership.has_stake(&public_key).await {
-                        target_epochs.push(epoch_number);
-                    }
-                    if membership
-                        .next_epoch_stake_table()
-                        .await?
-                        .has_stake(&public_key)
-                        .await
-                    {
-                        target_epochs.push(next_epoch);
-                    }
-                    if target_epochs.is_empty() {
-                        bail!(
-                            "Not calculating VID, the node doesn't belong to the current epoch or \
-                             the next epoch."
-                        );
-                    };
-
-                    tracing::debug!(
-                        "Primary network is down. Optimistically calculate own VID share."
-                    );
-                    let membership = membership.clone();
-                    spawn(async move {
-                        for target_epoch in target_epochs {
-                            Consensus::calculate_and_update_vid::<V>(
-                                OuterConsensus::new(Arc::clone(&consensus.inner_consensus)),
-                                view_number,
-                                target_epoch,
-                                membership.coordinator.clone(),
-                                &pk,
-                                &upgrade_lock,
-                            )
-                            .await;
-                            if let Some(vid_share) = consensus
-                                .read()
-                                .await
-                                .vid_shares()
-                                .get(&view_number)
-                                .and_then(|key_map| key_map.get(&public_key))
-                                .and_then(|epoch_map| epoch_map.get(&target_epoch))
-                            {
-                                tracing::debug!(
-                                    "Primary network is down. Calculated own VID share for epoch \
-                                     {target_epoch:?}, my id {my_id}"
-                                );
-                                broadcast_event(
-                                    Arc::new(HotShotEvent::VidShareRecv(
-                                        public_key.clone(),
-                                        vid_share.clone(),
-                                    )),
-                                    &chan,
-                                )
-                                .await;
-                            }
-                        }
-                    });
-                }
             },
             HotShotEvent::DaVoteRecv(ref vote) => {
                 tracing::debug!("DA vote recv, Main Task {}", vote.view_number());
@@ -453,18 +386,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                                 if epoch < *cur_epoch {
                                     // We are in a new epoch, we can't be in transition
                                     EpochTransitionIndicator::NotInTransition
+                                } else if !is_last_block(
+                                    block_number,
+                                    self.membership_coordinator.epoch_height,
+                                ) && is_ge_epoch_root(
+                                    block_number,
+                                    self.membership_coordinator.epoch_height,
+                                ) {
+                                    EpochTransitionIndicator::InTransition
                                 } else {
-                                    if !is_last_block(
-                                        block_number,
-                                        self.membership_coordinator.epoch_height,
-                                    ) && is_ge_epoch_root(
-                                        block_number,
-                                        self.membership_coordinator.epoch_height,
-                                    ) {
-                                        EpochTransitionIndicator::InTransition
-                                    } else {
-                                        EpochTransitionIndicator::NotInTransition
-                                    }
+                                    EpochTransitionIndicator::NotInTransition
                                 }
                             },
                             _ => EpochTransitionIndicator::NotInTransition,

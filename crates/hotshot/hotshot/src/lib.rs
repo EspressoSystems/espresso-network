@@ -269,8 +269,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let (internal_tx, mut internal_rx) = internal_channel;
         let (mut external_tx, mut external_rx) = external_channel;
 
+        let network_rx = external_rx.new_receiver();
+
         membership_coordinator
-            .set_external_channel(external_rx.clone())
+            .set_external_channel(network_rx)
             .await;
 
         tracing::warn!(

@@ -693,7 +693,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::DaCertificateRecv(cert) => {
                 let view = cert.view_number;
 
-                tracing::trace!("Received DAC for view {view}");
+                tracing::error!("Received DAC for view {view}");
                 // Do nothing if the DAC is old
                 ensure!(
                     view > self.latest_voted_view,
