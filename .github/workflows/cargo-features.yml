@@ -30,23 +30,11 @@ jobs:
           - just check-features-ci
           - just check-features-ci --tests
     steps:
+      - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@cargo-hack
       - uses: taiki-e/install-action@just
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          android: true
-          tool-cache: false
-          dotnet: false
-          haskell: false
-          large-packages: false
-          docker-images: false
-          swap-storage: false
-
+      - uses: actions/checkout@v4
       # Note: this job doesn't use a cache on purpose because it mostly compiles
       # the crates in this repo over and over again with different feature
       # combinations. The target directory gets really large. Adding caching

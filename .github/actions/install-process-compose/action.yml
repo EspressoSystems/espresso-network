@@ -1,0 +1,12 @@
+name: Install process-compose
+description: Install process-compose from GitHub releases
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        curl -L https://github.com/F1bonacc1/process-compose/releases/latest/download/process-compose_linux_amd64.tar.gz -o /tmp/process-compose.tar.gz
+        tar -xzf /tmp/process-compose.tar.gz -C /tmp
+        sudo mv /tmp/process-compose /usr/local/bin/
+        sudo chmod +x /usr/local/bin/process-compose

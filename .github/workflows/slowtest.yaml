@@ -44,22 +44,13 @@ jobs:
     name: ${{ matrix.name }}
 
     steps:
+      - uses: ./.github/actions/free-disk-space
+
       - name: Collect Workflow Telemetry
         uses: catchpoint/workflow-telemetry-action@v2
         with:
           comment_on_pr: false
 
-      - name: free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: false
-          swap-storage: false
-
-      # These tests need the `anvil` binary provided by foundry
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
@@ -67,8 +58,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - uses: rui314/setup-mold@v1
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       # NOTE: no rust cache, these tests are very slow anyway
 
