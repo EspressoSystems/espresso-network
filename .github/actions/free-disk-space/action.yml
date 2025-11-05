@@ -3,12 +3,14 @@ description: Free up disk space on GitHub runners using rmz for fast deletion
 runs:
   using: composite
   steps:
-    - uses: taiki-e/install-action@cargo-binstall
     - name: Free disk space
       shell: bash
       run: |
-        cargo binstall -y rmz
-        sudo mv /home/runner/.cargo/bin/rmz /usr/local/bin/rmz
+        set -euxo pipefail
+
+        curl -L https://github.com/SUPERCILEX/fuc/releases/latest/download/x86_64-unknown-linux-gnu-rmz -o /tmp/rmz
+        sudo mv /tmp/rmz /usr/local/bin/rmz
+        sudo chmod +x /usr/local/bin/rmz
 
         echo "Available storage before:"
         sudo df -h
