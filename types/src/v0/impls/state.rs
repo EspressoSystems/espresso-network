@@ -1394,11 +1394,12 @@ mod test {
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
+    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
         eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, v0_5, BlockSize, FeeAccountProof,
-        FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        FeeMerkleProof, Leaf, Payload, SequencerVersions, TimestampMillis, Transaction,
     };
 
     impl Transaction {
@@ -2104,5 +2105,64 @@ mod test {
         };
 
         validate_builder_fee(&header).unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validate_total_rewards_distributed() {
+        let instance = NodeState::mock().with_genesis_version(Version { major: 0, minor: 4 });
+
+        let (payload, metadata) =
+            Payload::from_transactions([], &instance.genesis_state, &instance)
+                .await
+                .unwrap();
+
+        let header = Header::genesis::<SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 4>>>(
+            &instance,
+            payload.clone(),
+            &metadata,
+        );
+
+        let validated_state = ValidatedState::default();
+        let actual_total = RewardAmount::from(1000u64);
+        let block_size = 100u32;
+
+        let proposed_header = match header.clone() {
+            Header::V4(mut h) => {
+                h.total_reward_distributed = actual_total;
+                Header::V4(h)
+            },
+            _ => unreachable!("Expected V4 header"),
+        };
+
+        let validated_transition = ValidatedTransition::new(
+            validated_state.clone(),
+            &header,
+            Proposal::new(&proposed_header, block_size),
+            Some(actual_total),
+            StaticVersion::<0, 4>::version(),
+        );
+
+        validated_transition
+            .validate_total_rewards_distributed()
+            .unwrap();
+
+        let wrong_total = RewardAmount::from(2000u64);
+        let proposed_header = match header.clone() {
+            Header::V4(mut h) => {
+                h.total_reward_distributed = wrong_total;
+                Header::V4(h)
+            },
+            _ => unreachable!("Expected V4 header"),
+        };
+
+        ValidatedTransition::new(
+            validated_state.clone(),
+            &header,
+            Proposal::new(&proposed_header, block_size),
+            Some(actual_total),
+            StaticVersion::<0, 4>::version(),
+        )
+        .validate_total_rewards_distributed()
+        .unwrap_err();
     }
 }
