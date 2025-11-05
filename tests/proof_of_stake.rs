@@ -85,99 +85,19 @@ async fn test_native_demo_drb_header() -> Result<()> {
     Ok(())
 }
 
-fn make_private_key(
-    pubkey: &str,
-) -> <<SeqTypes as NodeType>::SignatureKey as SignatureKey>::PrivateKey {
-    TaggedBase64::parse(pubkey).unwrap().try_into().unwrap()
-}
-
-fn make_private_state_key(
-    pubkey: &str,
-) -> <<SeqTypes as NodeType>::StateSignatureKey as hotshot_types::traits::signature_key::StateSignatureKey>::StatePrivateKey{
-    TaggedBase64::parse(pubkey).unwrap().try_into().unwrap()
-}
-
-/// Checks if the native works if started on the PoS/Epoch version
+/// Checks if dynamic DA committees work as expected
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_demo_da_committee() -> Result<()> {
-    /*let pubkey = hotshot_types::signature_key::BLSPubKey::from_private(&make_private_key(
-        "BLS_SIGNING_KEY~FTAq-zib6oUVGSOdIlgntYB1IelS0vK6icYW8Z8OUySv",
-    ));
-    println!("pubkey: {}", pubkey);
-
-    let pubkey = hotshot_types::light_client::StateKeyPair::from_sign_key(make_private_state_key(
-        "SCHNORR_SIGNING_KEY~4YXyoT7ZxwXcU0_J6NH9ziGLrG0jShNCtGJIZ7a0yQBr",
-    ))
-    .0
-    .ver_key();
-    println!("pubkey: {}", pubkey);
-
-    assert!(false);*/
-    /*     use hotshot_types::traits::signature_key::SignatureKey;
-    for i in 0..5 {
-        let key1 = hotshot_types::signature_key::BLSPubKey::generated_from_seed_indexed([0; 32], i).1.to_tagged_base64().unwrap();
-        let kp = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed([0; 32], i).sign_key_ref().to_tagged_base64().unwrap();
-        println!("Iteration {i}");
-        println!(" - BLS: {key1}");
-        println!(" - Schnorr: {kp}");
-    }
-    assert!(false);*/
-
     let genesis_path = "data/genesis/demo-da-committees.toml";
-    //let genesis_path = "data/genesis/demo-pos-base.toml";
     let genesis = load_genesis_file(genesis_path)?;
 
     let _child = NativeDemo::run(
         None,
-        Some(vec![
-            (
-                "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
-                // process compose runs from the root of the repo
-                genesis_path.to_string(),
-            ), /*
-               // These keys are generated with generated_from_seed_indexed and are the private side to the keys in demo-da-committees.toml
-               // TODO: Grab the default keys from .env and make public keys to put in demo-da-committees instead
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_0".to_string(),
-                   "BLS_SIGNING_KEY~lNDh4Pn-pTAyzyprOAFdXHwhrKhEwqwtMtkD3CZF4x3o".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0".to_string(),
-                   "SCHNORR_SIGNING_KEY~HpvL0GKuLCeVkbpyRWh8XGhpSgDAel5Ehq181Qp2nAFD".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_1".to_string(),
-                   "BLS_SIGNING_KEY~-DO72m_SFl6NQMYknm05FYpPEklkeqz-B3g2mFdbuS83".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1".to_string(),
-                   "SCHNORR_SIGNING_KEY~45YyRVukvS11jD742ESpdofgvNram9qXEcEbWJMZnAII".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_2".to_string(),
-                   "BLS_SIGNING_KEY~LY0x6w5BheYvEI3ro3g39NU-qwoYQRKc4ObCqc1yoC4S".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2".to_string(),
-                   "SCHNORR_SIGNING_KEY~MsqAFOzgc5RUvoB3sVRLKJmcgCST-x_fThnhiU0tTwEN".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_3".to_string(),
-                   "BLS_SIGNING_KEY~w4jERAaQfBdCdmlStEgj8PfIJJOWmCvbsL2wckpTfCbo".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3".to_string(),
-                   "SCHNORR_SIGNING_KEY~_vCBzmTgY32OZIkteql1y2knVqI7Jx68GvU_2117ggB4".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_4".to_string(),
-                   "BLS_SIGNING_KEY~FTAq-zib6oUVGSOdIlgntYB1IelS0vK6icYW8Z8OUySv".to_string(),
-               ),
-               (
-                   "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4".to_string(),
-                   "SCHNORR_SIGNING_KEY~O-7qlIsA5O9lD5tdwAqkit-AksJQ_hBAXAni_GCqTgVt".to_string(),
-               ),*/
-        ]),
+        Some(vec![(
+            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            // process compose runs from the root of the repo
+            genesis_path.to_string(),
+        )]),
     );
 
     let entries: &[PeerConfig<SeqTypes>] = &[PeerConfig {
@@ -198,8 +118,9 @@ async fn test_native_demo_da_committee() -> Result<()> {
     }];
 
     // Sanity check that the demo is working
-
     assert_native_demo_works(Default::default()).await?;
+
+    // Step through the committees defined in demo-da-committees
     assert_da_stake_table(
         Default::default(),
         5,
@@ -207,11 +128,16 @@ async fn test_native_demo_da_committee() -> Result<()> {
     )
     .await?;
     assert_da_stake_table(Default::default(), 10, &[&entries[0], &entries[1]]).await?;
-    assert_da_stake_table(Default::default(), 15, &[&entries[1], &entries[2]]).await?;
+    assert_da_stake_table(
+        Default::default(),
+        15,
+        &[&entries[0], &entries[1], &entries[2]],
+    )
+    .await?;
     assert_da_stake_table(
         Default::default(),
         20,
-        &[&entries[1], &entries[2], &entries[4]],
+        &[&entries[0], &entries[2], &entries[4]],
     )
     .await?;
 
@@ -255,6 +181,7 @@ async fn assert_da_stake_table(
     let da_stake_table_url = format!("{sequencer_url}v1/node/da-stake-table/current");
     println!("Fetching da stake table from: {}", da_stake_table_url);
 
+    let mut step = 0;
     loop {
         // Timeout if tests take too long.
         if start.elapsed() > requirements.global_timeout * 30 {
@@ -294,24 +221,34 @@ async fn assert_da_stake_table(
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         };
-        println!(
-            "Retrieved DA stake table for epoch {:?}, {} members: {:?}",
-            da_stake_table.epoch,
-            da_stake_table.stake_table.len(),
-            da_stake_table.stake_table
-        );
+
+        step += 1;
+        if step > 30 {
+            // Only show every 30 seconds
+            step = 0;
+            println!(
+                "Retrieved DA stake table for epoch {:?}, {} members: {:?}",
+                da_stake_table.epoch,
+                da_stake_table.stake_table.len(),
+                da_stake_table.stake_table
+            );
+        }
 
         let Some(response_epoch) = da_stake_table.epoch else {
-            println!("DA stake table epoch is None, waiting...");
+            if step == 0 {
+                println!("DA stake table epoch is None, waiting...");
+            }
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         };
 
         if *response_epoch < start_epoch {
-            println!(
-                "DA stake table epoch {} less than start epoch {}, waiting...",
-                response_epoch, start_epoch
-            );
+            if step == 0 {
+                println!(
+                    "DA stake table epoch {} less than start epoch {}, waiting...",
+                    response_epoch, start_epoch
+                );
+            }
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
