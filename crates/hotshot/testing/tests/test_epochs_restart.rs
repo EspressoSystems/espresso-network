@@ -48,11 +48,12 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
+      metadata.timing_data.next_view_timeout = 5000;
 
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(120),
+                  duration: Duration::from_secs(160),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {

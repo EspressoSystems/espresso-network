@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{AvidMCommit, AvidMShare, RawAvidMShare};
 use crate::{
-    avid_m::{AvidMScheme, MerkleTree},
+    avidm::{AvidMScheme, MerkleTree},
     VidError, VidResult, VidScheme,
 };
 
@@ -232,7 +232,7 @@ impl NsAvidMScheme {
 pub mod tests {
     use rand::{seq::SliceRandom, RngCore};
 
-    use crate::avid_m::namespaced::NsAvidMScheme;
+    use crate::avidm::namespaced::NsAvidMScheme;
 
     #[test]
     fn round_trip() {
