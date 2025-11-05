@@ -315,6 +315,8 @@ jobs:
       - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@nextest
       - uses: ./.github/actions/install-process-compose
+        with:
+          version: v1.75.2
 
       - name: Download archive
         uses: actions/download-artifact@v4
@@ -368,6 +370,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/install-process-compose
+        with:
+          version: v1.75.2
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.
@@ -390,8 +394,13 @@ jobs:
         run: |
           export PATH="$PWD/target/debug:$PATH"
           set -o pipefail
-          scripts/demo-native --tui=false &
+          scripts/demo-native --tui=false > "${{ env.NATIVE_DEMO_LOGS }}" 2>&1 &
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+      - name: Show end of logs
+        if: always()
+        run: |
+          tail -n 1000 "${{ env.NATIVE_DEMO_LOGS }}"
 
       - name: Upload process compose logs
         if: always()

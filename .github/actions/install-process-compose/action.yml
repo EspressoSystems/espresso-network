@@ -1,13 +1,24 @@
 name: Install process-compose
 description: Install process-compose from GitHub releases
 
+inputs:
+  version:
+    description: Version to install (e.g., v1.75.2 or latest)
+    required: false
+    default: latest
+
 runs:
   using: composite
   steps:
     - shell: bash
       run: |
         set -euxo pipefail
-        curl -L https://github.com/F1bonacc1/process-compose/releases/latest/download/process-compose_linux_amd64.tar.gz -o /tmp/process-compose.tar.gz
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          URL="https://github.com/F1bonacc1/process-compose/releases/latest/download/process-compose_linux_amd64.tar.gz"
+        else
+          URL="https://github.com/F1bonacc1/process-compose/releases/download/${{ inputs.version }}/process-compose_linux_amd64.tar.gz"
+        fi
+        curl -L "$URL" -o /tmp/process-compose.tar.gz
         tar -xzf /tmp/process-compose.tar.gz -C /tmp
         sudo mv /tmp/process-compose /usr/local/bin/
         sudo chmod +x /usr/local/bin/process-compose
