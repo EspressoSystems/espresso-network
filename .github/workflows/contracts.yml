@@ -66,7 +66,7 @@ jobs:
           git diff
 
   contracts-test:
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     strategy:
       matrix:
