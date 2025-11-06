@@ -60,12 +60,12 @@ jobs:
 
       - name: Build integration tests
         run: |
-          just hotshot::${{ matrix.test_suites }} --release --no-run
+          just hotshot::${{ matrix.test_suites }} --no-run
         timeout-minutes: 60
 
       - name: Run integration tests
         run: |
-          just hotshot::${{ matrix.test_suites }} --release --no-fail-fast
+          just hotshot::${{ matrix.test_suites }} --no-fail-fast
         timeout-minutes: 60
         env:
           RUST_BACKTRACE: full

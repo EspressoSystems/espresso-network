@@ -415,6 +415,10 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, DaVote2<TYPES>, DaCertificate2<TYP
         certificate: DaCertificate2<TYPES>,
         key: &TYPES::SignatureKey,
     ) -> HotShotEvent<TYPES> {
+        tracing::error!(
+            "Making DAC send event for view {}",
+            certificate.view_number()
+        );
         HotShotEvent::DacSend(certificate, key.clone())
     }
 }

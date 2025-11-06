@@ -664,7 +664,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::QuorumProposalValidated(proposal, _parent_leaf) => {
-                tracing::error!(
+                tracing::trace!(
                     "Received Proposal for view {}",
                     *proposal.data.view_number()
                 );
@@ -693,7 +693,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::DaCertificateRecv(cert) => {
                 let view = cert.view_number;
 
-                tracing::error!("Received DAC for view {view}");
+                tracing::trace!("Received DAC for view {view}");
                 // Do nothing if the DAC is old
                 ensure!(
                     view > self.latest_voted_view,
@@ -736,7 +736,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();
                 // Do nothing if the VID share is old
-                tracing::error!("Received VID share for view {view}");
+                tracing::trace!("Received VID share for view {view}");
                 ensure!(
                     view > self.latest_voted_view,
                     "Received VID share for an older view."
