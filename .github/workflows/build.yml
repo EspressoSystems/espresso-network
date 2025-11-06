@@ -63,6 +63,11 @@ jobs:
             save-cache: true
 
     steps:
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
@@ -128,6 +133,11 @@ jobs:
             save-cache: true
 
     steps:
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
