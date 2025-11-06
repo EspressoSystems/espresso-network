@@ -18,6 +18,9 @@ use hotshot_testing::{
     test_builder::TestDescription,
 };
 
+const NEXT_VIEW_TIMEOUT: u64 = 5000;
+const NUM_NODES: usize = 14;
+
 cross_tests!(
     TestName: test_staggered_restart_transition_block,
     Impls: [CombinedImpl],
@@ -25,7 +28,7 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -36,7 +39,7 @@ cross_tests!(
       }
 
       let mut down_regular_nodes = vec![];
-      for i in 4..20 {
+      for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -55,7 +58,7 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
-    metadata.timing_data.next_view_timeout = 8000;
+    metadata.timing_data.next_view_timeout = NEXT_VIEW_TIMEOUT;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
@@ -84,7 +87,7 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -95,7 +98,7 @@ cross_tests!(
       }
 
       let mut down_regular_nodes = vec![];
-      for i in 4..20 {
+      for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -114,7 +117,7 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
-      metadata.timing_data.next_view_timeout = 8000;
+      metadata.timing_data.next_view_timeout = NEXT_VIEW_TIMEOUT;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
@@ -143,7 +146,7 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -154,7 +157,7 @@ cross_tests!(
       }
 
       let mut down_regular_nodes = vec![];
-      for i in 4..20 {
+      for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -173,7 +176,7 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
-        metadata.timing_data.next_view_timeout = 8000;
+        metadata.timing_data.next_view_timeout = NEXT_VIEW_TIMEOUT;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
