@@ -1,15 +1,14 @@
-#![cfg(test)]
-
 use std::{
     collections::{BTreeMap, HashSet},
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::Address,
+    primitives::{Address, U256},
     providers::{
         ext::AnvilApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -18,7 +17,8 @@ use alloy::{
     },
     signers::local::LocalSigner,
 };
-use anyhow::bail;
+use anyhow::{bail, Context};
+use async_lock::RwLock;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
@@ -51,13 +51,28 @@ use hotshot_types::{
     event::{Event, EventType},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
+    signature_key::{BLSPrivKey, BLSPubKey},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
     PeerConfig,
 };
 use itertools::Itertools;
-use options::Modules;
 use portpicker::pick_unused_port;
-use run::init_with_storage;
+use sequencer::{
+    api::{
+        self, data_source::testing::TestableSequencerDataSource, options::Query,
+        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+    },
+    context::SequencerContext,
+    genesis::{Genesis, L1Finalized, StakeTableConfig},
+    network::{
+        self,
+        cdn::{TestingDef, WrappedSignatureKey},
+    },
+    options::{Modules, Options},
+    run::init_with_storage,
+    testing::{staking_priv_keys, wait_for_decide_on_handle},
+    SequencerApiVersion,
+};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
@@ -67,18 +82,6 @@ use tokio::{
 };
 use vbs::version::Version;
 use vec1::vec1;
-
-use super::*;
-use crate::{
-    api::{
-        self, data_source::testing::TestableSequencerDataSource, options::Query,
-        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-    },
-    genesis::{L1Finalized, StakeTableConfig},
-    network::cdn::{TestingDef, WrappedSignatureKey},
-    testing::{staking_priv_keys, wait_for_decide_on_handle},
-    SequencerApiVersion,
-};
 type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     let mut network = TestNetwork::new(network.0, network.1, cdn).await;
