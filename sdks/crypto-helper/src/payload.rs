@@ -58,11 +58,12 @@ impl DecodingResult {
 }
 
 #[no_mangle]
-// Decode a payload from payload bytes and namespace table bytes.
-//
-// Safety:
-// payload_ptr and ns_table_ptr must be valid pointers to initialized slices,
-// valid for the duration of the call. It is okay to pass null pointers if the length is zero.
+/// Decode a payload from payload bytes and namespace table bytes.
+///
+/// # Safety
+///
+/// payload_ptr and ns_table_ptr must be valid pointers to initialized slices,
+/// valid for the duration of the call. It is okay to pass null pointers if the length is zero.
 pub unsafe extern "C" fn decode_payload(
     mut payload_ptr: *const u8,
     payload_len: usize,
