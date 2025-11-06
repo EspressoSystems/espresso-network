@@ -10,8 +10,6 @@ mod external_event_handler;
 pub mod options;
 pub mod state_signature;
 
-mod restart_tests;
-
 mod message_compat_tests;
 
 use std::sync::Arc;
@@ -72,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersion, StaticVersionType};
 pub mod network;
 
-mod run;
+pub mod run;
 pub use run::main;
 
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
