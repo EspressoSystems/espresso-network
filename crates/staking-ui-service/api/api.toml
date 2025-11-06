@@ -7,11 +7,22 @@ Stake table and delegation information.
 This API provides information about the current stake table, the delegators and nodes therein, and
 pending rewards and withdrawals. It is designed to serve the Espresso staking UI.
 
-# Types
+## Types
 
 The following types are referenced by the endpoint descriptions below.
 
-## `L1BlockId`
+### `NodeSetEntry`
+
+```json
+{
+    "address": Hex,
+    "staking_key": TaggedBase64,
+    "stake": BigInt,
+    "commission": float
+}
+```
+
+### `L1BlockId`
 
 ```json
 {
@@ -21,9 +32,26 @@ The following types are referenced by the endpoint descriptions below.
 }
 ```
 
-## `Hex`
+### `L1BlockInfo`
+
+```json
+{
+    "hash": Hex,
+    "timestamp": integer,
+    "number": integer
+}
+
+### `Hex`
 
 Any valid `0x`-prefixed hex string.
+
+### `TaggedBase64`
+
+A representation of short binary strings consisting of:
+* A short alphabetic tag identifying the type of object
+* A `~`
+* A URL-safe base64-encoded byte string. The final byte of the encoded data is a CRC-8 checksum over
+  the tag and the payload.
 """
 
 [route.l1_block_latest]
@@ -31,7 +59,7 @@ PATH = ["/l1/block/latest"]
 DOC = """
 Get the latest L1 head.
 
-# Returns
+### Returns
 
 `L1BlockId`
 """
@@ -46,7 +74,59 @@ L1 block information is generally available from any block from the most recent 
 to the current head. Requests for older blocks may return `410 Gone`. Requests for blocks that have
 not yet been produced will return `404 Not Found`.
 
-# Returns
+### Returns
 
 `L1BlockId`
+"""
+
+[route.full_node_set_snapshot]
+PATH = ["/nodes/all/:hash"]
+":hash" = "Literal"
+DOC = """
+Get a snapshot of the full node set as of the indicated L1 block.
+
+This is the full node set as reflected in the stake table contract after L1 block `:hash`. Snapshots
+are available for L1 blocks from the last finalized block up to the latest head (i.e. the same range
+of availability for `/l1/block/:number`.
+
+It is important to note that this is _not_ the stake table that is actually in use by consensus.
+Consensus will only use snapshots taken from the L1 origin of the Espresso epoch root, and then the
+snapshot will only come into effect in the following epoch.
+
+### Returns
+
+```json
+{
+    "nodes": [NodeSetEntry],
+    "l1_block": L1BlockInfo
+}
+```
+"""
+
+[route.full_node_set_update]
+PATH = ["/nodes/all/updates/:hash"]
+":hash" = "Literal"
+DOC = """
+Get the update needed to bring a snapshot of the full node set up to date with L1 block `:hash`.
+
+This is available for unfinalized L1 blocks up to the latest head.
+
+### Returns
+
+```json
+{
+    "diff": [
+        {
+            "NodeUpdate": NodeSetEntry
+        } |
+        {
+            "NodeExit": { 
+                "address": Hex,
+                "exit_time": integer
+            }
+        }
+    ]
+    "l1_block": L1BlockInfo
+}
+```
 """

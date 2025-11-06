@@ -33,7 +33,7 @@ futures = "0.3"
 hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 im = { version = "15", features = ["serde"] }
-log-panics = "2"
+log-panics = { version = "2.0", features = ["with-backtrace"] }
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 surf-disco = "0.9"

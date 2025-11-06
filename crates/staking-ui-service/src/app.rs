@@ -68,6 +68,27 @@ where
             state.l1.read().await.l1_block(number)
         }
         .boxed()
+    })?
+    .at("full_node_set_snapshot", |req, state| {
+        async move {
+            let hash = req
+                .string_param("hash")?
+                .parse()
+                .context(Error::bad_request)?;
+            let (node_set, l1_block) = { state.l1.read().await.full_node_set(hash)? };
+            Ok(node_set.into_snapshot(l1_block))
+        }
+        .boxed()
+    })?
+    .at("full_node_set_update", |req, state| {
+        async move {
+            let hash = req
+                .string_param("hash")?
+                .parse()
+                .context(Error::bad_request)?;
+            state.l1.read().await.full_node_set_update(hash)
+        }
+        .boxed()
     })?;
 
     Ok(())
@@ -77,14 +98,24 @@ where
 mod test {
     use std::time::Duration;
 
+    use hotshot_contract_adapter::sol_types::StakeTableV2::StakeTableV2Events;
     use portpicker::pick_unused_port;
     use surf_disco::Client;
     use tide_disco::{Error as _, StatusCode};
     use tokio::{task::spawn, time::sleep};
 
     use crate::{
-        input::l1::testing::{MemoryStorage, block_id},
-        types::common::L1BlockId,
+        input::l1::{
+            BlockInput, Snapshot,
+            testing::{
+                MemoryStorage, VecStream, block_id, block_snapshot, subscribe_until,
+                validator_registered_event,
+            },
+        },
+        types::{
+            common::{L1BlockId, NodeSetEntry},
+            global::{FullNodeSetDiff, FullNodeSetSnapshot, FullNodeSetUpdate},
+        },
     };
 
     use super::*;
@@ -132,6 +163,89 @@ mod test {
         tracing::info!("test future block");
         let err = client
             .get::<L1BlockId>("/l1/block/3")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_full_node_set_endpoints() {
+        let port = pick_unused_port().unwrap();
+        let url = format!("http://localhost:{port}").parse().unwrap();
+
+        // Start with an empty state.
+        let l1 = Arc::new(RwLock::new(
+            l1::State::new(MemoryStorage::default(), Snapshot::empty(block_snapshot(1)))
+                .await
+                .unwrap(),
+        ));
+
+        // Register a node so that we have some non-empty state and updates.
+        let node = validator_registered_event(rand::thread_rng());
+        let node_entry = NodeSetEntry::from(&node);
+        let mut inputs = VecStream::infinite();
+        inputs.push(
+            BlockInput::empty(2)
+                .with_event(StakeTableV2Events::ValidatorRegisteredV2(node.clone())),
+        );
+        subscribe_until(&l1, inputs, |l1| l1.latest_l1_block().number == 2).await;
+
+        let state = State::new(l1);
+        let task = spawn(state.serve(port));
+
+        tracing::info!("waiting for service to become available");
+        sleep(Duration::from_secs(1)).await;
+        let client = Client::<Error, Version>::new(url);
+        client.connect(None).await;
+
+        tracing::info!("genesis snapshot should be empty");
+        let snapshot: FullNodeSetSnapshot = client
+            .get(&format!("/nodes/all/{:x}", block_id(1).hash))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.l1_block, block_snapshot(1).info());
+        assert!(snapshot.nodes.is_empty());
+
+        tracing::info!("updates should be unavailable for genesis state");
+        let err = client
+            .get::<FullNodeSetUpdate>(&format!("/nodes/all/updates/{:x}", block_id(1).hash))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::GONE);
+
+        tracing::info!("next snapshot should contain the registered validator");
+        let snapshot: FullNodeSetSnapshot = client
+            .get(&format!("/nodes/all/{:x}", block_id(2).hash))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.l1_block, block_snapshot(2).info());
+        assert_eq!(snapshot.nodes, std::slice::from_ref(&node_entry));
+
+        tracing::info!("next update should contain the registration event");
+        let update: FullNodeSetUpdate = client
+            .get(&format!("nodes/all/updates/{:x}", block_id(2).hash))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(update.l1_block, block_snapshot(2).info());
+        assert_eq!(update.diff, [FullNodeSetDiff::NodeUpdate(node_entry)]);
+
+        tracing::info!("queries at unknown block hash should return 404");
+        let err = client
+            .get::<FullNodeSetSnapshot>(&format!("nodes/all/{:x}", block_id(100).hash))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        let err = client
+            .get::<FullNodeSetUpdate>(&format!("nodes/all/updates/{:x}", block_id(100).hash))
             .send()
             .await
             .unwrap_err();

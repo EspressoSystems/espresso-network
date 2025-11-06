@@ -31,7 +31,7 @@ run-decaf:
     just run \
         --stake-table 0x40304fbe94d5e7d1492dd90c53a2d63e8506a037 \
         --storage "${storage}" \
-        --http-providers https://ethereum-sepolia.publicnode.com
+        --http-providers "${SEPOLIA_RPC_URL:-https://ethereum-sepolia.publicnode.com}"
 
 run *args: (run-profile "dev" args)
 

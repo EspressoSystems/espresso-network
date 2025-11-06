@@ -11,7 +11,8 @@ use derive_more::{Deref, DerefMut};
 use espresso_types::{PubKey, v0_3::COMMISSION_BASIS_POINTS};
 use futures::stream::{Stream, StreamExt};
 use hotshot_contract_adapter::sol_types::{
-    RewardClaim::RewardClaimEvents, StakeTableV2::StakeTableV2Events,
+    RewardClaim::RewardClaimEvents,
+    StakeTableV2::{StakeTableV2Events, ValidatorRegistered, ValidatorRegisteredV2},
 };
 use tracing::instrument;
 
@@ -63,8 +64,12 @@ impl<S: L1Persistence> State<S> {
     /// state in storage, the given genesis state will be used.
     pub async fn new(storage: S, genesis: Snapshot) -> Result<Self> {
         let state = match storage.finalized_snapshot().await? {
-            Some(snapshot) => snapshot,
+            Some(snapshot) => {
+                tracing::info!(?snapshot.block, "starting from saved snapshot");
+                snapshot
+            }
             None => {
+                tracing::info!(?genesis.block, "starting from genesis");
                 storage.save_genesis(genesis.clone()).await?;
                 genesis
             }
@@ -100,6 +105,15 @@ impl<S: L1Persistence> State<S> {
     }
 
     /// Get a snapshot of the full node set at the given L1 block.
+    ///
+    /// # Performance
+    ///
+    /// This method returns a full node set, plus information about the L1 block where that node set
+    /// was snapshotted. This can be converted into an API-facing [`FullNodeSetSnapshot`] using
+    /// [`NodeSet::into_snapshot`]. This conversion is not performed within this method because it
+    /// may be relatively expensive, while this method as-is is very efficient. It is recommended to
+    /// call this method, then drop the reference or lock on the [`State`] before performing the
+    /// conversion.
     pub fn full_node_set(&self, hash: BlockHash) -> Result<(NodeSet, L1BlockInfo)> {
         let number = self.block_number(hash)?;
         let block = self.block(number)?;
@@ -119,6 +133,15 @@ impl<S: L1Persistence> State<S> {
     }
 
     /// Get a snapshot of the requested wallet state at the given L1 block.
+    ///
+    /// # Performance
+    ///
+    /// This method returns a full wallet snapshot, plus information about the L1 block where the
+    /// snapshot was taken. This can be converted into an API-facing [`WalletSnapshot`] using
+    /// [`Wallet::into_snapshot`]. This conversion is not performed within this method because it
+    /// may be relatively expensive, while this method as-is is very efficient. It is recommended to
+    /// call this method, then drop the reference or lock on the [`State`] before performing the
+    /// conversion.
     pub fn wallet(&self, address: Address, hash: BlockHash) -> Result<(Wallet, L1BlockInfo)> {
         let number = self.block_number(hash)?;
         let block = self.block(number)?;
@@ -526,34 +549,11 @@ impl Snapshot {
                         tracing::warn!("got invalid ValidatorRegisteredV2 event: {err:#}");
                         return Default::default();
                     }
-
-                    let diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: ev.account,
-                        staking_key: PubKey::from(ev.blsVK).into(),
-                        commission: Ratio::new(
-                            ev.commission.into(),
-                            COMMISSION_BASIS_POINTS.into(),
-                        ),
-                        // All nodes start with 0 stake, a separate delegation event will be
-                        // generated when someone delegates non-zero stake to a node.
-                        stake: ESPTokenAmount::ZERO,
-                    });
-                    (vec![diff], vec![])
+                    (vec![FullNodeSetDiff::NodeUpdate(ev.into())], vec![])
                 }
                 StakeTableV2Events::ValidatorRegistered(ev) => {
                     tracing::warn!("received legacy ValidatorRegistered event");
-                    let diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: ev.account,
-                        staking_key: PubKey::from(ev.blsVk).into(),
-                        commission: Ratio::new(
-                            ev.commission.into(),
-                            COMMISSION_BASIS_POINTS.into(),
-                        ),
-                        // All nodes start with 0 stake, a separate delegation event will be
-                        // generated when someone delegates non-zero stake to a node.
-                        stake: ESPTokenAmount::ZERO,
-                    });
-                    (vec![diff], vec![])
+                    (vec![FullNodeSetDiff::NodeUpdate(ev.into())], vec![])
                 }
                 StakeTableV2Events::ExitEscrowPeriodUpdated(ev) => {
                     // This should be quite rare, we can be a little loud about it.
@@ -758,6 +758,33 @@ impl From<RewardClaimEvents> for L1Event {
 impl From<StakeTableV2Events> for L1Event {
     fn from(event: StakeTableV2Events) -> Self {
         Self::StakeTable(Arc::new(event))
+    }
+}
+
+impl From<&ValidatorRegisteredV2> for NodeSetEntry {
+    fn from(e: &ValidatorRegisteredV2) -> Self {
+        // Downgrade the event: apart from authentication, the V2 event contains the same
+        // information as the V1 event, and can be converted to a node the same way.
+        let e = ValidatorRegistered {
+            account: e.account,
+            blsVk: e.blsVK,
+            commission: e.commission,
+            schnorrVk: e.schnorrVK,
+        };
+        (&e).into()
+    }
+}
+
+impl From<&ValidatorRegistered> for NodeSetEntry {
+    fn from(e: &ValidatorRegistered) -> Self {
+        NodeSetEntry {
+            address: e.account,
+            staking_key: PubKey::from(e.blsVk).into(),
+            commission: Ratio::new(e.commission as usize, COMMISSION_BASIS_POINTS as usize),
+            // All nodes start with 0 stake, a separate delegation event will be generated when
+            // someone delegates non-zero stake to a node.
+            stake: ESPTokenAmount::ZERO,
+        }
     }
 }
 
@@ -1379,12 +1406,7 @@ mod test {
     fn test_event_validator_registered_v2_valid() {
         let event = validator_registered_event(rand::thread_rng());
         let block = test_events([StakeTableV2Events::ValidatorRegisteredV2(event.clone())]);
-        let expected = NodeSetEntry {
-            address: event.account,
-            staking_key: PubKey::from(event.blsVK).into(),
-            commission: Ratio::new(event.commission as usize, COMMISSION_BASIS_POINTS as usize),
-            stake: Default::default(),
-        };
+        let expected = NodeSetEntry::from(&event);
         assert_eq!(block.state.node_set.len(), 1);
         assert_eq!(block.state.node_set[&event.account], expected);
         assert_eq!(
@@ -1475,15 +1497,7 @@ mod test {
         assert_eq!(
             block.node_set_update.as_ref().unwrap(),
             &[
-                FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                    address: node.account,
-                    staking_key: PubKey::from(node.blsVK).into(),
-                    stake: Default::default(),
-                    commission: Ratio::new(
-                        node.commission as usize,
-                        COMMISSION_BASIS_POINTS as usize
-                    ),
-                }),
+                FullNodeSetDiff::NodeUpdate(NodeSetEntry::from(&node)),
                 FullNodeSetDiff::NodeExit(NodeExit {
                     address: node.account,
                     exit_time: block.block().timestamp() + block.block().exit_escrow_period

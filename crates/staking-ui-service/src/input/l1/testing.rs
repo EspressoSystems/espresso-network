@@ -39,11 +39,10 @@ use hotshot_types::{
 use jf_signature::{SignatureScheme, schnorr::SchnorrSignatureScheme};
 use rand::{CryptoRng, Rng, RngCore, SeedableRng, rngs::StdRng, seq::IteratorRandom};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
-use tagged_base64::TaggedBase64;
 use tide_disco::{Error as _, StatusCode, Url};
 use tokio::{task::spawn, time::sleep};
 
-use crate::types::common::{NodeSetEntry, Ratio};
+use crate::types::common::NodeSetEntry;
 
 use super::*;
 
@@ -218,14 +217,7 @@ pub fn block_snapshot(number: u64) -> L1BlockSnapshot {
 
 /// Generate an arbitrary node for testing.
 pub fn make_node(i: usize) -> NodeSetEntry {
-    let address = Address::random();
-    let staking_key = TaggedBase64::new("KEY", &i.to_le_bytes()).unwrap();
-    NodeSetEntry {
-        address,
-        staking_key,
-        stake: i.try_into().unwrap(),
-        commission: Ratio::new(5, 100),
-    }
+    (&validator_registered_event(StdRng::seed_from_u64(i as u64))).into()
 }
 
 /// Generate random L1 events for testing.

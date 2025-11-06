@@ -14,7 +14,10 @@ use alloy::{
     rpc::types::{Filter, Header},
     sol_types::SolEventInterface,
 };
-use futures::stream::{self, BoxStream, Stream, StreamExt};
+use futures::{
+    future,
+    stream::{self, BoxStream, Stream, StreamExt},
+};
 use hotshot_contract_adapter::sol_types::RewardClaim::RewardClaimEvents;
 use hotshot_contract_adapter::sol_types::StakeTableV2::StakeTableV2Events;
 use std::{
@@ -133,9 +136,8 @@ impl RpcStreamBuilder {
                 async move {
                     let head = stream.next().await?;
                     let blocks =
-                        process_block_header(&provider, &mut last_block_number, head, retry_delay)
-                            .await;
-                    Some((stream::iter(blocks), (stream, last_block_number, ws)))
+                        process_block_header(provider, &mut last_block_number, head, retry_delay);
+                    Some((blocks, (stream, last_block_number, ws)))
                 }
             },
         )
@@ -189,22 +191,21 @@ impl RpcStreamBuilder {
                         Ok(Some(block)) => block,
                         Ok(None) => {
                             tracing::warn!(%hash, "HTTP stream: Block not available");
-                            return Some((stream::iter(Vec::new()), (stream, last_block_number)));
+                            return Some((stream::empty().boxed(), (stream, last_block_number)));
                         }
                         Err(err) => {
                             tracing::warn!(%hash, "HTTP stream: Failed to fetch block: {err:#}");
-                            return Some((stream::iter(Vec::new()), (stream, last_block_number)));
+                            return Some((stream::empty().boxed(), (stream, last_block_number)));
                         }
                     };
 
                     let blocks = process_block_header(
-                        &provider,
+                        provider,
                         &mut last_block_number,
                         block.header,
                         retry_delay,
-                    )
-                    .await;
-                    Some((stream::iter(blocks), (stream, last_block_number)))
+                    );
+                    Some((blocks, (stream, last_block_number)))
                 }
             },
         )
@@ -361,64 +362,56 @@ async fn fetch_finalized(
 /// Process a new block header, handling missing blocks
 /// and updating last_block_number.
 /// Returns a vector of headers in order, including any missing blocks that were fetched.
-async fn process_block_header(
-    provider: &Arc<RootProvider<Ethereum>>,
+fn process_block_header(
+    provider: Arc<RootProvider<Ethereum>>,
     last_block_number: &mut Option<u64>,
     new_header: Header,
     retry_delay: Duration,
-) -> Vec<Header> {
+) -> BoxStream<'static, Header> {
     let new_block_number = new_header.number;
     let prev_block_number = *last_block_number;
 
-    let mut new_blocks = Vec::new();
-
+    let mut new_blocks = stream::empty().boxed();
     if let Some(prev) = prev_block_number {
         if new_block_number <= prev {
             tracing::info!(
                 "Skipping block {new_block_number} as it's not newer than previous block {prev}"
             );
-            return Vec::new();
+            return new_blocks;
         }
 
         if new_block_number != prev + 1 {
-            let missing_blocks =
-                fetch_missing_blocks(provider, prev, new_block_number, retry_delay).await;
-
-            tracing::info!(
-                fetched_count = missing_blocks.len(),
-                "Successfully fetched missing blocks"
-            );
-            new_blocks.extend(missing_blocks);
+            new_blocks =
+                fetch_missing_blocks(provider, prev, new_block_number, retry_delay).boxed();
         }
     }
 
-    new_blocks.push(new_header);
+    new_blocks = new_blocks
+        .chain(stream::once(future::ready(new_header)))
+        .boxed();
     *last_block_number = Some(new_block_number);
     new_blocks
 }
 
 /// Fetch missing blocks with retry logic.
-async fn fetch_missing_blocks(
-    provider: &Arc<RootProvider<Ethereum>>,
+fn fetch_missing_blocks(
+    provider: Arc<RootProvider<Ethereum>>,
     prev_block: u64,
     new_block: u64,
     retry_delay: Duration,
-) -> Vec<Header> {
-    let mut headers = Vec::new();
-
-    if new_block > prev_block + 1 {
-        tracing::warn!(
-            "Fetching missing blocks from {} to {}",
-            prev_block + 1,
-            new_block - 1
-        );
-
-        for block_num in (prev_block + 1)..new_block {
+) -> impl Stream<Item = Header> {
+    tracing::warn!(
+        "Fetching missing blocks from {} to {}",
+        prev_block + 1,
+        new_block - 1
+    );
+    stream::iter(prev_block + 1..new_block).then(move |block_num| {
+        let provider = provider.clone();
+        async move {
             loop {
                 match provider.get_block(BlockId::number(block_num)).await {
                     Ok(Some(block)) => {
-                        headers.push(block.header);
-                        break;
+                        break block.header;
                     }
                     Ok(None) => {
                         tracing::warn!("Missing block {block_num} not found, retrying...");
@@ -433,9 +426,7 @@ async fn fetch_missing_blocks(
                 }
             }
         }
-    }
-
-    headers
+    })
 }
 
 /// Try to fetch and decode events for a given header.

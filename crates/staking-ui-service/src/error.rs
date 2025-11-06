@@ -113,7 +113,11 @@ where
     type Ok = T;
 
     fn context(self, f: impl FnOnce() -> Error) -> Result<<Self as ResultExt>::Ok> {
-        self.map_err(|err| f().context(err))
+        self.map_err(|inner| {
+            let mut err = f();
+            err.message = format!("{}: {inner:#}", err.message);
+            err
+        })
     }
 }
 
