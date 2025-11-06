@@ -425,10 +425,14 @@ pub async fn get_node_identity_from_url(
 
     let request = client.get(completed_url).build()?;
     let response = client.execute(request).await?;
-    let response_bytes = response.bytes().await?;
+    let response_text = response.text().await?;
 
-    let buffered_response = std::io::BufReader::new(&*response_bytes);
-    let scrape = prometheus_parse::Scrape::parse(buffered_response.lines())?;
+    let response_text = response_text
+        .lines()
+        .into_iter()
+        .map(|line| Ok(line.to_string()));
+
+    let scrape = prometheus_parse::Scrape::parse(response_text)?;
 
     let mut node_identity = match node_identity_from_scrape(scrape) {
         Ok(node_identity) => node_identity,
