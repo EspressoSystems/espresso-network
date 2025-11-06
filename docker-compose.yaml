@@ -115,10 +115,10 @@ services:
     environment:
       - RUST_LOG
       - RUST_LOG_FORMAT
-      - L1_PROVIDER=http://demo-l1-network:8545
-      - STAKE_TABLE_ADDRESS=0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d
+      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
+      - STAKE_TABLE_ADDRESS=${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS}
       - ESPRESSO_URL=http://sequencer0:24000
-      - MNEMONIC=test test test test test test test test test test test junk
+      - MNEMONIC
       - ACCOUNT_INDEX=20
     depends_on:
       deploy-pos-contracts-upgrades:
