@@ -110,7 +110,7 @@ services:
         else
           echo "No rewards to claim yet ($$unclaimed)"
         fi
-        sleep 15
+        sleep 10
       done'
     environment:
       - RUST_LOG

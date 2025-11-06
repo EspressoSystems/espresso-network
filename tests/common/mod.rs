@@ -8,21 +8,22 @@ use std::{
 };
 
 use alloy::{
-    eips::BlockNumberOrTag,
-    primitives::Address,
-    providers::{Provider, ProviderBuilder},
-    rpc::types::Filter,
+    primitives::{Address, U256},
+    providers::ProviderBuilder,
 };
 use anyhow::{anyhow, Context, Result};
 use client::SequencerClient;
+use espresso_contract_deployer::build_signer;
 use espresso_types::FeeAmount;
 use futures::future::join_all;
+use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2};
 use sequencer::Genesis;
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 
 // TODO add to .env
 const RECIPIENT_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
+const VALIDATOR0_ACCOUNT_INDEX: u32 = 20;
 
 pub fn load_genesis_file(path: impl AsRef<Path>) -> Result<Genesis> {
     // Because we use nextest with the archive feature on CI we need to use the **runtime**
@@ -43,6 +44,7 @@ pub struct TestConfig {
     pub builder_address: Address,
     pub recipient_address: Address,
     pub light_client_address: Address,
+    pub reward_claim_address: Option<Address>,
     pub prover_url: String,
     pub sequencer_clients: Vec<SequencerClient>,
     pub initial_height: u64,
@@ -59,6 +61,8 @@ pub struct TestRequirements {
     /// Panic if no block seen for this interval, we will panic fail relatively quickly.
     pub block_timeout: Duration,
     pub max_consecutive_blocks_without_tx: u64,
+    /// Block height at which to check rewards have been claimed (if Some)
+    pub reward_claim_deadline_block_height: Option<u64>,
 }
 
 impl Default for TestRequirements {
@@ -71,17 +75,19 @@ impl Default for TestRequirements {
             // timeouts which lead to occasional drop in block times.
             block_timeout: Duration::from_secs(45),
             max_consecutive_blocks_without_tx: 10,
+            reward_claim_deadline_block_height: None,
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct TestState {
     pub block_height: Option<u64>,
     pub txn_count: u64,
     pub builder_balance: FeeAmount,
     pub recipient_balance: FeeAmount,
-    pub light_client_update: u64,
+    pub light_client_finalized_block_height: u64,
+    pub rewards_claimed: U256,
 }
 
 impl fmt::Display for TestState {
@@ -92,13 +98,15 @@ impl fmt::Display for TestState {
         transactions: {}
         builder_balance: {}
         recipient_balance: {}
-        light_client_updated: {}
+        light_client_finalized_block_height: {}
+        rewards_claimed: {}
 ",
             self.block_height.unwrap(),
             self.txn_count,
             self.builder_balance,
             self.recipient_balance,
-            self.light_client_update
+            self.light_client_finalized_block_height,
+            self.rewards_claimed
         );
 
         write!(f, "{output}")
@@ -147,6 +155,28 @@ impl TestConfig {
         let light_client_proxy_address =
             dotenvy::var("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")?;
 
+        // Derive reward claim address from contracts
+        let reward_claim_address = if let Ok(stake_table_addr_str) =
+            dotenvy::var("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")
+        {
+            let stake_table_addr: Address = stake_table_addr_str.parse()?;
+            let provider = ProviderBuilder::new().connect_http(Url::parse(&l1_provider_url)?);
+
+            let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+            let token_address = stake_table.token().call().await?;
+
+            let esp_token = EspTokenV2::new(token_address, &provider);
+            let reward_claim_addr = esp_token.rewardClaim().call().await?;
+
+            if reward_claim_addr == Address::ZERO {
+                None
+            } else {
+                Some(reward_claim_addr)
+            }
+        } else {
+            None
+        };
+
         println!("Waiting on Builder Address");
 
         let client = SequencerClient::new(Url::from_str(&sequencer_api_url).unwrap());
@@ -158,6 +188,7 @@ impl TestConfig {
             l1_endpoint: Url::parse(&l1_provider_url).unwrap(),
             espresso: client,
             light_client_address: light_client_proxy_address.parse::<Address>().unwrap(),
+            reward_claim_address,
             builder_address,
             recipient_address: RECIPIENT_ADDRESS.parse::<Address>().unwrap(),
             prover_url,
@@ -177,21 +208,12 @@ impl TestConfig {
         self.initial_txns + self.requirements.txn_count_increment
     }
 
-    /// Get the latest block where we see a light client update
-    pub async fn latest_light_client_update(&self) -> u64 {
+    /// Get the finalized block height from the light client
+    pub async fn light_client_finalized_block_height(&self) -> u64 {
         let provider = ProviderBuilder::new().connect_http(self.l1_endpoint.clone());
-        let filter = Filter::new()
-            .from_block(BlockNumberOrTag::Earliest)
-            .address(self.light_client_address);
-        // block number for latest light client update
-        provider
-            .get_logs(&filter)
-            .await
-            .unwrap()
-            .last()
-            .unwrap()
-            .block_number
-            .unwrap()
+        let light_client = LightClientV3::new(self.light_client_address, &provider);
+        let finalized_state = light_client.finalizedState().call().await.unwrap();
+        finalized_state.blockHeight
     }
 
     /// Return current state  of the test
@@ -210,14 +232,17 @@ impl TestConfig {
             .await
             .unwrap();
 
-        let light_client_update = self.latest_light_client_update().await;
+        let light_client_finalized_block_height = self.light_client_finalized_block_height().await;
+
+        let rewards_claimed = self.claimed_rewards().await.unwrap_or(U256::ZERO);
 
         TestState {
             block_height,
             txn_count,
             builder_balance,
             recipient_balance,
-            light_client_update,
+            light_client_finalized_block_height,
+            rewards_claimed,
         }
     }
 
@@ -230,6 +255,32 @@ impl TestConfig {
         .await
         .into_iter()
         .collect::<Result<Vec<String>>>()
+    }
+
+    /// Get the validator0 address (ACCOUNT_INDEX=20)
+    pub fn validator0_address() -> Address {
+        let mnemonic = dotenvy::var("ESPRESSO_SEQUENCER_ETH_MNEMONIC")
+            .expect("ESPRESSO_SEQUENCER_ETH_MNEMONIC not set");
+        let signer = build_signer(&mnemonic, VALIDATOR0_ACCOUNT_INDEX);
+        signer.address()
+    }
+
+    /// Check claimed rewards for validator0
+    pub async fn claimed_rewards(&self) -> Result<U256> {
+        let reward_claim_address = self
+            .reward_claim_address
+            .context("Reward claim address not available")?;
+
+        let provider = ProviderBuilder::new().connect_http(self.l1_endpoint.clone());
+        let reward_claim = RewardClaim::new(reward_claim_address, &provider);
+
+        let validator_address = Self::validator0_address();
+        let claimed = reward_claim
+            .claimedRewards(validator_address)
+            .call()
+            .await?;
+
+        Ok(claimed)
     }
 }
 
@@ -327,6 +378,12 @@ impl NativeDemo {
         let workspace_dir = crate_dir.parent().expect("crate_dir has a parent");
 
         let mut cmd = Command::new("bash");
+
+        // Set default ESPRESSO_STATE_PROVER_UPDATE_INTERVAL for tests if not already set
+        if std::env::var("ESPRESSO_STATE_PROVER_UPDATE_INTERVAL").is_err() {
+            cmd.env("ESPRESSO_STATE_PROVER_UPDATE_INTERVAL", "20s");
+        }
+
         if let Some(overrides) = env_overrides {
             for (key, value) in overrides {
                 println!("applying env override: {key}={value}");

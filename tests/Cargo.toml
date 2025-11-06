@@ -40,5 +40,12 @@ vbs = { workspace = true }
 name = "integration"
 path = "main.rs"
 
+[features]
+default = ["fee", "pos", "drb-and-header", "da-upgrade"]
+fee = ["sequencer/fee"]
+pos = ["sequencer/pos"]
+drb-and-header = ["sequencer/drb-and-header"]
+da-upgrade = ["sequencer/da-upgrade"]
+
 [lints]
 workspace = true

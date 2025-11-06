@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use alloy::primitives::U256;
 use anyhow::Result;
 use futures::StreamExt;
 
@@ -8,6 +9,8 @@ use crate::common::{NativeDemo, TestConfig, TestRequirements};
 pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<()> {
     let start = Instant::now();
     dotenvy::dotenv()?;
+
+    println!("{:#?}", requirements);
 
     let testing = TestConfig::new(requirements.clone()).await?;
 
@@ -80,6 +83,19 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             );
             continue;
         }
+
+        // Check rewards if required
+        if let Some(deadline_height) = requirements.reward_claim_deadline_block_height {
+            if new.block_height.unwrap() >= deadline_height {
+                assert!(new.rewards_claimed > U256::ZERO);
+                println!(
+                    "Rewards claimed: {} at block {}",
+                    new.rewards_claimed,
+                    new.block_height.unwrap()
+                );
+            }
+        }
+
         break;
     }
     println!("Final State: {}", testing.test_state().await);
