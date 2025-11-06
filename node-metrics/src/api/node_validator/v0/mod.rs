@@ -417,7 +417,7 @@ impl From<std::io::Error> for GetNodeIdentityFromUrlError {
 pub async fn get_node_identity_from_url(
     url: url::Url,
 ) -> Result<NodeIdentity, GetNodeIdentityFromUrlError> {
-    let client = reqwest::Client::new();
+    let client = reqwest::ClientBuilder::new().use_rustls_tls().build()?;
 
     let completed_url = url.join("v0/status/metrics")?;
 
