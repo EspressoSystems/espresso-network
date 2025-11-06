@@ -239,10 +239,6 @@ pub struct Options {
     )]
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
 
-    /// The URL of the builders to use for submitting transactions
-    #[clap(long, env = "ESPRESSO_SEQUENCER_BUILDER_URLS", value_delimiter = ',')]
-    pub builder_urls: Vec<Url>,
-
     /// URL of the Light Client State Relay Server
     #[clap(
         long,
