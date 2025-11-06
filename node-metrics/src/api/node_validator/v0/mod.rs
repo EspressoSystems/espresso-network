@@ -3,6 +3,7 @@ pub mod create_node_validator_api;
 use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
+use anyhow::{Context, Result};
 use espresso_types::{v0_3::Validator, BackoffParams, SeqTypes};
 use futures::{
     channel::mpsc::{self, SendError, Sender},
@@ -429,15 +430,16 @@ pub async fn get_node_identity_from_url(
     let buffered_response = std::io::BufReader::new(&*response_bytes);
     let scrape = prometheus_parse::Scrape::parse(buffered_response.lines())?;
 
-    if let Some(node_identity) = node_identity_from_scrape(scrape) {
-        println!("Node identity found for URL: {}", url);
-        let mut node_identity = node_identity;
-        node_identity.public_url = Some(url);
-        Ok(node_identity)
-    } else {
-        println!("No node identity found for URL: {}", url);
-        Err(GetNodeIdentityFromUrlError::NoNodeIdentity)
-    }
+    let mut node_identity = match node_identity_from_scrape(scrape) {
+        Ok(node_identity) => node_identity,
+        Err(err) => {
+            println!("Error retrieving node identity from scrape: {}", err);
+            return Err(GetNodeIdentityFromUrlError::NoNodeIdentity);
+        },
+    };
+
+    node_identity.public_url = Some(url);
+    Ok(node_identity)
 }
 
 /// [AvailabilityConnection] is a simple short-hand type alias for a
@@ -1041,36 +1043,38 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
 /// expects the [Scrape] to contain the necessary information to populate the
 /// [NodeIdentity].  If the [Scrape] doesn't contain the necessary information
 /// to populate the [NodeIdentity], then it will return [None].
-pub fn node_identity_from_scrape(scrape: Scrape) -> Option<NodeIdentity> {
+pub fn node_identity_from_scrape(scrape: Scrape) -> anyhow::Result<NodeIdentity> {
     let node_key = scrape
         .docs
         .iter()
         .find(|(_, key)| key == &"node")
         .map(|(key, _)| key);
 
-    let node_key = node_key?;
+    let node_key = node_key.with_context(|| "No node key found in scrape")?;
 
     let node_sample = scrape
         .samples
         .iter()
         .find(|sample| &sample.metric == node_key);
 
-    let node_sample = node_sample?;
+    let node_sample = node_sample.with_context(|| "No node sample found in scrape")?;
 
-    let public_key_string = node_sample.labels.get("key")?;
+    let public_key_string = node_sample
+        .labels
+        .get("key")
+        .with_context(|| "No public key found in node sample")?;
 
     let public_key = match BLSPubKey::from_str(public_key_string) {
         Ok(public_key) => public_key,
         Err(err) => {
-            tracing::info!("parsing public key failed: {}", err);
-            return None;
+            return Err(anyhow::anyhow!("Parsing public key failed: {}", err));
         },
     };
 
     let mut node_identity = NodeIdentity::from_public_key(public_key);
     populate_node_identity_from_scrape(&mut node_identity, scrape);
 
-    Some(node_identity)
+    Ok(node_identity)
 }
 
 /// [ProcessNodeIdentityUrlStreamTask] is a task that processes a stream of
@@ -1313,7 +1317,7 @@ mod tests {
 
         let node_identity = super::node_identity_from_scrape(scrape);
 
-        assert!(node_identity.is_some());
+        assert!(node_identity.is_ok());
         let node_identity = node_identity.unwrap();
 
         assert_eq!(
