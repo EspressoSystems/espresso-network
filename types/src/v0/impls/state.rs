@@ -978,7 +978,8 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
-        let total_rewards_distributed = if version <= EpochVersion::version() {
+        // total_rewards_distributed is only present in >= V4
+        let total_rewards_distributed = if version < EpochVersion::version() {
             None
         } else if let Some(reward_distributor) = distribute_block_reward(
             instance,
@@ -995,7 +996,8 @@ impl ValidatedState {
 
             Some(reward_distributor.total_distributed())
         } else {
-            None
+            // Version >= V4 but no rewards were distributed because epoch <= first epoch + 1
+            Some(Default::default())
         };
 
         Ok((validated_state, delta, total_rewards_distributed))
