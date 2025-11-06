@@ -116,9 +116,8 @@ func runDevNode(ctx context.Context, tmpDir string) func() {
 
 	invocation := []string{
 		"run",
-		"--bin",
+		"-p",
 		"espresso-dev-node",
-		"--features=testing,embedded-db",
 	}
 	p := exec.CommandContext(ctx, "cargo", invocation...)
 	p.Dir = workingDir

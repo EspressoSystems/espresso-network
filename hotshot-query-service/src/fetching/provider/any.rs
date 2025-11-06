@@ -187,7 +187,7 @@ where
         match p.fetch(req).await {
             Some(obj) => return Some(obj),
             None => {
-                tracing::warn!(
+                tracing::debug!(
                     "failed to fetch {req:?} from provider {i}/{}: {p:?}",
                     providers.len()
                 );
@@ -195,6 +195,11 @@ where
             },
         }
     }
+
+    tracing::warn!(
+        "failed to fetch {req:?} from all {} providers",
+        providers.len()
+    );
 
     None
 }

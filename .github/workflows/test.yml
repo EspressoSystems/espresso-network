@@ -21,6 +21,7 @@ concurrency:
 env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
   # Save the process compose logs
   NATIVE_DEMO_LOGS: /tmp/native-demo.log
   PC_LOG_FILE: /tmp/pc-logs.log
@@ -30,12 +31,11 @@ jobs:
     name: Build test artifacts (postgres)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: rui314/setup-mold@v1
-
       - uses: actions/checkout@v4
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,just
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -54,9 +54,7 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        # hotshot-testing is tested in hotshot.yml -> exclude
-        # sequencer-sqlite will enable embedded-db feature -> exclude
-        run: cargo nextest archive --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
+        run: just nextest-archive nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -69,14 +67,11 @@ jobs:
     name: Build test artifacts (sqlite)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: rui314/setup-mold@v1
-
       - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
+      - uses: taiki-e/install-action@v2
         with:
-          submodules: recursive
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
+          tool: nextest,just
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -95,8 +90,7 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        # hotshot-testing is tested in hotshot.yml -> exclude
-        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
+        run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing"
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -109,9 +103,8 @@ jobs:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: rui314/setup-mold@v1
-
       - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -156,8 +149,8 @@ jobs:
     name: Build sequencer-sqlite test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: rui314/setup-mold@v1
       - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -185,8 +178,8 @@ jobs:
     name: Build espresso-dev-node test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: rui314/setup-mold@v1
       - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -198,7 +191,7 @@ jobs:
 
       - name: Build espresso-dev-node binary
         run: |
-          cargo build --locked --profile test --features "embedded-db testing" --bin espresso-dev-node
+          cargo build --locked --profile test -p espresso-dev-node
         timeout-minutes: 30
 
       - name: Upload archive to workflow
@@ -217,10 +210,9 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-
       - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: taiki-e/install-action@nextest
 
       - name: Install node deps
         uses: nick-fields/retry@v3
@@ -231,8 +223,6 @@ jobs:
           retry_on: error
           command: yarn
 
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
@@ -253,14 +243,11 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
-
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: taiki-e/install-action@nextest
 
       - name: Install node deps
         uses: nick-fields/retry@v3
@@ -271,8 +258,6 @@ jobs:
           retry_on: error
           command: yarn
 
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
@@ -288,37 +273,10 @@ jobs:
   test-go-sdk:
     runs-on: ubuntu-latest
     steps:
-      # This job runs out of disk space
-      - uses: cargo-bins/cargo-binstall@main
-      - name: Make more disk space available on public runner
-        run: |
-          # rmz seems to be faster at deleting files than rm
-          cargo binstall -y --version 2.2.0 rmz
-          sudo mv /home/runner/.cargo/bin/rmz /usr/local/bin/rmz
-
-          echo "Available storage before:"
-          sudo df -h
-          echo
-          sudo rmz -f /usr/share/dotnet
-          sudo rmz -f /usr/share/swift
-          sudo rmz -f /usr/share/gradle-*
-          sudo rmz -f /usr/share/az_*
-          sudo rmz -f /usr/local/lib/android
-          sudo rmz -f /opt/ghc
-          sudo rmz -f /opt/az
-          sudo rmz -f /opt/pipx
-          sudo rmz -f /opt/google
-          sudo rmz -f /opt/microsoft
-          echo "Available storage after:"
-          sudo df -h
-          echo
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-
-      - name: Enable Cachix
-        uses: cachix/cachix-action@v16
-        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk-space
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
         continue-on-error: true
         with:
           name: espresso-systems-private
@@ -326,15 +284,9 @@ jobs:
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
-      - uses: actions/checkout@v4
-
       - name: Build espresso-dev-node
         run: |
-          nix develop --accept-flake-config -c cargo build --bin espresso-dev-node --features testing,embedded-db
-        env:
-          # Do not exceed the memory limit of the public github runner during cargo build.
-          CARGO_BUILD_JOBS: "2"
-
+          nix develop --accept-flake-config -c cargo build -p espresso-dev-node
 
       - name: Build verification module
         run: |
@@ -359,41 +311,12 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-
-      # The demo l1 (geth) sometimes shuts down due to perceived low disk space.
-      - uses: cargo-bins/cargo-binstall@main
-      - name: Make more disk space available on public runner
-        run: |
-          # rmz seems to be faster at deleting files than rm
-          cargo binstall -y --version 2.2.0 rmz
-          sudo mv /home/runner/.cargo/bin/rmz /usr/local/bin/rmz
-
-          echo "Available storage before:"
-          sudo df -h
-          echo
-          sudo rmz -f /usr/share/dotnet
-          sudo rmz -f /usr/share/swift
-          sudo rmz -f /usr/share/gradle-*
-          sudo rmz -f /usr/share/az_*
-          sudo rmz -f /usr/local/lib/android
-          sudo rmz -f /opt/ghc
-          sudo rmz -f /opt/az
-          sudo rmz -f /opt/pipx
-          sudo rmz -f /opt/google
-          sudo rmz -f /opt/microsoft
-          echo "Available storage after:"
-          sudo df -h
-          echo
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-
-      - name: Configure PATH
-        run: PATH="$PWD/target/debug:$PATH"
-
       - uses: actions/checkout@v4
-
+      - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@nextest
+      - uses: ./.github/actions/install-process-compose
+        with:
+          version: v1.75.2
 
       - name: Download archive
         uses: actions/download-artifact@v4
@@ -406,8 +329,8 @@ jobs:
           mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
-      - name: Install process-compose
-        run: nix profile install nixpkgs#process-compose
+      - name: Configure PATH
+        run: PATH="$PWD/target/debug:$PATH"
 
       - name: Collect Workflow Telemetry
         uses: catchpoint/workflow-telemetry-action@master
@@ -445,8 +368,10 @@ jobs:
     needs: [build-test-bins, build-test-bins-sqlite]
     runs-on: ubuntu-latest
     steps:
-      - uses: cachix/install-nix-action@v31
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/install-process-compose
+        with:
+          version: v1.75.2
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.
@@ -460,9 +385,6 @@ jobs:
           mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
-      - name: Install process-compose
-        run: nix profile install nixpkgs#process-compose
-
       - name: Collect Workflow Telemetry
         uses: catchpoint/workflow-telemetry-action@v2
         with:
@@ -472,8 +394,13 @@ jobs:
         run: |
           export PATH="$PWD/target/debug:$PATH"
           set -o pipefail
-          scripts/demo-native --tui=false &
+          scripts/demo-native --tui=false > "${{ env.NATIVE_DEMO_LOGS }}" 2>&1 &
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+      - name: Show end of logs
+        if: always()
+        run: |
+          tail -n 1000 "${{ env.NATIVE_DEMO_LOGS }}"
 
       - name: Upload process compose logs
         if: always()
@@ -484,7 +411,7 @@ jobs:
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
-    needs: [test-postgres, test-sqlite, demo-native, test-integration]
+    needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}
