@@ -1181,7 +1181,9 @@ pub(crate) async fn validate_proposal_view_and_certs<
                      preceding view"
                 );
                 let timeout_cert_epoch = timeout_cert.data().epoch();
-                membership = membership.get_new_epoch(timeout_cert_epoch).await?;
+                membership = membership
+                    .get_new_epoch_stake_table(timeout_cert_epoch)
+                    .await?;
 
                 let membership_stake_table = membership.stake_table().await;
                 let membership_success_threshold = membership.success_threshold().await;
@@ -1206,7 +1208,9 @@ pub(crate) async fn validate_proposal_view_and_certs<
                 );
 
                 let view_sync_cert_epoch = view_sync_cert.data().epoch();
-                membership = membership.get_new_epoch(view_sync_cert_epoch).await?;
+                membership = membership
+                    .get_new_epoch_stake_table(view_sync_cert_epoch)
+                    .await?;
 
                 let membership_stake_table = membership.stake_table().await;
                 let membership_success_threshold = membership.success_threshold().await;
