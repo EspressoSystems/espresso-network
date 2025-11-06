@@ -154,6 +154,7 @@ mod test {
         stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
     };
     use rand::{rngs::StdRng, SeedableRng as _};
+    use rstest::rstest;
 
     use super::*;
     use crate::{deploy::TestSystem, receipt::ReceiptExt};
@@ -191,9 +192,12 @@ mod test {
         Ok(())
     }
 
+    #[rstest]
+    #[case(StakeTableContractVersion::V1)]
+    #[case(StakeTableContractVersion::V2)]
     #[tokio::test]
-    async fn test_deregister_validator() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+    async fn test_deregister_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
+        let system = TestSystem::deploy_version(version).await?;
         system.register_validator().await?;
 
         let receipt = deregister_validator(&system.provider, system.stake_table)
@@ -201,10 +205,27 @@ mod test {
             .assert_success()
             .await?;
 
-        let event = receipt
-            .decoded_log::<StakeTableV2::ValidatorExit>()
-            .unwrap();
-        assert_eq!(event.validator, system.deployer_address);
+        match version {
+            StakeTableContractVersion::V1 => {
+                let event = receipt
+                    .decoded_log::<StakeTableV2::ValidatorExit>()
+                    .unwrap();
+                assert_eq!(event.validator, system.deployer_address);
+            },
+            StakeTableContractVersion::V2 => {
+                let event = receipt
+                    .decoded_log::<StakeTableV2::ValidatorExitV2>()
+                    .unwrap();
+                assert_eq!(event.validator, system.deployer_address);
+                let block = system
+                    .provider
+                    .get_block_by_number(receipt.block_number.unwrap().into())
+                    .await?
+                    .unwrap();
+                let expected_unlock = block.header.timestamp + system.exit_escrow_period.as_secs();
+                assert_eq!(event.unlocksAt, U256::from(expected_unlock));
+            },
+        }
 
         Ok(())
     }
