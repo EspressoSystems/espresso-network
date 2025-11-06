@@ -970,11 +970,10 @@ pub async fn deploy_reward_claim_proxy(
         anyhow::bail!("EspToken address is not a contract, can't deploy RewardClaimProxy");
     }
 
-    // TODO: MA currently disabled because in the local demo we deploy RewardClaimProxy before LightClientProxy
-    // // verify the light client address contains a contract
-    // if !is_contract(&provider, light_client_addr).await? {
-    //     anyhow::bail!("LightClient address is not a contract, can't deploy RewardClaimProxy");
-    // }
+    // verify the light client address contains a contract
+    if !is_contract(&provider, light_client_addr).await? {
+        anyhow::bail!("LightClient address is not a contract, can't deploy RewardClaimProxy");
+    }
 
     let init_data = reward_claim
         .initialize(owner, esp_token_addr, light_client_addr, pauser)

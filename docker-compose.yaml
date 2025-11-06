@@ -15,7 +15,7 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token --deploy-stake-table --deploy-reward-claim --upgrade-esp-token-v2 --upgrade-stake-table-v2
+    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token --deploy-stake-table
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -69,6 +69,31 @@ services:
         condition: service_healthy
       # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
       deploy-sequencer-contracts:
+        condition: service_completed_successfully
+
+  deploy-pos-contracts-upgrades:
+    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    command: deploy --deploy-reward-claim --upgrade-esp-token-v2 --upgrade-stake-table-v2
+    environment:
+      - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+      - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
+      - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
+      - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
+      - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
+      - ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+      - ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
+      - ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS
+      - ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN
+      - ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY
+      - ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS
+      - ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+      - ASYNC_STD_THREAD_COUNT
+    depends_on:
+      demo-l1-network:
+        condition: service_healthy
+      deploy-prover-contracts:
         condition: service_completed_successfully
 
   fund-builder:

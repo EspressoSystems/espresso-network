@@ -43,7 +43,7 @@ processes:
       ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
       ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
       ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
-      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token --deploy-stake-table --deploy-reward-claim --upgrade-esp-token-v2 --upgrade-stake-table-v2
+      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token --deploy-stake-table
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -63,6 +63,21 @@ processes:
       sequencer0:
         condition: process_healthy
       deploy-sequencer-contracts:
+        condition: process_completed
+    availability: *exit-ok
+
+  # - Reward claims needs the LC to be deployed.
+  # - The stake table upgrade could be done earlier but this way we get some extra
+  #   testing of the contract upgrade while the network is running.
+  deploy-pos-contracts-upgrades:
+    command:
+      unset ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS
+      && deploy --deploy-reward-claim --upgrade-esp-token-v2 --upgrade-stake-table-v2
+    namespace: setup
+    depends_on:
+      demo-l1-network:
+        condition: process_healthy
+      deploy-prover-contracts:
         condition: process_completed
     availability: *exit-ok
 

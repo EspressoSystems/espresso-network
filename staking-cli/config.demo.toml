@@ -1,5 +1,5 @@
 rpc_url = "http://127.0.0.1:8545"
-stake_table_address = "0x2a264f26859166c5bf3868a54593ee716aebc848"
+stake_table_address = "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"
 espresso_url = "http://localhost:24000"
 
 [signer]
