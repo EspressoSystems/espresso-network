@@ -435,20 +435,25 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
     // If the response was not 200, error
     if response.status() != 200 {
         return Err(anyhow::anyhow!(
-            "Failed to get node identity from URL: {}",
+            "Failed to get node identity from URL. Status: {}",
             response.status()
         ));
     }
 
-    // Get the response bytes (with a timeout)
-    let response_bytes = timeout(Duration::from_secs(5), response.bytes())
+    // Get the response text (with a timeout)
+    let response_text = timeout(Duration::from_secs(5), response.text())
         .await
-        .with_context(|| "Timed out while getting response bytes")?
-        .with_context(|| "Failed to get response bytes")?;
+        .with_context(|| "Timed out while getting response text")?
+        .with_context(|| "Failed to get response text")?;
 
-    // Parse the scrape
-    let buffered_response = std::io::BufReader::new(&*response_bytes);
-    let scrape = prometheus_parse::Scrape::parse(buffered_response.lines())
+    // Get the response lines
+    let response_lines = response_text
+        .lines()
+        .into_iter()
+        .map(|line| Ok(line.to_string()));
+
+    // Parse the response lines into a scrape
+    let scrape = prometheus_parse::Scrape::parse(response_lines)
         .with_context(|| "Failed to parse scrape")?;
 
     // Get the node identity from the scrape
