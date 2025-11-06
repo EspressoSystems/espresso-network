@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use alloy::{
     self,
     eips::BlockId,
-    primitives::{utils::format_ether, Address},
+    primitives::{utils::format_ether, Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::Log,
     sol_types::SolEventInterface,
@@ -25,7 +25,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
 };
 use staking_cli::{
-    claim::{claim_reward, claim_validator_exit, claim_withdrawal},
+    claim::{claim_reward, claim_validator_exit, claim_withdrawal, unclaimed_rewards},
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     info::{display_stake_table, fetch_token_address, stake_table_info},
@@ -36,6 +36,12 @@ use staking_cli::{
     Commands, Config, ValidSignerConfig,
 };
 use sysinfo::System;
+
+fn format_esp(value: U256) -> String {
+    let formatted = format_ether(value);
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+    format!("{} ESP", trimmed)
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -360,6 +366,20 @@ pub async fn main() -> Result<()> {
             tracing::info!("Stake table token allowance for {owner}: {allowance} ESP");
             return Ok(());
         },
+        Commands::UnclaimedRewards { address } => {
+            let address = address.unwrap_or(account);
+            let espresso_url = config.espresso_url.ok_or_else(|| {
+                anyhow::anyhow!("espresso_url not set, use --espresso-url or ESPRESSO_URL")
+            })?;
+            let unclaimed =
+                unclaimed_rewards(&provider, config.stake_table_address, espresso_url, address)
+                    .await
+                    .unwrap_or_else(|err| {
+                        exit_err("Failed to check unclaimed rewards", err);
+                    });
+            println!("{}", format_esp(unclaimed));
+            return Ok(());
+        },
         _ => {
             // Continue with the rest of the commands that require a signer
         },
@@ -416,7 +436,7 @@ pub async fn main() -> Result<()> {
             tracing::info!("Claiming validator exit for {validator_address}");
             claim_validator_exit(&provider, stake_table_addr, validator_address).await?
         },
-        Commands::ClaimReward => {
+        Commands::ClaimRewards => {
             let espresso_url = config.espresso_url.ok_or_else(|| {
                 anyhow::anyhow!("espresso_url not set, use --espresso-url or ESPRESSO_URL")
             })?;

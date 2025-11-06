@@ -27,6 +27,7 @@ pub mod receipt;
 pub mod registration;
 pub mod signature;
 
+#[cfg(feature = "testing")]
 pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -263,7 +264,13 @@ pub enum Commands {
         validator_address: Address,
     },
     /// Claim staking rewards.
-    ClaimReward,
+    ClaimRewards,
+    /// Check unclaimed staking rewards.
+    UnclaimedRewards {
+        /// The address to check.
+        #[clap(long)]
+        address: Option<Address>,
+    },
     /// Check ESP token balance.
     TokenBalance {
         /// The address to check.

@@ -11244,6 +11244,7 @@ dependencies = [
  "sequencer-utils",
  "serde",
  "serde_json",
+ "staking-cli",
  "sysinfo",
  "tagged-base64",
  "tempfile",

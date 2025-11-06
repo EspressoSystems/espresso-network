@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use alloy::{
     network::{Ethereum, EthereumWallet},
-    primitives::{utils::parse_ether, Address, U256},
+    primitives::{utils::parse_ether, Address, B256, U256},
     providers::{
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
@@ -11,23 +11,33 @@ use alloy::{
         ProviderBuilder, RootProvider, WalletProvider,
     },
     signers::local::PrivateKeySigner,
+    sol_types::SolValue as _,
 };
 use anyhow::Result;
 use espresso_contract_deployer::{
     build_signer, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table, Contract, Contracts,
 };
+use espresso_types::{
+    v0::v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+    },
+    v0_3::RewardAmount,
+    v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
+};
 use hotshot_contract_adapter::{
     sol_types::{
         EspToken::{self, EspTokenInstance},
-        StakeTableV2,
+        LightClientV3Mock, StakeTableV2,
     },
     stake_table::StakeTableContractVersion,
 };
 use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
+use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
+use warp::Filter;
 
 use crate::{
     delegation::{approve, delegate, undelegate},
@@ -296,6 +306,56 @@ impl TestSystem {
             .await?;
         assert!(self.allowance(self.deployer_address).await? == amount);
         Ok(())
+    }
+
+    pub async fn setup_reward_claim_mock(&self, balance: U256) -> Result<Url> {
+        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let light_client_addr = stake_table.lightClient().call().await?;
+        let light_client = LightClientV3Mock::new(light_client_addr, &self.provider);
+
+        let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+        let account = RewardAccountV2::from(self.deployer_address);
+        let amount = RewardAmount::from(balance);
+
+        tree.update(account, amount)?;
+
+        let commitment = tree.commitment();
+        let root = commitment.digest().into();
+
+        let auth_root_fields: [B256; 8] = [
+            root,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+        ];
+        let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+
+        light_client
+            .setAuthRoot(auth_root.into())
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+
+        let query_data: RewardAccountQueryDataV2 = RewardAccountProofV2::prove(&tree, account.0)
+            .ok_or_else(|| anyhow::anyhow!("Failed to generate proof"))?
+            .into();
+        let claim_input = query_data.to_reward_claim_input()?;
+        let claim_input = std::sync::Arc::new(claim_input);
+
+        let port = portpicker::pick_unused_port().expect("No ports available");
+
+        let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String).map(
+            move |_block_height: u64, _address: String| warp::reply::json(&*claim_input.clone()),
+        );
+
+        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
+
+        Ok(format!("http://localhost:{}/", port).parse()?)
     }
 }
 

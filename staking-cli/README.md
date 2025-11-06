@@ -19,6 +19,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     - [Delegating](#delegating)
     - [Undelegating](#undelegating)
     - [Recovering funds after a validator exit](#recovering-funds-after-a-validator-exit)
+    - [Claiming staking rewards](#claiming-staking-rewards)
   - [Node operators](#node-operators)
     - [Registering a validator](#registering-a-validator)
     - [Updating your commission](#updating-your-commission)
@@ -73,6 +74,8 @@ Commands:
     undelegate             Initiate a withdrawal of delegated funds from a validator
     claim-withdrawal       Claim withdrawal after an undelegation
     claim-validator-exit   Claim withdrawal after validator exit
+    claim-rewards          Claim staking rewards
+    unclaimed-rewards      Check unclaimed staking rewards
     token-balance          Check ESP token balance
     token-allowance        Check ESP token allowance of stake table contract
     transfer               Transfer ESP tokens
@@ -215,6 +218,24 @@ This section covers commands for stakers/delegators.
     to your wallet by running
 
          staking-cli claim-validator-exit --validator-address 0x12...34
+
+### Claiming staking rewards
+
+Delegators and validators can earn staking rewards. To check and claim your rewards:
+
+1.  Check your unclaimed rewards:
+
+        staking-cli unclaimed-rewards
+
+    This will display the amount of unclaimed rewards in ESP tokens.
+
+2.  Claim your rewards:
+
+        staking-cli claim-rewards
+
+    This will transfer your unclaimed rewards to your wallet.
+
+Note: You need to set the `espresso_url` in your config file or pass `--espresso-url` flag to use these commands.
 
 ## Node operators
 

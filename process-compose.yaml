@@ -81,6 +81,33 @@ processes:
         condition: process_completed
     availability: *exit-ok
 
+  claim-rewards:
+    command: |
+      set -euo pipefail
+      while true; do
+        unclaimed=$(staking-cli unclaimed-rewards)
+        if [ "$unclaimed" != "0 ESP" ]; then
+          echo "Claiming $unclaimed..."
+          staking-cli claim-rewards
+          echo "Successfully claimed rewards"
+        else
+          echo "No rewards to claim yet ($unclaimed)"
+        fi
+        sleep 15
+      done
+    environment:
+      - L1_PROVIDER=http://localhost:8545
+      - STAKE_TABLE_ADDRESS=0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d
+      - ESPRESSO_URL=http://localhost:24000
+      - MNEMONIC=test test test test test test test test test test test junk
+      - ACCOUNT_INDEX=20
+    depends_on:
+      deploy-pos-contracts-upgrades:
+        condition: process_completed
+      sequencer0:
+        condition: process_healthy
+    availability: *run-forever
+
   fund-builder:
     command: espresso-bridge deposit
     namespace: setup
