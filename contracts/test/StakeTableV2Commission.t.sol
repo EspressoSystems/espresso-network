@@ -265,4 +265,36 @@ contract StakeTableV2CommissionTest is Test {
         baseProxy.upgradeToAndCall(address(implV2), initData);
         vm.stopPrank();
     }
+
+    function test_UndelegatedV2_EmitsEventWithUnlocksAt() public {
+        address validator = makeAddr("validator");
+        address delegator = makeAddr("delegator");
+        uint256 delegateAmount = 1 ether;
+
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+
+        deal(address(stakeTableUpgradeTest.token()), delegator, delegateAmount);
+
+        vm.startPrank(delegator);
+        stakeTableUpgradeTest.token().approve(address(proxy), delegateAmount);
+        proxy.delegate(validator, delegateAmount);
+
+        uint256 expectedUnlocksAt = block.timestamp + proxy.exitEscrowPeriod();
+        vm.expectEmit();
+        emit StakeTableV2.UndelegatedV2(delegator, validator, delegateAmount, expectedUnlocksAt);
+        proxy.undelegate(validator, delegateAmount);
+        vm.stopPrank();
+    }
+
+    function test_ValidatorExitV2_EmitsEventWithUnlocksAt() public {
+        address validator = makeAddr("validator");
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+
+        vm.startPrank(validator);
+        uint256 expectedUnlocksAt = block.timestamp + proxy.exitEscrowPeriod();
+        vm.expectEmit();
+        emit StakeTableV2.ValidatorExitV2(validator, expectedUnlocksAt);
+        proxy.deregisterValidator();
+        vm.stopPrank();
+    }
 }

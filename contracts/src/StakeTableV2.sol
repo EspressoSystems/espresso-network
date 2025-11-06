@@ -147,6 +147,20 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param newMaxIncrease The new maximum commission increase in basis points
     event MaxCommissionIncreaseUpdated(uint16 newMaxIncrease);
 
+    /// @notice A delegator undelegated funds from a validator (V2 with unlocksAt)
+    /// @param delegator The address of the delegator
+    /// @param validator The address of the validator
+    /// @param amount The amount undelegated
+    /// @param unlocksAt The timestamp when the funds can be claimed
+    event UndelegatedV2(
+        address indexed delegator, address indexed validator, uint256 amount, uint256 unlocksAt
+    );
+
+    /// @notice A validator initiated an exit (V2 with unlocksAt)
+    /// @param validator The address of the validator
+    /// @param unlocksAt The timestamp when delegators can claim their funds
+    event ValidatorExitV2(address indexed validator, uint256 unlocksAt);
+
     // === Errors ===
 
     /// The Schnorr signature is invalid (either the wrong length or the wrong key)
@@ -291,10 +305,32 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Undelegate funds from a validator
     /// @param validator The validator to undelegate from
     /// @param amount The amount to undelegate
-    /// @dev This function is overridden to add pausable functionality
+    /// @dev This function is overridden to add pausable functionality and emit UndelegatedV2
+    /// instead of Undelegated
     function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
-        super.undelegate(validator, amount);
+        ensureValidatorActive(validator);
+        address delegator = msg.sender;
+
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+
+        if (undelegations[validator][delegator].amount != 0) {
+            revert UndelegationAlreadyExists();
+        }
+
+        uint256 balance = delegations[validator][delegator];
+        if (balance < amount) {
+            revert InsufficientBalance(balance);
+        }
+
+        delegations[validator][delegator] -= amount;
+        uint256 unlocksAt = block.timestamp + exitEscrowPeriod;
+        undelegations[validator][delegator] = Undelegation({ amount: amount, unlocksAt: unlocksAt });
+        validators[validator].delegatedAmount -= amount;
+
         activeStake -= amount;
+        emit UndelegatedV2(delegator, validator, amount, unlocksAt);
     }
 
     /// @notice Deregister a validator
@@ -302,16 +338,18 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev and to ensure that the validator's delegatedAmount is not updated until withdrawal
     /// @dev delegatedAmount represents the no. of tokens that have been delegated to a validator,
     /// even if it's not participating in consensus
+    /// @dev emits ValidatorExitV2 instead of ValidatorExit
     function deregisterValidator() public virtual override whenNotPaused {
         address validator = msg.sender;
         ensureValidatorActive(validator);
 
         validators[validator].status = ValidatorStatus.Exited;
-        validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        uint256 unlocksAt = block.timestamp + exitEscrowPeriod;
+        validatorExits[validator] = unlocksAt;
         // in v2, the delegatedAmount is not updated until withdrawal
 
         activeStake -= validators[validator].delegatedAmount;
-        emit ValidatorExit(validator);
+        emit ValidatorExitV2(validator, unlocksAt);
     }
 
     /// @notice Register a validator in the stake table

@@ -144,7 +144,9 @@ fn decode_and_display_logs(logs: &[Log]) {
                 )),
                 StakeTableV2Events::Delegated(e) => output_success(format!("event: {e:?}")),
                 StakeTableV2Events::Undelegated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::UndelegatedV2(e) => output_success(format!("event: {e:?}")),
                 StakeTableV2Events::ValidatorExit(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::ValidatorExitV2(e) => output_success(format!("event: {e:?}")),
                 StakeTableV2Events::ConsensusKeysUpdated(e) => output_success(format!(
                     "event: ConsensusKeysUpdated {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,

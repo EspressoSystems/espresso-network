@@ -9,7 +9,7 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::{SignatureKey};
 use hotshot_contract_adapter::sol_types::{ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy, StakeTableV2::{
-    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2
 }, UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy, ValidatorRegisteredV2Legacy};
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
@@ -138,8 +138,10 @@ pub enum StakeTableEvent {
     Register(ValidatorRegistered),
     RegisterV2(ValidatorRegisteredV2),
     Deregister(ValidatorExit),
+    DeregisterV2(ValidatorExitV2),
     Delegate(Delegated),
     Undelegate(Undelegated),
+    UndelegateV2(UndelegatedV2),
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
     CommissionUpdate(CommissionUpdated),
