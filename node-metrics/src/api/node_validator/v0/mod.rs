@@ -432,19 +432,23 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
         .with_context(|| "Timed out while sending request")?
         .with_context(|| "Failed to send request")?;
 
-    // If the response was not 200, error
-    if response.status() != 200 {
-        return Err(anyhow::anyhow!(
-            "Failed to get node identity from URL. Status: {}",
-            response.status()
-        ));
-    }
+    let response_status = response.status();
 
     // Get the response text (with a timeout)
     let response_text = timeout(Duration::from_secs(5), response.text())
         .await
         .with_context(|| "Timed out while getting response text")?
         .with_context(|| "Failed to get response text")?;
+
+    println!("Response text: {}", response_text);
+
+    // If the response was not 200, error
+    if response_status != 200 {
+        return Err(anyhow::anyhow!(
+            "Failed to get node identity from URL. Status: {}",
+            response_status
+        ));
+    }
 
     // Get the response lines
     let response_lines = response_text
