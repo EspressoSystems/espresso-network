@@ -130,7 +130,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                         let heights = leaves.keys().collect::<Vec<_>>();
 
                         let Some(leaf) = leaves.get(&requested_height) else {
-                            tracing::warn!(
+                            tracing::error!(
                                 "Block at height {requested_height} not found in storage.\n\n \
                                  stored leaf heights: {heights:?}"
                             );
@@ -220,10 +220,10 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         if let Err(e) =
             (self.network_functions.direct_message)(serialized_leaf_request, source).await
         {
-            tracing::warn!("Failed to send leaf request in test membership fetcher: {e}");
+            tracing::error!("Failed to send leaf request in test membership fetcher: {e}");
         };
 
-        tokio::time::timeout(std::time::Duration::from_millis(50), async {
+        tokio::time::timeout(std::time::Duration::from_millis(20), async {
             loop {
                 match network_receiver.recv_direct().await {
                     Ok(Event {

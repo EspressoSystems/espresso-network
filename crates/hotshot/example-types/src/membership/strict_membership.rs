@@ -13,7 +13,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::transition_block_for_epoch,
+    utils::{epoch_from_block_number, transition_block_for_epoch},
     PeerConfig,
 };
 
@@ -288,13 +288,14 @@ impl<
         _epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
+        let epoch = epoch_from_block_number(block_height, membership_reader.epoch_height);
 
-        let full_stake_table = membership_reader.inner.full_stake_table();
+        let stake_table = membership_reader.inner.stake_table(Some(epoch));
         let fetcher = membership_reader.fetcher.clone();
 
         drop(membership_reader);
 
-        for node in full_stake_table {
+        for node in stake_table {
             if let Ok(leaf) = fetcher
                 .read()
                 .await
@@ -302,11 +303,9 @@ impl<
                 .await
             {
                 return Ok(leaf);
-            } else {
-                tracing::error!("Failed to fetch leaf at height {block_height}");
             }
         }
-
+        tracing::error!("Failed to fetch epoch root from any peer");
         anyhow::bail!("Failed to fetch epoch root from any peer");
     }
 
@@ -318,7 +317,6 @@ impl<
 
         let epoch_height = membership_reader.epoch_height;
         let epoch_drb = membership_reader.inner.get_epoch_drb(*epoch);
-        let full_stake_table = membership_reader.inner.full_stake_table();
         let fetcher = membership_reader.fetcher.clone();
 
         drop(membership_reader);
@@ -335,9 +333,14 @@ impl<
 
             let drb_block_height = transition_block_for_epoch(previous_epoch, epoch_height);
 
+            let stake_table = membership
+                .read()
+                .await
+                .inner
+                .stake_table(Some(previous_epoch));
             let mut drb_leaf = None;
 
-            for node in full_stake_table {
+            for node in stake_table {
                 if let Ok(leaf) = fetcher
                     .read()
                     .await
