@@ -7,7 +7,8 @@ use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
+    ValidatedState,
 };
 use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
@@ -88,7 +89,7 @@ pub(crate) async fn compute_state_update(
         },
     }
 
-    state
+    let (state, delta, total_rewards_distributed) = state
         .apply_header(
             instance,
             peers,
@@ -97,7 +98,32 @@ pub(crate) async fn compute_state_update(
             header.version(),
             proposed_leaf.view_number(),
         )
-        .await
+        .await?;
+
+    if header.version() >= DrbAndHeaderUpgradeVersion::version() {
+        let Some(actual_total) = total_rewards_distributed else {
+            bail!(
+                "internal error! total_rewards_distributed is None for version {:?}",
+                header.version()
+            );
+        };
+
+        let Some(proposed_total) = header.total_reward_distributed() else {
+            bail!(
+                "internal error! proposed header.total_reward_distributed() is None for version \
+                 {:?}",
+                header.version()
+            );
+        };
+
+        ensure!(
+            proposed_total == actual_total,
+            "Total rewards mismatch: proposed header has {proposed_total} but actual total is \
+             {actual_total}",
+        );
+    }
+
+    Ok((state, delta))
 }
 
 async fn store_state_update(
