@@ -173,6 +173,11 @@ pub enum ProposalValidationError {
     NoEpochHeight,
     #[error("No First Epoch Configured")]
     NoFirstEpoch,
+    #[error("Total rewards mismatch: proposed header has {proposed} but actual is {actual}")]
+    TotalRewardsMismatch {
+        proposed: RewardAmount,
+        actual: RewardAmount,
+    },
 }
 
 impl StateDelta for Delta {}
@@ -506,10 +511,18 @@ pub(crate) struct ValidatedTransition<'a> {
     expected_chain_config: ChainConfig,
     parent: &'a Header,
     proposal: Proposal<'a>,
+    total_rewards_distributed: Option<RewardAmount>,
+    version: Version,
 }
 
 impl<'a> ValidatedTransition<'a> {
-    pub(crate) fn new(state: ValidatedState, parent: &'a Header, proposal: Proposal<'a>) -> Self {
+    pub(crate) fn new(
+        state: ValidatedState,
+        parent: &'a Header,
+        proposal: Proposal<'a>,
+        total_rewards_distributed: Option<RewardAmount>,
+        version: Version,
+    ) -> Self {
         let expected_chain_config = state
             .chain_config
             .resolve()
@@ -519,6 +532,8 @@ impl<'a> ValidatedTransition<'a> {
             expected_chain_config,
             parent,
             proposal,
+            total_rewards_distributed,
+            version,
         }
     }
 
@@ -536,6 +551,7 @@ impl<'a> ValidatedTransition<'a> {
     /// self.validate_l1_finalized()?;
     /// self.validate_l1_head()?;
     /// self.validate_namespace_table()?;
+    /// self.validate_total_rewards_distributed()?;
     /// ```
     pub(crate) fn validate(self) -> Result<Self, ProposalValidationError> {
         self.validate_timestamp()?;
@@ -550,6 +566,7 @@ impl<'a> ValidatedTransition<'a> {
         self.validate_l1_finalized()?;
         self.validate_l1_head()?;
         self.validate_namespace_table()?;
+        self.validate_total_rewards_distributed()?;
 
         Ok(self)
     }
@@ -746,6 +763,41 @@ impl<'a> ValidatedTransition<'a> {
             .validate(&PayloadByteLen(self.proposal.block_size as usize))
             .map_err(ProposalValidationError::from)
     }
+
+    /// Validate that the total rewards distributed in the proposed header matches the actual distributed amount.
+    /// This field is only present in >= V4 version.
+    fn validate_total_rewards_distributed(&self) -> Result<(), ProposalValidationError> {
+        if self.version >= DrbAndHeaderUpgradeVersion::version() {
+            let Some(actual_total) = self.total_rewards_distributed else {
+                // This should never happen - if version >= V4, total_rewards_distributed must be Some
+                return Err(ProposalValidationError::TotalRewardsMismatch {
+                    proposed: self
+                        .proposal
+                        .header
+                        .total_reward_distributed()
+                        .unwrap_or_default(),
+                    actual: RewardAmount::from(0),
+                });
+            };
+
+            let proposed_total =
+                self.proposal
+                    .header
+                    .total_reward_distributed()
+                    .ok_or_else(|| ProposalValidationError::TotalRewardsMismatch {
+                        proposed: RewardAmount::from(0),
+                        actual: actual_total,
+                    })?;
+
+            if proposed_total != actual_total {
+                return Err(ProposalValidationError::TotalRewardsMismatch {
+                    proposed: proposed_total,
+                    actual: actual_total,
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -836,7 +888,7 @@ impl ValidatedState {
         proposed_header: &Header,
         version: Version,
         view_number: ViewNumber,
-    ) -> anyhow::Result<(Self, Delta)> {
+    ) -> anyhow::Result<(Self, Delta, Option<RewardAmount>)> {
         // Clone state to avoid mutation. Consumer can take update
         // through returned value.
         let mut validated_state = self.clone();
@@ -926,23 +978,29 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
-        if version >= EpochVersion::version() {
-            let reward_distributor = distribute_block_reward(
-                instance,
-                &mut validated_state,
-                parent_leaf,
-                view_number,
-                version,
-            )
-            .await?;
-            if let Some(reward_distributor) = reward_distributor {
-                reward_distributor
-                    .update_rewards_delta(&mut delta)
-                    .context("failed to update rewards delta")?;
-            }
-        }
+        // total_rewards_distributed is only present in >= V4
+        let total_rewards_distributed = if version < EpochVersion::version() {
+            None
+        } else if let Some(reward_distributor) = distribute_block_reward(
+            instance,
+            &mut validated_state,
+            parent_leaf,
+            view_number,
+            version,
+        )
+        .await?
+        {
+            reward_distributor
+                .update_rewards_delta(&mut delta)
+                .context("failed to update rewards delta")?;
 
-        Ok((validated_state, delta))
+            Some(reward_distributor.total_distributed())
+        } else {
+            // Version >= V4 but no rewards were distributed because epoch <= first epoch + 1
+            Some(Default::default())
+        };
+
+        Ok((validated_state, delta, total_rewards_distributed))
     }
 
     /// Updates the `ValidatedState` if a protocol upgrade has occurred.
@@ -1091,7 +1149,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        let (validated_state, delta) = self
+        let (validated_state, delta, total_rewards_distributed) = self
             // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
             .apply_header(
                 instance,
@@ -1113,6 +1171,8 @@ impl HotShotState<SeqTypes> for ValidatedState {
             validated_state,
             parent_leaf.block_header(),
             Proposal::new(proposed_header, payload_byte_len),
+            total_rewards_distributed,
+            version,
         )
         .validate()?
         .wait_for_l1(&instance.l1_client)
@@ -1336,11 +1396,12 @@ mod test {
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
+    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
         eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, v0_5, BlockSize, FeeAccountProof,
-        FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        FeeMerkleProof, Leaf, Payload, SequencerVersions, TimestampMillis, Transaction,
     };
 
     impl Transaction {
@@ -1478,6 +1539,8 @@ mod test {
                 expected_chain_config,
                 parent,
                 proposal,
+                total_rewards_distributed: None,
+                version: Version { major: 0, minor: 1 },
             }
         }
     }
@@ -2044,5 +2107,64 @@ mod test {
         };
 
         validate_builder_fee(&header).unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validate_total_rewards_distributed() {
+        let instance = NodeState::mock().with_genesis_version(Version { major: 0, minor: 4 });
+
+        let (payload, metadata) =
+            Payload::from_transactions([], &instance.genesis_state, &instance)
+                .await
+                .unwrap();
+
+        let header = Header::genesis::<SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 4>>>(
+            &instance,
+            payload.clone(),
+            &metadata,
+        );
+
+        let validated_state = ValidatedState::default();
+        let actual_total = RewardAmount::from(1000u64);
+        let block_size = 100u32;
+
+        let proposed_header = match header.clone() {
+            Header::V4(mut h) => {
+                h.total_reward_distributed = actual_total;
+                Header::V4(h)
+            },
+            _ => unreachable!("Expected V4 header"),
+        };
+
+        let validated_transition = ValidatedTransition::new(
+            validated_state.clone(),
+            &header,
+            Proposal::new(&proposed_header, block_size),
+            Some(actual_total),
+            StaticVersion::<0, 4>::version(),
+        );
+
+        validated_transition
+            .validate_total_rewards_distributed()
+            .unwrap();
+
+        let wrong_total = RewardAmount::from(2000u64);
+        let proposed_header = match header.clone() {
+            Header::V4(mut h) => {
+                h.total_reward_distributed = wrong_total;
+                Header::V4(h)
+            },
+            _ => unreachable!("Expected V4 header"),
+        };
+
+        ValidatedTransition::new(
+            validated_state.clone(),
+            &header,
+            Proposal::new(&proposed_header, block_size),
+            Some(actual_total),
+            StaticVersion::<0, 4>::version(),
+        )
+        .validate_total_rewards_distributed()
+        .unwrap_err();
     }
 }
