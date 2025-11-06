@@ -1044,6 +1044,8 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
 /// [NodeIdentity].  If the [Scrape] doesn't contain the necessary information
 /// to populate the [NodeIdentity], then it will return [None].
 pub fn node_identity_from_scrape(scrape: Scrape) -> anyhow::Result<NodeIdentity> {
+    println!("Scrape: {:?}", scrape);
+
     let node_key = scrape
         .docs
         .iter()
