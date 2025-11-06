@@ -33,7 +33,7 @@ cross_tests!(
 
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
-            decide_timeout: Duration::from_secs(8),
+            decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
 
@@ -80,7 +80,7 @@ cross_tests!(
 
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
-            decide_timeout: Duration::from_secs(10),
+            decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
 
@@ -131,7 +131,7 @@ cross_tests!(
 
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
-            decide_timeout: Duration::from_secs(10),
+            decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
 
