@@ -1,0 +1,30 @@
+name: Free Disk Space
+description: Free up disk space on GitHub runners using rmz for fast deletion
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      shell: bash
+      run: |
+        set -euxo pipefail
+
+        curl -L https://github.com/SUPERCILEX/fuc/releases/latest/download/x86_64-unknown-linux-gnu-rmz -o /tmp/rmz
+        sudo mv /tmp/rmz /usr/local/bin/rmz
+        sudo chmod +x /usr/local/bin/rmz
+
+        echo "Available storage before:"
+        sudo df -h
+        echo
+        sudo rmz -f /usr/share/dotnet
+        sudo rmz -f /usr/share/swift
+        sudo rmz -f /usr/share/gradle-*
+        sudo rmz -f /usr/share/az_*
+        sudo rmz -f /usr/local/lib/android
+        sudo rmz -f /opt/ghc
+        sudo rmz -f /opt/az
+        sudo rmz -f /opt/pipx
+        sudo rmz -f /opt/google
+        sudo rmz -f /opt/microsoft
+        echo "Available storage after:"
+        sudo df -h
+        echo

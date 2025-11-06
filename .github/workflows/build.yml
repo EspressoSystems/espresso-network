@@ -36,6 +36,7 @@ concurrency:
 env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   build-amd:
@@ -68,10 +69,8 @@ jobs:
         with:
           comment_on_pr: false
 
+      - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -138,10 +137,8 @@ jobs:
         with:
           comment_on_pr: false
 
+      - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -437,10 +434,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
+      - uses: actions/checkout@v4
       - uses: taiki-e/install-action@just
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -480,10 +475,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
+      - uses: actions/checkout@v4
       - uses: taiki-e/install-action@just
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Set docker image tag for compose
         run: |

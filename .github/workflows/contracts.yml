@@ -18,13 +18,17 @@ concurrency:
 
 env:
   RUST_LOG: info,libp2p=off
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   contracts-lint:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: taiki-e/install-action@just
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
@@ -38,11 +42,6 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Check toolchain versions
         run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
@@ -88,13 +87,12 @@ jobs:
             nix-env: ".#echidna"
             with-diff-test: false
     steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: taiki-e/install-action@just
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-
-      - name: Enable Cachix
-        uses: cachix/cachix-action@v16
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
         # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
         continue-on-error: true
         with:
@@ -102,11 +100,6 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       # NOTE: no rust cache, it doesn't work out of the box our nix env
 
