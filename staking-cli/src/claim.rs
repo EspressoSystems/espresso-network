@@ -1,6 +1,6 @@
 use alloy::{
     network::Ethereum,
-    primitives::Address,
+    primitives::{Address, U256},
     providers::{PendingTransactionBuilder, Provider},
 };
 use anyhow::{bail, Context as _, Result};
@@ -39,58 +39,17 @@ pub async fn claim_validator_exit(
         .maybe_decode_revert::<StakeTableErrors>()
 }
 
-pub async fn claim_reward(
-    provider: impl Provider + Clone,
-    stake_table_address: Address,
-    espresso_url: Url,
-    claimer_address: Address,
-) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let stake_table = StakeTableV2::new(stake_table_address, &provider);
-    let token_address = stake_table.token().call().await?;
-
-    let esp_token = EspTokenV2::new(token_address, &provider);
-    let reward_claim_address = esp_token.rewardClaim().call().await?;
-
-    if reward_claim_address == Address::ZERO {
-        bail!("Reward claim contract not set on ESP token");
-    }
-
-    let light_client_address = stake_table.lightClient().call().await?;
-    let light_client = LightClientV3::new(light_client_address, &provider);
-    let finalized_state = light_client.finalizedState().call().await?;
-    let block_height = finalized_state.blockHeight;
-
-    let reward_claim_url = format!(
-        "{}reward-state-v2/reward-claim-input/{}/{}",
-        espresso_url, block_height, claimer_address
-    );
-
-    let http_client = reqwest::Client::new();
-    let response = http_client
-        .get(&reward_claim_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?
-        .error_for_status()?;
-
-    let claim_input: RewardClaimInput = response.json().await?;
-
-    let reward_claim = RewardClaim::new(reward_claim_address, provider);
-    reward_claim
-        .claimRewards(claim_input.lifetime_rewards, claim_input.auth_data.into())
-        .send()
-        .await
-        .map_err(Into::into)
+struct RewardClaimData {
+    reward_claim_address: Address,
+    claim_input: RewardClaimInput,
 }
 
-pub async fn unclaimed_rewards(
+async fn try_fetch_reward_claim_data(
     provider: impl Provider + Clone,
     stake_table_address: Address,
-    espresso_url: Url,
+    espresso_url: &Url,
     claimer_address: Address,
-) -> Result<alloy::primitives::U256> {
-    use alloy::primitives::U256;
-
+) -> Result<Option<RewardClaimData>> {
     let stake_table = StakeTableV2::new(stake_table_address, &provider);
     let token_address = stake_table
         .token()
@@ -132,19 +91,76 @@ pub async fn unclaimed_rewards(
         .get(&reward_claim_url)
         .header("Accept", "application/json")
         .send()
-        .await?;
+        .await
+        .context("Failed to fetch reward claim input from Espresso API")?;
 
     if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(U256::ZERO);
+        return Ok(None);
     }
 
-    let response = response.error_for_status()?;
-    let claim_input: RewardClaimInput = response.json().await?;
+    let response = response
+        .error_for_status()
+        .context("Espresso API returned error status")?;
 
-    let reward_claim = RewardClaim::new(reward_claim_address, &provider);
+    let claim_input: RewardClaimInput = response
+        .json()
+        .await
+        .context("Failed to parse reward claim input from API response")?;
+
+    Ok(Some(RewardClaimData {
+        reward_claim_address,
+        claim_input,
+    }))
+}
+
+pub async fn claim_reward(
+    provider: impl Provider + Clone,
+    stake_table_address: Address,
+    espresso_url: Url,
+    claimer_address: Address,
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    let data = try_fetch_reward_claim_data(
+        &provider,
+        stake_table_address,
+        &espresso_url,
+        claimer_address,
+    )
+    .await?
+    .context("No reward claim data found for address")?;
+
+    let reward_claim = RewardClaim::new(data.reward_claim_address, provider);
+    reward_claim
+        .claimRewards(
+            data.claim_input.lifetime_rewards,
+            data.claim_input.auth_data.into(),
+        )
+        .send()
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn unclaimed_rewards(
+    provider: impl Provider + Clone,
+    stake_table_address: Address,
+    espresso_url: Url,
+    claimer_address: Address,
+) -> Result<U256> {
+    let Some(data) = try_fetch_reward_claim_data(
+        &provider,
+        stake_table_address,
+        &espresso_url,
+        claimer_address,
+    )
+    .await?
+    else {
+        return Ok(U256::ZERO);
+    };
+
+    let reward_claim = RewardClaim::new(data.reward_claim_address, &provider);
     let already_claimed = reward_claim.claimedRewards(claimer_address).call().await?;
 
-    let unclaimed = claim_input
+    let unclaimed = data
+        .claim_input
         .lifetime_rewards
         .checked_sub(already_claimed)
         .unwrap_or(U256::ZERO);
