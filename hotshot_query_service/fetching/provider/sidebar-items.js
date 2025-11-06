@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["any","query_service"],"struct":["AnyProvider","NoFetching","QueryServiceProvider"],"trait":["Provider"]};
+window.SIDEBAR_ITEMS = {"mod":["any","query_service","testing"],"struct":["AnyProvider","NoFetching","QueryServiceProvider","TestProvider"],"trait":["Provider"]};

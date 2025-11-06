@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["ExtensibleDataSource"]};
+window.SIDEBAR_ITEMS = {"mod":["impl_testable_data_source"],"struct":["ExtensibleDataSource"]};

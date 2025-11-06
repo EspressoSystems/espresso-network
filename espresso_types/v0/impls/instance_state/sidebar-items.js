@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["NodeState","UpgradeMap"]};
+window.SIDEBAR_ITEMS = {"mod":["mock"],"struct":["NodeState","UpgradeMap"]};
