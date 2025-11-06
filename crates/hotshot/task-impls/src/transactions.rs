@@ -5,13 +5,13 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{stream::FuturesUnordered, StreamExt};
 use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
@@ -29,7 +29,10 @@ use hotshot_types::{
     utils::{is_epoch_transition, is_last_block, ViewInner},
 };
 use hotshot_utils::anytrace::*;
-use tokio::time::{sleep, timeout};
+use tokio::{
+    task::JoinSet,
+    time::{sleep, timeout},
+};
 use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
@@ -41,17 +44,6 @@ use crate::{
 
 // Parameters for builder querying algorithm
 
-/// Proportion of builders queried in first batch, dividend
-const BUILDER_MAIN_BATCH_THRESHOLD_DIVIDEND: usize = 2;
-/// Proportion of builders queried in the first batch, divisor
-const BUILDER_MAIN_BATCH_THRESHOLD_DIVISOR: usize = 3;
-/// Time the first batch of builders has to respond
-const BUILDER_MAIN_BATCH_CUTOFF: Duration = Duration::from_millis(700);
-/// Multiplier for extra time to give to the second batch of builders
-const BUILDER_ADDITIONAL_TIME_MULTIPLIER: f32 = 0.2;
-/// Minimum amount of time allotted to both batches, cannot be cut shorter if the first batch
-/// responds extremely fast.
-const BUILDER_MINIMUM_QUERY_TIME: Duration = Duration::from_millis(300);
 /// Delay between re-tries on unsuccessful calls
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 
@@ -545,178 +537,152 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         None
     }
 
-    /// Query the builders for available blocks. Queries only fraction of the builders
-    /// based on the response time.
-    async fn get_available_blocks(
-        &self,
-        parent_comm: VidCommitment,
-        view_number: TYPES::View,
-        parent_comm_sig: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Vec<(AvailableBlockInfo<TYPES>, usize)> {
-        let tasks = self
-            .builder_clients
-            .iter()
-            .enumerate()
-            .map(|(builder_idx, client)| async move {
-                client
-                    .available_blocks(
-                        parent_comm,
-                        view_number.u64(),
-                        self.public_key.clone(),
-                        parent_comm_sig,
-                    )
-                    .await
-                    .map(move |blocks| {
-                        blocks
-                            .into_iter()
-                            .map(move |block_info| (block_info, builder_idx))
-                    })
-            })
-            .collect::<FuturesUnordered<_>>();
-        let mut results = Vec::with_capacity(self.builder_clients.len());
-        let query_start = Instant::now();
-        let threshold = (self.builder_clients.len() * BUILDER_MAIN_BATCH_THRESHOLD_DIVIDEND)
-            .div_ceil(BUILDER_MAIN_BATCH_THRESHOLD_DIVISOR);
-        let mut tasks = tasks.take(threshold);
-        while let Some(result) = tasks.next().await {
-            results.push(result);
-            if query_start.elapsed() > BUILDER_MAIN_BATCH_CUTOFF {
-                break;
-            }
-        }
-        let timeout = sleep(std::cmp::max(
-            query_start
-                .elapsed()
-                .mul_f32(BUILDER_ADDITIONAL_TIME_MULTIPLIER),
-            BUILDER_MINIMUM_QUERY_TIME.saturating_sub(query_start.elapsed()),
-        ));
-        futures::pin_mut!(timeout);
-        let mut tasks = tasks.into_inner().take_until(timeout);
-        while let Some(result) = tasks.next().await {
-            results.push(result);
-        }
-        results
-            .into_iter()
-            .filter_map(|result| result.ok())
-            .flatten()
-            .collect::<Vec<_>>()
-    }
-
-    /// Get a block from builder.
-    /// Queries the sufficiently fast builders for available blocks and chooses the one with the
-    /// best fee/byte ratio, re-trying with the next best one in case of failure.
+    /// Get a block from one of the builders.
+    /// Will prioritize builders that respond quickly and will fall back to builders that respond more slowly.
     ///
-    /// # Errors
-    /// If none of the builder reports any available blocks or claiming block fails for all of the
-    /// builders.
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view), name = "block_from_builder", level = "error")]
+    /// Will return an error if no block is found on any of the builders.
     async fn block_from_builder(
         &self,
         parent_comm: VidCommitment,
         view_number: TYPES::View,
         parent_comm_sig: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<BuilderResponse<TYPES>> {
-        let mut available_blocks = self
-            .get_available_blocks(parent_comm, view_number, parent_comm_sig)
-            .await;
+        // Create a `JoinSet` of tasks to get the available blocks from each of the builders
+        let mut join_set = JoinSet::new();
 
-        available_blocks.sort_by(|(l, _), (r, _)| {
-            // We want the block with the highest fee per byte of data we're going to have to
-            // process, thus our comparison function is:
-            //      (l.offered_fee / l.block_size) < (r.offered_fee / r.block_size)
-            // To avoid floating point math (which doesn't even have an `Ord` impl) we multiply
-            // through by the denominators to get
-            //      l.offered_fee * r.block_size < r.offered_fee * l.block_size
-            // We cast up to u128 to avoid overflow.
-            (u128::from(l.offered_fee) * u128::from(r.block_size))
-                .cmp(&(u128::from(r.offered_fee) * u128::from(l.block_size)))
-        });
+        // Create a map from the task ID to the builder index
+        let mut task_id_to_builder_index = HashMap::new();
 
-        if available_blocks.is_empty() {
-            tracing::info!("No available blocks");
-            bail!("No available blocks");
+        // Spawn a task for each of the builders to get the available blocks
+        for (builder_client_index, client) in self.builder_clients.iter().cloned().enumerate() {
+            // Clone what we need in the closure
+            let public_key = self.public_key.clone();
+            let parent_comm_sig = parent_comm_sig.clone();
+
+            // Spawn the task and get the ID
+            let task_id = join_set
+                .spawn(async move {
+                    // Get the available blocks from the builder
+                    let available_blocks = client
+                        .available_blocks(
+                            parent_comm,
+                            view_number.u64(),
+                            public_key,
+                            &parent_comm_sig,
+                        )
+                        .await?;
+
+                    Ok::<Vec<AvailableBlockInfo<TYPES>>, anyhow::Error>(available_blocks)
+                })
+                .id();
+
+            // Add the task ID to the map
+            task_id_to_builder_index.insert(task_id, builder_client_index);
         }
 
-        for (block_info, builder_idx) in available_blocks {
-            // Verify signature over chosen block.
-            if !block_info.sender.validate_block_info_signature(
-                &block_info.signature,
-                block_info.block_size,
-                block_info.offered_fee,
-                &block_info.block_hash,
-            ) {
-                tracing::warn!("Failed to verify available block info response message signature");
-                continue;
-            }
-
-            let request_signature = match <<TYPES as NodeType>::SignatureKey as SignatureKey>::sign(
-                &self.private_key,
-                block_info.block_hash.as_ref(),
-            ) {
-                Ok(request_signature) => request_signature,
+        // Wait for each of the tasks to complete
+        while let Some(result) = join_set.join_next_with_id().await {
+            // Get the task ID and the block infos from the result
+            let (task_id, mut block_infos) = match result {
+                Ok((task_id, Ok(blocks))) => (task_id, blocks),
+                Ok((_, Err(err))) => {
+                    tracing::warn!("Failed to get available blocks from builder: {err}");
+                    continue;
+                },
                 Err(err) => {
-                    tracing::error!(%err, "Failed to sign block hash");
+                    tracing::warn!("Failed to join task: {err}");
                     continue;
                 },
             };
 
-            let response = {
-                let client = &self.builder_clients[builder_idx];
+            // Sort the blocks by the amount of data they have (in descending order)
+            block_infos.sort_by(|l, r| l.block_size.cmp(&r.block_size));
+            block_infos.reverse();
 
+            // See if any of the blocks are valid/claimable
+            for block_info in block_infos {
+                // Verify the signature
+                if !block_info.sender.validate_block_info_signature(
+                    &block_info.signature,
+                    block_info.block_size,
+                    block_info.offered_fee,
+                    &block_info.block_hash,
+                ) {
+                    tracing::warn!("Block info signature was invalid");
+                    continue;
+                }
+
+                // Sign the block hash to use for claiming the block
+                let request_signature =
+                    match <<TYPES as NodeType>::SignatureKey as SignatureKey>::sign(
+                        &self.private_key,
+                        block_info.block_hash.as_ref(),
+                    ) {
+                        Ok(request_signature) => request_signature,
+                        Err(err) => {
+                            tracing::error!(%err, "Failed to sign block hash");
+                            continue;
+                        },
+                    };
+
+                // Get the builder client for the given ID
+                let client = &self.builder_clients[task_id_to_builder_index[&task_id]];
+
+                // Claim the block and the header input
                 let (block, either_header_input) = futures::join! {
                     client.claim_block(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
                     client.claim_either_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
                 };
 
+                // Get the block data
                 let block_data = match block {
                     Ok(block_data) => block_data,
                     Err(err) => {
-                        tracing::warn!(%err, "Error claiming block data");
+                        tracing::warn!(%err, "Failed to claim block data");
                         continue;
                     },
                 };
 
-                let Ok(either_header_input) = either_header_input
-                    .inspect_err(|err| tracing::warn!(%err, "Error claiming header input"))
-                else {
-                    continue;
+                // Get the header input
+                let header_input = match either_header_input {
+                    Ok(header_input) => header_input,
+                    Err(err) => {
+                        tracing::warn!(%err, "Failed to claim header input");
+                        continue;
+                    },
                 };
 
-                let Some(header_input) = either_header_input
+                // Validate the signature and get the header input
+                let Some(header_input) = header_input
                     .validate_signature_and_get_input(block_info.offered_fee, &block_data.metadata)
                 else {
-                    tracing::warn!(
-                        "Failed to verify available new or legacy block header input data \
-                         response message signature"
-                    );
+                    tracing::warn!("Failed to validate signature and get header input");
                     continue;
                 };
 
-                // verify the signature over the message
+                // Validate the block data signature
                 if !block_data.validate_signature() {
-                    tracing::warn!(
-                        "Failed to verify available block data response message signature"
-                    );
+                    tracing::warn!("Failed to validate block data signature");
                     continue;
                 }
 
+                // Create the fee
                 let fee = BuilderFee {
                     fee_amount: block_info.offered_fee,
                     fee_account: header_input.sender,
                     fee_signature: header_input.fee_signature,
                 };
 
-                BuilderResponse {
+                // Return the block data, header input, and fee
+                return Ok(BuilderResponse {
                     fee,
                     block_payload: block_data.block_payload,
                     metadata: block_data.metadata,
-                }
-            };
-
-            return Ok(response);
+                });
+            }
         }
 
-        bail!("Couldn't claim a block from any of the builders");
+        bail!("Unable to claim a valid, non-empty block from any of the builders");
     }
 }
 

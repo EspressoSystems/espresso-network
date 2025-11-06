@@ -60,6 +60,7 @@ impl From<BuilderApiError> for BuilderClientError {
 }
 
 /// Client for builder API
+#[derive(Clone)]
 pub struct BuilderClient<TYPES: NodeType, Ver: StaticVersionType> {
     /// Underlying surf_disco::Client for the legacy builder api
     client: Client<BuilderApiError, Ver>,

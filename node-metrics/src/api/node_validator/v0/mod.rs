@@ -419,6 +419,9 @@ pub async fn get_node_identity_from_url(
     let client = reqwest::Client::new();
 
     let completed_url = url.join("v0/status/metrics")?;
+
+    println!("Making request to {}", completed_url);
+
     let request = client.get(completed_url).build()?;
     let response = client.execute(request).await?;
     let response_bytes = response.bytes().await?;
@@ -427,10 +430,12 @@ pub async fn get_node_identity_from_url(
     let scrape = prometheus_parse::Scrape::parse(buffered_response.lines())?;
 
     if let Some(node_identity) = node_identity_from_scrape(scrape) {
+        println!("Node identity found for URL: {}", url);
         let mut node_identity = node_identity;
         node_identity.public_url = Some(url);
         Ok(node_identity)
     } else {
+        println!("No node identity found for URL: {}", url);
         Err(GetNodeIdentityFromUrlError::NoNodeIdentity)
     }
 }
