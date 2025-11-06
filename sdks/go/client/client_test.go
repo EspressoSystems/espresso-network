@@ -11,6 +11,7 @@ import (
 
 	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
+	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 )
@@ -67,6 +68,11 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 		t.Fatal("failed to submit transaction", err)
 	}
 	fmt.Println("submitted transaction with hash", hash)
+	expected := tx.Commit()
+	if common.Commitment(hash.Value()) != expected {
+		fmt.Printf("expected: %s, actual: %s\n", expected, hash.Value())
+		t.Fatal("transaction hash does not match")
+	}
 
 	stream, err := client.StreamTransactions(ctx, 1)
 	require.NoError(t, err)

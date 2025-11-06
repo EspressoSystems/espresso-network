@@ -154,6 +154,33 @@ func TestFetchWithMajority(t *testing.T) {
 	assert.Equal(t, header1.Header.Commit(), resultHeader.Header.Commit())
 }
 
+func TestFetchWithMajorityWithTwoNodes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockNode1 := new(MockClient)
+	mockNode2 := new(MockClient)
+
+	mockNode1.On("FetchRawHeaderByHeight", ctx, uint64(1)).Return(json.RawMessage(`{"data":"value1"}`), nil)
+	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(1)).Return(json.RawMessage(`{"data":"value2"}`), nil)
+
+	nodes := []*MockClient{mockNode1, mockNode2}
+
+	_, err := FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
+		return node.FetchRawHeaderByHeight(ctx, 1)
+	})
+	assert.Error(t, err)
+
+	mockNode1.On("FetchRawHeaderByHeight", ctx, uint64(2)).Return(json.RawMessage(`{"data":"value1"}`), nil)
+	mockNode2.On("FetchRawHeaderByHeight", ctx, uint64(2)).Return(json.RawMessage(`{"data":"value1"}`), nil)
+
+	result, err := FetchWithMajority(ctx, nodes, func(node *MockClient) (json.RawMessage, error) {
+		return node.FetchRawHeaderByHeight(ctx, 2)
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, json.RawMessage(`{"data":"value1"}`), result)
+}
+
 func TestApiWithSingleEspressoDevNode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -209,6 +236,29 @@ func TestApiWithSingleEspressoDevNode(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed to fetch transactions in block", err)
 	}
+
+	// One good url and one bad url
+	client, err = NewMultipleNodesClient([]string{"http://localhost:21000", "http://localhost.bad-url:21000"})
+	if err != nil {
+		t.Fatal("Constructing the client with more than 1 url should succeed")
+	}
+
+	blockHeight = uint64(1)
+	_, err = client.FetchHeaderByHeight(ctx, blockHeight)
+	assert.Error(t, err)
+
+	_, err = client.FetchRawHeaderByHeight(ctx, blockHeight)
+	assert.Error(t, err)
+
+	_, err = client.FetchVidCommonByHeight(ctx, blockHeight)
+	assert.Error(t, err)
+
+	_, err = client.FetchHeadersByRange(ctx, blockHeight, blockHeight+10)
+	assert.Error(t, err)
+
+	_, err = client.FetchTransactionsInBlock(ctx, 1, 1)
+	assert.Error(t, err)
+
 }
 
 func getHeaderFromTestFile(path string, t *testing.T) types.HeaderInterface {
