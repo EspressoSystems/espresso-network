@@ -26,6 +26,7 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "espresso-dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -35,6 +36,7 @@ members = [
     "sdks/crypto-helper",
     "sequencer",
     "sequencer-sqlite",
+    "slow-tests",
     "staking-cli",
     "tests",
     "types",
@@ -42,7 +44,7 @@ members = [
     "vid",
 ]
 
-# All crates except sequencer-sqlite, to avoid turning on embedded-db feature
+# All crates except sequencer-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
@@ -74,6 +76,7 @@ default-members = [
     "request-response",
     "sdks/crypto-helper",
     "sequencer",
+    "slow-tests",
     "staking-cli",
     "tests",
     "types",
@@ -268,9 +271,9 @@ vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
 
 # Push CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.1", package = "cdn-broker", features = ["global-permits"] }
-cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.1", package = "cdn-client" }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.1", package = "cdn-marshal" }
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat", package = "cdn-broker", features = ["global-permits"] }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat", package = "cdn-marshal" }
 
 [workspace.lints.clippy]
 # may prevent accidental deadlocks from holding guards over match statments
