@@ -302,6 +302,8 @@ impl<
                 .await
             {
                 return Ok(leaf);
+            } else {
+                tracing::error!("Failed to fetch leaf at height {block_height}");
             }
         }
 

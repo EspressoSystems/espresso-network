@@ -77,7 +77,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         fixed_leader_for_gpuvid: 1,
         next_view_timeout: 500,
         view_sync_timeout: Duration::from_millis(250),
-        builder_timeout: Duration::from_millis(1000),
+        builder_timeout: Duration::from_millis(100),
         data_request_delay: Duration::from_millis(200),
         // Placeholder until we spin up the builder
         builder_urls: vec1::vec1![Url::parse("http://localhost:9999").expect("Valid URL")],
