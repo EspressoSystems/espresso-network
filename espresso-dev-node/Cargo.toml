@@ -1,0 +1,51 @@
+[package]
+name = "espresso-dev-node"
+version = "0.1.0"
+authors = ["Espresso Systems <hello@espressosys.com>"]
+edition = "2021"
+
+[[bin]]
+name = "espresso-dev-node"
+path = "src/main.rs"
+
+[dependencies]
+sequencer = { path = "../sequencer", features = ["testing", "embedded-db"] }
+
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
+espresso-types = { path = "../types" }
+futures = { workspace = true }
+hotshot-contract-adapter = { path = "../contracts/rust/adapter" }
+hotshot-state-prover = { workspace = true }
+hotshot-types = { workspace = true }
+itertools = { workspace = true }
+portpicker = { workspace = true }
+sequencer-utils = { path = "../utils" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+staking-cli = { workspace = true }
+tempfile = { workspace = true }
+tide-disco = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+
+[dev-dependencies]
+committable = { workspace = true }
+escargot = "0.5.10"
+hotshot-query-service = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
+portpicker = { workspace = true }
+rand = { workspace = true }
+test-log = { workspace = true }
+rstest = { workspace = true }
+surf-disco = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

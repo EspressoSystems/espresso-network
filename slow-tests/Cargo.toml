@@ -1,0 +1,49 @@
+[package]
+name = "slow-tests"
+version = "0.1.0"
+authors = ["Espresso Systems <hello@espressosys.com>"]
+edition = "2021"
+
+[features]
+embedded-db = ["sequencer/embedded-db"]
+
+[dependencies]
+sequencer = { path = "../sequencer", features = ["testing"] }
+
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-lock = { workspace = true }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
+clap = { workspace = true }
+committable = { workspace = true }
+derivative = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
+espresso-types = { path = "../types" }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
+hotshot-orchestrator = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-testing = { workspace = true }
+hotshot-types = { workspace = true }
+itertools = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
+portpicker = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+staking-cli = { workspace = true }
+surf-disco = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+vec1 = { workspace = true }
+test-log = { workspace = true }
+rstest = { workspace = true }
+tide-disco = { workspace = true }
+
+[lints]
+workspace = true
