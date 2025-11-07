@@ -267,14 +267,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let instance_state = initializer.instance_state;
 
         let (internal_tx, internal_rx) = internal_channel;
-        let (mut external_tx, mut external_rx) = external_channel;
+        let (mut external_tx, external_rx) = external_channel;
 
         let mut internal_rx = internal_rx.new_receiver();
 
-        let network_rx = external_rx.new_receiver();
+        let mut external_rx = external_rx.new_receiver();
+
+        // Allow overflow on the internal channel as well. We don't want to block consensus if we
+        // have a slow receiver
+        internal_rx.set_overflow(true);
+        // Allow overflow on the external channel, otherwise sending to it may block.
+        external_rx.set_overflow(true);
 
         membership_coordinator
-            .set_external_channel(network_rx)
+            .set_external_channel(external_rx)
             .await;
 
         tracing::warn!(
@@ -312,13 +318,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                     .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
             }
         }
-
-        // Allow overflow on the external channel, otherwise sending to it may block.
-        external_rx.set_overflow(true);
-
-        // Allow overflow on the internal channel as well. We don't want to block consensus if we
-        // have a slow receiver
-        internal_rx.set_overflow(true);
 
         // Get the validated state from the initializer or construct an incomplete one from the
         // block header.
@@ -396,7 +395,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let consensus = Arc::new(RwLock::new(consensus));
 
         if let Some(epoch) = epoch {
-            tracing::error!(
+            tracing::info!(
                 "Triggering catchup for epoch {} and next epoch {}",
                 epoch,
                 epoch + 1
@@ -408,6 +407,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             let _ = membership_coordinator
                 .membership_for_epoch(Some(epoch + 1))
                 .await;
+            // If we already have an epoch root, we can trigger catchup for the epoch
+            // which that root applies to.
             if let Some(high_qc_block_number) = high_qc_block_number {
                 if is_ge_epoch_root(high_qc_block_number, config.epoch_height) {
                     let _ = membership_coordinator

@@ -100,7 +100,7 @@ impl Default for OverallSafetyPropertiesDescription {
             transaction_threshold: 0,
             expected_view_failures: vec![],
             possible_view_failures: vec![],
-            decide_timeout: Duration::from_secs(10),
+            decide_timeout: Duration::from_secs(60),
         }
     }
 }

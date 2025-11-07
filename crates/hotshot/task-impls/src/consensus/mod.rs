@@ -183,15 +183,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 broadcast_view_change(&sender, cert_view + 1, Some(next_epoch), self.first_epoch)
                     .await;
                 tracing::info!("Entering new epoch: {next_epoch}");
-                tracing::error!(
-                    "Stake table for epoch {}:\n\nLen: {}",
+                tracing::info!(
+                    "Stake table for epoch {}:\n\n{:?}",
                     next_epoch,
                     self.membership_coordinator
                         .stake_table_for_epoch(Some(next_epoch))
                         .await?
                         .stake_table()
                         .await
-                        .len()
                 );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {

@@ -94,7 +94,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
         match event.as_ref() {
             HotShotEvent::DaProposalRecv(proposal, sender) => {
                 let sender = sender.clone();
-                tracing::error!(
+                tracing::debug!(
                     "DA proposal received for view: {}",
                     proposal.data.view_number()
                 );
@@ -128,7 +128,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     .await?;
                 ensure!(
                     view_leader_key == sender,
-                    error!(
+                    warn!(
                         "DA proposal doesn't have expected leader key for view {} \n DA proposal \
                          is: {:?}",
                         *view,
@@ -138,7 +138,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     view_leader_key.validate(&proposal.signature, &encoded_transactions_hash),
-                    error!("Could not verify proposal.")
+                    warn!("Could not verify proposal.")
                 );
 
                 broadcast_event(
@@ -148,7 +148,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 .await;
             },
             HotShotEvent::DaProposalValidated(proposal, sender) => {
-                tracing::error!(
+                tracing::debug!(
                     "DA proposal validated for view {}",
                     proposal.data.view_number()
                 );
@@ -163,7 +163,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     cur_view <= view_number + 1,
-                    error!(
+                    debug!(
                         "Validated DA proposal for prior view but it's too old now Current view \
                          {cur_view}, DA Proposal view {}",
                         proposal.data.view_number()
@@ -185,7 +185,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     membership.has_da_stake(&self.public_key).await,
-                    error!(
+                    debug!(
                         "We were not chosen for consensus committee for view {view_number} in \
                          epoch {epoch_number:?}"
                     )

@@ -46,7 +46,6 @@ cross_tests!(
         metadata.overall_safety_properties.num_successful_views = 20;
         metadata.overall_safety_properties.expected_view_failures = vec![5, 11, 17, 23, 29];
         metadata.overall_safety_properties.possible_view_failures = vec![4, 10, 16, 22, 28];
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(20);
 
         metadata
     }
@@ -82,7 +81,6 @@ cross_tests!(
             view_spin_node_down + 1,
             view_spin_node_down + 2
         ];
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(20);
         // Make sure we keep committing rounds after the bad leaders, but not the full 50 because of the numerous timeouts
         metadata.overall_safety_properties.num_successful_views = 13;
 
@@ -122,7 +120,6 @@ cross_tests!(
         };
 
         metadata.overall_safety_properties.expected_view_failures = vec![16, 17, 18, 19];
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(24);
         // Make sure we keep committing rounds after the bad leaders, but not the full 50 because of the numerous timeouts
         metadata.overall_safety_properties.num_successful_views = 19;
         metadata

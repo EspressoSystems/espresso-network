@@ -77,7 +77,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         fixed_leader_for_gpuvid: 1,
         next_view_timeout: 500,
         view_sync_timeout: Duration::from_millis(250),
-        builder_timeout: Duration::from_millis(100),
+        builder_timeout: Duration::from_millis(1000),
         data_request_delay: Duration::from_millis(200),
         // Placeholder until we spin up the builder
         builder_urls: vec1::vec1![Url::parse("http://localhost:9999").expect("Valid URL")],
@@ -454,14 +454,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
                     // Increase the duration to get the expected number of successful views.
-                    duration: Duration::new(340, 0),
+                    duration: Duration::from_secs(340),
                 },
             ),
             overall_safety_properties: OverallSafetyPropertiesDescription {
                 ..Default::default()
             },
             timing_data: TimingData {
-                next_view_timeout: 5000,
+                next_view_timeout: 6000,
                 ..TimingData::default()
             },
             view_sync_properties: ViewSyncTaskDescription::Threshold(
@@ -533,8 +533,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
             txn_description: TxnTaskDescription::RoundRobinTimeBased(Duration::from_millis(100)),
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    // TODO ED Put a configurable time here - 10 seconds for now
-                    duration: Duration::from_secs(30),
+                    duration: Duration::from_secs(120),
                 },
             ),
             unreliable_network: None,

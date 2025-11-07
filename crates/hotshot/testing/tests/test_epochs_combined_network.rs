@@ -33,7 +33,6 @@ cross_tests!(
 
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
-            decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
 

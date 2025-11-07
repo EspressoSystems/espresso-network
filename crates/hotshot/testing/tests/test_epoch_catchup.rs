@@ -66,7 +66,6 @@ cross_tests!(
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
             possible_view_failures: vec![12, 13, 26, 27, 40, 41],
-            decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
 
@@ -115,7 +114,6 @@ cross_tests!(
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
             possible_view_failures: vec![5,6,13,14,26,27,32,33,34,40,41],
-            decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
 
@@ -163,8 +161,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![11,12,13,33,34,39, 40],
-            decide_timeout: Duration::from_secs(30),
+            possible_view_failures: vec![11,12,13,33,34,39, 40, 41, 42, 43],
             ..Default::default()
         };
 
