@@ -73,7 +73,7 @@ services:
 
   wait-for-v4:
     image: ghcr.io/vi/websocat
-    command: /scripts/wait-for-header-version http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT} 4
+    command: /scripts/wait-for-header version 4 http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
     volumes:
       - ./scripts:/scripts:ro
     depends_on:

@@ -75,6 +75,17 @@ async fn try_fetch_reward_claim_data(
         .await
         .context("Failed to get light client address from stake table")?;
     let light_client = LightClientV3::new(light_client_address, &provider);
+
+    let auth_root = light_client
+        .authRoot()
+        .call()
+        .await
+        .context("Failed to get auth root from light client")?;
+
+    if auth_root == U256::ZERO {
+        return Ok(None);
+    }
+
     let finalized_state = light_client
         .finalizedState()
         .call()

@@ -65,7 +65,7 @@ processes:
     availability: *exit-ok
 
   wait-for-v4:
-    command: scripts/wait-for-header-version http://localhost:${ESPRESSO_SEQUENCER0_API_PORT} 4
+    command: scripts/wait-for-header version 4 http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
     namespace: setup
     depends_on:
       deploy-prover-contracts:
@@ -172,12 +172,13 @@ processes:
         path: /healthcheck
     availability: *run-forever
 
-  prover-service:
+  prover-one-shot:
     # to avoid interfering so much with other work, "nice" the state prover process
-    command: nice state-prover -d
+    command: env RUST_LOG=INFO,hotshot_state_prover=DEBUG state-prover
     environment:
       - MNEMONIC=${ESPRESSO_SEQUENCER_ETH_MNEMONIC}
       - RAYON_NUM_THREADS=${PROVER_RAYON_NUM_THREADS}
+      - ESPRESSO_STATE_PROVER_ONESHOT_RETRIES=1
     depends_on:
       sequencer0:
         condition: process_healthy
@@ -187,7 +188,9 @@ processes:
         condition: process_healthy
       deploy-prover-contracts:
         condition: process_completed
-    availability: *run-forever
+    availability:
+      restart: always
+      backoff_seconds: ${ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS}
 
   sequencer0:
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup -- light-client

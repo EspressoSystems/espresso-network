@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-}"
+SEQUENCER_URL="http://localhost:24000"
+
+show_usage() {
+    echo "Usage:"
+    echo "  $0 version <target-minor-version> [sequencer-url]"
+    echo "  $0 new-epochs <num-epochs> [sequencer-url]"
+    echo ""
+    echo "Examples:"
+    echo "  $0 version 4"
+    echo "  $0 version 4 http://localhost:24000"
+    echo "  $0 new-epochs 2"
+    echo "  $0 new-epochs 2 http://localhost:24000"
+    exit 1
+}
+
+if [ -z "$MODE" ]; then
+    show_usage
+fi
+
+case "$MODE" in
+    version)
+        TARGET_MINOR_VERSION="${2:-}"
+        if [ -z "$TARGET_MINOR_VERSION" ]; then
+            echo "Error: target-minor-version is required for 'version' mode"
+            show_usage
+        fi
+        SEQUENCER_URL="${3:-$SEQUENCER_URL}"
+        ;;
+    new-epochs)
+        NUM_EPOCHS="${2:-}"
+        if [ -z "$NUM_EPOCHS" ]; then
+            echo "Error: num-epochs is required for 'new-epochs' mode"
+            show_usage
+        fi
+        SEQUENCER_URL="${3:-$SEQUENCER_URL}"
+        ;;
+    *)
+        echo "Error: unknown mode '$MODE'"
+        show_usage
+        ;;
+esac
+
+ws_url=$(echo "$SEQUENCER_URL" | sed 's|^http://|ws://|' | sed 's|^https://|wss://|')
+blocks_per_epoch=$(curl -sL "${SEQUENCER_URL}/config/hotshot" | jq -r '.config.epoch_height')
+echo "Blocks per epoch: ${blocks_per_epoch}"
+
+if [ "$MODE" = "version" ]; then
+    echo "Waiting for sequencer to upgrade to version 0.${TARGET_MINOR_VERSION}..."
+    echo "Connecting to sequencer header stream at ${SEQUENCER_URL}..."
+
+    detection_height=""
+
+    while true; do
+        set +o pipefail
+        websocat "${ws_url}/v0/availability/stream/headers/0" 2>&1 | \
+            while read -r line; do
+                echo "$line" | jq -r '"v0.\(.version.Version.minor) height=\(.fields.height)"' 2>/dev/null || echo "$line"
+                minor=$(echo "$line" | jq -r '.version.Version.minor' 2>/dev/null || echo "")
+                height=$(echo "$line" | jq -r '.fields.height' 2>/dev/null || echo "")
+
+                if [ "$minor" = "$TARGET_MINOR_VERSION" ] && [ -z "$detection_height" ]; then
+                    detection_height="$height"
+                    echo "Version 0.${TARGET_MINOR_VERSION} detected at height ${detection_height}!"
+
+                    target_height=$((detection_height + blocks_per_epoch))
+                    echo "Waiting for one additional epoch (${blocks_per_epoch} blocks) until height ${target_height}..."
+                fi
+
+                if [ -n "$detection_height" ] && [ -n "$height" ] && [ "$height" -ge "$target_height" ]; then
+                    echo "Reached height ${height}, one epoch past version detection!"
+                    exit 0
+                fi
+            done
+
+        pipe_status=("${PIPESTATUS[@]}")
+        set -o pipefail
+
+        while_exit=${pipe_status[1]}
+
+        if [ "$while_exit" -eq 0 ]; then
+            exit 0
+        fi
+
+        echo "Connection failed or stream interrupted, retrying in 5 seconds..."
+        sleep 5
+    done
+
+elif [ "$MODE" = "new-epochs" ]; then
+    echo "Waiting for ${NUM_EPOCHS} new epoch(s) to pass..."
+    echo "Connecting to sequencer header stream at ${SEQUENCER_URL}..."
+
+    initial_epoch=""
+    target_epoch=""
+
+    while true; do
+        set +o pipefail
+        websocat "${ws_url}/v0/availability/stream/headers/0" 2>&1 | \
+            while read -r line; do
+                height=$(echo "$line" | jq -r '.fields.height' 2>/dev/null || echo "")
+
+                if [ -n "$height" ]; then
+                    current_epoch=$((height / blocks_per_epoch))
+                    echo "Height: ${height}, Epoch: ${current_epoch}"
+
+                    if [ -z "$initial_epoch" ]; then
+                        initial_epoch="$current_epoch"
+                        target_epoch=$((initial_epoch + NUM_EPOCHS))
+                        echo "Initial epoch: ${initial_epoch}, Target epoch: ${target_epoch}"
+                    fi
+
+                    if [ -n "$initial_epoch" ] && [ "$current_epoch" -ge "$target_epoch" ]; then
+                        echo "Reached epoch ${current_epoch} (${NUM_EPOCHS} epochs from initial epoch ${initial_epoch})!"
+                        exit 0
+                    fi
+                else
+                    echo "$line" | jq -r '"v0.\(.version.Version.minor) height=\(.fields.height)"' 2>/dev/null || echo "$line"
+                fi
+            done
+
+        pipe_status=("${PIPESTATUS[@]}")
+        set -o pipefail
+
+        while_exit=${pipe_status[1]}
+
+        if [ "$while_exit" -eq 0 ]; then
+            exit 0
+        fi
+
+        echo "Connection failed or stream interrupted, retrying in 5 seconds..."
+        sleep 5
+    done
+fi
