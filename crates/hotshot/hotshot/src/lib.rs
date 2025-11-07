@@ -280,7 +280,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         external_rx.set_overflow(true);
 
         membership_coordinator
-            .set_external_channel(external_rx)
+            .set_external_channel(external_rx.clone())
             .await;
 
         tracing::warn!(

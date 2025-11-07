@@ -18,7 +18,6 @@ use hotshot_testing::{
     test_builder::TestDescription,
 };
 
-const NEXT_VIEW_TIMEOUT: u64 = 5000;
 const NUM_NODES: u64 = 14;
 
 cross_tests!(
