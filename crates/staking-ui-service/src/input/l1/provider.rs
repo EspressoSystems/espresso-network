@@ -2,6 +2,7 @@
 
 use crate::{
     Error, Result,
+    error::ensure,
     input::l1::L1BlockSnapshot,
     types::common::{Address, L1BlockId},
 };
@@ -37,11 +38,13 @@ pub async fn load_genesis(
 
     let finalized_block_number = finalized_block.header.number;
 
-    if initialized_at_block > finalized_block_number {
-        panic!(
-            "Initialized block {initialized_at_block} must be less than finalized block {finalized_block_number}",
-        );
-    }
+    ensure!(
+        initialized_at_block <= finalized_block_number,
+        Error::internal().context(format!(
+            "Initialized block {initialized_at_block} must be less than finalized block \
+                {finalized_block_number}"
+        ))
+    );
 
     let block = provider
         .get_block(BlockId::number(initialized_at_block))

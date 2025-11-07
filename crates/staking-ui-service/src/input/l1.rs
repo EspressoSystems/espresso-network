@@ -589,22 +589,40 @@ impl Snapshot {
                     (vec![diff], vec![])
                 }
                 StakeTableV2Events::ConsensusKeysUpdated(_) => {
-                    todo!("implement event handling for StakeTableV2Events::ConsensusKeysUpdated")
+                    tracing::error!(
+                        "not implemented event handling for StakeTableV2Events::ConsensusKeysUpdated"
+                    );
+                    (vec![], vec![])
                 }
                 StakeTableV2Events::ConsensusKeysUpdatedV2(_) => {
-                    todo!("implement event handling for StakeTableV2Events::ConsensusKeysUpdatedV2")
+                    tracing::error!(
+                        "not implemented event handling for StakeTableV2Events::ConsensusKeysUpdatedV2"
+                    );
+                    (vec![], vec![])
                 }
                 StakeTableV2Events::CommissionUpdated(_) => {
-                    todo!("implement event handling for StakeTableV2Events::CommissionUpdated")
+                    tracing::error!(
+                        "not implemented event handling for StakeTableV2Events::CommissionUpdated"
+                    );
+                    (vec![], vec![])
                 }
                 StakeTableV2Events::Delegated(_) => {
-                    todo!("implement event handling for StakeTableV2Events::Delegated")
+                    tracing::error!(
+                        "not implemented event handling for StakeTableV2Events::Delegated"
+                    );
+                    (vec![], vec![])
                 }
                 StakeTableV2Events::Undelegated(_) => {
-                    todo!("implement event handling for StakeTableV2Events::Undelegated")
+                    tracing::error!(
+                        "not implemented event handling for StakeTableV2Events::Undelegated"
+                    );
+                    (vec![], vec![])
                 }
                 StakeTableV2Events::Withdrawal(_) => {
-                    todo!("implement event handling for StakeTableV2Events::Withdrawal")
+                    tracing::error!(
+                        "not implemented event handling for StakeTableV2Events::Withdrawal"
+                    );
+                    (vec![], vec![])
                 }
                 // These events are not relevant to this service. We still list them out explicitly
                 // (rather than matching on _) so that it is clear that we are not missing any

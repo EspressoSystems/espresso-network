@@ -1,3 +1,5 @@
+mod demo
+
 default:
     just --list
 
@@ -17,9 +19,6 @@ build profile="dev" *args:
     cargo build --profile {{profile}} {{args}}
 
 run-profile profile *args:
-    cargo run --profile {{profile}} -- {{args}}
-
-run-decaf:
     #!/usr/bin/env bash
     set -e
     storage=$(mktemp /tmp/staking-ui.XXXXXX)
@@ -28,10 +27,26 @@ run-decaf:
         rm -r "$storage"
     }
     trap cleanup EXIT
+    cargo run --profile {{profile}} -- --storage "${storage}" {{args}}
+
+run-decaf:
     just run \
-        --stake-table 0x40304fbe94d5e7d1492dd90c53a2d63e8506a037 \
-        --storage "${storage}" \
+        --stake-table-address 0x40304fbe94d5e7d1492dd90c53a2d63e8506a037 \
+        --reward-contract-address 0x0000000000000000000000000000000000000000 \
         --http-providers "${SEPOLIA_RPC_URL:-https://ethereum-sepolia.publicnode.com}"
+
+run-local: build
+    #!/usr/bin/env bash
+    just demo::up l1 espresso-dev-node
+    function demo_down {
+        just demo::down
+    }
+    trap demo_down EXIT
+    just run \
+        --stake-table-address 0xefdc2a236dba7a8f60726b49abc79ee6b22ed445 \
+        --reward-contract-address 0x0000000000000000000000000000000000000000 \
+        --http-providers http://localhost:8545 \
+        --l1-ws-provider ws://localhost:8546
 
 run *args: (run-profile "dev" args)
 

@@ -1,0 +1,59 @@
+services:
+  l1:
+    image: ghcr.io/espressosystems/geth-l1-staging:main
+    command: --dev --dev.period=1
+    ports:
+      - $ESPRESSO_SEQUENCER_L1_PORT:8545
+      - $ESPRESSO_SEQUENCER_L1_WS_PORT:8546
+
+  espresso-dev-node:
+    image: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:20250826
+    ports:
+      - "$ESPRESSO_SEQUENCER_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
+      - "$ESPRESSO_BUILDER_PORT:$ESPRESSO_BUILDER_PORT"
+      - "$ESPRESSO_DEV_NODE_PORT:$ESPRESSO_DEV_NODE_PORT"
+    environment:
+      - ESPRESSO_BUILDER_PORT
+      - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
+      - ESPRESSO_DEV_NODE_PORT
+      - ESPRESSO_SEQUENCER_API_PORT
+      - ESPRESSO_SEQUENCER_ETH_MNEMONIC
+      - ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS=25
+      - ESPRESSO_DEV_NODE_EPOCH_HEIGHT
+      - ESPRESSO_SEQUENCER_STORAGE_PATH=/data/espresso/dev-node
+      - ESPRESSO_SEQUENCER_L1_PROVIDER=http://l1:$ESPRESSO_SEQUENCER_L1_PORT
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+      - ESPRESSO_DEV_NODE_VERSION=0.4
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    depends_on:
+      l1:
+        condition: service_healthy
+    volumes:
+      - espresso_storage:/data/espresso
+
+  staking-ui-service:
+    image: ghcr.io/espressosystems/staking-ui-service:latest
+    ports:
+      - "$ESPRESSO_STAKING_SERVICE_PORT:$ESPRESSO_STAKING_SERVICE_PORT"
+    environment:
+      - ESPRESSO_STAKING_SERVICE_PORT
+      - ESPRESSO_STAKING_SERVICE_STORAGE=/data/espresso/staking-service
+      - ESPRESSO_STAKING_SERVICE_L1_HTTP=http://l1:$ESPRESSO_SEQUENCER_L1_PORT
+      - ESPRESSO_STAKING_SERVICE_L1_WS=ws://l1:$ESPRESSO_SEQUENCER_L1_WS_PORT
+      - ESPRESSO_STAKING_SERVICE_STAKE_TABLE_ADDRESS
+      - ESPRESSO_STAKING_SERVICE_REWARD_CONTRACT_ADDRESS
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+    depends_on:
+      espresso-dev-node:
+        condition: service_healthy
+    volumes:
+      - espresso_storage:/data/espresso
+
+volumes:
+  espresso_storage:

@@ -79,3 +79,32 @@ jobs:
             tags: ghcr.io/espressosystems/staking-ui-service:latest
             inputs: ghcr.io/espressosystems/staking-ui-service@${{ needs.build-amd.outputs.digest }},ghcr.io/espressosystems/staking-ui-service@${{ needs.build-arm.outputs.digest }}
             push: ${{ github.event_name != 'pull_request' }}
+  test-demo:
+    # On pull requests, we don't push the new Docker images, so we can't test the Docker demo.
+    if: github.event_name != 'pull_request'
+    needs: [build-multi-platform-docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - uses: extractions/setup-just@v3
+      - uses: docker/setup-compose-action@v1
+      
+      - name: Pull
+        run: just demo::pull
+
+      - name: Start Demo
+        run: just demo::up
+
+      - name: Smoketest
+        run: scripts/smoketest-demo.sh
+
+      - name: Dump Logs
+        if: ${{ failure() }}
+        run: just demo::logs
+
+      - name: Stop Demo
+        if: ${{ always() }}
+        run: just demo::down

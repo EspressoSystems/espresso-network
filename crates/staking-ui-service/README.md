@@ -41,7 +41,7 @@ natively, use `just run`. You can optionally pass in a build profile as well as 
 service itself, e.g. `just run release --port 3000`.
 
 To run via Docker, first [build or obtain a Docker image](#docker), then run
-`docker run ghcr.io/espressosystems/staking-ui-service:main`.
+`docker run ghcr.io/espressosystems/staking-ui-service:latest`.
 
 No matter how you run the service, you will need to configure it properly to connect to an Espresso
 and Ethereum blockchain. Service configuration is outlined in the next section.
@@ -50,28 +50,81 @@ and Ethereum blockchain. Service configuration is outlined in the next section.
 
 The following environment variables are _required_ for the service to run:
 
-| Variable                               | Description                                                                                         |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `ESPRESSO_STAKING_SERVICE_L1_HTTP`     | One or more (comma-separated) HTTP RPC endpoints for reading from Ethereum (or a different layer 1) |
-| `ESPRESSO_STAKING_SERVICE_STAKE_TABLE` | Address of stake table contract on layer 1                                                          |
-| `ESPRESSO_STAKING_SERVICE_STORAGE`     | Path to local storage (a SQLite database will be created or opened here)                            |
+| Variable                                           | Description                                                                                         |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `ESPRESSO_STAKING_SERVICE_L1_HTTP`                 | One or more (comma-separated) HTTP RPC endpoints for reading from Ethereum (or a different layer 1) |
+| `ESPRESSO_STAKING_SERVICE_STAKE_TABLE_ADDRESS`     | Address of stake table contract on layer 1                                                          |
+| `ESPRESSO_STAKING_SERVICE_REWARD_CONTRACT_ADDRESS` | Address of the reward claim contract on layer 1                                                     |
+| `ESPRESSO_STAKING_SERVICE_STORAGE`                 | Path to local storage (a SQLite database will be created or opened here)                            |
 
 In additional, the following _optional_ variables are available for customization:
 
-| Variable                         | Description                                                                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ESPRESSO_STAKING_SERVICE_L1_WS` | Comma-separated list of WebSockets RPC endpoints for reading from Ethereum. Providing these in addition to HTTP can reduce the cost of streaming data from L1 |
-| `ESPRESSO_STAKING_SERVICE_PORT`  | Port for the HTTP server to run on. **Default: 8080**.                                                                                                        |
+| Variable                                                    | Description                                                                                                                                                   |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ESPRESSO_STAKING_SERVICE_L1_WS`                            | Comma-separated list of WebSockets RPC endpoints for reading from Ethereum. Providing these in addition to HTTP can reduce the cost of streaming data from L1 |
+| `ESPRESSO_STAKING_SERVICE_L1_RETRY_DELAY`                   | Delay before retrying failed L1 RPC requests (default: `1s`)                                                                                                  |
+| `ESPRESSO_STAKING_SERVICE_L1_POLLING_INTERVAL`              | Interval for polling HTTP RPCs for new blocks (if not using WebSockets) (default: `7s`)                                                                       |
+| `ESPRESSO_STAKING_SERVICE_L1_SUBSCRIPTION_TIMEOUT`          | Maximum time to wait for L1 new heads before considering a stream invalid and reconnecting (default: `2m`)                                                    |
+| `ESPRESSO_STAKING_SERVICE_L1_FREQUENT_FAILURE_TOLERANCE`    | Fail over to another provider if the current provider fails twice within this window (default: `1m`)                                                          |
+| `ESPRESSO_STAKING_SERVICE_L1_CONSECUTIVE_FAILURE_TOLERANCE` | Fail over to another provider if the current provider fails many times in a row (default: `10`)                                                               |
+| `ESPRESSO_STAKING_SERVICE_L1_FAILOVER_REVERT`               | Revert back to the first provider this duration after failing over (default: `30m`)                                                                           |
+| `ESPRESSO_STAKING_SERVICE_L1_RATE_LIMIT_DELAY`              | Amount of time to wait after receiving a 429 response before making more L1 RPC requests (default: same as L1 retry delay)                                    |
+| `ESPRESSO_STAKING_SERVICE_PORT`                             | Port for the HTTP server to run on. (default: `8080`)                                                                                                         |
+| `RUST_LOG`                                                  | Log level (e.g. `debug`, `info`, `warn`)                                                                                                                      |
+| `RUST_LOG_FORMAT`                                           | Log formatting (`full`, `compact`, or `json`)                                                                                                                 |
 
 ## Docker
 
 The ultimate build target for this service is a Docker image, enabling easy deployment in a variety
 of settings. The image is defined in the [Dockerfile](./Dockerfile). The CI pipeline automatically
 builds a cross-platform (for ARM and AMD on Linux) image from this Dockerfile and publishes it as
-`ghcr.io/espressosystems/staking-ui-service:main`.
+`ghcr.io/espressosystems/staking-ui-service:latest`.
 
 If you are running Linux, you can build your own version of this image using `just build-docker`.
 
 Unfortunately, this is not so easy on MacOS, since Rust cross-compilation for Linux is...
 complicated. Mac users will have to make do with the published images:
-`docker pull ghcr.io/espressosystems/staking-ui-service:main`.
+`docker pull ghcr.io/espressosystems/staking-ui-service:latest`.
+
+## Demo
+
+A full-system demo is available via [demo/docker-compose.yaml](demo/docker-compose.yaml). This
+system includes:
+
+- A geth node running a local L1 devnet
+- An `espresso-dev-node` simulating an Espresso network
+- An instance of the staking UI service
+
+The demo can be controlled via the `demo` Just module:
+
+- `just demo::up`: start all services
+- `just demo::logs <service>`: print logs for a service
+- `just demo::down`: shut down all services and clean up
+
+The demo runs the staking service via the Docker tag
+`docker pull ghcr.io/espressosystems/staking-ui-service:latest`. By default this will pull the
+image from the GHCR registry. You can override this tag locally to run the demo with some changes
+that haven't been pushed yet, using the [Docker build instructions](#docker). You can replace your
+local image by pulling from the registry using `just demo::pull`.
+
+As mentioned above, it is only possible to build a local version of the staking service Docker if
+you are running on Linux. Otherwise, you can test local changes against the demo by starting all
+Docker services _except_ the staking UI service, and then running the staking service as a native
+executable, connecting to the Docker services via TCP. This is possible by running `just run-local`.
+
+### Limitations
+
+The current demo has some known limitations:
+
+- The Espresso dev node does not deploy a reward contract, so the reward contract address is set to
+  the zero address
+- Startup is slow because we deploy new contracts every time. This could potentially be improved by
+  creating an L1 image that has contracts already deployed
+
+### Testing the UI
+
+The primary purpose of this service is to be a backend for the staking UI. You can test the latest
+version of the UI against the local demo of the staking UI service using [your browser](https://bookish-doodle-kq5le1n.pages.github.io/?path=/story/sites-delegation-ui--local-dev-net&args=stakeTableContractAddress:0xefdc2a236dba7a8f60726b49abc79ee6b22ed445;espTokenContractAddress:0x80f43505d8d1a739504eb4237eb15b2e0048da8d&globals=backgrounds.grid:!true;outline:!true).
+
+At the bottom of the page, you will need to set the value of the `l1ValidatorServiceURL` control to
+`http://localshot:8080/v0/`.

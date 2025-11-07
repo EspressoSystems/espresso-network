@@ -1,0 +1,43 @@
+name: Test Demo
+
+on:
+  push:
+    branches:
+      - main
+      - release-*
+    tags:
+      # YYYYMMDD
+      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    name: demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main'  }}
+          shared-key: test-demo
+      - uses: extractions/setup-just@v3
+      - uses: docker/setup-compose-action@v1
+
+      - name: Build
+        run: just build
+
+      - name: Start demo
+        run: just run-local 2>&1 >/tmp/demo-log.txt &
+
+      - name: Smoketest
+        run: scripts/smoketest-demo.sh
+
+      - name: Dump Logs
+        if: ${{ failure() }}
+        run: cat /tmp/demo-log.txt
