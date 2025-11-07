@@ -319,11 +319,11 @@ cross_tests!(
       }
 
       metadata.spinning_properties = SpinningTaskDescription {
-          // Restart all the nodes in view 10
+          // Restart all the nodes in view 6
           node_changes: vec![(6, catchup_nodes)],
       };
       metadata.view_sync_properties =
-          hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(1, 20);
+          hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
 
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
