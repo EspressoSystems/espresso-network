@@ -415,6 +415,8 @@ impl From<std::io::Error> for GetNodeIdentityFromUrlError {
 /// If no [NodeIdentity] is found, it will return a
 /// [GetNodeIdentityFromUrlError::NoNodeIdentity] error.
 pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIdentity> {
+    println!("Getting node identity from URL: {}", url);
+
     // Create a new reqwest client using Rustls TLS
     let client = reqwest::ClientBuilder::new()
         .use_rustls_tls()
@@ -440,7 +442,7 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
         .with_context(|| "Timed out while getting response text")?
         .with_context(|| "Failed to get response text")?;
 
-    println!("Response text: {}", response_text);
+    println!("Response text: {}", response_text.replace('\n', " "));
 
     // If the response was not 200, error
     if response_status != 200 {
