@@ -130,20 +130,9 @@ services:
 
   claim-rewards:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
-    command: |
-      sh -c '
-      set -euo pipefail
-      while true; do
-        unclaimed=$$(staking-cli unclaimed-rewards)
-        if [ "$$unclaimed" != "0 ESP" ]; then
-          echo "Claiming $$unclaimed..."
-          staking-cli claim-rewards
-          echo "Successfully claimed rewards"
-        else
-          echo "No rewards to claim yet ($$unclaimed)"
-        fi
-        sleep 10
-      done'
+    command: /scripts/claim-rewards-loop 10
+    volumes:
+      - ./scripts:/scripts:ro
     environment:
       - RUST_LOG
       - RUST_LOG_FORMAT

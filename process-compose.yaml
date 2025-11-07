@@ -58,8 +58,6 @@ processes:
       && deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     namespace: setup
     depends_on:
-      demo-l1-network:
-        condition: process_healthy
       sequencer0:
         condition: process_healthy
       deploy-sequencer-contracts:
@@ -70,20 +68,14 @@ processes:
     command: scripts/wait-for-header-version http://localhost:${ESPRESSO_SEQUENCER0_API_PORT} 4
     namespace: setup
     depends_on:
-      sequencer0:
-        condition: process_healthy
       deploy-prover-contracts:
         condition: process_completed
     availability: *exit-ok
 
   deploy-lcv3-upgrade:
-    command: |
-      unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
-      deploy --upgrade-light-client-v3
+    command: deploy --upgrade-light-client-v3
     namespace: setup
     depends_on:
-      demo-l1-network:
-        condition: process_healthy
       wait-for-v4:
         condition: process_completed
     availability: *exit-ok
@@ -104,19 +96,7 @@ processes:
     availability: *exit-ok
 
   claim-rewards:
-    command: |
-      set -euo pipefail
-      while true; do
-        unclaimed=$(staking-cli unclaimed-rewards)
-        if [ "$unclaimed" != "0 ESP" ]; then
-          echo "Claiming $unclaimed..."
-          staking-cli claim-rewards
-          echo "Successfully claimed rewards"
-        else
-          echo "No rewards to claim yet ($unclaimed)"
-        fi
-        sleep 10
-      done
+    command: scripts/claim-rewards-loop 10
     environment:
       - L1_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
       - STAKE_TABLE_ADDRESS=${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS}

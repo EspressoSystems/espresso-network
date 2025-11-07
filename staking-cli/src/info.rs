@@ -11,7 +11,7 @@ use hotshot_contract_adapter::sol_types::StakeTableV2;
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;
 
-use crate::parse::Commission;
+use crate::{output::output_success, parse::Commission};
 
 pub async fn stake_table_info(
     l1_url: Url,
@@ -42,14 +42,14 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
         } else {
             bls_key.to_string()
         };
-        tracing::info!(
+        output_success(format!(
             "Validator {}: {key_str} comm={comm} stake={} ESP",
             validator.account,
             format_ether(validator.stake),
-        );
+        ));
 
         if validator.delegators.is_empty() {
-            tracing::info!(" - No delegators");
+            output_success(" - No delegators");
             continue;
         }
 
@@ -57,10 +57,10 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
         let mut delegators = validator.delegators.iter().collect::<Vec<_>>();
         delegators.sort_by(|a, b| a.0.cmp(b.0));
         for (delegator, stake) in delegators {
-            tracing::info!(
+            output_success(format!(
                 " - Delegator {delegator}: stake={} ESP",
                 format_ether(*stake)
-            );
+            ));
         }
     }
     Ok(())

@@ -8,7 +8,8 @@ use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
     reward::RewardClaimInput,
     sol_types::{
-        EspTokenV2, LightClientV3, RewardClaim,
+        EspTokenV2, LightClientV3,
+        RewardClaim::{self, RewardClaimErrors},
         StakeTable::{self, StakeTableErrors},
         StakeTableV2,
     },
@@ -136,7 +137,7 @@ pub async fn claim_reward(
         )
         .send()
         .await
-        .map_err(Into::into)
+        .maybe_decode_revert::<RewardClaimErrors>()
 }
 
 pub async fn unclaimed_rewards(

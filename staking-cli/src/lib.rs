@@ -22,6 +22,7 @@ pub mod demo;
 pub mod funding;
 pub mod info;
 pub mod l1;
+pub mod output;
 pub mod parse;
 pub mod receipt;
 pub mod registration;

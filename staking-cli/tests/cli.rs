@@ -863,6 +863,18 @@ async fn test_cli_all_operations_manual_inspect(
             .stdout
             .clone();
         println!("{}", String::from_utf8_lossy(&output));
+
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("--espresso-url")
+            .arg(espresso_url.to_string())
+            .arg("claim-rewards")
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
     }
 
     Ok(())
