@@ -333,11 +333,10 @@ impl<
 
             let drb_block_height = transition_block_for_epoch(previous_epoch, epoch_height);
 
-            let stake_table = membership
-                .read()
-                .await
-                .inner
-                .stake_table(Some(previous_epoch));
+            let membership_reader = membership.read().await;
+            let stake_table = membership_reader.inner.stake_table(Some(previous_epoch));
+            drop(membership_reader);
+
             let mut drb_leaf = None;
 
             for node in stake_table {

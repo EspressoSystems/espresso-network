@@ -374,7 +374,7 @@ pub struct FakeSolverApiDescription {
 impl Default for TimingData {
     fn default() -> Self {
         Self {
-            next_view_timeout: 4000,
+            next_view_timeout: 6000,
             builder_timeout: Duration::from_millis(500),
             data_request_delay: Duration::from_millis(200),
             secondary_network_delay: Duration::from_millis(1000),

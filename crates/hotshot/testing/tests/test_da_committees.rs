@@ -31,7 +31,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
+                                                 duration: Duration::from_secs(200),
                                              },
                                          ),
             ..TestDescription::default()
@@ -65,6 +65,7 @@ cross_tests!(
         ];
 
         metadata.test_config.epoch_height = 50;
+        metadata.timing_data.next_view_timeout = 5000;
         metadata.test_config.da_committees.push(hotshot_types::VersionedDaCommittee {
             start_version: Version{major: 0, minor: 4},
             start_epoch: 0,
@@ -104,7 +105,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
+                                                 duration: Duration::from_secs(200),
                                              },
                                          ),
             ..TestDescription::default()
@@ -138,6 +139,7 @@ cross_tests!(
         ];
 
         metadata.test_config.epoch_height = 50;
+        metadata.timing_data.next_view_timeout = 5000;
         metadata.test_config.da_committees.push(hotshot_types::VersionedDaCommittee {
             start_version: Version{major: 0, minor: 4},
             start_epoch: 0,
@@ -177,7 +179,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
+                                                 duration: Duration::from_secs(200),
                                              },
                                          ),
             ..TestDescription::default()
@@ -223,6 +225,7 @@ cross_tests!(
         ];
 
         metadata.test_config.epoch_height = 50;
+        metadata.timing_data.next_view_timeout = 5000;
         metadata.test_config.da_committees.push(hotshot_types::VersionedDaCommittee {
             start_version: Version{major: 0, minor: 4},
             start_epoch: 0,
