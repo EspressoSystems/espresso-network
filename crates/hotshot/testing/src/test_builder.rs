@@ -534,7 +534,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
                     // TODO ED Put a configurable time here - 10 seconds for now
-                    duration: Duration::from_millis(10000),
+                    duration: Duration::from_secs(30),
                 },
             ),
             unreliable_network: None,

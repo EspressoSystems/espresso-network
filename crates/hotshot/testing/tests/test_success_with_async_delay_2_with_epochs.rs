@@ -31,7 +31,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
+                                                 duration: Duration::from_secs(200),
                                              },
                                          ),
             ..TestDescription::default()

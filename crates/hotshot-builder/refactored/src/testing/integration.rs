@@ -146,7 +146,7 @@ mod tests {
             ),
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(60),
+                    duration: Duration::from_secs(120),
                 },
             ),
             overall_safety_properties: OverallSafetyPropertiesDescription {

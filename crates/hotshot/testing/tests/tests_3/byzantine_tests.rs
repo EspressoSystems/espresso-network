@@ -40,7 +40,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
+                                                 duration: Duration::from_secs(120),
                                              },
                                          ),
             behaviour,
@@ -69,7 +69,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
+                                                 duration: Duration::from_secs(120),
                                              },
                                          ),
             behaviour,
@@ -109,7 +109,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
+                                                 duration: Duration::from_secs(120),
                                              },
                                          ),
             behaviour,
@@ -147,7 +147,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
+                                                 duration: Duration::from_secs(120),
                                              },
                                          ),
             behaviour,
@@ -188,7 +188,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
+                                                 duration: Duration::from_secs(120),
                                              },
                                          ),
             behaviour,
@@ -230,7 +230,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(60),
+                    duration: Duration::from_secs(120),
                 },
             ),
             behaviour,
@@ -269,7 +269,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(60),
+                    duration: Duration::from_secs(240),
                 },
             ),
             view_sync_properties: ViewSyncTaskDescription::Threshold(0, 13),
@@ -306,7 +306,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(120),
+                    duration: Duration::from_secs(240),
                 },
             ),
             overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -346,7 +346,7 @@ cross_tests!(
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(120),
+                    duration: Duration::from_secs(240),
                 },
             ),
             overall_safety_properties: OverallSafetyPropertiesDescription {

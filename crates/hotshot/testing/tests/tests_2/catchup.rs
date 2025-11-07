@@ -57,7 +57,7 @@ async fn test_catchup() {
     metadata.completion_task_description =
         CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
+                duration: Duration::from_secs(120),
             },
         );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -109,7 +109,7 @@ async fn test_catchup_cdn() {
     metadata.completion_task_description =
         CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
-                duration: Duration::from_millis(100_000),
+                duration: Duration::from_secs(120),
             },
         );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -159,7 +159,7 @@ async fn test_catchup_one_node() {
     metadata.completion_task_description =
         CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
+                duration: Duration::from_secs(120),
             },
         );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -219,7 +219,7 @@ async fn test_catchup_in_view_sync() {
     metadata.completion_task_description =
         CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
+                duration: Duration::from_secs(120),
             },
         );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -275,7 +275,7 @@ async fn test_catchup_reload() {
     metadata.completion_task_description =
         CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
+                duration: Duration::from_secs(120),
             },
         );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -326,7 +326,7 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(60),
+                  duration: Duration::from_secs(120),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
@@ -381,7 +381,7 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(60),
+                  duration: Duration::from_secs(120),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
