@@ -100,48 +100,29 @@ async fn test_native_demo_da_committee() -> Result<()> {
         )]),
     );
 
-    let entries: &[PeerConfig<SeqTypes>] = &[PeerConfig {
-        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~ibJCbfPOhDoURqiGLe683TDJ_KOLQCx8_Hdq43dOviSuL6WJJ_2mARKO3xA2k5zpXE3iiq4_z7mzvA-V1VXvIWw"),
-    },PeerConfig {
-        stake_table_entry:make_stake_table_entry("BLS_VER_KEY~4zQnaCOFJ7m95OjxeNls0QOOwWbz4rfxaL3NwmN2zSdnf8t5Nw_dfmMHq05ee8jCegw6Bn5T8inmrnGGAsQJMMWLv77nd7FJziz2ViAbXg-XGGF7o4HyzELCmypDOIYF3X2UWferFE_n72ZX0iQkUhOvYZZ7cfXToXxRTtb_mwRR"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~lNCMqH5qLthH5OXxW_Z25tLXJUqmzzhsuQ6oVuaPWhtRPmgIKSqcBoJTaEbmGZL2VfTyQNguaoQL4U_4tCA_HmI"),
-    },PeerConfig {
-        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~IBRoz_Q1EXvcm1pNZcmVlyYZU8hZ7qmy337ePAjEMhz8Hl2q8vWPFOd3BaLwgRS1UzAPW3z4E-XIgRDGcRBTAMZX9b_0lKYjlyTlNF2EZfNnKmvv-xJ0yurkfjiveeYEsD2l5d8q_rJJbH1iZdXy-yPEbwI0SIvQfwdlcaKw9po4"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~nkFKzpLhJAafJ3LBkY_0h9OzxSyTu95Z029EUFPO4QNkeUo6DHQGTTVjxmprTA5H8jRSn73i0slJvig6dZ5kLX4"),
-    },PeerConfig {
-        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~rO2PIjyY30HGfapFcloFe3mNDKMIFi6JlOLkH5ZWBSYoRm5fE2-Rm6Lp3EvmAcB5r7KFJ0c1Uor308x78r04EY_sfjcsDCWt7RSJdL4cJoD_4fSTCv_bisO8k98hs_8BtqQt8BHlPeJohpUXvcfnK8suXJETiJ6Er97pfxRbzgAL"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~NwYhzlWarlZHxTNvChWuf74O3fP7zIt5NdC7V8gV6w2W92JOBDkrNmKQeMGxMUke-G5HHxUjHlZEWr1m1xLjEaI"),
-    },PeerConfig {
-        stake_table_entry: make_stake_table_entry("BLS_VER_KEY~r6b-Cwzp-b3czlt0MHmYPJIow5kMsXbrNmZsLSYg9RV49oCCO4WEeCRFR02x9bqLCa_sgNFMrIeNdEa11qNiBAohApYFIvrSa-zP5QGj3xbZaMOCrshxYit6E2TR-XsWvv6gjOrypmugjyTAth-iqQzTboSfmO9DD1-gjJIdCaD7"),
-        state_ver_key: make_state_ver_key("SCHNORR_VER_KEY~qMfMj1c1hRVTnugvz3MKNnVC5JA9jvZcV3ZCLL_J4Ap-u0i6ulGWveTk3OOelZj2-kd_WD5ojtYGWV1jHx9wCaA"),
-    }];
-
     // Sanity check that the demo is working
     assert_native_demo_works(Default::default()).await?;
 
     // Step through the committees defined in demo-da-committees
-    assert_da_stake_table(
-        Default::default(),
-        5,
-        &[&entries[0], &entries[1], &entries[2], &entries[4]],
-    )
-    .await?;
-    assert_da_stake_table(Default::default(), 10, &[&entries[0], &entries[1]]).await?;
-    assert_da_stake_table(
-        Default::default(),
-        15,
-        &[&entries[0], &entries[1], &entries[2]],
-    )
-    .await?;
-    assert_da_stake_table(
-        Default::default(),
-        20,
-        &[&entries[0], &entries[2], &entries[4]],
-    )
-    .await?;
+    for committee in genesis
+        .da_committees
+        .expect("da_committees not set in genesis")
+    {
+        assert_da_stake_table(
+            Default::default(),
+            committee.start_epoch,
+            &committee
+                .committee
+                .iter()
+                .map(|member| member)
+                .collect::<Vec<&PeerConfig<SeqTypes>>>(),
+        )
+        .await?;
+    }
 
-    let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
+    let epoch_length = genesis
+        .epoch_height
+        .expect("epoch_height not set in genesis");
     // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
     // we are using the stake table from the contract.
     let expected_block_height = epoch_length * 21 + 10; // Make sure we're past epoch 21
@@ -155,19 +136,6 @@ async fn test_native_demo_da_committee() -> Result<()> {
     assert_native_demo_works(pos_progress_requirements).await?;
 
     Ok(())
-}
-
-fn make_stake_table_entry(
-    pubkey: &str,
-) -> <<SeqTypes as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry {
-    StakeTableEntry {
-        stake_key: TaggedBase64::parse(pubkey).unwrap().try_into().unwrap(),
-        stake_amount: U256::from(1),
-    }
-}
-
-fn make_state_ver_key(pubkey: &str) -> <SeqTypes as NodeType>::StateSignatureKey {
-    TaggedBase64::parse(pubkey).unwrap().try_into().unwrap()
 }
 
 async fn assert_da_stake_table(
@@ -253,21 +221,19 @@ async fn assert_da_stake_table(
             continue;
         }
 
-        assert_eq!(
-            da_stake_table.stake_table.len(),
-            entries.len(),
-            "expected lengths of da stake tables to match. Expected: {entries:?}, Got: {:?}",
-            da_stake_table.stake_table
-        );
+        let mut expected = entries
+            .iter()
+            .cloned()
+            .cloned()
+            .collect::<Vec<PeerConfig<SeqTypes>>>();
+        expected.sort_by_key(|e| e.stake_table_entry.stake_key.clone());
+        let mut actual = da_stake_table.stake_table.clone();
+        actual.sort_by_key(|e| e.stake_table_entry.stake_key.clone());
 
-        for entry in entries {
-            assert!(
-                da_stake_table.stake_table.iter().any(|e| entry == &e),
-                "DA stake table missing expected entry: {entry:?}. Expected entries: {entries:?}, \
-                 Got: {:?}",
-                da_stake_table.stake_table
-            );
-        }
+        assert_eq!(
+            expected, actual,
+            "Expected DA stake table to match. Expected: {expected:?}, Actual: {actual:?}"
+        );
 
         return Ok(());
     }
