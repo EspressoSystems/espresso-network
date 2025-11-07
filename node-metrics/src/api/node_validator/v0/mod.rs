@@ -1,6 +1,6 @@
 pub mod create_node_validator_api;
 
-use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
+use std::{fmt, future::Future, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Context;
@@ -419,23 +419,23 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
     let client = reqwest::ClientBuilder::new()
         .use_rustls_tls()
         .build()
-        .with_context(|| "Failed to build reqwest client")?;
+        .with_context(|| "failed to build reqwest client")?;
 
     // Join the URL with the status metrics API path
     let completed_url = url
         .join("v0/status/metrics")
-        .with_context(|| "Failed to join URL")?;
+        .with_context(|| "failed to join URL")?;
 
     // Send the request (with a timeout)
     let response = timeout(Duration::from_secs(5), client.get(completed_url).send())
         .await
-        .with_context(|| "Timed out while sending request")?
-        .with_context(|| "Failed to send request")?;
+        .with_context(|| "timed out while sending request")?
+        .with_context(|| "failed to send request")?;
 
     // If the response was not 200, error
     if response.status() != 200 {
         return Err(anyhow::anyhow!(
-            "Failed to get node identity from URL. Status: {}",
+            "failed to get node identity from URL. status: {}",
             response.status()
         ));
     }
@@ -443,18 +443,15 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
     // Get the response text (with a timeout)
     let response_text = timeout(Duration::from_secs(5), response.text())
         .await
-        .with_context(|| "Timed out while getting response text")?
-        .with_context(|| "Failed to get response text")?;
+        .with_context(|| "timed out while getting response text")?
+        .with_context(|| "failed to get response text")?;
 
     // Get the response lines
-    let response_lines = response_text
-        .lines()
-        .into_iter()
-        .map(|line| Ok(line.to_string()));
+    let response_lines = response_text.lines().map(|line| Ok(line.to_string()));
 
     // Parse the response lines into a scrape
     let scrape = prometheus_parse::Scrape::parse(response_lines)
-        .with_context(|| "Failed to parse scrape")?;
+        .with_context(|| "failed to parse scrape")?;
 
     // Get the node identity from the scrape
     if let Some(node_identity) = node_identity_from_scrape(scrape) {
@@ -462,7 +459,7 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
         node_identity.public_url = Some(url);
         Ok(node_identity)
     } else {
-        Err(anyhow::anyhow!("No node identity found in scrape"))
+        Err(anyhow::anyhow!("no node identity found in scrape"))
     }
 }
 

@@ -30,7 +30,7 @@ tokio = { workspace = true }
 # Dependencies for feature `testing`
 hotshot-types = { workspace = true }
 prometheus-parse = { version = "^0.2.5" }
-reqwest = { workspace = true, features = ["rustls-tls", "gzip", "deflate", "brotli"] }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
