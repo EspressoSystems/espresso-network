@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
-    consensus::{OuterConsensus, PayloadWithMetadata},
+    consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
     data::{vid_commitment, vid_disperse::vid_total_weight, DaProposal2, PackedBundle},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
@@ -19,6 +19,7 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
+        network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
         storage::Storage,
@@ -29,7 +30,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use sha2::{Digest, Sha256};
-use tokio::task::spawn_blocking;
+use tokio::{spawn, task::spawn_blocking};
 use tracing::instrument;
 
 use crate::{
