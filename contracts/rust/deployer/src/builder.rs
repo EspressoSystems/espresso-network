@@ -40,7 +40,8 @@ use crate::{
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
-/// - `multisig_pauser`: new multisig that owns the pauser role
+/// - `multisig_pauser1`: first multisig address that has the pauser role
+/// - `multisig_pauser2`: second multisig address that has the pauser role
 /// - `initial_token_supply`: initial token supply for the token contract
 /// - `token_name`: name of the token
 /// - `token_symbol`: symbol of the token
@@ -89,7 +90,9 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     multisig: Option<Address>,
     #[builder(default)]
-    multisig_pauser: Option<Address>,
+    multisig_pauser1: Option<Address>,
+    #[builder(default)]
+    multisig_pauser2: Option<Address>,
     #[builder(default)]
     initial_token_supply: Option<U256>,
     #[builder(default)]
@@ -394,8 +397,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::StakeTableV2 => {
                 let use_multisig = self.use_multisig;
                 let dry_run = self.dry_run;
-                let multisig_pauser = self.multisig_pauser.context(
-                    "Multisig pauser address must be set for the upgrade to StakeTableV2",
+                let multisig_pauser1 = self.multisig_pauser1.context(
+                    "Multisig pauser1 address must be set for the upgrade to StakeTableV2",
+                )?;
+                let multisig_pauser2 = self.multisig_pauser2.context(
+                    "Multisig pauser2 address must be set for the upgrade to StakeTableV2",
                 )?;
                 let l1_client = L1Client::new(vec![self.rpc_url.clone()])?;
                 tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
@@ -409,7 +415,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             "Multisig address must be set when upgrading to --use-multisig flag \
                              is present",
                         )?,
-                        multisig_pauser,
+                        multisig_pauser1,
+                        multisig_pauser2,
                         Some(dry_run),
                     )
                     .await?;
@@ -418,7 +425,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         l1_client,
                         contracts,
-                        multisig_pauser,
+                        multisig_pauser1,
+                        multisig_pauser2,
                         admin,
                     )
                     .await?;
@@ -512,8 +520,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let lc_addr = contracts
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
-                let pauser = self.multisig_pauser.context(
-                    "Multisig pauser address must be set for RewardClaimProxy deployment",
+                // RewardClaimProxy only needs one pauser, use pauser1
+                let pauser = self.multisig_pauser1.context(
+                    "Multisig pauser1 address must be set for RewardClaimProxy deployment",
                 )?;
                 let addr = crate::deploy_reward_claim_proxy(
                     provider, contracts, token_addr, lc_addr, admin, pauser,

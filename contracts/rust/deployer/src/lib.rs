@@ -1065,7 +1065,8 @@ pub async fn fetch_stake_table_for_stake_table_storage_migration(
 pub async fn prepare_stake_table_v2_upgrade(
     l1_client: L1Client,
     proxy_addr: Address,
-    pauser: Address,
+    pauser1: Address,
+    pauser2: Address,
     admin: Address,
 ) -> Result<(
     Option<Vec<StakeTableV2::InitialCommission>>,
@@ -1099,7 +1100,8 @@ pub async fn prepare_stake_table_v2_upgrade(
                 .await?;
 
         tracing::info!(
-            %pauser,
+            %pauser1,
+            %pauser2,
             %admin,
             active_stake = %format!("{:?} wei", active_stake),
             commission_count = commissions.len(),
@@ -1108,7 +1110,7 @@ pub async fn prepare_stake_table_v2_upgrade(
 
         // We can use any address here since we're just building calldata
         let data = StakeTableV2::new(Address::ZERO, &l1_client)
-            .initializeV2(pauser, admin, active_stake, commissions.clone())
+            .initializeV2(pauser1, pauser2, admin, active_stake, commissions.clone())
             .calldata()
             .to_owned();
 
@@ -1127,7 +1129,8 @@ pub async fn upgrade_stake_table_v2(
     provider: impl Provider,
     l1_client: L1Client,
     contracts: &mut Contracts,
-    pauser: Address,
+    pauser1: Address,
+    pauser2: Address,
     admin: Address,
 ) -> Result<TransactionReceipt> {
     tracing::info!("Upgrading StakeTableProxy to StakeTableV2 with EOA admin");
@@ -1137,7 +1140,8 @@ pub async fn upgrade_stake_table_v2(
 
     // First prepare upgrade data (including fetching commissions if needed)
     let (init_commissions, init_active_stake, init_data) =
-        prepare_stake_table_v2_upgrade(l1_client.clone(), proxy_addr, pauser, admin).await?;
+        prepare_stake_table_v2_upgrade(l1_client.clone(), proxy_addr, pauser1, pauser2, admin)
+            .await?;
 
     // Then deploy the new implementation
     let v2_addr = contracts
@@ -1162,7 +1166,14 @@ pub async fn upgrade_stake_table_v2(
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
 
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
-        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?,);
+        assert!(
+            proxy_as_v2.hasRole(pauser_role, pauser1).call().await?,
+            "pauser1 should have PAUSER_ROLE"
+        );
+        assert!(
+            proxy_as_v2.hasRole(pauser_role, pauser2).call().await?,
+            "pauser2 should have PAUSER_ROLE"
+        );
 
         let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?;
         assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?,);
@@ -1971,10 +1982,17 @@ mod tests {
         }
         println!("Fetched active stake: {}", fetched_active_stake);
 
-        let pauser = Address::random();
+        let pauser1 = Address::random();
+        let pauser2 = Address::random();
         let admin = Address::random();
         let init_v2_calldata = StakeTableV2::new(stake_table_address, &provider)
-            .initializeV2(pauser, admin, fetched_active_stake, fetched_commissions)
+            .initializeV2(
+                pauser1,
+                pauser2,
+                admin,
+                fetched_active_stake,
+                fetched_commissions,
+            )
             .calldata()
             .clone();
         println!("Calldata size: {} bytes", init_v2_calldata.len());
@@ -2031,10 +2049,19 @@ mod tests {
         // We need a Contracts instance with proxy deployed
         let mut contracts = Contracts::new();
         contracts.insert(Contract::StakeTableProxy, stake_table_address);
-        let pauser = Address::random();
+        let pauser1 = Address::random();
+        let pauser2 = Address::random();
         let admin = proxy_owner;
 
-        upgrade_stake_table_v2(&provider, l1_client, &mut contracts, pauser, admin).await?;
+        upgrade_stake_table_v2(
+            &provider,
+            l1_client,
+            &mut contracts,
+            pauser1,
+            pauser2,
+            admin,
+        )
+        .await?;
         Ok(())
     }
 
@@ -2478,8 +2505,17 @@ mod tests {
         let mut contracts_v1 = contracts.clone();
 
         // upgrade to v2
-        let pauser = Address::random();
-        upgrade_stake_table_v2(&provider, l1_client.clone(), &mut contracts, pauser, owner).await?;
+        let pauser1 = Address::random();
+        let pauser2 = Address::random();
+        upgrade_stake_table_v2(
+            &provider,
+            l1_client.clone(),
+            &mut contracts,
+            pauser1,
+            pauser2,
+            owner,
+        )
+        .await?;
 
         let stake_table_v2 = StakeTableV2::new(stake_table_addr, &provider);
 
@@ -2490,7 +2526,14 @@ mod tests {
 
         // get pauser role
         let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?;
-        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?,);
+        assert!(
+            stake_table_v2.hasRole(pauser_role, pauser1).call().await?,
+            "pauser1 should have PAUSER_ROLE"
+        );
+        assert!(
+            stake_table_v2.hasRole(pauser_role, pauser2).call().await?,
+            "pauser2 should have PAUSER_ROLE"
+        );
 
         // get admin role
         let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?;
@@ -2498,7 +2541,15 @@ mod tests {
 
         // ensure we can upgrade (again) to a V2 patch version
         let current_impl = read_proxy_impl(&provider, stake_table_addr).await?;
-        upgrade_stake_table_v2(&provider, l1_client, &mut contracts_v1, pauser, owner).await?;
+        upgrade_stake_table_v2(
+            &provider,
+            l1_client,
+            &mut contracts_v1,
+            pauser1,
+            pauser2,
+            owner,
+        )
+        .await?;
         assert_ne!(
             read_proxy_impl(&provider, stake_table_addr).await?,
             current_impl
@@ -2589,14 +2640,16 @@ mod tests {
         let stake_table = StakeTable::new(stake_table_proxy_addr, &provider);
         assert_eq!(stake_table.owner().call().await?, multisig_admin);
         // then send upgrade proposal to the multisig wallet
-        let pauser = Address::random();
+        let pauser1 = Address::random();
+        let pauser2 = Address::random();
         upgrade_stake_table_v2_multisig_owner(
             &provider,
             l1_client,
             &mut contracts,
             sepolia_rpc_url,
             multisig_admin,
-            pauser,
+            pauser1,
+            pauser2,
             Some(dry_run),
         )
         .await?;
@@ -3435,9 +3488,18 @@ mod tests {
         )
         .await?;
 
-        let pauser = Address::random();
+        let pauser1 = Address::random();
+        let pauser2 = Address::random();
         let admin = Address::random();
-        upgrade_stake_table_v2(&provider, l1_client.clone(), &mut contracts, pauser, admin).await?;
+        upgrade_stake_table_v2(
+            &provider,
+            l1_client.clone(),
+            &mut contracts,
+            pauser1,
+            pauser2,
+            admin,
+        )
+        .await?;
 
         let version = get_proxy_initialized_version(&l1_client, stake_table_proxy_addr).await?;
         assert_eq!(version, 2, "Reinitialized proxy should return version 2");

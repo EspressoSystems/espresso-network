@@ -184,8 +184,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Reinitialize the contract
     ///
-    /// @param admin The address to be granted the default admin role
-    /// @param pauser The address to be granted the pauser role
+    /// @param pauser1 The first address to be granted the pauser role
+    /// @param pauser2 The second address to be granted the pauser role
+    /// @param admin The address to be granted the default admin role, this should be a timelock
+    /// contract address
     /// @param initialActiveStake The initial active stake in the contract
     /// @param initialCommissions commissions of validators
     ///
@@ -196,15 +198,20 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     ///
     /// @dev This function is overridden to add pauser and admin roles
     function initializeV2(
-        address pauser,
+        address pauser1,
+        address pauser2,
         address admin,
         uint256 initialActiveStake,
         InitialCommission[] calldata initialCommissions
     ) public onlyOwner reinitializer(2) {
+        require(admin != address(0), ZeroAddress());
+        require(pauser1 != address(0), ZeroAddress());
+        require(pauser2 != address(0), ZeroAddress());
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(PAUSER_ROLE, pauser);
+        _grantRole(PAUSER_ROLE, pauser1);
+        _grantRole(PAUSER_ROLE, pauser2);
 
         // Default values found to be reasonable in internal discussion, may be
         // adjusted before release and updated after release.

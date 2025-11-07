@@ -609,7 +609,8 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     contracts: &mut Contracts,
     rpc_url: String,
     multisig_address: Address,
-    pauser: Address,
+    pauser1: Address,
+    pauser2: Address,
     dry_run: Option<bool>,
 ) -> Result<()> {
     tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
@@ -634,7 +635,8 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     // TODO: check if owner is a SAFE multisig
 
     let (_init_commissions, _init_active_stake, init_data) =
-        crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, pauser, owner_addr).await?;
+        crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, pauser1, pauser2, owner_addr)
+            .await?;
 
     let stake_table_v2_addr = contracts
         .deploy(

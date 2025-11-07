@@ -1445,7 +1445,8 @@ pub mod test_helpers {
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
                 .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
-                .multisig_pauser(signer.address())
+                .multisig_pauser1(signer.address())
+                .multisig_pauser2(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
                 .initial_token_supply(U256::from(100000u64))
@@ -5329,7 +5330,8 @@ mod test {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
-            .multisig_pauser(network_config.signer().address())
+            .multisig_pauser1(network_config.signer().address())
+            .multisig_pauser2(network_config.signer().address())
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
             .initial_token_supply(U256::from(3590000000u64))
@@ -6188,6 +6190,7 @@ mod test {
             provider,
             L1Client::new(vec![network.cfg.l1_url()])?,
             &mut contracts,
+            deployer_addr,
             deployer_addr,
             deployer_addr,
         )

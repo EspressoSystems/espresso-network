@@ -1194,8 +1194,9 @@ touch $OUTPUT_FILE
 # Set the EspressoSys multisig address (will be the pauser of StakeTableV2)
 export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 
-# Set the pauser address for StakeTableV2 (same as EspressoSys multisig)
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
+# Set the pauser addresses for StakeTableV2 (two pausers required)
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER1_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER2_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS_2
 
 # Set the EspToken address (required for StakeTableV2)
 export ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
@@ -1217,7 +1218,8 @@ docker compose run --rm \
   -e RPC_URL \
   -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
   -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS \
+  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER1_ADDRESS \
+  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER2_ADDRESS \
   -e ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS \
   -e ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
   -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
@@ -1267,10 +1269,15 @@ cast storage $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS 0x360894a13ba1a321066
 # Export the PAUSER_ROLE constant
 export PAUSER_CONSTANT=$(cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "PAUSER_ROLE()(bytes32)" --rpc-url $RPC_URL)
 
-# Check the pauser role (should be EspressoSys multisig)
+# Check the pauser role for pauser1 (should be EspressoSys multisig)
 cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "hasRole(bytes32,address)(bool)" \
   $PAUSER_CONSTANT \
-  $ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS --rpc-url $RPC_URL
+  $ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER1_ADDRESS --rpc-url $RPC_URL
+
+# Check the pauser role for pauser2 (should be EspressoSys multisig 2)
+cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "hasRole(bytes32,address)(bool)" \
+  $PAUSER_CONSTANT \
+  $ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER2_ADDRESS --rpc-url $RPC_URL
 
 # Verify the EspToken address matches
 cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "token()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
@@ -1705,8 +1712,9 @@ export RPC_URL=https://water-devnet.example.com
 export OUTPUT_FILE=.env.water.staketable
 touch $OUTPUT_FILE
 
-# Set StakeTable configuration (use Espresso EOA admin instead of EspressoSys Multisig)
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSO_EOA_ADMIN_ADDRESS
+# Set StakeTable configuration (use Espresso EOA admins instead of EspressoSys Multisig)
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER1_ADDRESS=0xESPRESSO_EOA_ADMIN_ADDRESS_1
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER2_ADDRESS=0xESPRESSO_EOA_ADMIN_ADDRESS_2
 ```
 
 Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
