@@ -19,7 +19,7 @@ use hotshot_testing::{
 };
 
 const NEXT_VIEW_TIMEOUT: u64 = 5000;
-const NUM_NODES: usize = 14;
+const NUM_NODES: u64 = 14;
 
 cross_tests!(
     TestName: test_staggered_restart_transition_block,
@@ -41,7 +41,7 @@ cross_tests!(
       let mut down_regular_nodes = vec![];
       for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
-              idx: i,
+              idx: i as usize,
               updown: NodeAction::RestartDown(0),
           });
       }
@@ -100,7 +100,7 @@ cross_tests!(
       let mut down_regular_nodes = vec![];
       for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
-              idx: i,
+              idx: i as usize,
               updown: NodeAction::RestartDown(0),
           });
       }
@@ -159,7 +159,7 @@ cross_tests!(
       let mut down_regular_nodes = vec![];
       for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
-              idx: i,
+              idx: i as usize,
               updown: NodeAction::RestartDown(0),
           });
       }

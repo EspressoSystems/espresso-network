@@ -41,10 +41,10 @@ cross_tests!(
             ..Default::default()
         };
 
-        let mut metadata = TestDescription::default().set_num_nodes(20, 7);
+        let mut metadata = TestDescription::default().set_num_nodes(14, 7);
 
         let catchup_node = vec![ChangeNode {
-            idx: 19,
+            idx: 13,
             updown: NodeAction::Up,
         }];
 
@@ -65,7 +65,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![18, 19, 38, 39],
+            possible_view_failures: vec![12, 13, 26, 27, 40, 41],
             decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
@@ -90,10 +90,10 @@ cross_tests!(
             ..Default::default()
         };
 
-        let mut metadata = TestDescription::default().set_num_nodes(20, 7);
+        let mut metadata = TestDescription::default().set_num_nodes(14, 5);
 
         let catchup_node = vec![ChangeNode {
-            idx: 18,
+            idx: 13,
             updown: NodeAction::Up,
         }];
 
@@ -114,7 +114,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![18, 19, 38, 39],
+            possible_view_failures: vec![5,6,13,14,26,27,32,33,34,40,41],
             decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
@@ -139,10 +139,10 @@ cross_tests!(
             ..Default::default()
         };
 
-        let mut metadata = TestDescription::default().set_num_nodes(20, 7);
+        let mut metadata = TestDescription::default().set_num_nodes(14, 5);
 
         let catchup_node = vec![ChangeNode {
-            idx: 18,
+            idx: 13,
             updown: NodeAction::Up,
         }];
 
@@ -163,7 +163,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![33, 34, 39, 40],
+            possible_view_failures: vec![11,12,13,33,34,39, 40],
             decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };

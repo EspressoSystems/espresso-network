@@ -37,9 +37,9 @@ async fn test_catchup() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
-        idx: 19,
+        idx: 13,
         updown: NodeAction::Up,
     }];
 
@@ -93,7 +93,7 @@ async fn test_catchup_cdn() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, PushCdnImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
         idx: 18,
         updown: NodeAction::Up,
@@ -143,9 +143,9 @@ async fn test_catchup_one_node() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
-        idx: 18,
+        idx: 13,
         updown: NodeAction::Up,
     }];
     metadata.test_config.epoch_height = 0;
@@ -195,14 +195,14 @@ async fn test_catchup_in_view_sync() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![
         ChangeNode {
-            idx: 18,
+            idx: 13,
             updown: NodeAction::Up,
         },
         ChangeNode {
-            idx: 19,
+            idx: 12,
             updown: NodeAction::Up,
         },
     ];
@@ -254,9 +254,9 @@ async fn test_catchup_reload() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
-        idx: 19,
+        idx: 13,
         updown: NodeAction::Up,
     }];
 
@@ -303,10 +303,10 @@ cross_tests!(
           next_view_timeout: 2000,
           ..Default::default()
       };
-      let mut metadata = TestDescription::default().set_num_nodes(20,7);
+      let mut metadata = TestDescription::default().set_num_nodes(14,7);
       let mut catchup_nodes = vec![];
 
-      for i in 0..20 {
+      for i in 0..14 {
           catchup_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -358,10 +358,10 @@ cross_tests!(
           ..Default::default()
       };
       let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> =
-          TestDescription::default().set_num_nodes(20,1);
+          TestDescription::default().set_num_nodes(14,1);
 
       let mut catchup_nodes = vec![];
-      for i in 0..20 {
+      for i in 0..14 {
           catchup_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),

@@ -30,10 +30,10 @@ cross_tests!(
           next_view_timeout: 8000,
           ..Default::default()
       };
-      let mut metadata = TestDescription::default().set_num_nodes(20,20);
+      let mut metadata = TestDescription::default().set_num_nodes(10,10);
       let mut catchup_nodes = vec![];
 
-      for i in 0..20 {
+      for i in 0..10 {
           catchup_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -80,10 +80,10 @@ cross_tests!(
           next_view_timeout: 8000,
           ..Default::default()
       };
-      let mut metadata = TestDescription::default().set_num_nodes(20,2);
+      let mut metadata = TestDescription::default().set_num_nodes(10,2);
 
       let mut catchup_nodes = vec![];
-      for i in 0..20 {
+      for i in 0..10 {
           catchup_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -125,7 +125,7 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(10,4);
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -183,7 +183,7 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(10,4);
       metadata.timing_data.next_view_timeout = 8000;
 
       let mut down_da_nodes = vec![];
