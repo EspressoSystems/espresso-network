@@ -100,15 +100,7 @@ cross_tests!(
     Versions: [DaCommitteeTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
-                                             },
-                                         ),
-            ..TestDescription::default()
-        };
+        let mut metadata = TestDescription::default();
 
         let node_configs = [
             ValidatorConfig::generated_from_seed_indexed(
@@ -173,15 +165,7 @@ cross_tests!(
     Versions: [DaCommitteeTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
-                                             },
-                                         ),
-            ..TestDescription::default()
-        };
+        let mut metadata = TestDescription::default();
 
         let node_configs = [
             ValidatorConfig::generated_from_seed_indexed(

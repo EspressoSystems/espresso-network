@@ -63,12 +63,9 @@ async fn test_timeout() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore]
 async fn test_timeout_libp2p() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{Libp2pImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -99,13 +96,6 @@ async fn test_timeout_libp2p() {
     metadata.spinning_properties = SpinningTaskDescription {
         node_changes: vec![(5, dead_nodes)],
     };
-
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        );
 
     metadata
         .gen_launcher()

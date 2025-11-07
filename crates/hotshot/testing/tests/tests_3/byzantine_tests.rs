@@ -37,12 +37,6 @@ cross_tests!(
           } });
 
         let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
-                                             },
-                                         ),
             behaviour,
             ..TestDescription::default()
         };
@@ -66,12 +60,6 @@ cross_tests!(
           } });
 
         let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
-                                             },
-                                         ),
             behaviour,
             ..TestDescription::default()
         }.set_num_nodes(12,12);
@@ -106,12 +94,6 @@ cross_tests!(
             });
 
         let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
-                                             },
-                                         ),
             behaviour,
             ..TestDescription::default()
         }.set_num_nodes(5,5);
@@ -144,12 +126,6 @@ cross_tests!(
             });
 
         let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
-                                             },
-                                         ),
             behaviour,
             ..TestDescription::default()
         }.set_num_nodes(10,10);
@@ -185,12 +161,6 @@ cross_tests!(
         });
 
         let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
-                                             },
-                                         ),
             behaviour,
             ..TestDescription::default()
         }.set_num_nodes(nodes_count, nodes_count);
@@ -227,12 +197,6 @@ cross_tests!(
         });
 
         let mut metadata = TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(120),
-                },
-            ),
             behaviour,
             ..TestDescription::default()
         }.set_num_nodes(10,10);

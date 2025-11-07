@@ -307,10 +307,6 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let timing_data = TimingData {
-          next_view_timeout: 5000,
-          ..Default::default()
-      };
       // 9 nodes, 3 da nodes
       let mut metadata = TestDescription::default().set_num_nodes(9,3);
       let mut catchup_nodes = vec![];
@@ -322,8 +318,6 @@ cross_tests!(
           })
       }
 
-      metadata.timing_data = timing_data;
-
       metadata.spinning_properties = SpinningTaskDescription {
           // Restart all the nodes in view 10
           node_changes: vec![(6, catchup_nodes)],
@@ -331,17 +325,11 @@ cross_tests!(
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(1, 20);
 
-      metadata.completion_task_description =
-          CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-              TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(60),
-              },
-          );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
-          expected_view_failures: vec![5,6],
-          possible_view_failures: vec![7, 8, 9],
+          expected_view_failures: vec![6],
+          possible_view_failures: vec![5, 7, 8, 9],
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };

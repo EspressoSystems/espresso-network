@@ -57,7 +57,6 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
-    metadata.timing_data.next_view_timeout = NEXT_VIEW_TIMEOUT;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
@@ -116,7 +115,6 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
-      metadata.timing_data.next_view_timeout = NEXT_VIEW_TIMEOUT;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =
@@ -175,7 +173,6 @@ cross_tests!(
       };
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
-        metadata.timing_data.next_view_timeout = NEXT_VIEW_TIMEOUT;
 
       // Give the test some extra time because we are purposely timing out views
       metadata.completion_task_description =

@@ -21,12 +21,9 @@ use hotshot_testing::{
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -54,12 +51,6 @@ async fn test_catchup() {
         node_changes: vec![(10, catchup_node)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         // Make sure we keep committing rounds after the catchup, but not the full 50.
         num_successful_views: 22,
@@ -77,12 +68,9 @@ async fn test_catchup() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_cdn() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{PushCdnImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -106,12 +94,6 @@ async fn test_catchup_cdn() {
         node_changes: vec![(10, catchup_nodes)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         ..Default::default()
     };
@@ -127,12 +109,9 @@ async fn test_catchup_cdn() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_one_node() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -156,12 +135,6 @@ async fn test_catchup_one_node() {
         node_changes: vec![(10, catchup_nodes)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         // Make sure we keep committing rounds after the catchup, but not the full 50.
         num_successful_views: 22,
@@ -179,12 +152,9 @@ async fn test_catchup_one_node() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_in_view_sync() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -216,12 +186,6 @@ async fn test_catchup_in_view_sync() {
         node_changes: vec![(10, catchup_nodes)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         ..Default::default()
     };
@@ -238,12 +202,9 @@ async fn test_catchup_in_view_sync() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_reload() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -272,12 +233,6 @@ async fn test_catchup_reload() {
         node_changes: vec![(10, catchup_node)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         // Make sure we keep committing rounds after the catchup, but not the full 50.
         num_successful_views: 22,
@@ -323,12 +278,6 @@ cross_tests!(
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
 
-      metadata.completion_task_description =
-          CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-              TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(120),
-              },
-          );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
@@ -378,12 +327,6 @@ cross_tests!(
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
 
-      metadata.completion_task_description =
-          CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-              TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(120),
-              },
-          );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
