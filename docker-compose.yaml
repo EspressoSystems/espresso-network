@@ -45,7 +45,7 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3
+    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -71,6 +71,38 @@ services:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
 
+  wait-for-v4:
+    image: ghcr.io/vi/websocat
+    command: /scripts/wait-for-header-version http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT} 4
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      sequencer0:
+        condition: service_healthy
+      deploy-prover-contracts:
+        condition: service_completed_successfully
+
+  deploy-lcv3-upgrade:
+    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    command: deploy --upgrade-light-client-v3
+    environment:
+      - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
+      - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
+      - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
+      - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+      - ESPRESSO_OPS_TIMELOCK_ADMIN
+      - ESPRESSO_OPS_TIMELOCK_DELAY
+      - ESPRESSO_OPS_TIMELOCK_EXECUTORS
+      - ESPRESSO_OPS_TIMELOCK_PROPOSERS
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+      - ASYNC_STD_THREAD_COUNT
+    depends_on:
+      demo-l1-network:
+        condition: service_healthy
+      wait-for-v4:
+        condition: service_completed_successfully
+
   deploy-pos-contracts-upgrades:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
     command: deploy --deploy-reward-claim --upgrade-esp-token-v2 --upgrade-stake-table-v2
@@ -93,7 +125,7 @@ services:
     depends_on:
       demo-l1-network:
         condition: service_healthy
-      deploy-prover-contracts:
+      deploy-lcv3-upgrade:
         condition: service_completed_successfully
 
   claim-rewards:

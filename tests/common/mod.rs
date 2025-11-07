@@ -156,26 +156,26 @@ impl TestConfig {
             dotenvy::var("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")?;
 
         // Derive reward claim address from contracts
-        let reward_claim_address = if let Ok(stake_table_addr_str) =
-            dotenvy::var("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")
-        {
-            let stake_table_addr: Address = stake_table_addr_str.parse()?;
-            let provider = ProviderBuilder::new().connect_http(Url::parse(&l1_provider_url)?);
+        // If contracts aren't upgraded yet, this will fail and we'll just set it to None.
+        // Tests will check rewards only after the upgrade happens.
+        let stake_table_addr: Address =
+            dotenvy::var("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")?.parse()?;
+        let provider = ProviderBuilder::new().connect_http(Url::parse(&l1_provider_url)?);
 
+        let reward_claim_address = async {
             let stake_table = StakeTableV2::new(stake_table_addr, &provider);
-            let token_address = stake_table.token().call().await?;
+            let token_address = stake_table.token().call().await.ok()?;
 
             let esp_token = EspTokenV2::new(token_address, &provider);
-            let reward_claim_addr = esp_token.rewardClaim().call().await?;
+            let reward_claim_addr = esp_token.rewardClaim().call().await.ok()?;
 
             if reward_claim_addr == Address::ZERO {
                 None
             } else {
                 Some(reward_claim_addr)
             }
-        } else {
-            None
-        };
+        }
+        .await;
 
         println!("Waiting on Builder Address");
 
@@ -266,6 +266,7 @@ impl TestConfig {
     }
 
     /// Check claimed rewards for validator0
+    /// Returns an error if reward claim contract isn't available yet
     pub async fn claimed_rewards(&self) -> Result<U256> {
         let reward_claim_address = self
             .reward_claim_address
