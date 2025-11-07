@@ -332,32 +332,6 @@ impl AsRef<[u8; 32]> for VidCommitment {
     }
 }
 
-impl VidCommitment {
-    /// Unwrap an ADVZCommitment. Panic if incorrect version.
-    pub fn unwrap_v0(self) -> ADVZCommitment {
-        match self {
-            VidCommitment::V0(comm) => comm,
-            _ => panic!("Unexpected version for this commitment"),
-        }
-    }
-
-    /// Unwrap an AvidMCommitment. Panic if incorrect version.
-    pub fn unwrap_v1(self) -> AvidMCommitment {
-        match self {
-            VidCommitment::V1(comm) => comm,
-            _ => panic!("Unexpected version for this commitment"),
-        }
-    }
-
-    /// Unwrap an AvidmGf2Commitment. Panic if incorrect version.
-    pub fn unwrap_v2(self) -> AvidmGf2Commitment {
-        match self {
-            VidCommitment::V2(comm) => comm,
-            _ => panic!("Unexpected version for this commitment"),
-        }
-    }
-}
-
 /// Compute the VID payload commitment.
 /// TODO(Gus) delete this function?
 /// # Panics

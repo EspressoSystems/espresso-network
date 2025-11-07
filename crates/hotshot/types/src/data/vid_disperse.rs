@@ -40,7 +40,9 @@ use crate::{
 impl_has_epoch!(
     ADVZDisperse<TYPES>,
     AvidMDisperse<TYPES>,
-    AvidMDisperseShare<TYPES>
+    AvidMDisperseShare<TYPES>,
+    AvidmGf2Disperse<TYPES>,
+    AvidmGf2DisperseShare<TYPES>
 );
 
 /// ADVZ dispersal data
@@ -620,12 +622,6 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidmGf2Disperse<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for AvidmGf2Disperse<TYPES> {
-    fn epoch(&self) -> Option<TYPES::Epoch> {
-        self.epoch
-    }
-}
-
 impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     /// Create VID dispersal from a specified membership for the target epoch.
     /// Uses the specified function to calculate share dispersal
@@ -669,8 +665,6 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     ///
     /// # Errors
     /// Returns an error if the disperse or commitment calculation fails
-    #[allow(clippy::panic)]
-    #[allow(clippy::single_range_in_vec_init)]
     pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
@@ -750,12 +744,6 @@ pub struct AvidmGf2DisperseShare<TYPES: NodeType> {
 impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidmGf2DisperseShare<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.view_number
-    }
-}
-
-impl<TYPES: NodeType> HasEpoch<TYPES> for AvidmGf2DisperseShare<TYPES> {
-    fn epoch(&self) -> Option<TYPES::Epoch> {
-        self.epoch
     }
 }
 
