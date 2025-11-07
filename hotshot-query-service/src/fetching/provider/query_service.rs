@@ -316,7 +316,7 @@ where
                         expected = %req_hash,
                         actual = %header.payload_commitment(),
                         %client_url,
-                        "header payload commitment mismatch (V1)"
+                        "header payload commitment mismatch (V1, AvidM)"
                     );
                     return None;
                 }
@@ -362,7 +362,7 @@ where
                         expected = %req_hash,
                         actual = %header.payload_commitment(),
                         %client_url,
-                        "header payload commitment mismatch (V1)"
+                        "header payload commitment mismatch (V2, AvidmGf2)"
                     );
                     return None;
                 }
@@ -385,7 +385,7 @@ where
                         expected = %req_hash,
                         actual = %commit,
                         %client_url,
-                        "commitment type mismatch for AVIDM check"
+                        "commitment type mismatch for AvidmGf2 check"
                     );
                     return None;
                 }

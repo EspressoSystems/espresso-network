@@ -262,7 +262,7 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
     }
 }
 
-/// ADVZ dispersal data
+/// AvidM dispersal data
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct AvidMDisperse<TYPES: NodeType> {
     /// The view number for which this VID data is intended
@@ -595,7 +595,7 @@ impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
     }
 }
 
-/// ADVZ dispersal data
+/// AvidmGf2 dispersal data
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct AvidmGf2Disperse<TYPES: NodeType> {
     /// The view number for which this VID data is intended
