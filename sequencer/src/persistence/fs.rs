@@ -376,7 +376,7 @@ impl Inner {
         match bincode::deserialize(bytes) {
             Ok((leaf, cert)) => Ok((leaf, cert)),
             Err(err) => {
-                tracing::warn!(
+                tracing::info!(
                     "error parsing decided leaf, maybe file was created without next epoch QC? \
                      {err}"
                 );
