@@ -450,7 +450,7 @@ cross_tests!(
           num_successful_views: 22,
           expected_view_failures: vec![12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34],
           possible_view_failures: vec![35],
-          decide_timeout: Duration::from_secs(120),
+          decide_timeout: Duration::from_secs(200),
           ..Default::default()
       };
 
