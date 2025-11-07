@@ -54,10 +54,10 @@ contract RewardClaimInitializeTest is Test {
         new ERC1967Proxy(impl, initData);
     }
 
-    function test_Initialize_RevertsZeroOwner() public {
+    function test_Initialize_RevertsZeroAdmin() public {
         (bytes memory initData) = prepare(supply, address(0), lc, pauser);
 
-        vm.expectRevert(abi.encodeWithSignature("OwnableInvalidOwner(address)", address(0)));
+        vm.expectRevert(RewardClaim.ZeroAdminAddress.selector);
         new ERC1967Proxy(impl, initData);
     }
 

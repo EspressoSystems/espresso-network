@@ -2,8 +2,6 @@
 pragma solidity ^0.8.28;
 
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { PausableUpgradeable } from
@@ -20,7 +18,6 @@ import "./interfaces/IRewardClaim.sol";
 contract RewardClaim is
     IRewardClaim,
     Initializable,
-    OwnableUpgradeable,
     UUPSUpgradeable,
     PausableUpgradeable,
     AccessControlUpgradeable,
@@ -96,6 +93,9 @@ contract RewardClaim is
     /// @notice Pauser address is zero during initialization
     error ZeroPauserAddress();
 
+    /// @notice Admin address is zero during initialization
+    error ZeroAdminAddress();
+
     /// @notice Light client address is zero during initialization
     error ZeroLightClientAddress();
 
@@ -107,17 +107,17 @@ contract RewardClaim is
     }
 
     /// @notice Initializes the RewardClaim contract
-    /// @param _owner Address that will own the contract
+    /// @param _admin Address that will be granted DEFAULT_ADMIN_ROLE for contract administration
     /// @param _espToken Address of the ESP token contract
     /// @param _lightClient Address of the light client contract
     /// @param _pauser Address to be granted the pauser role
     /// @dev Sets daily limit to 1% of total ESP token supply
-    function initialize(address _owner, address _espToken, address _lightClient, address _pauser)
+    function initialize(address _admin, address _espToken, address _lightClient, address _pauser)
         external
         virtual
         initializer
     {
-        // NOTE: __Ownable_init checks _owner != address(0)
+        require(_admin != address(0), ZeroAdminAddress());
         require(_lightClient != address(0), ZeroLightClientAddress());
         require(_pauser != address(0), ZeroPauserAddress());
         require(_espToken != address(0), ZeroTokenAddress());
@@ -131,13 +131,12 @@ contract RewardClaim is
         uint256 _dailyLimit = (totalSupply * initialBps) / 10000;
         require(_dailyLimit > 0, ZeroDailyLimit());
 
-        __Ownable_init(_owner);
         __UUPSUpgradeable_init();
         __Pausable_init();
         __AccessControl_init();
         __ReentrancyGuard_init();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, _owner);
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(PAUSER_ROLE, _pauser);
 
         espToken = EspTokenV2(_espToken);
@@ -166,7 +165,12 @@ contract RewardClaim is
     /// @dev nonReentrant protects against reentrancy during the external call to `totalSupply`.
     /// @dev Unlikely to be exploited: we are calling our token, but the token is upgradable.
     /// @dev DO NOT REMOVE: Added for defense-in-depth.
-    function setDailyLimit(uint256 basisPoints) external virtual onlyOwner nonReentrant {
+    function setDailyLimit(uint256 basisPoints)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        nonReentrant
+    {
         require(basisPoints > 0, ZeroDailyLimit());
         require(basisPoints <= MAX_DAILY_LIMIT_BASIS_POINTS, DailyLimitTooHigh());
         uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
@@ -237,7 +241,12 @@ contract RewardClaim is
         }
     }
 
-    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         emit Upgrade(newImplementation);
     }
 

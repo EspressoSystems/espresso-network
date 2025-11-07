@@ -954,7 +954,7 @@ pub async fn deploy_reward_claim_proxy(
     contracts: &mut Contracts,
     esp_token_addr: Address,
     light_client_addr: Address,
-    owner: Address,
+    admin: Address,
     pauser: Address,
 ) -> Result<Address> {
     let reward_claim_addr = contracts
@@ -976,7 +976,7 @@ pub async fn deploy_reward_claim_proxy(
     }
 
     let init_data = reward_claim
-        .initialize(owner, esp_token_addr, light_client_addr, pauser)
+        .initialize(admin, esp_token_addr, light_client_addr, pauser)
         .calldata()
         .to_owned();
     let reward_claim_proxy_addr = contracts
@@ -995,7 +995,12 @@ pub async fn deploy_reward_claim_proxy(
         reward_claim_proxy.getVersion().call().await?,
         (1, 0, 0).into()
     );
-    assert_eq!(reward_claim_proxy.owner().call().await?, owner);
+    // Verify admin has DEFAULT_ADMIN_ROLE (RewardClaim no longer uses Ownable)
+    let admin_role = reward_claim_proxy.DEFAULT_ADMIN_ROLE().call().await?;
+    assert!(
+        reward_claim_proxy.hasRole(admin_role, admin).call().await?,
+        "admin should have DEFAULT_ADMIN_ROLE"
+    );
     assert_eq!(reward_claim_proxy.espToken().call().await?, esp_token_addr);
     assert_eq!(
         reward_claim_proxy.lightClient().call().await?,

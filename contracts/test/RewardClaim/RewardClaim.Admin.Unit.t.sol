@@ -5,8 +5,7 @@
 pragma solidity ^0.8.28;
 
 import "./RewardClaim.t.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract RewardClaimAdminTest is RewardClaimTest {
     function test_SetDailyLimit_Success() public {
@@ -22,12 +21,15 @@ contract RewardClaimAdminTest is RewardClaimTest {
         assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
     }
 
-    function test_SetDailyLimit_RevertsNonOwner() public {
+    function test_SetDailyLimit_RevertsNonAdmin() public {
         address attacker = makeAddr("attacker");
         uint256 basisPoints = 200; // 2%
+        bytes32 adminRole = rewardClaim.DEFAULT_ADMIN_ROLE();
         vm.prank(attacker);
         vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, attacker)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, attacker, adminRole
+            )
         );
         rewardClaim.setDailyLimit(basisPoints);
     }

@@ -524,28 +524,38 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let pauser = self.multisig_pauser1.context(
                     "Multisig pauser1 address must be set for RewardClaimProxy deployment",
                 )?;
-                let addr = crate::deploy_reward_claim_proxy(
+
+                // Determine the admin based on configuration
+                // RewardClaim uses SafeExitTimelock because:
+                // - It is not expected to require urgent upgrades.
+                // - In emergency situations it can be paused.
+                // - It can mint ESP tokens, users should have enough time
+                //   to react if they do not agree with an upgrade.
+                let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
+                    if use_timelock_owner {
+                        contracts
+                            .address(Contract::SafeExitTimelock)
+                            .expect("fail to get SafeExitTimelock address")
+                    } else {
+                        self.ops_timelock_admin.context(
+                            "SafeExitTimelock contract address must be set when using \
+                             --use-timelock-owner flag",
+                        )?
+                    }
+                } else if let Some(multisig) = self.multisig {
+                    multisig
+                } else {
+                    admin
+                };
+
+                tracing::info!("Deploying RewardClaimProxy with admin: {:?}", admin);
+                crate::deploy_reward_claim_proxy(
                     provider, contracts, token_addr, lc_addr, admin, pauser,
                 )
                 .await?;
 
-                if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    // RewardClaim uses SafeExitTimelock because:
-                    // - It is not expected to require urgent upgrades.
-                    // - In emergency situations it can be paused.
-                    // - It can mint ESP tokens, users should have enough time
-                    //   to react if they do not agree with an upgrade.
-                    tracing::info!("Transferring ownership to SafeExitTimelock");
-                    if use_timelock_owner {
-                        let timelock_addr = contracts
-                            .address(Contract::SafeExitTimelock)
-                            .expect("fail to get SafeExitTimelock address");
-                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
-                    }
-                } else if let Some(multisig) = self.multisig {
-                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
-                    crate::transfer_ownership(provider, target, addr, multisig).await?;
-                }
+                // Note: RewardClaim no longer uses OwnableUpgradeable, so no transfer_ownership needed.
+                // The admin is set during initialization and receives DEFAULT_ADMIN_ROLE.
             },
             _ => {
                 panic!("Deploying {target} not supported.");
