@@ -223,7 +223,7 @@ async fn store_state_update(
                 &delta, reward_merkle_tree_v2.height()
             );
 
-            tracing::debug!(%delta, "inserting reward account");
+            tracing::debug!(%delta, "inserting v2 reward account");
             UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
