@@ -51,13 +51,13 @@ pub(crate) async fn compute_state_update(
     );
     ensure!(
         state.block_merkle_tree.commitment() == parent_header.block_merkle_tree_root(),
-        "internal error! in-memory block tree {:?} does not match parent header {:?}",
+        "internal error! in-memory block tree {} does not match parent header {}",
         state.block_merkle_tree.commitment(),
         parent_header.block_merkle_tree_root()
     );
     ensure!(
         state.fee_merkle_tree.commitment() == parent_header.fee_merkle_tree_root(),
-        "internal error! in-memory fee tree {:?} does not match parent header {:?}",
+        "internal error! in-memory fee tree {} does not match parent header {}",
         state.fee_merkle_tree.commitment(),
         parent_header.fee_merkle_tree_root()
     );
@@ -66,7 +66,7 @@ pub(crate) async fn compute_state_update(
         Either::Left(v1_root) => {
             ensure!(
                 state.reward_merkle_tree_v1.commitment() == v1_root,
-                "internal error! in-memory v1 reward tree {:?} does not match parent header {:?}",
+                "internal error! in-memory v1 reward tree {} does not match parent header {}",
                 state.reward_merkle_tree_v1.commitment(),
                 v1_root
             )
@@ -74,7 +74,7 @@ pub(crate) async fn compute_state_update(
         Either::Right(v2_root) => {
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == v2_root,
-                "internal error! in-memory v2 reward tree {:?} does not match parent header {:?}",
+                "internal error! in-memory v2 reward tree {} does not match parent header {}",
                 state.reward_merkle_tree_v2.commitment(),
                 v2_root
             )
