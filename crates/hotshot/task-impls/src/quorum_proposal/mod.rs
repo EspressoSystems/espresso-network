@@ -431,6 +431,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 id: self.id,
                 view_start_time: Instant::now(),
                 epoch_height: self.epoch_height,
+                cancel_receiver,
             },
         );
         self.proposal_dependencies

@@ -120,7 +120,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
     #[allow(clippy::too_many_lines)]
     #[instrument(skip_all, fields(id = self.id, view = *self.view_number))]
     async fn handle_dep_result(self, res: Self::Output) {
-        let result = self.handle_vote_deps(&res).await;
+        let mut cancel_receiver = self.cancel_receiver.clone();
+        let result = tokio::select! { result = self.handle_vote_deps(&res) => {
+            result
+        }
+        _ = cancel_receiver.recv() => {
+            tracing::warn!("Vote dependency task cancelled");
+            return;
+        }
+        };
         if result.is_err() {
             log!(result);
             self.print_vote_events(&res)
