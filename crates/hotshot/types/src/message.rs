@@ -722,6 +722,10 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         self.version_infallible(view).await >= V::DrbAndHeaderUpgrade::VERSION
     }
 
+    pub async fn upgraded_vid3(&self, view: TYPES::View) -> bool {
+        self.version_infallible(view).await >= V::Vid3Upgrade::VERSION
+    }
+
     /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.
     ///
     /// # Errors

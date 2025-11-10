@@ -144,7 +144,7 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn append_vid(
+    async fn append_vid1(
         &self,
         _proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {

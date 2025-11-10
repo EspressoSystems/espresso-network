@@ -13,7 +13,8 @@ use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
+        QuorumProposalWrapper, VidCommitment, VidDisperseShare, VidDisperseShare1,
+        VidDisperseShare2, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
@@ -858,14 +859,14 @@ pub trait SequencerPersistence:
     async fn load_anchor_leaf(
         &self,
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>>;
-    async fn append_vid(
+    async fn append_vid1(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare1<SeqTypes>>,
     ) -> anyhow::Result<()>;
     // TODO: merge these two `append_vid`s
     async fn append_vid2(
         &self,
-        proposal: &Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
     ) -> anyhow::Result<()>;
     async fn append_da(
         &self,
@@ -1006,11 +1007,11 @@ impl EventConsumer for NullEventConsumer {
 
 #[async_trait]
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
-    async fn append_vid(
+    async fn append_vid1(
         &self,
         proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        (**self).append_vid(proposal).await
+        (**self).append_vid1(proposal).await
     }
 
     async fn append_vid2(

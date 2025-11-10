@@ -573,7 +573,6 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
                         },
                         DaConsensusMessage::VidDisperseMsg2(proposal) => {
-                            // TODO(Chengyu): consensus version check
                             if !self
                                 .upgrade_lock
                                 .epochs_enabled(proposal.data.view_number())
@@ -586,10 +585,33 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
+                            if self
+                                .upgrade_lock
+                                .upgraded_vid3(proposal.data.view_number())
+                                .await
+                            {
+                                tracing::warn!(
+                                    "received DaConsensusMessage::VidDisperseMsg2 for view {} but \
+                                     vid3 upgrade is enabled for that view",
+                                    proposal.data.view_number()
+                                );
+                                return;
+                            }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
                         },
                         DaConsensusMessage::VidDisperseMsg3(proposal) => {
-                            // TODO(Chengyu): consensus version check
+                            if !self
+                                .upgrade_lock
+                                .upgraded_vid3(proposal.data.view_number())
+                                .await
+                            {
+                                tracing::warn!(
+                                    "received DaConsensusMessage::VidDisperseMsg2 for view {} but \
+                                     vid3 upgrade is not enabled for that view",
+                                    proposal.data.view_number()
+                                );
+                                return;
+                            }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
                         },
                     },
@@ -1376,6 +1398,10 @@ impl<
                     .upgrade_lock
                     .epochs_enabled(proposal.data.view_number())
                     .await;
+                let upgraded_vid3 = self
+                    .upgrade_lock
+                    .upgraded_vid3(proposal.data.view_number())
+                    .await;
                 let message = match proposal.data {
                     VidDisperseShare::V1(data) => {
                         if epochs_enabled {
@@ -1406,6 +1432,14 @@ impl<
                             );
                             return None;
                         }
+                        if upgraded_vid3 {
+                            tracing::warn!(
+                                "VID3 upgrade is enabled for view {} but didn't receive \
+                                 VidDisperseShare3",
+                                data.view_number()
+                            );
+                            return None;
+                        }
                         let vid_share_proposal = Proposal {
                             data,
                             signature: proposal.signature,
@@ -1418,7 +1452,14 @@ impl<
                         )))
                     },
                     VidDisperseShare::V3(data) => {
-                        // TODO(Chengyu): consensus version check
+                        if !upgraded_vid3 {
+                            tracing::warn!(
+                                "VID3 upgrade is not enabled for view {} but receive \
+                                 VidDisperseShare3",
+                                data.view_number()
+                            );
+                            return None;
+                        }
                         let vid_share_proposal = Proposal {
                             data,
                             signature: proposal.signature,

@@ -28,7 +28,7 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::{StaticVersionType, Version};
 use vec1::Vec1;
-use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse};
+use vid_disperse::ADVZDisperseShare;
 
 use crate::{
     drb::DrbResult,
@@ -56,6 +56,7 @@ use crate::{
     vid::{
         advz::advz_scheme,
         avidm::{init_avidm_param, AvidMScheme},
+        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -359,7 +360,7 @@ pub fn vid_commitment<V: Versions>(
                      error: {err}"
                 )
             })
-    } else {
+    } else if version < V::Vid3Upgrade::VERSION {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
@@ -369,8 +370,17 @@ pub fn vid_commitment<V: Versions>(
         )
         .map(VidCommitment::V2)
         .unwrap()
+    } else {
+        let param = init_avidm_gf2_param(total_weight).unwrap();
+        let encoded_tx_len = encoded_transactions.len();
+        AvidmGf2Scheme::commit(
+            &param,
+            encoded_transactions,
+            ns_table::parse_ns_table(encoded_tx_len, metadata),
+        )
+        .map(|(comm, _)| VidCommitment::V3(comm))
+        .unwrap()
     }
-    // TODO(Chengyu): add AvidmGf2Commitment
 }
 
 /// Type aliases for different versions of VID shares
@@ -491,9 +501,11 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
-        let version = upgrade_lock.version_infallible(view).await;
-        if version < V::Epochs::VERSION {
-            ADVZDisperse::calculate_vid_disperse(
+        // let version = upgrade_lock.version_infallible(view).await;
+        let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
+        let upgraded_vid3 = upgrade_lock.upgraded_vid3(view).await;
+        if !epochs_enabled {
+            VidDisperse1::calculate_vid_disperse(
                 payload,
                 membership,
                 view,
@@ -505,8 +517,8 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 disperse: Self::V1(disperse),
                 duration,
             })
-        } else {
-            AvidMDisperse::calculate_vid_disperse(
+        } else if !upgraded_vid3 {
+            VidDisperse2::calculate_vid_disperse(
                 payload,
                 membership,
                 view,
@@ -519,8 +531,21 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 disperse: Self::V2(disperse),
                 duration,
             })
+        } else {
+            VidDisperse3::calculate_vid_disperse(
+                payload,
+                membership,
+                view,
+                target_epoch,
+                data_epoch,
+                metadata,
+            )
+            .await
+            .map(|(disperse, duration)| VidDisperseAndDuration {
+                disperse: Self::V3(disperse),
+                duration,
+            })
         }
-        // TODO(Chengyu): add AvidmGf2Disperse
     }
 
     /// Return the internal payload commitment

@@ -48,9 +48,9 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare1,
+        VidDisperseShare2,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -1339,9 +1339,9 @@ impl SequencerPersistence for Persistence {
         Ok(proposal)
     }
 
-    async fn append_vid(
+    async fn append_vid1(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare1<SeqTypes>>,
     ) -> anyhow::Result<()> {
         let view = proposal.data.view_number.u64();
         let payload_hash = proposal.data.payload_commitment;
@@ -1366,7 +1366,7 @@ impl SequencerPersistence for Persistence {
     }
     async fn append_vid2(
         &self,
-        proposal: &Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         let view = proposal.data.view_number.u64();
         let payload_hash = proposal.data.payload_commitment;
@@ -1768,7 +1768,7 @@ impl SequencerPersistence for Persistence {
                 let data: Vec<u8> = row.try_get("data")?;
                 let payload_hash: String = row.try_get("payload_hash")?;
 
-                let vid_share: Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>> =
+                let vid_share: Proposal<SeqTypes, VidDisperseShare1<SeqTypes>> =
                     bincode::deserialize(&data)?;
                 let vid_share2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(vid_share);
@@ -3575,7 +3575,7 @@ mod test {
                 .disperse(payload_bytes.clone())
                 .unwrap();
 
-            let vid = ADVZDisperseShare::<SeqTypes> {
+            let vid = VidDisperseShare1::<SeqTypes> {
                 view_number: ViewNumber::new(i),
                 payload_commitment: Default::default(),
                 share: disperse.shares[0].clone(),
@@ -3604,7 +3604,7 @@ mod test {
             };
 
             storage
-                .append_vid(&vid.to_proposal(&privkey).unwrap())
+                .append_vid1(&vid.to_proposal(&privkey).unwrap())
                 .await
                 .unwrap();
             storage

@@ -258,4 +258,7 @@ pub trait Versions: Clone + Copy + Debug + Send + Sync + 'static {
 
     /// The version at which to use the upgraded DRB difficulty
     type DrbAndHeaderUpgrade: StaticVersionType;
+
+    /// The version at which to use VID v3
+    type Vid3Upgrade: StaticVersionType;
 }
