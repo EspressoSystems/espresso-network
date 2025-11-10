@@ -20,6 +20,7 @@ alloy = { version = "1.0", features = [
     "json-rpc",
     "node-bindings",
 ] }
+anyhow = "1"
 async-lock = "3.0"
 bitvec = "1"
 clap = { version = "4.4", features = ["derive", "env"] }
@@ -36,6 +37,12 @@ im = { version = "15", features = ["serde"] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = [
+    "sqlite",
+    "runtime-tokio",
+    "migrate",
+] }
 surf-disco = "0.9"
 tagged-base64 = "0.4"
 tide-disco = "0.9"

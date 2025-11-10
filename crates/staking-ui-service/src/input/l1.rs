@@ -14,6 +14,7 @@ use hotshot_contract_adapter::sol_types::{
     RewardClaim::RewardClaimEvents,
     StakeTableV2::{StakeTableV2Events, ValidatorRegistered, ValidatorRegisteredV2},
 };
+use hotshot_types::light_client::StateVerKey;
 use tracing::instrument;
 
 use crate::{
@@ -468,13 +469,13 @@ impl L1BlockSnapshot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     /// The L1 block.
-    block: L1BlockSnapshot,
+    pub block: L1BlockSnapshot,
 
     /// The full node set as of this L1 block.
-    node_set: NodeSet,
+    pub node_set: NodeSet,
 
     /// The state of each wallet as of this L1 block.
-    wallets: Wallets,
+    pub wallets: Wallets,
 }
 
 impl Snapshot {
@@ -675,7 +676,7 @@ impl Wallets {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Wallet {
     /// Nodes that this user is delegating to.
-    nodes: im::Vector<Delegation>,
+    pub nodes: im::Vector<Delegation>,
 
     /// Stake that has been undelegated but not yet withdrawn.
     pub pending_undelegations: im::Vector<PendingWithdrawal>,
@@ -798,6 +799,7 @@ impl From<&ValidatorRegistered> for NodeSetEntry {
         NodeSetEntry {
             address: e.account,
             staking_key: PubKey::from(e.blsVk).into(),
+            state_key: StateVerKey::from(e.schnorrVk).into(),
             commission: Ratio::new(e.commission as usize, COMMISSION_BASIS_POINTS as usize),
             // All nodes start with 0 stake, a separate delegation event will be generated when
             // someone delegates non-zero stake to a node.

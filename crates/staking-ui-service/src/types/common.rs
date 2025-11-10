@@ -21,6 +21,18 @@ impl Ratio {
     }
 }
 
+impl From<f32> for Ratio {
+    fn from(value: f32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Ratio> for f32 {
+    fn from(val: Ratio) -> Self {
+        val.0
+    }
+}
+
 /// An entry in the full node set.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct NodeSetEntry {
@@ -29,6 +41,9 @@ pub struct NodeSetEntry {
 
     /// The key used for the node for signing consensus messages.
     pub staking_key: TaggedBase64,
+
+    /// state verifying key
+    pub state_key: TaggedBase64,
 
     /// Total stake currently attributed to the node.
     pub stake: ESPTokenAmount,

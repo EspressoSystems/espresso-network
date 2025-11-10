@@ -96,6 +96,18 @@ impl From<RequestError> for Error {
     }
 }
 
+impl From<anyhow::Error> for Error {
+    fn from(err: anyhow::Error) -> Self {
+        Self::internal().context(err)
+    }
+}
+
+impl From<sqlx::Error> for Error {
+    fn from(err: sqlx::Error) -> Self {
+        Self::internal().context(err)
+    }
+}
+
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 /// Extension functions for converting other result types into [`Result`].
