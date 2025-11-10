@@ -346,6 +346,42 @@ where
         }
         .boxed()
     })?
+    .at("da_stake_table", |req, state| {
+        async move {
+            // Try to get the epoch from the request. If this fails, error
+            // as it was probably a mistake
+            let epoch = req
+                .opt_integer_param("epoch_number")
+                .map_err(|_| hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?
+                .map(EpochNumber::new);
+
+            state
+                .read(|state| state.get_da_stake_table(epoch).boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!(
+                        "failed to get DA stake table for epoch={epoch:?}. err={err:#}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
+    })?
+    .at("da_stake_table_current", |_, state| {
+        async move {
+            state
+                .read(|state| state.get_da_stake_table_current().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get current DA stake table. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
+    })?
     .at("get_validators", |req, state| {
         async move {
             let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {

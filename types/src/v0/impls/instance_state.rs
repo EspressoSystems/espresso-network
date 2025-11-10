@@ -483,9 +483,9 @@ pub mod mock {
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
                     .context(format!("response missing fee account {account}"))?;
-                proof
-                    .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for fee account {account}"))?;
+                proof.verify(&fee_merkle_tree_root).context(format!(
+                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 

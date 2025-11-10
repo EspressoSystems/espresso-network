@@ -82,9 +82,17 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
+# hotshot-testing: tested in hotshot.yml
+# sequencer-sqlite: no tests, enables embedded-db feature
+# slow-tests: slow and serial tests
+# espresso-dev-node: enables embedded-db
+nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node"
+
 nextest *args:
-    # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
-    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --verbose {{args}}
+    cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
+
+nextest-archive archive-file *args:
+    cargo nextest archive --locked --workspace {{nextest_excludes}} --archive-file {{archive-file}} {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
@@ -94,9 +102,14 @@ test *args:
 
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile slow {{args}}
-    just nextest --profile slow {{args}}
+    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+
+build-dev-node *args:
+    cargo build -p espresso-dev-node {{args}}
+
+test-dev-node *args:
+    @echo 'Running espresso-dev-node integration tests'
+    cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
 test-all:
     @echo 'features: "embedded-db"'

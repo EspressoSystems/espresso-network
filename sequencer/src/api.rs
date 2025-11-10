@@ -39,6 +39,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
+        election::Membership,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeType, Versions},
     },
@@ -204,6 +205,21 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref().get_stake_table_current().await
     }
 
+    /// Get the DA stake table for a given epoch
+    async fn get_da_stake_table(
+        &self,
+        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        self.as_ref().get_da_stake_table(epoch).await
+    }
+
+    /// Get the DA stake table for the current epoch if not provided
+    async fn get_da_stake_table_current(
+        &self,
+    ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
+        self.as_ref().get_da_stake_table_current().await
+    }
+
     /// Get all the validators
     async fn get_validators(
         &self,
@@ -277,6 +293,36 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         Ok(StakeTableWithEpochNumber {
             epoch,
             stake_table: self.get_stake_table(epoch).await?,
+        })
+    }
+
+    /// Get the DA stake table for a given epoch
+    async fn get_da_stake_table(
+        &self,
+        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        Ok(self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .membership()
+            .read()
+            .await
+            .da_stake_table(epoch)
+            .0)
+    }
+
+    /// Get the DA stake table for the current epoch and return it along with the epoch number
+    async fn get_da_stake_table_current(
+        &self,
+    ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
+        let epoch = self.consensus().await.read().await.cur_epoch().await;
+
+        Ok(StakeTableWithEpochNumber {
+            epoch,
+            stake_table: self.get_da_stake_table(epoch).await?,
         })
     }
 
@@ -2566,82 +2612,6 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn catchup_test_without_query_module() {
         catchup_test_helper(|opt| opt).await
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn slow_test_merklized_state_api() {
-        let port = pick_unused_port().expect("No ports free");
-
-        let storage = SqlDataSource::create_storage().await;
-
-        let options = SqlDataSource::options(&storage, Options::with_port(port));
-
-        let network_config = TestConfigBuilder::default().build();
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(options)
-            .network_config(network_config)
-            .build();
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
-        let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
-
-        client.connect(Some(Duration::from_secs(15))).await;
-
-        // Wait until some blocks have been decided.
-        tracing::info!("waiting for blocks");
-        let blocks = client
-            .socket("availability/stream/blocks/0")
-            .subscribe::<BlockQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take(4)
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-
-        // sleep for few seconds so that state data is upserted
-        tracing::info!("waiting for state to be inserted");
-        sleep(Duration::from_secs(5)).await;
-        network.stop_consensus().await;
-
-        for block in blocks {
-            let i = block.height();
-            tracing::info!(i, "get block state");
-            let path = client
-                .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
-                    "block-state/{}/{i}",
-                    i + 1
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(*path.elem().unwrap(), block.hash());
-
-            tracing::info!(i, "get fee state");
-            let account = TestConfig::<5>::builder_key().fee_account();
-            let path = client
-                .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
-                    "fee-state/{}/{}",
-                    i + 1,
-                    account
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(*path.index(), account);
-            assert!(*path.elem().unwrap() > 0.into(), "{:?}", path.elem());
-        }
-
-        // testing fee_balance api
-        let account = TestConfig::<5>::builder_key().fee_account();
-        let amount = client
-            .get::<Option<FeeAmount>>(&format!("fee-state/fee-balance/latest/{account}"))
-            .send()
-            .await
-            .unwrap()
-            .unwrap();
-        let expected = U256::MAX;
-        assert_eq!(expected, amount.0);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

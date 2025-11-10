@@ -7,6 +7,15 @@ PATH = ["stake-table/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "Get the stake table for the given epoch"
 
+[route.da_stake_table_current]
+PATH = ["da-stake-table/current"]
+DOC = "Get the DA stake table for the current epoch"
+
+[route.da_stake_table]
+PATH = ["da-stake-table/:epoch_number"]
+":epoch_number" = "Integer"
+DOC = "Get the DA stake table for the given epoch"
+
 [route.get_validators]
 PATH = ["validators/:epoch_number"]
 ":epoch_number" = "Integer"

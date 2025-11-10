@@ -53,7 +53,6 @@ use surf_disco::Request;
 use tide_disco::error::ServerError;
 use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
-use tracing::warn;
 use url::Url;
 use vbs::version::StaticVersionType;
 
@@ -165,6 +164,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // is a lot cheaper than holding the read lock the entire time we are making requests (which
         // could be a while).
         let mut scores = { (*self.scores.read().await).clone() };
+        let mut logs = vec![format!("Fetching failed.\n")];
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
@@ -172,17 +172,30 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                 Ok(Ok(t)) => {
                     requests.insert(id, true);
                     res = Ok(t);
+                    logs = Vec::new();
                     break;
                 },
                 Ok(Err(err)) => {
-                    tracing::warn!(id, ?score, peer = %client.url, "error from peer: {err:#}");
+                    tracing::debug!(id, ?score, peer = %client.url, "error from peer: {err:#}");
+                    logs.push(format!(
+                        "Error from peer {} with id {id} and score {score:?}: {err:#}",
+                        client.url
+                    ));
                     requests.insert(id, false);
                 },
                 Err(_) => {
-                    tracing::warn!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
+                    tracing::debug!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
+                    logs.push(format!(
+                        "Error from peer {} with id {id} and score {score:?}: request timed out",
+                        client.url
+                    ));
                     requests.insert(id, false);
                 },
             }
+        }
+
+        if !logs.is_empty() {
+            tracing::warn!("{}", logs.join("\n"));
         }
 
         // Update client scores.
@@ -283,9 +296,9 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
                     .context(format!("response missing fee account {account}"))?;
-                proof
-                    .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for fee account {account}"))?;
+                proof.verify(&fee_merkle_tree_root).context(format!(
+                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -401,9 +414,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV2::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v2 reward account {account}, root: \
+                     {reward_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -438,9 +452,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v1 reward account {account}, root: \
+                     {reward_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -706,9 +721,9 @@ where
         for account in accounts {
             let (proof, _) = FeeAccountProof::prove(&fee_merkle_tree_from_db, (*account).into())
                 .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&fee_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&fee_merkle_tree_root).context(format!(
+                "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
@@ -783,9 +798,9 @@ where
             let (proof, _) =
                 RewardAccountProofV2::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&reward_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&reward_merkle_tree_root).context(format!(
+                "invalid proof for v2 reward account {account}, root: {reward_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
@@ -814,9 +829,9 @@ where
             let (proof, _) =
                 RewardAccountProofV1::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&reward_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&reward_merkle_tree_root).context(format!(
+                "invalid proof for v1 reward account {account}, root: {reward_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
@@ -1037,13 +1052,15 @@ impl ParallelStateCatchup {
             futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
         }
 
+        let mut logs = vec![format!("No providers returned a successful result.\n")];
         // Return the first successful result
         while let Some(result) = futures.next().await {
             // Unwrap the inner (join) result
             let result = match result {
                 Ok(res) => res,
                 Err(err) => {
-                    warn!("Failed to join on provider: {err:#}. Trying next provider...");
+                    tracing::debug!("Failed to join on provider: {err:#}.");
+                    logs.push(format!("Failed to join on provider: {err:#}."));
                     continue;
                 },
             };
@@ -1052,7 +1069,8 @@ impl ParallelStateCatchup {
             let result = match result {
                 Ok(res) => res,
                 Err(err) => {
-                    warn!("Failed to fetch data: {err:#}. Trying next provider...");
+                    tracing::debug!("Failed to fetch data: {err:#}.");
+                    logs.push(format!("Failed to fetch data: {err:#}."));
                     continue;
                 },
             };
@@ -1060,7 +1078,7 @@ impl ParallelStateCatchup {
             return Ok(result);
         }
 
-        Err(anyhow::anyhow!("no providers returned a successful result"))
+        Err(anyhow::anyhow!(logs.join("\n")))
     }
 }
 
