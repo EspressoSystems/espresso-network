@@ -124,6 +124,8 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    pub cancel_receiver: Receiver<()>,
 }
 
 impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
@@ -589,8 +591,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 maybe_next_epoch_qc
                     .as_ref()
                     .is_some_and(|neqc| neqc.data.leaf_commit == parent_qc.data.leaf_commit),
-                "Jusify QC on our proposal is for an epoch transition block but we don't have the \
-                 corresponding next epoch QC. Do not propose."
+                "Justify QC on our proposal is for an epoch transition block but we don't have \
+                 the corresponding next epoch QC. Do not propose."
             );
             maybe_next_epoch_qc
         } else {
@@ -841,7 +843,15 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
     #[allow(clippy::no_effect_underscore_binding, clippy::too_many_lines)]
     #[instrument(skip_all, fields(id = self.id, view_number = *self.view_number, latest_proposed_view = *self.latest_proposed_view))]
     async fn handle_dep_result(self, res: Self::Output) {
-        let result = self.handle_proposal_deps(&res).await;
+        let mut cancel_receiver = self.cancel_receiver.clone();
+        let result = tokio::select! {
+            result = self.handle_proposal_deps(&res) => {
+                result
+            }
+            _ = cancel_receiver.recv() => {
+                return;
+            }
+        };
         if result.is_err() {
             log!(result);
             self.print_proposal_events(&res)
