@@ -491,6 +491,36 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
             .collect()
     }
 
+    /// Construct a VID disperse from an iterator of disperse shares.
+    pub fn try_from_shares<'a, I>(mut it: I) -> Option<Self>
+    where
+        I: Iterator<Item = &'a AvidMDisperseShare<TYPES>>,
+    {
+        let first_vid_disperse_share = it.next()?.clone();
+        let payload_byte_len = first_vid_disperse_share.share.payload_byte_len();
+        let mut share_map = BTreeMap::new();
+        share_map.insert(
+            first_vid_disperse_share.recipient_key,
+            first_vid_disperse_share.share,
+        );
+        let mut vid_disperse = Self {
+            view_number: first_vid_disperse_share.view_number,
+            epoch: first_vid_disperse_share.epoch,
+            target_epoch: first_vid_disperse_share.target_epoch,
+            payload_commitment: first_vid_disperse_share.payload_commitment,
+            shares: share_map,
+            payload_byte_len,
+            common: first_vid_disperse_share.common,
+        };
+        let _ = it.map(|vid_disperse_share| {
+            vid_disperse.shares.insert(
+                vid_disperse_share.recipient_key.clone(),
+                vid_disperse_share.share.clone(),
+            )
+        });
+        Some(vid_disperse)
+    }
+
     /// Returns the payload length in bytes.
     pub fn payload_byte_len(&self) -> u32 {
         self.payload_byte_len as u32
@@ -539,36 +569,6 @@ impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
             _pd: PhantomData,
             data: self,
         })
-    }
-
-    /// Create `VidDisperse` out of an iterator to `VidDisperseShare`s
-    pub fn to_vid_disperse<'a, I>(mut it: I) -> Option<AvidMDisperse<TYPES>>
-    where
-        I: Iterator<Item = &'a Self>,
-    {
-        let first_vid_disperse_share = it.next()?.clone();
-        let payload_byte_len = first_vid_disperse_share.share.payload_byte_len();
-        let mut share_map = BTreeMap::new();
-        share_map.insert(
-            first_vid_disperse_share.recipient_key,
-            first_vid_disperse_share.share,
-        );
-        let mut vid_disperse = AvidMDisperse {
-            view_number: first_vid_disperse_share.view_number,
-            epoch: first_vid_disperse_share.epoch,
-            target_epoch: first_vid_disperse_share.target_epoch,
-            payload_commitment: first_vid_disperse_share.payload_commitment,
-            shares: share_map,
-            payload_byte_len,
-            common: first_vid_disperse_share.common,
-        };
-        let _ = it.map(|vid_disperse_share| {
-            vid_disperse.shares.insert(
-                vid_disperse_share.recipient_key.clone(),
-                vid_disperse_share.share.clone(),
-            )
-        });
-        Some(vid_disperse)
     }
 
     /// Returns the payload length in bytes.
@@ -741,6 +741,36 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             .collect()
     }
 
+    /// Construct a VID disperse from an iterator of disperse shares.
+    pub fn try_from_shares<'a, I>(mut it: I) -> Option<Self>
+    where
+        I: Iterator<Item = &'a AvidmGf2DisperseShare<TYPES>>,
+    {
+        let first_vid_disperse_share = it.next()?.clone();
+        let payload_byte_len = first_vid_disperse_share.common.payload_byte_len();
+        let mut share_map = BTreeMap::new();
+        share_map.insert(
+            first_vid_disperse_share.recipient_key,
+            first_vid_disperse_share.share,
+        );
+        let mut vid_disperse = Self {
+            view_number: first_vid_disperse_share.view_number,
+            epoch: first_vid_disperse_share.epoch,
+            target_epoch: first_vid_disperse_share.target_epoch,
+            payload_commitment: first_vid_disperse_share.payload_commitment,
+            shares: share_map,
+            payload_byte_len,
+            common: first_vid_disperse_share.common,
+        };
+        let _ = it.map(|vid_disperse_share| {
+            vid_disperse.shares.insert(
+                vid_disperse_share.recipient_key.clone(),
+                vid_disperse_share.share.clone(),
+            )
+        });
+        Some(vid_disperse)
+    }
+
     /// Returns the payload length in bytes.
     pub fn payload_byte_len(&self) -> u32 {
         self.payload_byte_len as u32
@@ -790,37 +820,6 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
             data: self,
         })
     }
-
-    /// Create `VidDisperse` out of an iterator to `VidDisperseShare`s
-    pub fn to_vid_disperse<'a, I>(mut it: I) -> Option<AvidmGf2Disperse<TYPES>>
-    where
-        I: Iterator<Item = &'a Self>,
-    {
-        let first_vid_disperse_share = it.next()?.clone();
-        let payload_byte_len = first_vid_disperse_share.common.payload_byte_len();
-        let mut share_map = BTreeMap::new();
-        share_map.insert(
-            first_vid_disperse_share.recipient_key,
-            first_vid_disperse_share.share,
-        );
-        let mut vid_disperse = AvidmGf2Disperse {
-            view_number: first_vid_disperse_share.view_number,
-            epoch: first_vid_disperse_share.epoch,
-            target_epoch: first_vid_disperse_share.target_epoch,
-            payload_commitment: first_vid_disperse_share.payload_commitment,
-            shares: share_map,
-            payload_byte_len,
-            common: first_vid_disperse_share.common,
-        };
-        let _ = it.map(|vid_disperse_share| {
-            vid_disperse.shares.insert(
-                vid_disperse_share.recipient_key.clone(),
-                vid_disperse_share.share.clone(),
-            )
-        });
-        Some(vid_disperse)
-    }
-
     /// Returns the payload length in bytes.
     pub fn payload_byte_len(&self) -> u32 {
         self.common.payload_byte_len() as u32
