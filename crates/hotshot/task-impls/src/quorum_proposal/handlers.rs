@@ -849,6 +849,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                 result
             }
             _ = cancel_receiver.recv() => {
+                tracing::warn!("Proposal dependency task cancelled");
                 return;
             }
         };
