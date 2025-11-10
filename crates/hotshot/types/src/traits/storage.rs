@@ -60,8 +60,8 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
                 .await
             },
             VidDisperseShare::V3(_share) => {
-                // TODO(Chengyu): implement when V2 is defined
-                Err(anyhow!("VID Disperse Share V2 not supported yet"))
+                // TODO(Chengyu): implement when V3 is defined
+                Err(anyhow!("VID Disperse Share V3 not supported yet"))
             },
         }
     }
