@@ -175,21 +175,18 @@ async fn any_fetch<Types, P, T>(providers: &[Arc<P>], req: T) -> Option<T::Respo
 where
     Types: NodeType,
     P: Provider<Types, T> + Debug + ?Sized,
-    T: Request<Types>,
+    T: Request<Types> + Clone + Debug,
 {
-    // There's a policy question of how to decide when to try each fetcher: all in parallel, in
-    // serial, or a combination. For now, we do the simplest thing of trying each in order, in
-    // serial. This has the best performance in the common case when we succeed on the first
-    // fetcher: low latency, and no undue burden on the other providers. However, a more complicated
-    // strategy where we slowly ramp up the parallelism as more and more requests fail may provide
-    // better worst-case latency.
     for (i, p) in providers.iter().enumerate() {
-        match p.fetch(req).await {
+        match p.fetch(req.clone()).await {
             Some(obj) => return Some(obj),
             None => {
                 tracing::debug!(
-                    "failed to fetch {req:?} from provider {i}/{}: {p:?}",
-                    providers.len()
+                    "failed to fetch {:?} from provider {}/{}: {:?}",
+                    req,
+                    i,
+                    providers.len(),
+                    p
                 );
                 continue;
             },
@@ -197,7 +194,8 @@ where
     }
 
     tracing::warn!(
-        "failed to fetch {req:?} from all {} providers",
+        "failed to fetch {:?} from all {} providers",
+        req,
         providers.len()
     );
 
