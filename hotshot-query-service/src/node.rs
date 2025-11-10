@@ -342,7 +342,7 @@ mod test {
                     .await
                     .unwrap();
                 if let Some(vid_share) = vid_share.as_ref() {
-                    let VidDisperseShare::V0(new_share) = vid_share else {
+                    let VidDisperseShare::V1(new_share) = vid_share else {
                         panic!("VID share is not V0");
                     };
                     assert_eq!(share, VidShare::V1(new_share.share.clone()));

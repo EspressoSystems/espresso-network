@@ -96,7 +96,7 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
             vid_share: self
                 .vid_share
                 .map(|share| match share {
-                    VidDisperseShare::V0(share) => Ok(share),
+                    VidDisperseShare::V1(share) => Ok(share),
                     _ => Err(error!("VID share is post-epoch")),
                 })
                 .transpose()?,

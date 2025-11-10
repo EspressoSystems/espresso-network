@@ -130,21 +130,21 @@ where
                 }
 
                 let (vid_common, vid_share) = match vid_share {
-                    Some(VidDisperseShare::V0(share)) => (
+                    Some(VidDisperseShare::V1(share)) => (
                         Some(VidCommonQueryData::new(
                             leaf2.block_header().clone(),
                             VidCommon::V0(share.common.clone()),
                         )),
                         Some(VidShare::V1(share.share.clone())),
                     ),
-                    Some(VidDisperseShare::V1(share)) => (
+                    Some(VidDisperseShare::V2(share)) => (
                         Some(VidCommonQueryData::new(
                             leaf2.block_header().clone(),
                             VidCommon::V1(share.common.clone()),
                         )),
                         Some(VidShare::V2(share.share.clone())),
                     ),
-                    Some(VidDisperseShare::V2(share)) => (
+                    Some(VidDisperseShare::V3(share)) => (
                         Some(VidCommonQueryData::new(
                             leaf2.block_header().clone(),
                             VidCommon::V2(share.common.clone()),

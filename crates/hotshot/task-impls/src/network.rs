@@ -775,7 +775,7 @@ impl<
                 .epochs_enabled(proposal.data.view_number())
                 .await
             {
-                let vid_share_proposal = if let VidDisperseShare::V1(data) = proposal.data {
+                let vid_share_proposal = if let VidDisperseShare::V2(data) = proposal.data {
                     Proposal {
                         data,
                         signature: proposal.signature,
@@ -795,7 +795,7 @@ impl<
                     )),
                 }
             } else {
-                let vid_share_proposal = if let VidDisperseShare::V0(data) = proposal.data {
+                let vid_share_proposal = if let VidDisperseShare::V1(data) = proposal.data {
                     Proposal {
                         data,
                         signature: proposal.signature,
@@ -1377,7 +1377,7 @@ impl<
                     .epochs_enabled(proposal.data.view_number())
                     .await;
                 let message = match proposal.data {
-                    VidDisperseShare::V0(data) => {
+                    VidDisperseShare::V1(data) => {
                         if epochs_enabled {
                             tracing::warn!(
                                 "Epochs are enabled for view {} but didn't receive \
@@ -1397,7 +1397,7 @@ impl<
                             )),
                         )))
                     },
-                    VidDisperseShare::V1(data) => {
+                    VidDisperseShare::V2(data) => {
                         if !epochs_enabled {
                             tracing::warn!(
                                 "Epochs are enabled for view {} but didn't receive \
@@ -1417,7 +1417,7 @@ impl<
                             )),
                         )))
                     },
-                    VidDisperseShare::V2(data) => {
+                    VidDisperseShare::V3(data) => {
                         // TODO(Chengyu): consensus version check
                         let vid_share_proposal = Proposal {
                             data,

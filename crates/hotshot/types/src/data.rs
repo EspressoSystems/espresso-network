@@ -297,9 +297,9 @@ impl std::str::FromStr for VidCommitment {
 }
 
 // TODO(Chengyu): cannot have this because of `impl<H> From<Output<H>> for HasherNode<H>`.
-// impl From<ADVZCommitment> for VidCommitment {
-//     fn from(comm: ADVZCommitment) -> Self {
-//         Self::V0(comm)
+// impl From<VidCommitment1> for VidCommitment {
+//     fn from(comm: VidCommitment1) -> Self {
+//         Self::V1(comm)
 //     }
 // }
 
@@ -387,9 +387,9 @@ pub enum VidShare {
 }
 
 // TODO(Chengyu): cannot have this
-// impl From<ADVZShare> for VidShare {
-//     fn from(share: ADVZShare) -> Self {
-//         Self::V0(share)
+// impl From<VidShare1> for VidShare {
+//     fn from(share: VidShare1) -> Self {
+//         Self::V1(share)
 //     }
 // }
 
@@ -416,6 +416,11 @@ pub struct VidDisperseAndDuration<TYPES: NodeType> {
     pub duration: Duration,
 }
 
+/// Type aliases for different versions of VID disperse
+pub type VidDisperse1<TYPES> = vid_disperse::ADVZDisperse<TYPES>;
+pub type VidDisperse2<TYPES> = vid_disperse::AvidMDisperse<TYPES>;
+pub type VidDisperse3<TYPES> = vid_disperse::AvidmGf2Disperse<TYPES>;
+
 /// VID dispersal data
 ///
 /// Like [`DaProposal`].
@@ -425,37 +430,37 @@ pub struct VidDisperseAndDuration<TYPES: NodeType> {
 #[serde(bound = "TYPES: NodeType")]
 pub enum VidDisperse<TYPES: NodeType> {
     /// Disperse type for first VID version
-    V0(vid_disperse::ADVZDisperse<TYPES>),
+    V1(VidDisperse1<TYPES>),
     /// Disperse type for AvidM Scheme
-    V1(vid_disperse::AvidMDisperse<TYPES>),
+    V2(VidDisperse2<TYPES>),
     /// Disperse type for AvidmGf2 Scheme
-    V2(vid_disperse::AvidmGf2Disperse<TYPES>),
+    V3(VidDisperse3<TYPES>),
 }
 
-impl<TYPES: NodeType> From<vid_disperse::ADVZDisperse<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: vid_disperse::ADVZDisperse<TYPES>) -> Self {
-        Self::V0(disperse)
-    }
-}
-
-impl<TYPES: NodeType> From<vid_disperse::AvidMDisperse<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: vid_disperse::AvidMDisperse<TYPES>) -> Self {
+impl<TYPES: NodeType> From<VidDisperse1<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: VidDisperse1<TYPES>) -> Self {
         Self::V1(disperse)
     }
 }
 
-impl<TYPES: NodeType> From<vid_disperse::AvidmGf2Disperse<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: vid_disperse::AvidmGf2Disperse<TYPES>) -> Self {
+impl<TYPES: NodeType> From<VidDisperse2<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: VidDisperse2<TYPES>) -> Self {
         Self::V2(disperse)
+    }
+}
+
+impl<TYPES: NodeType> From<VidDisperse3<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: VidDisperse3<TYPES>) -> Self {
+        Self::V3(disperse)
     }
 }
 
 impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
     fn view_number(&self) -> TYPES::View {
         match self {
-            Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
             Self::V2(disperse) => disperse.view_number(),
+            Self::V3(disperse) => disperse.view_number(),
         }
     }
 }
@@ -463,9 +468,9 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
 impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperse<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         match self {
-            Self::V0(disperse) => disperse.epoch(),
             Self::V1(disperse) => disperse.epoch(),
             Self::V2(disperse) => disperse.epoch(),
+            Self::V3(disperse) => disperse.epoch(),
         }
     }
 }
@@ -497,7 +502,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
             )
             .await
             .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V0(disperse),
+                disperse: Self::V1(disperse),
                 duration,
             })
         } else {
@@ -511,7 +516,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
             )
             .await
             .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V1(disperse),
+                disperse: Self::V2(disperse),
                 duration,
             })
         }
@@ -521,37 +526,32 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     /// Return the internal payload commitment
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V0(disperse) => VidCommitment::V1(disperse.payload_commitment),
-            Self::V1(disperse) => disperse.payload_commitment.into(),
+            Self::V1(disperse) => VidCommitment::V1(disperse.payload_commitment),
             Self::V2(disperse) => disperse.payload_commitment.into(),
+            Self::V3(disperse) => disperse.payload_commitment.into(),
         }
     }
 
     /// Return a slice reference to the payload commitment. Should be used for signature.
     pub fn payload_commitment_ref(&self) -> &[u8] {
         match self {
-            Self::V0(disperse) => disperse.payload_commitment.as_ref(),
             Self::V1(disperse) => disperse.payload_commitment.as_ref(),
             Self::V2(disperse) => disperse.payload_commitment.as_ref(),
+            Self::V3(disperse) => disperse.payload_commitment.as_ref(),
         }
     }
 
     /// Set the view number
     pub fn set_view_number(&mut self, view_number: <TYPES as NodeType>::View) {
         match self {
-            Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
             Self::V2(share) => share.view_number = view_number,
+            Self::V3(share) => share.view_number = view_number,
         }
     }
 
     pub fn to_shares(self) -> Vec<VidDisperseShare<TYPES>> {
         match self {
-            VidDisperse::V0(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V0(share))
-                .collect(),
             VidDisperse::V1(disperse) => disperse
                 .to_shares()
                 .into_iter()
@@ -562,6 +562,11 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 .into_iter()
                 .map(|share| VidDisperseShare::V2(share))
                 .collect(),
+            VidDisperse::V3(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V3(share))
+                .collect(),
         }
     }
 
@@ -570,11 +575,6 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         proposal: Proposal<TYPES, Self>,
     ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
         match proposal.data {
-            VidDisperse::V0(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
             VidDisperse::V1(disperse) => disperse
                 .to_share_proposals(&proposal.signature)
                 .into_iter()
@@ -585,37 +585,47 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 .into_iter()
                 .map(|proposal| convert_proposal(proposal))
                 .collect(),
+            VidDisperse::V3(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
         }
     }
 }
+
+/// Type aliases for different versions of VID disperse shares
+pub type VidDisperseShare1<TYPES> = vid_disperse::ADVZDisperseShare<TYPES>;
+pub type VidDisperseShare2<TYPES> = vid_disperse::AvidMDisperseShare<TYPES>;
+pub type VidDisperseShare3<TYPES> = vid_disperse::AvidmGf2DisperseShare<TYPES>;
 
 /// VID share and associated metadata for a single node
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound = "TYPES: NodeType")]
 pub enum VidDisperseShare<TYPES: NodeType> {
     /// VID disperse share type for first version VID
-    V0(vid_disperse::ADVZDisperseShare<TYPES>),
+    V1(VidDisperseShare1<TYPES>),
     /// VID disperse share type after epoch upgrade and VID upgrade
-    V1(vid_disperse::AvidMDisperseShare<TYPES>),
+    V2(VidDisperseShare2<TYPES>),
     /// VID disperse share type for AvidmGf2 Scheme
-    V2(vid_disperse::AvidmGf2DisperseShare<TYPES>),
+    V3(VidDisperseShare3<TYPES>),
 }
 
-impl<TYPES: NodeType> From<vid_disperse::ADVZDisperseShare<TYPES>> for VidDisperseShare<TYPES> {
-    fn from(share: vid_disperse::ADVZDisperseShare<TYPES>) -> Self {
-        Self::V0(share)
-    }
-}
-
-impl<TYPES: NodeType> From<vid_disperse::AvidMDisperseShare<TYPES>> for VidDisperseShare<TYPES> {
-    fn from(share: vid_disperse::AvidMDisperseShare<TYPES>) -> Self {
+impl<TYPES: NodeType> From<VidDisperseShare1<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: VidDisperseShare1<TYPES>) -> Self {
         Self::V1(share)
     }
 }
 
-impl<TYPES: NodeType> From<vid_disperse::AvidmGf2DisperseShare<TYPES>> for VidDisperseShare<TYPES> {
-    fn from(share: vid_disperse::AvidmGf2DisperseShare<TYPES>) -> Self {
+impl<TYPES: NodeType> From<VidDisperseShare2<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: VidDisperseShare2<TYPES>) -> Self {
         Self::V2(share)
+    }
+}
+
+impl<TYPES: NodeType> From<VidDisperseShare3<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: VidDisperseShare3<TYPES>) -> Self {
+        Self::V3(share)
     }
 }
 
@@ -626,9 +636,9 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
     ) -> Option<Proposal<TYPES, Self>> {
         let payload_commitment_ref: &[u8] = match &self {
-            Self::V0(share) => share.payload_commitment.as_ref(),
             Self::V1(share) => share.payload_commitment.as_ref(),
             Self::V2(share) => share.payload_commitment.as_ref(),
+            Self::V3(share) => share.payload_commitment.as_ref(),
         };
         let Ok(signature) = TYPES::SignatureKey::sign(private_key, payload_commitment_ref) else {
             tracing::error!("VID: failed to sign dispersal share payload");
@@ -644,63 +654,63 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     /// Return the internal `recipient_key`
     pub fn recipient_key(&self) -> &TYPES::SignatureKey {
         match self {
-            Self::V0(share) => &share.recipient_key,
             Self::V1(share) => &share.recipient_key,
             Self::V2(share) => &share.recipient_key,
+            Self::V3(share) => &share.recipient_key,
         }
     }
 
     /// Return the payload length in bytes.
     pub fn payload_byte_len(&self) -> u32 {
         match self {
-            Self::V0(share) => share.payload_byte_len(),
             Self::V1(share) => share.payload_byte_len(),
             Self::V2(share) => share.payload_byte_len(),
+            Self::V3(share) => share.payload_byte_len(),
         }
     }
 
     /// Return a reference to the internal payload VID commitment
     pub fn payload_commitment_ref(&self) -> &[u8] {
         match self {
-            Self::V0(share) => share.payload_commitment.as_ref(),
             Self::V1(share) => share.payload_commitment.as_ref(),
             Self::V2(share) => share.payload_commitment.as_ref(),
+            Self::V3(share) => share.payload_commitment.as_ref(),
         }
     }
 
     /// Return the internal payload VID commitment
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V0(share) => VidCommitment::V1(share.payload_commitment),
-            Self::V1(share) => share.payload_commitment.into(),
+            Self::V1(share) => VidCommitment::V1(share.payload_commitment),
             Self::V2(share) => share.payload_commitment.into(),
+            Self::V3(share) => share.payload_commitment.into(),
         }
     }
 
     /// Return the target epoch
     pub fn target_epoch(&self) -> Option<<TYPES as NodeType>::Epoch> {
         match self {
-            Self::V0(_) => None,
-            Self::V1(share) => share.target_epoch,
+            Self::V1(_) => None,
             Self::V2(share) => share.target_epoch,
+            Self::V3(share) => share.target_epoch,
         }
     }
 
     /// Internally verify the share given necessary information
     pub fn verify_share(&self, total_nodes: usize) -> bool {
         match self {
-            Self::V0(share) => share.verify_share(total_nodes),
             Self::V1(share) => share.verify_share(total_nodes),
             Self::V2(share) => share.verify_share(total_nodes),
+            Self::V3(share) => share.verify_share(total_nodes),
         }
     }
 
     /// Set the view number
     pub fn set_view_number(&mut self, view_number: <TYPES as NodeType>::View) {
         match self {
-            Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
             Self::V2(share) => share.view_number = view_number,
+            Self::V3(share) => share.view_number = view_number,
         }
     }
 }
@@ -708,9 +718,9 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
 impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare<TYPES> {
     fn view_number(&self) -> TYPES::View {
         match self {
-            Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
             Self::V2(disperse) => disperse.view_number(),
+            Self::V3(disperse) => disperse.view_number(),
         }
     }
 }
@@ -718,9 +728,9 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare<TYPES> {
 impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperseShare<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         match self {
-            Self::V0(_) => None,
-            Self::V1(share) => share.epoch(),
+            Self::V1(_) => None,
             Self::V2(share) => share.epoch(),
+            Self::V3(share) => share.epoch(),
         }
     }
 }

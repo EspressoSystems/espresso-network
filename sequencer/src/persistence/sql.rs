@@ -2908,9 +2908,9 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
             };
 
         match share.data {
-            VidDisperseShare::V0(vid) => Some(VidCommon::V0(vid.common)),
-            VidDisperseShare::V1(vid) => Some(VidCommon::V1(vid.common)),
-            VidDisperseShare::V2(vid) => Some(VidCommon::V2(vid.common)),
+            VidDisperseShare::V1(vid) => Some(VidCommon::V0(vid.common)),
+            VidDisperseShare::V2(vid) => Some(VidCommon::V1(vid.common)),
+            VidDisperseShare::V3(vid) => Some(VidCommon::V2(vid.common)),
         }
     }
 }

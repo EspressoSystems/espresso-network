@@ -29,9 +29,9 @@ pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, AvidMDisperseShare, AvidmGf2DisperseShare},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal,
+        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare1,
+        VidDisperseShare2, VidDisperseShare3,
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
@@ -310,7 +310,7 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Initiate VID dispersal.
     ///
     /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
-    VidDisperseMsg(Proposal<TYPES, ADVZDisperseShare<TYPES>>),
+    VidDisperseMsg(Proposal<TYPES, VidDisperseShare1<TYPES>>),
 
     /// Proposal for data availability committee
     DaProposal2(Proposal<TYPES, DaProposal2<TYPES>>),
@@ -322,10 +322,10 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     DaCertificate2(DaCertificate2<TYPES>),
 
     /// VID dispersal for AvidM Scheme.
-    VidDisperseMsg2(Proposal<TYPES, AvidMDisperseShare<TYPES>>),
+    VidDisperseMsg2(Proposal<TYPES, VidDisperseShare2<TYPES>>),
 
     /// VID dispersal for AvidmGf2 Scheme.
-    VidDisperseMsg3(Proposal<TYPES, AvidmGf2DisperseShare<TYPES>>),
+    VidDisperseMsg3(Proposal<TYPES, VidDisperseShare3<TYPES>>),
 }
 
 /// Messages for sequencing consensus.

@@ -48,7 +48,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     ) -> Result<()> {
         let signature = proposal.signature.clone();
         match &proposal.data {
-            VidDisperseShare::V0(share) => {
+            VidDisperseShare::V1(share) => {
                 self.append_vid(&Proposal {
                     data: share.clone(),
                     signature,
@@ -56,7 +56,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
                 })
                 .await
             },
-            VidDisperseShare::V1(share) => {
+            VidDisperseShare::V2(share) => {
                 self.append_vid2(&Proposal {
                     data: share.clone(),
                     signature,
@@ -64,7 +64,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
                 })
                 .await
             },
-            VidDisperseShare::V2(_share) => {
+            VidDisperseShare::V3(_share) => {
                 // TODO(Chengyu): implement when V2 is defined
                 Err(anyhow!("VID Disperse Share V2 not supported yet"))
             },
