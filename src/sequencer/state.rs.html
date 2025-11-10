@@ -51,13 +51,13 @@
 <a href=#51 id=51 data-nosnippet>51</a>    );
 <a href=#52 id=52 data-nosnippet>52</a>    <span class="macro">ensure!</span>(
 <a href=#53 id=53 data-nosnippet>53</a>        state.block_merkle_tree.commitment() == parent_header.block_merkle_tree_root(),
-<a href=#54 id=54 data-nosnippet>54</a>        <span class="string">"internal error! in-memory block tree {:?} does not match parent header {:?}"</span>,
+<a href=#54 id=54 data-nosnippet>54</a>        <span class="string">"internal error! in-memory block tree {} does not match parent header {}"</span>,
 <a href=#55 id=55 data-nosnippet>55</a>        state.block_merkle_tree.commitment(),
 <a href=#56 id=56 data-nosnippet>56</a>        parent_header.block_merkle_tree_root()
 <a href=#57 id=57 data-nosnippet>57</a>    );
 <a href=#58 id=58 data-nosnippet>58</a>    <span class="macro">ensure!</span>(
 <a href=#59 id=59 data-nosnippet>59</a>        state.fee_merkle_tree.commitment() == parent_header.fee_merkle_tree_root(),
-<a href=#60 id=60 data-nosnippet>60</a>        <span class="string">"internal error! in-memory fee tree {:?} does not match parent header {:?}"</span>,
+<a href=#60 id=60 data-nosnippet>60</a>        <span class="string">"internal error! in-memory fee tree {} does not match parent header {}"</span>,
 <a href=#61 id=61 data-nosnippet>61</a>        state.fee_merkle_tree.commitment(),
 <a href=#62 id=62 data-nosnippet>62</a>        parent_header.fee_merkle_tree_root()
 <a href=#63 id=63 data-nosnippet>63</a>    );
@@ -66,7 +66,7 @@
 <a href=#66 id=66 data-nosnippet>66</a>        Either::Left(v1_root) =&gt; {
 <a href=#67 id=67 data-nosnippet>67</a>            <span class="macro">ensure!</span>(
 <a href=#68 id=68 data-nosnippet>68</a>                state.reward_merkle_tree_v1.commitment() == v1_root,
-<a href=#69 id=69 data-nosnippet>69</a>                <span class="string">"internal error! in-memory v1 reward tree {:?} does not match parent header {:?}"</span>,
+<a href=#69 id=69 data-nosnippet>69</a>                <span class="string">"internal error! in-memory v1 reward tree {} does not match parent header {}"</span>,
 <a href=#70 id=70 data-nosnippet>70</a>                state.reward_merkle_tree_v1.commitment(),
 <a href=#71 id=71 data-nosnippet>71</a>                v1_root
 <a href=#72 id=72 data-nosnippet>72</a>            )
@@ -74,7 +74,7 @@
 <a href=#74 id=74 data-nosnippet>74</a>        Either::Right(v2_root) =&gt; {
 <a href=#75 id=75 data-nosnippet>75</a>            <span class="macro">ensure!</span>(
 <a href=#76 id=76 data-nosnippet>76</a>                state.reward_merkle_tree_v2.commitment() == v2_root,
-<a href=#77 id=77 data-nosnippet>77</a>                <span class="string">"internal error! in-memory v2 reward tree {:?} does not match parent header {:?}"</span>,
+<a href=#77 id=77 data-nosnippet>77</a>                <span class="string">"internal error! in-memory v2 reward tree {} does not match parent header {}"</span>,
 <a href=#78 id=78 data-nosnippet>78</a>                state.reward_merkle_tree_v2.commitment(),
 <a href=#79 id=79 data-nosnippet>79</a>                v2_root
 <a href=#80 id=80 data-nosnippet>80</a>            )
@@ -223,7 +223,7 @@
 <a href=#223 id=223 data-nosnippet>223</a>                <span class="kw-2">&amp;</span>delta, reward_merkle_tree_v2.height()
 <a href=#224 id=224 data-nosnippet>224</a>            );
 <a href=#225 id=225 data-nosnippet>225</a>
-<a href=#226 id=226 data-nosnippet>226</a>            <span class="macro">tracing::debug!</span>(%delta, <span class="string">"inserting reward account"</span>);
+<a href=#226 id=226 data-nosnippet>226</a>            <span class="macro">tracing::debug!</span>(%delta, <span class="string">"inserting v2 reward account"</span>);
 <a href=#227 id=227 data-nosnippet>227</a>            UpdateStateData::&lt;SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }&gt;::insert_merkle_nodes(
 <a href=#228 id=228 data-nosnippet>228</a>            tx,
 <a href=#229 id=229 data-nosnippet>229</a>            proof,
