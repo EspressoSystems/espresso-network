@@ -245,7 +245,7 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
     }
 
     /// Internally verify the share given necessary information
-    pub fn verify_share(&self, total_weight: usize) -> bool {
+    pub fn verify(&self, total_weight: usize) -> bool {
         advz_scheme(total_weight)
             .verify_share(&self.share, &self.common, &self.payload_commitment)
             .is_ok_and(|r| r.is_ok())
@@ -577,8 +577,7 @@ impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
     }
 
     /// Internally verify the share given necessary information
-    #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, _total_weight: usize) -> bool {
+    pub fn verify(&self, _total_weight: usize) -> bool {
         AvidMScheme::verify_share(&self.common, &self.payload_commitment, &self.share)
             .is_ok_and(|r| r.is_ok())
     }
@@ -825,7 +824,7 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
         self.common.payload_byte_len() as u32
     }
     /// Internally verify the share given necessary information
-    pub fn verify_share(&self, _total_weight: usize) -> bool {
+    pub fn verify(&self, _total_weight: usize) -> bool {
         AvidmGf2Scheme::verify_share(&self.payload_commitment, &self.common, &self.share)
             .is_ok_and(|r| r.is_ok())
     }

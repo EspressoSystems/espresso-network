@@ -697,11 +697,11 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     }
 
     /// Internally verify the share given necessary information
-    pub fn verify_share(&self, total_nodes: usize) -> bool {
+    pub fn verify(&self, total_nodes: usize) -> bool {
         match self {
-            Self::V1(share) => share.verify_share(total_nodes),
-            Self::V2(share) => share.verify_share(total_nodes),
-            Self::V3(share) => share.verify_share(total_nodes),
+            Self::V1(share) => share.verify(total_nodes),
+            Self::V2(share) => share.verify(total_nodes),
+            Self::V3(share) => share.verify(total_nodes),
         }
     }
 
