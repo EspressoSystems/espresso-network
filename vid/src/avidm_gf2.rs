@@ -78,6 +78,7 @@ impl AvidmGf2Share {
     Clone,
     Copy,
     Debug,
+    Default,
     Hash,
     CanonicalSerialize,
     CanonicalDeserialize,

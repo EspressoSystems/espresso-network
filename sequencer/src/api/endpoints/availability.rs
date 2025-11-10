@@ -103,7 +103,7 @@ where
     let vid_shares: Vec<AvidMShare> = vid_shares
         .into_iter()
         .filter_map(|share| {
-            if let VidShare::V1(share) = share {
+            if let VidShare::V2(share) = share {
                 Some(share)
             } else {
                 None

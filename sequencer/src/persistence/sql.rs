@@ -3263,7 +3263,7 @@ mod test {
 
         // Add to database.
         storage
-            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+            .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
             .await
             .unwrap();
         storage
@@ -3285,7 +3285,7 @@ mod test {
         assert_eq!(
             Some(VidCommon::V1(avidm_param)),
             storage
-                .fetch(VidCommonRequest(VidCommitment::V1(
+                .fetch(VidCommonRequest(VidCommitment::V2(
                     vid_share.data.payload_commitment
                 )))
                 .await
@@ -3293,7 +3293,7 @@ mod test {
         assert_eq!(
             leaf_payload,
             storage
-                .fetch(PayloadRequest(VidCommitment::V1(
+                .fetch(PayloadRequest(VidCommitment::V2(
                     vid_share.data.payload_commitment
                 )))
                 .await
@@ -3400,7 +3400,7 @@ mod test {
         tracing::info!(?vid, ?da_proposal, ?quorum_proposal, "append data");
         storage.append_vid2(&vid).await.unwrap();
         storage
-            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+            .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
             .await
             .unwrap();
         storage
@@ -3608,7 +3608,7 @@ mod test {
                 .await
                 .unwrap();
             storage
-                .append_da(&da_proposal, VidCommitment::V0(disperse.commit))
+                .append_da(&da_proposal, VidCommitment::V1(disperse.commit))
                 .await
                 .unwrap();
 

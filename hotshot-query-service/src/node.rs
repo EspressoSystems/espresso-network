@@ -345,7 +345,7 @@ mod test {
                     let VidDisperseShare::V0(new_share) = vid_share else {
                         panic!("VID share is not V0");
                     };
-                    assert_eq!(share, VidShare::V0(new_share.share.clone()));
+                    assert_eq!(share, VidShare::V1(new_share.share.clone()));
                 }
 
                 // Query various other ways.

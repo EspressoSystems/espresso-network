@@ -570,7 +570,7 @@ impl<Types: NodeType> From<BlockQueryData<Types>> for PayloadQueryData<Types> {
 
 impl<Types: NodeType> PayloadQueryData<Types> {
     pub fn to_legacy(&self) -> Option<ADVZPayloadQueryData<Types>> {
-        let VidCommitment::V0(advz_commit) = self.hash else {
+        let VidCommitment::V1(advz_commit) = self.hash else {
             return None;
         };
 
@@ -631,7 +631,7 @@ pub struct ADVZCommonQueryData<Types: NodeType> {
 
 impl<Types: NodeType> ADVZCommonQueryData<Types> {
     pub fn new(header: Header<Types>, common: ADVZCommon) -> anyhow::Result<Self> {
-        let VidCommitment::V0(payload_hash) = header.payload_commitment() else {
+        let VidCommitment::V1(payload_hash) = header.payload_commitment() else {
             return Err(anyhow::anyhow!("Inconsistent header type."));
         };
         Ok(Self {

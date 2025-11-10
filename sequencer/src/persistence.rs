@@ -1277,7 +1277,7 @@ mod tests {
         };
 
         storage
-            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+            .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
             .await
             .unwrap();
         storage.append_vid2(&vid_share).await.unwrap();

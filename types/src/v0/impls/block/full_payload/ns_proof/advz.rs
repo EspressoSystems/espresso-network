@@ -84,7 +84,7 @@ impl ADVZNsProof {
         common: &ADVZCommon,
     ) -> Option<(Vec<Transaction>, NamespaceId)> {
         match commit {
-            VidCommitment::V0(commit) => {
+            VidCommitment::V1(commit) => {
                 ADVZScheme::is_consistent(commit, common).ok()?;
                 if !ns_table.in_bounds(&self.ns_index) {
                     return None; // error: index out of bounds
@@ -251,7 +251,7 @@ mod tests {
                 let (ns_proof_txs, ns_proof_ns_id) = ns_proof
                     .verify(
                         block.ns_table(),
-                        &VidCommitment::V0(vid.commit),
+                        &VidCommitment::V1(vid.commit),
                         &vid.common,
                     )
                     .unwrap_or_else(|| panic!("namespace {ns_id} proof verification failure"));
@@ -266,8 +266,8 @@ mod tests {
         let ns_proof_0_0 = &blocks[0].ns_proofs[0];
         let ns_table_0 = blocks[0].block.ns_table();
         let ns_table_1 = blocks[1].block.ns_table();
-        let vid_commit_0 = &VidCommitment::V0(blocks[0].vid.commit);
-        let vid_commit_1 = &VidCommitment::V0(blocks[1].vid.commit);
+        let vid_commit_0 = &VidCommitment::V1(blocks[0].vid.commit);
+        let vid_commit_1 = &VidCommitment::V1(blocks[1].vid.commit);
         let vid_common_0 = &blocks[0].vid.common;
         let vid_common_1 = &blocks[1].vid.common;
 

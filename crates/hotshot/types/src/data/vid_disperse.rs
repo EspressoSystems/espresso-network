@@ -78,11 +78,10 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         membership: &EpochMembershipCoordinator<TYPES>,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
-    ) -> Self {
+    ) -> Result<Self> {
         let shares = membership
             .stake_table_for_epoch(target_epoch)
-            .await
-            .unwrap()
+            .await?
             .stake_table()
             .await
             .iter()
@@ -90,14 +89,14 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
             .map(|node| (node.clone(), vid_disperse.shares.remove(0)))
             .collect();
 
-        Self {
+        Ok(Self {
             view_number,
             shares,
             common: vid_disperse.common,
             payload_commitment: vid_disperse.commit,
             epoch: data_epoch,
             target_epoch,
-        }
+        })
     }
 
     /// Calculate the vid disperse information from the payload given a view, epoch and membership,
@@ -131,9 +130,44 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         let advz_scheme_duration = now.elapsed();
 
         Ok((
-            Self::from_membership(view, vid_disperse, membership, target_epoch, data_epoch).await,
+            Self::from_membership(view, vid_disperse, membership, target_epoch, data_epoch).await?,
             advz_scheme_duration,
         ))
+    }
+
+    /// This function splits a VID disperse into individual shares.
+    pub fn to_shares(self) -> Vec<ADVZDisperseShare<TYPES>> {
+        self.shares
+            .into_iter()
+            .map(|(recipient_key, share)| ADVZDisperseShare {
+                share,
+                recipient_key,
+                view_number: self.view_number,
+                common: self.common.clone(),
+                payload_commitment: self.payload_commitment,
+            })
+            .collect()
+    }
+
+    /// Split a VID disperse into a share proposal for each recipient.
+    pub fn to_share_proposals(
+        self,
+        signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    ) -> Vec<Proposal<TYPES, ADVZDisperseShare<TYPES>>> {
+        self.shares
+            .into_iter()
+            .map(|(recipient_key, share)| Proposal {
+                data: ADVZDisperseShare {
+                    share,
+                    recipient_key,
+                    view_number: self.view_number,
+                    payload_commitment: self.payload_commitment,
+                    common: self.common.clone(),
+                },
+                signature: signature.clone(),
+                _pd: PhantomData,
+            })
+            .collect()
     }
 
     /// Returns the payload length in bytes.
@@ -164,21 +198,6 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for ADVZDisperseShare<TYPES> {
 }
 
 impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
-    /// Create a vector of `VidDisperseShare` from `VidDisperse`
-    pub fn from_advz_disperse(vid_disperse: ADVZDisperse<TYPES>) -> Vec<Self> {
-        vid_disperse
-            .shares
-            .into_iter()
-            .map(|(recipient_key, share)| Self {
-                share,
-                recipient_key,
-                view_number: vid_disperse.view_number,
-                common: vid_disperse.common.clone(),
-                payload_commitment: vid_disperse.payload_commitment,
-            })
-            .collect()
-    }
-
     /// Consume `self` and return a `Proposal`
     pub fn to_proposal(
         self,
@@ -225,37 +244,11 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
         Some(vid_disperse)
     }
 
-    /// Split a VID share proposal into a proposal for each recipient.
-    pub fn to_vid_share_proposals(
-        vid_disperse: ADVZDisperse<TYPES>,
-        signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Vec<Proposal<TYPES, Self>> {
-        vid_disperse
-            .shares
-            .into_iter()
-            .map(|(recipient_key, share)| Proposal {
-                data: Self {
-                    share,
-                    recipient_key,
-                    view_number: vid_disperse.view_number,
-                    common: vid_disperse.common.clone(),
-                    payload_commitment: vid_disperse.payload_commitment,
-                },
-                signature: signature.clone(),
-                _pd: PhantomData,
-            })
-            .collect()
-    }
-
     /// Internally verify the share given necessary information
-    ///
-    /// # Errors
-    /// Verification fail
-    #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, total_weight: usize) -> std::result::Result<(), ()> {
+    pub fn verify_share(&self, total_weight: usize) -> bool {
         advz_scheme(total_weight)
             .verify_share(&self.share, &self.common, &self.payload_commitment)
-            .unwrap_or(Err(()))
+            .is_ok_and(|r| r.is_ok())
     }
 
     /// Returns the payload length in bytes.
@@ -375,13 +368,12 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         membership: &EpochMembership<TYPES>,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
-    ) -> Self {
+    ) -> Result<Self> {
         let payload_byte_len = shares[0].payload_byte_len();
         let shares = membership
             .coordinator
             .stake_table_for_epoch(target_epoch)
-            .await
-            .unwrap()
+            .await?
             .stake_table()
             .await
             .iter()
@@ -390,7 +382,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
             .map(|(node, share)| (node.clone(), share.clone()))
             .collect();
 
-        Self {
+        Ok(Self {
             view_number,
             shares,
             payload_commitment: commit,
@@ -398,7 +390,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
             target_epoch,
             payload_byte_len,
             common,
-        }
+        })
     }
 
     /// Calculate the vid disperse information from the payload given a view, epoch and membership,
@@ -455,9 +447,48 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
                 target_epoch,
                 data_epoch,
             )
-            .await,
+            .await?,
             ns_disperse_duration,
         ))
+    }
+
+    /// This function splits a VID disperse into individual shares.
+    pub fn to_shares(self) -> Vec<AvidMDisperseShare<TYPES>> {
+        self.shares
+            .into_iter()
+            .map(|(recipient_key, share)| AvidMDisperseShare {
+                share,
+                recipient_key,
+                view_number: self.view_number,
+                payload_commitment: self.payload_commitment,
+                epoch: self.epoch,
+                target_epoch: self.target_epoch,
+                common: self.common.clone(),
+            })
+            .collect()
+    }
+
+    /// Split a VID disperse into a share proposal for each recipient.
+    pub fn to_share_proposals(
+        self,
+        signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    ) -> Vec<Proposal<TYPES, AvidMDisperseShare<TYPES>>> {
+        self.shares
+            .into_iter()
+            .map(|(recipient_key, share)| Proposal {
+                data: AvidMDisperseShare {
+                    share,
+                    recipient_key,
+                    view_number: self.view_number,
+                    payload_commitment: self.payload_commitment,
+                    epoch: self.epoch,
+                    target_epoch: self.target_epoch,
+                    common: self.common.clone(),
+                },
+                signature: signature.clone(),
+                _pd: PhantomData,
+            })
+            .collect()
     }
 
     /// Returns the payload length in bytes.
@@ -492,23 +523,6 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidMDisperseShare<TYPES> {
 }
 
 impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
-    /// Create a vector of `VidDisperseShare` from `VidDisperse`
-    pub fn from_vid_disperse(vid_disperse: AvidMDisperse<TYPES>) -> Vec<Self> {
-        vid_disperse
-            .shares
-            .into_iter()
-            .map(|(recipient_key, share)| Self {
-                share,
-                recipient_key,
-                view_number: vid_disperse.view_number,
-                payload_commitment: vid_disperse.payload_commitment,
-                epoch: vid_disperse.epoch,
-                target_epoch: vid_disperse.target_epoch,
-                common: vid_disperse.common.clone(),
-            })
-            .collect()
-    }
-
     /// Consume `self` and return a `Proposal`
     pub fn to_proposal(
         self,
@@ -562,38 +576,11 @@ impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
         self.share.payload_byte_len() as u32
     }
 
-    /// Split a VID share proposal into a proposal for each recipient.
-    pub fn to_vid_share_proposals(
-        vid_disperse: AvidMDisperse<TYPES>,
-        signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Vec<Proposal<TYPES, Self>> {
-        vid_disperse
-            .shares
-            .into_iter()
-            .map(|(recipient_key, share)| Proposal {
-                data: Self {
-                    share,
-                    recipient_key,
-                    view_number: vid_disperse.view_number,
-                    payload_commitment: vid_disperse.payload_commitment,
-                    epoch: vid_disperse.epoch,
-                    target_epoch: vid_disperse.target_epoch,
-                    common: vid_disperse.common.clone(),
-                },
-                signature: signature.clone(),
-                _pd: PhantomData,
-            })
-            .collect()
-    }
-
     /// Internally verify the share given necessary information
-    ///
-    /// # Errors
     #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, total_weight: usize) -> std::result::Result<(), ()> {
-        let avidm_param = init_avidm_param(total_weight).map_err(|_| ())?;
-        AvidMScheme::verify_share(&avidm_param, &self.payload_commitment, &self.share)
-            .unwrap_or(Err(()))
+    pub fn verify_share(&self, _total_weight: usize) -> bool {
+        AvidMScheme::verify_share(&self.common, &self.payload_commitment, &self.share)
+            .is_ok_and(|r| r.is_ok())
     }
 }
 
@@ -634,13 +621,12 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         membership: &EpochMembership<TYPES>,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
-    ) -> Self {
+    ) -> Result<Self> {
         let payload_byte_len = common.payload_byte_len();
         let shares = membership
             .coordinator
             .stake_table_for_epoch(target_epoch)
-            .await
-            .unwrap()
+            .await?
             .stake_table()
             .await
             .iter()
@@ -649,7 +635,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             .map(|(node, share)| (node.clone(), share.clone()))
             .collect();
 
-        Self {
+        Ok(Self {
             view_number,
             shares,
             payload_commitment: commit,
@@ -657,7 +643,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             target_epoch,
             payload_byte_len,
             common,
-        }
+        })
     }
 
     /// Calculate the vid disperse information from the payload given a view, epoch and membership,
@@ -711,9 +697,48 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
                 target_epoch,
                 data_epoch,
             )
-            .await,
+            .await?,
             ns_disperse_duration,
         ))
+    }
+
+    /// This function splits a VID disperse into individual shares.
+    pub fn to_shares(self) -> Vec<AvidmGf2DisperseShare<TYPES>> {
+        self.shares
+            .into_iter()
+            .map(|(recipient_key, share)| AvidmGf2DisperseShare {
+                share,
+                recipient_key,
+                view_number: self.view_number,
+                payload_commitment: self.payload_commitment,
+                epoch: self.epoch,
+                target_epoch: self.target_epoch,
+                common: self.common.clone(),
+            })
+            .collect()
+    }
+
+    /// Split a VID disperse into a share proposal for each recipient.
+    pub fn to_share_proposals(
+        self,
+        signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    ) -> Vec<Proposal<TYPES, AvidmGf2DisperseShare<TYPES>>> {
+        self.shares
+            .into_iter()
+            .map(|(recipient_key, share)| Proposal {
+                data: AvidmGf2DisperseShare {
+                    share,
+                    recipient_key,
+                    view_number: self.view_number,
+                    payload_commitment: self.payload_commitment,
+                    epoch: self.epoch,
+                    target_epoch: self.target_epoch,
+                    common: self.common.clone(),
+                },
+                signature: signature.clone(),
+                _pd: PhantomData,
+            })
+            .collect()
     }
 
     /// Returns the payload length in bytes.
@@ -748,23 +773,6 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidmGf2DisperseShare<TYPES> {
 }
 
 impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
-    /// Create a vector of `VidDisperseShare` from `VidDisperse`
-    pub fn from_vid_disperse(vid_disperse: AvidmGf2Disperse<TYPES>) -> Vec<Self> {
-        vid_disperse
-            .shares
-            .into_iter()
-            .map(|(recipient_key, share)| Self {
-                share,
-                recipient_key,
-                view_number: vid_disperse.view_number,
-                payload_commitment: vid_disperse.payload_commitment,
-                epoch: vid_disperse.epoch,
-                target_epoch: vid_disperse.target_epoch,
-                common: vid_disperse.common.clone(),
-            })
-            .collect()
-    }
-
     /// Consume `self` and return a `Proposal`
     pub fn to_proposal(
         self,
@@ -817,37 +825,9 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
     pub fn payload_byte_len(&self) -> u32 {
         self.common.payload_byte_len() as u32
     }
-
-    /// Split a VID share proposal into a proposal for each recipient.
-    pub fn to_vid_share_proposals(
-        vid_disperse: AvidmGf2Disperse<TYPES>,
-        signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Vec<Proposal<TYPES, Self>> {
-        vid_disperse
-            .shares
-            .into_iter()
-            .map(|(recipient_key, share)| Proposal {
-                data: Self {
-                    share,
-                    recipient_key,
-                    view_number: vid_disperse.view_number,
-                    payload_commitment: vid_disperse.payload_commitment,
-                    epoch: vid_disperse.epoch,
-                    target_epoch: vid_disperse.target_epoch,
-                    common: vid_disperse.common.clone(),
-                },
-                signature: signature.clone(),
-                _pd: PhantomData,
-            })
-            .collect()
-    }
-
     /// Internally verify the share given necessary information
-    ///
-    /// # Errors
-    #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, _total_weight: usize) -> std::result::Result<(), ()> {
+    pub fn verify_share(&self, _total_weight: usize) -> bool {
         AvidmGf2Scheme::verify_share(&self.payload_commitment, &self.common, &self.share)
-            .unwrap_or(Err(()))
+            .is_ok_and(|r| r.is_ok())
     }
 }

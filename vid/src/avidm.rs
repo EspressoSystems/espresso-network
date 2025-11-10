@@ -54,6 +54,7 @@ type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
     Clone,
     Copy,
     Debug,
+    Default,
     Hash,
     CanonicalSerialize,
     CanonicalDeserialize,

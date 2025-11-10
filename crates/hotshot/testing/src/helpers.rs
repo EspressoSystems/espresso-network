@@ -360,10 +360,11 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
 
     (
         vid_disperse_proposal,
-        VidDisperseShare::from_vid_disperse(vid_disperse)
+        vid_disperse
+            .to_shares()
             .into_iter()
-            .map(|vid_disperse| {
-                vid_disperse
+            .map(|share| {
+                share
                     .to_proposal(private_key)
                     .expect("Failed to sign payload commitment")
             })

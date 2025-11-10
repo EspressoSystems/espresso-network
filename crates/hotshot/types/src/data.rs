@@ -28,10 +28,9 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::{StaticVersionType, Version};
 use vec1::Vec1;
-use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse, AvidMDisperseShare};
+use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse};
 
 use crate::{
-    data::vid_disperse::AvidmGf2DisperseShare,
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     impl_has_epoch, impl_has_none_epoch,
@@ -55,9 +54,8 @@ use crate::{
         EpochTransitionIndicator,
     },
     vid::{
-        advz::{advz_scheme, ADVZCommitment, ADVZShare},
-        avidm::{init_avidm_param, AvidMCommitment, AvidMScheme, AvidMShare},
-        avidm_gf2::{AvidmGf2Commitment, AvidmGf2Share},
+        advz::advz_scheme,
+        avidm::{init_avidm_param, AvidMScheme},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -208,6 +206,11 @@ where
     pub view_number: TYPES::View,
 }
 
+/// Type aliases for different versions of VID commitments
+pub type VidCommitment1 = crate::vid::advz::ADVZCommitment;
+pub type VidCommitment2 = crate::vid::avidm::AvidMCommitment;
+pub type VidCommitment3 = crate::vid::avidm_gf2::AvidmGf2Commitment;
+
 /// VID Commitment type
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 #[serde(
@@ -215,14 +218,14 @@ where
     into = "tagged_base64::TaggedBase64"
 )]
 pub enum VidCommitment {
-    V0(ADVZCommitment),
-    V1(AvidMCommitment),
-    V2(AvidmGf2Commitment),
+    V1(VidCommitment1),
+    V2(VidCommitment2),
+    V3(VidCommitment3),
 }
 
 impl Default for VidCommitment {
     fn default() -> Self {
-        Self::V0(Default::default())
+        Self::V1(Default::default())
     }
 }
 
@@ -241,9 +244,9 @@ impl Debug for VidCommitment {
 impl From<VidCommitment> for TaggedBase64 {
     fn from(val: VidCommitment) -> Self {
         match val {
-            VidCommitment::V0(comm) => comm.into(),
             VidCommitment::V1(comm) => comm.into(),
             VidCommitment::V2(comm) => comm.into(),
+            VidCommitment::V3(comm) => comm.into(),
         }
     }
 }
@@ -251,9 +254,9 @@ impl From<VidCommitment> for TaggedBase64 {
 impl From<&VidCommitment> for TaggedBase64 {
     fn from(val: &VidCommitment) -> Self {
         match val {
-            VidCommitment::V0(comm) => comm.into(),
             VidCommitment::V1(comm) => comm.into(),
             VidCommitment::V2(comm) => comm.into(),
+            VidCommitment::V3(comm) => comm.into(),
         }
     }
 }
@@ -263,9 +266,9 @@ impl TryFrom<TaggedBase64> for VidCommitment {
 
     fn try_from(value: TaggedBase64) -> std::result::Result<Self, Self::Error> {
         match value.tag().as_str() {
-            "HASH" => ADVZCommitment::try_from(value).map(Self::V0),
-            "AvidMCommit" => AvidMCommitment::try_from(value).map(Self::V1),
-            "AvidmGf2Commit" => AvidmGf2Commitment::try_from(value).map(Self::V2),
+            "HASH" => VidCommitment1::try_from(value).map(Self::V1),
+            "AvidMCommit" => VidCommitment2::try_from(value).map(Self::V2),
+            "AvidmGf2Commit" => VidCommitment3::try_from(value).map(Self::V3),
             _ => Err(Tb64Error::InvalidTag),
         }
     }
@@ -276,9 +279,9 @@ impl<'a> TryFrom<&'a TaggedBase64> for VidCommitment {
 
     fn try_from(value: &'a TaggedBase64) -> std::result::Result<Self, Self::Error> {
         match value.tag().as_str() {
-            "HASH" => ADVZCommitment::try_from(value).map(Self::V0),
-            "AvidMCommit" => AvidMCommitment::try_from(value).map(Self::V1),
-            "AvidmGf2Commit" => AvidmGf2Commitment::try_from(value).map(Self::V2),
+            "HASH" => VidCommitment1::try_from(value).map(Self::V1),
+            "AvidMCommit" => VidCommitment2::try_from(value).map(Self::V2),
+            "AvidmGf2Commit" => VidCommitment3::try_from(value).map(Self::V3),
             _ => Err(Tb64Error::InvalidTag),
         }
     }
@@ -300,24 +303,24 @@ impl std::str::FromStr for VidCommitment {
 //     }
 // }
 
-impl From<AvidMCommitment> for VidCommitment {
-    fn from(comm: AvidMCommitment) -> Self {
-        Self::V1(comm)
+impl From<VidCommitment2> for VidCommitment {
+    fn from(comm: VidCommitment2) -> Self {
+        Self::V2(comm)
     }
 }
 
-impl From<AvidmGf2Commitment> for VidCommitment {
-    fn from(comm: AvidmGf2Commitment) -> Self {
-        Self::V2(comm)
+impl From<VidCommitment3> for VidCommitment {
+    fn from(comm: VidCommitment3) -> Self {
+        Self::V3(comm)
     }
 }
 
 impl AsRef<[u8]> for VidCommitment {
     fn as_ref(&self) -> &[u8] {
         match self {
-            Self::V0(comm) => comm.as_ref(),
             Self::V1(comm) => comm.as_ref(),
             Self::V2(comm) => comm.as_ref(),
+            Self::V3(comm) => comm.as_ref(),
         }
     }
 }
@@ -325,9 +328,9 @@ impl AsRef<[u8]> for VidCommitment {
 impl AsRef<[u8; 32]> for VidCommitment {
     fn as_ref(&self) -> &[u8; 32] {
         match self {
-            Self::V0(comm) => comm.as_ref().as_ref(),
-            Self::V1(comm) => comm.as_ref(),
+            Self::V1(comm) => comm.as_ref().as_ref(),
             Self::V2(comm) => comm.as_ref(),
+            Self::V3(comm) => comm.as_ref(),
         }
     }
 }
@@ -348,7 +351,7 @@ pub fn vid_commitment<V: Versions>(
         let encoded_tx_len = encoded_transactions.len();
         advz_scheme(total_weight)
             .commit_only(encoded_transactions)
-            .map(VidCommitment::V0)
+            .map(VidCommitment::V1)
             .unwrap_or_else(|err| {
                 panic!(
                     "VidScheme::commit_only \
@@ -364,18 +367,23 @@ pub fn vid_commitment<V: Versions>(
             encoded_transactions,
             ns_table::parse_ns_table(encoded_tx_len, metadata),
         )
-        .map(VidCommitment::V1)
+        .map(VidCommitment::V2)
         .unwrap()
     }
     // TODO(Chengyu): add AvidmGf2Commitment
 }
 
+/// Type aliases for different versions of VID shares
+pub type VidShare1 = crate::vid::advz::ADVZShare;
+pub type VidShare2 = crate::vid::avidm::AvidMShare;
+pub type VidShare3 = crate::vid::avidm_gf2::AvidmGf2Share;
+
 /// VID share type
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum VidShare {
-    V0(ADVZShare),
-    V1(AvidMShare),
-    V2(AvidmGf2Share),
+    V1(VidShare1),
+    V2(VidShare2),
+    V3(VidShare3),
 }
 
 // TODO(Chengyu): cannot have this
@@ -385,15 +393,15 @@ pub enum VidShare {
 //     }
 // }
 
-impl From<AvidMShare> for VidShare {
-    fn from(share: AvidMShare) -> Self {
-        Self::V1(share)
+impl From<VidShare2> for VidShare {
+    fn from(share: VidShare2) -> Self {
+        Self::V2(share)
     }
 }
 
-impl From<AvidmGf2Share> for VidShare {
-    fn from(share: AvidmGf2Share) -> Self {
-        Self::V2(share)
+impl From<VidShare3> for VidShare {
+    fn from(share: VidShare3) -> Self {
+        Self::V3(share)
     }
 }
 
@@ -513,7 +521,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     /// Return the internal payload commitment
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V0(disperse) => VidCommitment::V0(disperse.payload_commitment),
+            Self::V0(disperse) => VidCommitment::V1(disperse.payload_commitment),
             Self::V1(disperse) => disperse.payload_commitment.into(),
             Self::V2(disperse) => disperse.payload_commitment.into(),
         }
@@ -534,6 +542,49 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
             Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
             Self::V2(share) => share.view_number = view_number,
+        }
+    }
+
+    pub fn to_shares(self) -> Vec<VidDisperseShare<TYPES>> {
+        match self {
+            VidDisperse::V0(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V0(share))
+                .collect(),
+            VidDisperse::V1(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V1(share))
+                .collect(),
+            VidDisperse::V2(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V2(share))
+                .collect(),
+        }
+    }
+
+    /// Split a VID share proposal into a proposal for each recipient.
+    pub fn to_share_proposals(
+        proposal: Proposal<TYPES, Self>,
+    ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
+        match proposal.data {
+            VidDisperse::V0(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
+            VidDisperse::V1(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
+            VidDisperse::V2(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
         }
     }
 }
@@ -569,30 +620,6 @@ impl<TYPES: NodeType> From<vid_disperse::AvidmGf2DisperseShare<TYPES>> for VidDi
 }
 
 impl<TYPES: NodeType> VidDisperseShare<TYPES> {
-    /// Create a vector of `VidDisperseShare` from `VidDisperse`
-    pub fn from_vid_disperse(vid_disperse: VidDisperse<TYPES>) -> Vec<Self> {
-        match vid_disperse {
-            VidDisperse::V0(vid_disperse) => {
-                ADVZDisperseShare::<TYPES>::from_advz_disperse(vid_disperse)
-                    .into_iter()
-                    .map(|share| Self::V0(share))
-                    .collect()
-            },
-            VidDisperse::V1(vid_disperse) => {
-                AvidMDisperseShare::<TYPES>::from_vid_disperse(vid_disperse)
-                    .into_iter()
-                    .map(|share| Self::V1(share))
-                    .collect()
-            },
-            VidDisperse::V2(vid_disperse) => {
-                AvidmGf2DisperseShare::<TYPES>::from_vid_disperse(vid_disperse)
-                    .into_iter()
-                    .map(|share| Self::V2(share))
-                    .collect()
-            },
-        }
-    }
-
     /// Consume `self` and return a `Proposal`
     pub fn to_proposal(
         self,
@@ -612,35 +639,6 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
             _pd: PhantomData,
             data: self,
         })
-    }
-
-    /// Split a VID share proposal into a proposal for each recipient.
-    pub fn to_vid_share_proposals(
-        vid_disperse_proposal: Proposal<TYPES, VidDisperse<TYPES>>,
-    ) -> Vec<Proposal<TYPES, Self>> {
-        match vid_disperse_proposal.data {
-            VidDisperse::V0(disperse) => ADVZDisperseShare::to_vid_share_proposals(
-                disperse,
-                &vid_disperse_proposal.signature,
-            )
-            .into_iter()
-            .map(|proposal| convert_proposal(proposal))
-            .collect(),
-            VidDisperse::V1(disperse) => AvidMDisperseShare::to_vid_share_proposals(
-                disperse,
-                &vid_disperse_proposal.signature,
-            )
-            .into_iter()
-            .map(|proposal| convert_proposal(proposal))
-            .collect(),
-            VidDisperse::V2(disperse) => AvidmGf2DisperseShare::to_vid_share_proposals(
-                disperse,
-                &vid_disperse_proposal.signature,
-            )
-            .into_iter()
-            .map(|proposal| convert_proposal(proposal))
-            .collect(),
-        }
     }
 
     /// Return the internal `recipient_key`
@@ -673,7 +671,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     /// Return the internal payload VID commitment
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V0(share) => VidCommitment::V0(share.payload_commitment),
+            Self::V0(share) => VidCommitment::V1(share.payload_commitment),
             Self::V1(share) => share.payload_commitment.into(),
             Self::V2(share) => share.payload_commitment.into(),
         }
@@ -689,10 +687,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     }
 
     /// Internally verify the share given necessary information
-    ///
-    /// # Errors
-    #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, total_nodes: usize) -> std::result::Result<(), ()> {
+    pub fn verify_share(&self, total_nodes: usize) -> bool {
         match self {
             Self::V0(share) => share.verify_share(total_nodes),
             Self::V1(share) => share.verify_share(total_nodes),
@@ -2065,7 +2060,7 @@ pub mod null_block {
         let vid_result = advz_scheme(num_storage_nodes).commit_only(Vec::new());
 
         match vid_result {
-            Ok(r) => Some(VidCommitment::V0(r)),
+            Ok(r) => Some(VidCommitment::V1(r)),
             Err(_) => None,
         }
     }
@@ -2162,7 +2157,7 @@ mod test {
 
     #[test]
     fn test_vid_commitment_display() {
-        let vc = VidCommitment::V0(ADVZCommitment::default());
+        let vc = VidCommitment::V1(VidCommitment1::default());
         assert_eq!(
             format!("{vc}"),
             "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
@@ -2172,9 +2167,7 @@ mod test {
             "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
         );
 
-        let vc = VidCommitment::V1(AvidMCommitment {
-            commit: Default::default(),
-        });
+        let vc = VidCommitment::V2(VidCommitment2::default());
         assert_eq!(
             format!("{vc}"),
             "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
@@ -2182,6 +2175,16 @@ mod test {
         assert_eq!(
             format!("{vc:?}"),
             "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
+        );
+
+        let vc = VidCommitment::V3(VidCommitment3::default());
+        assert_eq!(
+            format!("{vc}"),
+            "AvidmGf2Commit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACq"
+        );
+        assert_eq!(
+            format!("{vc:?}"),
+            "AvidmGf2Commit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACq"
         );
     }
 }

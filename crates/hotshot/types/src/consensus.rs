@@ -1365,13 +1365,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         .await
         .ok()?;
 
-        let shares = VidDisperseShare::from_vid_disperse(vid);
         let mut consensus_writer = consensus.write().await;
         consensus_writer
             .metrics
             .vid_disperse_duration
             .add_point(disperse_duration.as_secs_f64());
-        for share in shares {
+        for share in vid.to_shares() {
             if let Some(prop) = share.to_proposal(private_key) {
                 consensus_writer.update_vid_shares(view, prop);
             }

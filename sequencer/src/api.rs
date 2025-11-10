@@ -467,7 +467,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
                 .with_context(|| "failed to initialize avidm param")?;
 
             // Get the payload hash for verification
-            let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
+            let VidCommitment::V2(local_payload_hash) = vid_common_data.payload_hash() else {
                 bail!("V0 share verification not supported yet");
             };
 
@@ -487,7 +487,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
                         let received_shares = received_shares_clone.clone();
                         async move {
                             // Make sure the response was a V1 share
-                            let Response::VidShare(VidShare::V1(received_share)) = response else {
+                            let Response::VidShare(VidShare::V2(received_share)) = response else {
                                 bail!("V0 share verification not supported yet");
                             };
 
@@ -521,7 +521,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
                         .lock()
                         .clone()
                         .into_iter()
-                        .map(VidShare::V1)
+                        .map(VidShare::V2)
                         .collect())
                 },
 
@@ -2279,7 +2279,7 @@ mod api_tests {
                 _pd: Default::default(),
             };
             persistence
-                .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+                .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
                 .await
                 .unwrap();
         }

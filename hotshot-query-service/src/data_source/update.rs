@@ -135,21 +135,21 @@ where
                             leaf2.block_header().clone(),
                             VidCommon::V0(share.common.clone()),
                         )),
-                        Some(VidShare::V0(share.share.clone())),
+                        Some(VidShare::V1(share.share.clone())),
                     ),
                     Some(VidDisperseShare::V1(share)) => (
                         Some(VidCommonQueryData::new(
                             leaf2.block_header().clone(),
                             VidCommon::V1(share.common.clone()),
                         )),
-                        Some(VidShare::V1(share.share.clone())),
+                        Some(VidShare::V2(share.share.clone())),
                     ),
                     Some(VidDisperseShare::V2(share)) => (
                         Some(VidCommonQueryData::new(
                             leaf2.block_header().clone(),
                             VidCommon::V2(share.common.clone()),
                         )),
-                        Some(VidShare::V2(share.share.clone())),
+                        Some(VidShare::V3(share.share.clone())),
                     ),
                     None => {
                         if leaf2.view_number().u64() == 0 {
@@ -199,7 +199,7 @@ fn genesis_vid<Types: NodeType>(
     let bytes = payload.encode();
 
     match leaf.block_header().payload_commitment() {
-        VidCommitment::V0(commit) => {
+        VidCommitment::V1(commit) => {
             let mut disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
                 .disperse(bytes)
                 .context("unable to compute VID dispersal for genesis block")?;
@@ -215,10 +215,10 @@ fn genesis_vid<Types: NodeType>(
                     leaf.block_header().clone(),
                     VidCommon::V0(disperse.common),
                 ),
-                VidShare::V0(disperse.shares.remove(0)),
+                VidShare::V1(disperse.shares.remove(0)),
             ))
         },
-        VidCommitment::V1(commit) => {
+        VidCommitment::V2(commit) => {
             let avidm_param = init_avidm_param(GENESIS_VID_NUM_STORAGE_NODES)?;
             let weights = vec![1; GENESIS_VID_NUM_STORAGE_NODES];
             let ns_table = parse_ns_table(bytes.len(), &leaf.block_header().metadata().encode());
@@ -235,10 +235,10 @@ fn genesis_vid<Types: NodeType>(
 
             Ok((
                 VidCommonQueryData::new(leaf.block_header().clone(), VidCommon::V1(avidm_param)),
-                VidShare::V1(shares.remove(0)),
+                VidShare::V2(shares.remove(0)),
             ))
         },
-        VidCommitment::V2(commit) => {
+        VidCommitment::V3(commit) => {
             let avidm_gf2_param = init_avidm_gf2_param(GENESIS_VID_NUM_STORAGE_NODES)?;
             let weights = vec![1; GENESIS_VID_NUM_STORAGE_NODES];
             let ns_table = parse_ns_table(bytes.len(), &leaf.block_header().metadata().encode());
@@ -255,7 +255,7 @@ fn genesis_vid<Types: NodeType>(
 
             Ok((
                 VidCommonQueryData::new(leaf.block_header().clone(), VidCommon::V2(common)),
-                VidShare::V2(shares.remove(0)),
+                VidShare::V3(shares.remove(0)),
             ))
         },
     }

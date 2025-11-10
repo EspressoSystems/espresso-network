@@ -53,7 +53,7 @@ async fn basic_correctness() {
             (disperse_data.commit, disperse_data.common)
         };
 
-        let vid_commit = VidCommitment::V0(advz_commit);
+        let vid_commit = VidCommitment::V1(advz_commit);
         let vid_common = VidCommon::V0(advz_common);
 
         // test iterate over all txs

@@ -2633,7 +2633,7 @@ mod test {
 
             tracing::debug!("inserting da for {view}");
             storage
-                .append_da(&da_proposal, VidCommitment::V0(disperse.commit))
+                .append_da(&da_proposal, VidCommitment::V1(disperse.commit))
                 .await
                 .unwrap();
         }

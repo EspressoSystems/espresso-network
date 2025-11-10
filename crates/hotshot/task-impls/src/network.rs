@@ -765,7 +765,7 @@ impl<
     ) -> Option<HotShotTaskCompleted> {
         let view = vid_proposal.data.view_number();
         let epoch = vid_proposal.data.epoch();
-        let vid_share_proposals = VidDisperseShare::to_vid_share_proposals(vid_proposal);
+        let vid_share_proposals = VidDisperse::to_share_proposals(vid_proposal);
         let mut messages = HashMap::new();
 
         for proposal in vid_share_proposals {

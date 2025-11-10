@@ -924,16 +924,16 @@ pub mod node_tests {
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_block(blocks[0].clone()).await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), Some(VidShare::V0(vid[0].1.clone())))
+            tx.insert_vid(vid[0].0.clone(), Some(VidShare::V1(vid[0].1.clone())))
                 .await
                 .unwrap();
             tx.insert_leaf(leaves[1].clone()).await.unwrap();
             tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(vid[1].0.clone(), Some(VidShare::V0(vid[1].1.clone())))
+            tx.insert_vid(vid[1].0.clone(), Some(VidShare::V1(vid[1].1.clone())))
                 .await
                 .unwrap();
             tx.insert_block(blocks[2].clone()).await.unwrap();
-            tx.insert_vid(vid[2].0.clone(), Some(VidShare::V0(vid[2].1.clone())))
+            tx.insert_vid(vid[2].0.clone(), Some(VidShare::V1(vid[2].1.clone())))
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -1114,7 +1114,7 @@ pub mod node_tests {
             leaf,
             None,
             Some(common.clone()),
-            Some(VidShare::V0(disperse.shares[0].clone())),
+            Some(VidShare::V1(disperse.shares[0].clone())),
         ))
         .await
         .unwrap();
@@ -1123,7 +1123,7 @@ pub mod node_tests {
             assert_eq!(ds.get_vid_common(0).await.await, common);
             assert_eq!(
                 ds.vid_share(0).await.unwrap(),
-                VidShare::V0(disperse.shares[0].clone())
+                VidShare::V1(disperse.shares[0].clone())
             );
         }
 
@@ -1138,7 +1138,7 @@ pub mod node_tests {
             assert_eq!(ds.get_vid_common(0).await.await, common);
             assert_eq!(
                 ds.vid_share(0).await.unwrap(),
-                VidShare::V0(disperse.shares[0].clone())
+                VidShare::V1(disperse.shares[0].clone())
             );
         }
     }
@@ -1169,7 +1169,7 @@ pub mod node_tests {
             tracing::info!(height = block.height(), "empty block");
         };
         let height = block.height() as usize;
-        let commit = if let VidCommitment::V0(commit) = block.payload_hash() {
+        let commit = if let VidCommitment::V1(commit) = block.payload_hash() {
             commit
         } else {
             panic!("expect ADVZ commitment")
@@ -1198,9 +1198,9 @@ pub mod node_tests {
             let mut leaves = ds.subscribe_leaves(height).await;
             let leaf = leaves.next().await.unwrap();
             assert_eq!(leaf.height(), height as u64);
-            assert_eq!(leaf.payload_hash(), VidCommitment::V0(commit));
+            assert_eq!(leaf.payload_hash(), VidCommitment::V1(commit));
 
-            let share = if let VidShare::V0(share) = ds.vid_share(height).await.unwrap() {
+            let share = if let VidShare::V1(share) = ds.vid_share(height).await.unwrap() {
                 share
             } else {
                 panic!("expect ADVZ share")
