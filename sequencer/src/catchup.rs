@@ -296,9 +296,9 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
                     .context(format!("response missing fee account {account}"))?;
-                proof
-                    .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for fee account {account}"))?;
+                proof.verify(&fee_merkle_tree_root).context(format!(
+                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -414,9 +414,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV2::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v2 reward account {account}, root: \
+                     {reward_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -451,9 +452,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v1 reward account {account}, root: \
+                     {reward_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -719,9 +721,9 @@ where
         for account in accounts {
             let (proof, _) = FeeAccountProof::prove(&fee_merkle_tree_from_db, (*account).into())
                 .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&fee_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&fee_merkle_tree_root).context(format!(
+                "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
@@ -796,9 +798,9 @@ where
             let (proof, _) =
                 RewardAccountProofV2::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&reward_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&reward_merkle_tree_root).context(format!(
+                "invalid proof for v2 reward account {account}, root: {reward_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
@@ -827,9 +829,9 @@ where
             let (proof, _) =
                 RewardAccountProofV1::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&reward_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&reward_merkle_tree_root).context(format!(
+                "invalid proof for v1 reward account {account}, root: {reward_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 

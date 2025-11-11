@@ -216,9 +216,11 @@ impl<
                 for account in accounts_clone {
                     let (proof, _) = FeeAccountProof::prove(&fee_merkle_tree, account.into())
                         .with_context(|| format!("response was missing account {account}"))?;
-                    proof
-                        .verify(&fee_merkle_tree_root)
-                        .with_context(|| format!("invalid proof for account {account}"))?;
+                    proof.verify(&fee_merkle_tree_root).with_context(|| {
+                        format!(
+                            "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+                        )
+                    })?;
                     proofs.push(proof);
                 }
 
@@ -419,9 +421,12 @@ impl<
                     let (proof, _) =
                         RewardAccountProofV2::prove(&reward_merkle_tree, account.into())
                             .with_context(|| format!("response was missing account {account}"))?;
-                    proof
-                        .verify(&reward_merkle_tree_root)
-                        .with_context(|| format!("invalid proof for account {account}"))?;
+                    proof.verify(&reward_merkle_tree_root).with_context(|| {
+                        format!(
+                            "invalid proof for v2 reward account {account}, root: \
+                             {reward_merkle_tree_root}"
+                        )
+                    })?;
                     proofs.push(proof);
                 }
 
@@ -475,7 +480,10 @@ impl<
                         RewardAccountProofV1::prove(&reward_merkle_tree, account.into())
                             .with_context(|| format!("response was missing account {account}"))?;
                     proof.verify(&reward_merkle_tree_root).with_context(|| {
-                        format!("invalid proof for v1 reward account {account}")
+                        format!(
+                            "invalid proof for v1 reward account {account}, root: \
+                             {reward_merkle_tree_root}"
+                        )
                     })?;
                     proofs.push(proof);
                 }
