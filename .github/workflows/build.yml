@@ -59,7 +59,7 @@ jobs:
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses differend features testing,emdbedded-db
+            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 
@@ -122,7 +122,7 @@ jobs:
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses differend features testing,emdbedded-db
+            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 
@@ -449,6 +449,37 @@ jobs:
             DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
           fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
+
+      - name: Debug loaded image tags
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "=== Loaded images ==="
+          docker images --format "{{.Repository}}:{{.Tag}}" | grep "ghcr.io/espressosystems/espresso-sequencer/" || true
+          echo "=== Expected DOCKER_TAG ==="
+          echo "pr-${{ github.event.pull_request.number }}"
+
+      - name: Retag loaded images for docker-compose (if needed)
+        if: github.event_name == 'pull_request'
+        run: |
+          DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          # Retag all loaded images to match what docker-compose expects
+          # Only retag if the expected tag doesn't already exist
+          docker images --format "{{.Repository}}:{{.Tag}}" | \
+            grep "ghcr.io/espressosystems/espresso-sequencer/" | \
+            while read image; do
+              # Extract service name (e.g., "deploy" from "ghcr.io/espressosystems/espresso-sequencer/deploy:some-tag")
+              service=$(echo "$image" | sed -n 's|ghcr.io/espressosystems/espresso-sequencer/\([^:]*\):.*|\1|p')
+              if [[ -n "$service" ]]; then
+                expected_tag="ghcr.io/espressosystems/espresso-sequencer/$service:$DOCKER_TAG"
+                # Check if expected tag already exists
+                if ! docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${expected_tag}$"; then
+                  echo "Retagging $image to $expected_tag"
+                  docker tag "$image" "$expected_tag"
+                else
+                  echo "Tag $expected_tag already exists, skipping retag"
+                fi
+              fi
+            done
 
       - name: Pull remaining docker images
         run: |
