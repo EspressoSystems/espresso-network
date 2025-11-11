@@ -3073,6 +3073,29 @@ mod test {
             let mut file = fs::File::create(&path).unwrap();
             let json = serde_json::to_string_pretty(legacy_event).unwrap();
             file.write_all(json.as_bytes()).unwrap();
+            println!("{}", json);
+            let fq: StakeTableEventLegacy = serde_json::from_str(&json).unwrap();
+            let json2 = serde_json::to_string_pretty(&fq).unwrap();
+            println!("{}", json2);
+
+            let deserialized1: StakeTableEvent = serde_json::from_str(&json).unwrap();
+            let deserialized2: StakeTableEvent = serde_json::from_str(&json2).unwrap();
+            assert_eq!(
+                deserialized1, deserialized2,
+                "deserialization mismatch between original and re-serialized"
+            );
+            let moved1: StakeTableEvent = legacy_event.clone().into();
+            let moved2: StakeTableEvent = fq.into();
+            assert_eq!(
+                deserialized1, moved1,
+                "deserialization does not match direct conversion from legacy"
+            );
+            assert_eq!(
+                deserialized2, moved2,
+                "re-serialization does not match direct conversion from legacy"
+            );
+            let json3 = serde_json::to_string_pretty(&deserialized1).unwrap();
+            println!("{}", json3);
         }
 
         let last_block = 1_u64;
