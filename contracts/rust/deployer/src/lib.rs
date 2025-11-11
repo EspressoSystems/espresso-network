@@ -1498,7 +1498,7 @@ mod tests {
             multisig::{
                 transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
                 upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-                LightClientV2UpgradeParams, TransferOwnershipParams,
+                LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
                 cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
@@ -2651,11 +2651,13 @@ mod tests {
             &provider,
             l1_client,
             &mut contracts,
-            sepolia_rpc_url,
-            multisig_admin,
-            pauser1,
-            pauser2,
-            Some(dry_run),
+            StakeTableV2UpgradeParams {
+                rpc_url: sepolia_rpc_url,
+                multisig_address: multisig_admin,
+                pauser1,
+                pauser2,
+                dry_run: Some(dry_run),
+            },
         )
         .await?;
 

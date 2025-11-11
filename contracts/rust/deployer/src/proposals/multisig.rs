@@ -595,6 +595,14 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     Ok(result)
 }
 
+pub struct StakeTableV2UpgradeParams {
+    pub rpc_url: String,
+    pub multisig_address: Address,
+    pub pauser1: Address,
+    pub pauser2: Address,
+    pub dry_run: Option<bool>,
+}
+
 /// Upgrade the stake table proxy to use StakeTableV2.
 /// Internally, first detect existence of proxy, then deploy StakeTableV2
 /// Assumes:
@@ -607,14 +615,10 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     provider: impl Provider,
     l1_client: L1Client,
     contracts: &mut Contracts,
-    rpc_url: String,
-    multisig_address: Address,
-    pauser1: Address,
-    pauser2: Address,
-    dry_run: Option<bool>,
+    params: StakeTableV2UpgradeParams,
 ) -> Result<()> {
     tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
-    let dry_run = dry_run.unwrap_or(false);
+    let dry_run = params.dry_run.unwrap_or(false);
     let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
@@ -623,9 +627,10 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     let owner = proxy.owner().call().await?;
     let owner_addr = owner;
 
-    if owner_addr != multisig_address {
+    if owner_addr != params.multisig_address {
         anyhow::bail!(
-            "Proxy not owned by multisig. expected: {multisig_address:#x}, got: {owner_addr:#x}"
+            "Proxy not owned by multisig. expected: {:#x}, got: {owner_addr:#x}",
+            params.multisig_address
         );
     }
     if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
@@ -634,9 +639,14 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     }
     // TODO: check if owner is a SAFE multisig
 
-    let (_init_commissions, _init_active_stake, init_data) =
-        crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, pauser1, pauser2, owner_addr)
-            .await?;
+    let (_init_commissions, _init_active_stake, init_data) = crate::prepare_stake_table_v2_upgrade(
+        l1_client,
+        proxy_addr,
+        params.pauser1,
+        params.pauser2,
+        owner_addr,
+    )
+    .await?;
 
     let stake_table_v2_addr = contracts
         .deploy(
@@ -650,7 +660,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
         proxy_addr,
         stake_table_v2_addr,
         init_data.unwrap_or_default().to_string(),
-        rpc_url,
+        params.rpc_url,
         owner_addr,
         Some(dry_run),
     )

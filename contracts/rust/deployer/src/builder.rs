@@ -18,7 +18,7 @@ use crate::{
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
             upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
             upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
-            TransferOwnershipParams,
+            StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
             cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
@@ -410,14 +410,16 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         provider,
                         l1_client,
                         contracts,
-                        self.rpc_url.to_string(),
-                        self.multisig.context(
-                            "Multisig address must be set when upgrading to --use-multisig flag \
-                             is present",
-                        )?,
-                        multisig_pauser1,
-                        multisig_pauser2,
-                        Some(dry_run),
+                        StakeTableV2UpgradeParams {
+                            rpc_url: self.rpc_url.to_string(),
+                            multisig_address: self.multisig.context(
+                                "Multisig address must be set when upgrading to --use-multisig \
+                                 flag is present",
+                            )?,
+                            pauser1: multisig_pauser1,
+                            pauser2: multisig_pauser2,
+                            dry_run: Some(dry_run),
+                        },
                     )
                     .await?;
                 } else {
