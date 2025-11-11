@@ -20,7 +20,7 @@ import { LightClientStateUpdateVK as VkLib } from "./libraries/LightClientStateU
 /// This state is submitted by any state-prover with evidence which is
 /// a SNARK proof that proves consensus.
 /// This contract also keeps track of the current epoch.
-/// For this version, the epoch is not used. <br>
+/// For this version, the epoch is not used.<br>
 /// The light client state primarily consists of:<br>
 /// - the merkle root of finalized block commitments,<br>
 /// - the fee ledger commitment and <br>
@@ -138,7 +138,7 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// initialized
     /// @dev This is standard practice for OpenZeppelin upgradeable contracts. Storage is on the
     /// proxy contract
-    /// since it calls this cnotract via delegatecall
+    /// since it calls this contract via delegatecall
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -421,7 +421,7 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     /// @notice get the HotShot commitment that represents the Merkle root containing the leaf at
     /// the provided hotShotBlockHeight where the block height in the array is greater than
-    //  the provided hotShotBlockHeight.
+    /// the provided hotShotBlockHeight.
     /// @dev if the provided hotShotBlockHeight is greater than or equal to the latest commitment in
     /// the array,
     /// the function reverts.
