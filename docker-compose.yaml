@@ -84,7 +84,7 @@ services:
 
   deploy-lcv3-upgrade:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --upgrade-light-client-v3
+    command: deploy --upgrade-light-client-v3 --use-mock
     environment:
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL

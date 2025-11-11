@@ -75,7 +75,7 @@ processes:
     availability: *exit-ok
 
   deploy-lcv3-upgrade:
-    command: deploy --upgrade-light-client-v3
+    command: deploy --upgrade-light-client-v3 --use-mock
     namespace: setup
     depends_on:
       wait-for-v4:
