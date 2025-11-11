@@ -485,12 +485,12 @@ impl Config {
     /// This helps prevent queries from running indefinitely even when the client is dropped
     #[cfg(not(feature = "embedded-db"))]
     pub fn statement_timeout(mut self, timeout: Duration) -> Self {
-        let timeout_str = if timeout.as_secs() >= 60 {
-            format!("{}min", timeout.as_secs() / 60)
-        } else {
-            format!("{}s", timeout.as_secs())
-        };
-        self.db_opt = self.db_opt.options([("statement_timeout", timeout_str)]);
+        // Format duration as milliseconds
+        // PostgreSQL interprets values without units as milliseconds
+        let timeout_ms = timeout.as_millis();
+        self.db_opt = self
+            .db_opt
+            .options([("statement_timeout", timeout_ms.to_string())]);
         self
     }
 
