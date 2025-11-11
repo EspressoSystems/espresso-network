@@ -401,9 +401,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV2::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v2 reward account {account}, root: \
+                     {reward_merkle_tree_root} height {height} view {view}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -438,9 +439,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v1 reward account {account}, root: \
+                     {reward_merkle_tree_root} height {height} view {view}"
+                ))?;
                 proofs.push(proof);
             }
 
