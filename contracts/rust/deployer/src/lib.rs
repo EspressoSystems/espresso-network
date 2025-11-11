@@ -995,7 +995,7 @@ pub async fn deploy_reward_claim_proxy(
         reward_claim_proxy.getVersion().call().await?,
         (1, 0, 0).into()
     );
-    // Verify admin has DEFAULT_ADMIN_ROLE (RewardClaim no longer uses Ownable)
+    // Verify admin has DEFAULT_ADMIN_ROLE
     let admin_role = reward_claim_proxy.DEFAULT_ADMIN_ROLE().call().await?;
     assert!(
         reward_claim_proxy.hasRole(admin_role, admin).call().await?,

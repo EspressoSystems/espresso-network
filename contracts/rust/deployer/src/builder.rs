@@ -421,6 +421,23 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
                 } else {
+                    // Pick admin from config. StakeTable uses OpsTimelock for faster
+                    // emergency updates since it handles critical staking ops.
+                    let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
+                        if use_timelock_owner {
+                            contracts
+                                .address(Contract::OpsTimelock)
+                                .expect("fail to get OpsTimelock address")
+                        } else {
+                            admin // deployer
+                        }
+                    } else if let Some(multisig) = self.multisig {
+                        multisig
+                    } else {
+                        admin // deployer
+                    };
+
+                    tracing::info!("Upgrading StakeTableV2 with admin: {:?}", admin);
                     crate::upgrade_stake_table_v2(
                         provider,
                         l1_client,
@@ -431,36 +448,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
 
-                    let addr = contracts
-                        .address(Contract::StakeTableProxy)
-                        .expect("fail to get StakeTableProxy address");
-
-                    if let Some(use_timelock_owner) = self.use_timelock_owner {
-                        // StakeTable uses OpsTimelock because:
-                        // - It manages critical staking and validator operations
-                        // - May require emergency updates for security or functionality
-                        // - OpsTimelock provides a shorter delay for critical operations
-                        tracing::info!("Transferring ownership to OpsTimelock");
-                        // deployer is the timelock owner
-                        if use_timelock_owner {
-                            let timelock_addr = contracts
-                                .address(Contract::OpsTimelock)
-                                .expect("fail to get OpsTimelock address");
-                            crate::transfer_ownership(provider, target, addr, timelock_addr)
-                                .await?;
-                        }
-                    } else if let Some(multisig) = self.multisig {
-                        let stake_table_proxy = contracts
-                            .address(Contract::StakeTableProxy)
-                            .expect("fail to get StakeTableProxy address");
-                        crate::transfer_ownership(
-                            provider,
-                            Contract::StakeTableProxy,
-                            stake_table_proxy,
-                            multisig,
-                        )
-                        .await?;
-                    }
+                    // initializeV2() handles ownership transfer, so no separate call needed
                 }
             },
             Contract::OpsTimelock => {
@@ -525,12 +513,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     "Multisig pauser1 address must be set for RewardClaimProxy deployment",
                 )?;
 
-                // Determine the admin based on configuration
-                // RewardClaim uses SafeExitTimelock because:
-                // - It is not expected to require urgent upgrades.
-                // - In emergency situations it can be paused.
-                // - It can mint ESP tokens, users should have enough time
-                //   to react if they do not agree with an upgrade.
+                // RewardClaim uses SafeExitTimelock (longer delay) since it can mint tokens
+                // and users need time to react to upgrades. Can be paused in emergencies.
                 let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
                     if use_timelock_owner {
                         contracts
@@ -554,8 +538,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 )
                 .await?;
 
-                // Note: RewardClaim no longer uses OwnableUpgradeable, so no transfer_ownership needed.
-                // The admin is set during initialization and receives DEFAULT_ADMIN_ROLE.
+                // RewardClaim uses AccessControl only (no Ownable). Admin is set in initialize(),
+                // not via separate transfer_ownership() call.
             },
             _ => {
                 panic!("Deploying {target} not supported.");

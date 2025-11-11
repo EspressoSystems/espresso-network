@@ -63,6 +63,13 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
+///
+/// Governance: This contract keeps owner() and DEFAULT_ADMIN_ROLE in sync. When you call
+/// transferOwnership() or grantRole(DEFAULT_ADMIN_ROLE, ...), both are updated together.
+///
+/// Note: renounceOwnership(), revokeRole(DEFAULT_ADMIN_ROLE, ...), and renounceRole() are
+/// not overridden. These can create drift between owner() and DEFAULT_ADMIN_ROLE if you
+/// really need that behavior, but generally you should use transferOwnership() instead.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
     // === Types ===
 
@@ -186,8 +193,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     ///
     /// @param pauser1 The first address to be granted the pauser role
     /// @param pauser2 The second address to be granted the pauser role
-    /// @param admin The address to be granted the default admin role, this should be a timelock
-    /// contract address
+    /// @param admin The address to be granted the default admin role and ownership.
+    /// This should be a timelock contract address, multisig, or another governance address.
     /// @param initialActiveStake The initial active stake in the contract
     /// @param initialCommissions commissions of validators
     ///
@@ -196,7 +203,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// this must be called with the current commissions of pre-existing
     /// validators read from L1 events.
     ///
-    /// @dev This function is overridden to add pauser and admin roles
+    /// @dev Sets up roles and transfers ownership to admin. The deployer picks the admin
+    /// address (timelock, multisig, etc.) based on config.
     function initializeV2(
         address pauser1,
         address pauser2,
@@ -209,9 +217,19 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         require(pauser2 != address(0), ZeroAddress());
         __AccessControl_init();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, pauser1);
         _grantRole(PAUSER_ROLE, pauser2);
+
+        // Transfer ownership to admin if it's not the current owner
+        // This ensures owner() and DEFAULT_ADMIN_ROLE remain synchronized
+        // preventing governance drift.
+        address previousOwner = owner();
+        if (admin != previousOwner) {
+            _grantRole(DEFAULT_ADMIN_ROLE, admin);
+            _transferOwnership(admin);
+        } else {
+            _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        }
 
         // Default values found to be reasonable in internal discussion, may be
         // adjusted before release and updated after release.
@@ -245,6 +263,43 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function is only callable by the PAUSER_ROLE
     function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
+    }
+
+    /// @notice Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
+    /// @dev Grants the role to new owner and revokes from old owner. renounceOwnership()
+    /// is intentionally not overridden.
+    function transferOwnership(address newOwner)
+        public
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (newOwner == address(0)) {
+            revert OwnableInvalidOwner(address(0));
+        }
+        address oldOwner = owner();
+
+        super.grantRole(DEFAULT_ADMIN_ROLE, newOwner);
+        super.transferOwnership(newOwner);
+        // Only revoke if transferring to a different address to prevent self-revocation
+        if (oldOwner != newOwner) {
+            _revokeRole(DEFAULT_ADMIN_ROLE, oldOwner);
+        }
+    }
+
+    /// @notice Grants a role. If granting DEFAULT_ADMIN_ROLE, also transfers ownership.
+    /// @dev revokeRole and renounceRole are not overridden - they can create drift if needed.
+    function grantRole(bytes32 role, address account)
+        public
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            transferOwnership(account);
+            return;
+        }
+        super.grantRole(role, account);
     }
 
     /// @notice Withdraw previously delegated funds after a validator has exited
@@ -445,7 +500,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Set the minimum interval between commission updates
     /// @param newInterval The new minimum interval in seconds
-    function setMinCommissionUpdateInterval(uint256 newInterval) external virtual onlyOwner {
+    function setMinCommissionUpdateInterval(uint256 newInterval)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         require(newInterval > 0 && newInterval <= 365 days, InvalidRateLimitParameters());
         minCommissionIncreaseInterval = newInterval;
         emit MinCommissionUpdateIntervalUpdated(newInterval);
@@ -453,7 +512,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Set the maximum commission increase allowed per update
     /// @param newMaxIncrease The new maximum increase in basis points (e.g., 500 = 5%)
-    function setMaxCommissionIncrease(uint16 newMaxIncrease) external virtual onlyOwner {
+    function setMaxCommissionIncrease(uint16 newMaxIncrease)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         require(newMaxIncrease > 0 && newMaxIncrease <= 10000, InvalidRateLimitParameters());
         maxCommissionIncrease = newMaxIncrease;
         emit MaxCommissionIncreaseUpdated(newMaxIncrease);
@@ -502,7 +565,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function ensures that the exit escrow period is within the valid range
     /// @dev This function is not pausable so that governance can perform emergency updates in the
     /// presence of system
-    function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external virtual onlyOwner {
+    function updateExitEscrowPeriod(uint64 newExitEscrowPeriod)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
             // block
         uint64 maxExitEscrowPeriod = 86400 * 14; // 14 days
@@ -561,5 +628,18 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         BN254.G1Point memory
     ) external pure override {
         revert DeprecatedFunction();
+    }
+
+    /// @notice Authorize an upgrade to a new implementation
+    /// @param newImplementation The address of the new implementation
+    /// @dev This function is overridden to use AccessControl instead of Ownable
+    /// Only addresses with DEFAULT_ADMIN_ROLE can authorize upgrades
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        newImplementation; // Silence empty block warning
     }
 }

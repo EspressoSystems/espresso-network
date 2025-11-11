@@ -1006,12 +1006,11 @@ contract StakeTableFieldsReorderedTest is Test {
     mapping(address validator => uint256 unlocksAt) public validatorExits;
     mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
     mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
-    uint256 exitEscrowPeriod;
     LightClient public lightClient; //re-ordered field
 }
 
 contract StakeTableUpgradeV2Test is Test {
-    StakeTable_register_Test stakeTableRegisterTest;
+    StakeTable_register_Test public stakeTableRegisterTest;
 
     function setUp() public virtual {
         stakeTableRegisterTest = new StakeTable_register_Test();
@@ -1083,7 +1082,7 @@ contract StakeTableUpgradeV2Test is Test {
     }
 
     /// forge-config: default.allow_internal_expect_revert = true
-    function test_RevertWhen_NotAdmin() public {
+    function test_Upgrade_RevertsNonAdmin() public {
         address notAdmin = makeAddr("not_admin");
         S proxy = stakeTableRegisterTest.stakeTable();
         (uint8 majorVersion,,) = proxy.getVersion();
@@ -1251,13 +1250,59 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
     }
 
+    function test_upgradeStakeTableV2() public {
+        address currentOwner = stakeTableRegisterTest.admin();
+        vm.startPrank(currentOwner);
+
+        S proxy = S(address(stakeTableRegisterTest.stakeTable()));
+        address proxyAddress = address(proxy);
+
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 1, "Should start with V1");
+
+        address pauser1 = makeAddr("pauser1");
+        address pauser2 = makeAddr("pauser2");
+        address defaultAdmin = makeAddr("defaultAdmin");
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser1, pauser2, defaultAdmin, 0, emptyCommissions
+        );
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        proxy.upgradeToAndCall(address(newImpl), initData);
+
+        StakeTableV2 proxyV2 = StakeTableV2(proxyAddress);
+        (uint8 newMajorVersion,,) = proxyV2.getVersion();
+        assertEq(newMajorVersion, 2, "Should be upgraded to V2");
+
+        assertTrue(
+            proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), defaultAdmin),
+            "Admin should have DEFAULT_ADMIN_ROLE"
+        );
+        assertTrue(
+            proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser1), "Pauser1 should have PAUSER_ROLE"
+        );
+        assertTrue(
+            proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser2), "Pauser2 should have PAUSER_ROLE"
+        );
+        assertEq(proxyV2.owner(), defaultAdmin, "Owner should be admin");
+        assertFalse(
+            proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), currentOwner),
+            "Original owner should NOT have DEFAULT_ADMIN_ROLE after upgrade"
+        );
+
+        vm.stopPrank();
+    }
+
     function test_updateExitEscrowPeriod() public {
-        vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = address(stakeTableRegisterTest.stakeTable());
-        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        test_upgradeStakeTableV2();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.stakeTable()));
+        address defaultAdmin = proxy.owner();
+        vm.startPrank(defaultAdmin);
         vm.expectEmit(false, false, false, true, address(proxy));
         emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
-        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        proxy.updateExitEscrowPeriod(200 seconds);
         vm.stopPrank();
     }
 
@@ -1267,30 +1312,40 @@ contract StakeTableUpgradeV2Test is Test {
         S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
         vm.stopPrank();
         address notAdmin = makeAddr("notAdmin");
+        bytes32 adminRole = StakeTableV2(proxy).DEFAULT_ADMIN_ROLE();
         vm.startPrank(notAdmin);
         vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
+            )
         );
         StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
         vm.stopPrank();
     }
 
     function test_RevertWhen_ExitEscrowPeriodTooShort() public {
-        vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = address(stakeTableRegisterTest.stakeTable());
-        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
-
+        test_upgradeStakeTableV2();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.stakeTable()));
+        address defaultAdmin = proxy.owner();
+        vm.startPrank(defaultAdmin);
         vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
-        StakeTableV2(proxy).updateExitEscrowPeriod(100 seconds);
+        proxy.updateExitEscrowPeriod(100 seconds);
         vm.stopPrank();
     }
 
     function test_RevertWhen_ExitEscrowPeriodTooLong() public {
-        vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = address(stakeTableRegisterTest.stakeTable());
-        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        test_upgradeStakeTableV2();
+        // get the stake table role default_admin_role
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.stakeTable()));
+
+        address defaultAdmin = proxy.owner();
+        assertTrue(
+            proxy.hasRole(proxy.DEFAULT_ADMIN_ROLE(), defaultAdmin),
+            "owner should have DEFAULT_ADMIN_ROLE"
+        );
+        vm.startPrank(defaultAdmin);
         vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
-        StakeTableV2(proxy).updateExitEscrowPeriod(100 days);
+        proxy.updateExitEscrowPeriod(100 days);
         vm.stopPrank();
     }
 
@@ -1981,15 +2036,15 @@ contract StakeTableUpgradeV2Test is Test {
         StakeTableV2 stakeTableV2 = StakeTableV2(address(stakeTableRegisterTest.stakeTable()));
 
         address newImpl = address(new StakeTableV2());
-        address admin = stakeTableRegisterTest.admin();
+        address adminAddr = stakeTableRegisterTest.admin();
         vm.expectRevert(StakeTableV2.InitialActiveStakeExceedsBalance.selector);
         stakeTableV2.upgradeToAndCall(
             newImpl,
             abi.encodeWithSelector(
                 StakeTableV2.initializeV2.selector,
-                admin,
-                admin,
-                admin,
+                adminAddr,
+                adminAddr,
+                adminAddr,
                 initialBalance,
                 initialCommissions
             )
@@ -2419,11 +2474,62 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         S proxy = S(address(stakeTableRegisterTest.proxy()));
         address originalOwner = proxy.owner();
 
-        // Create a different admin address for V2
-        address newAdmin = makeAddr("newAdmin");
-        require(newAdmin != originalOwner, "Admin should be different from original owner");
-
         // Upgrade to V2 with a different admin than the current owner
+        test_upgradeStakeTableV2();
+
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        (uint8 majorVersionNew,,) = proxyV2.getVersion();
+        assertEq(majorVersionNew, 2);
+
+        assertNotEq(proxyV2.owner(), originalOwner, "Owner should be transferred to new admin");
+
+        assertFalse(
+            proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), originalOwner),
+            "Original owner should not have DEFAULT_ADMIN_ROLE"
+        );
+    }
+
+    function test_InitializeV2_WhenAdminIsSameAsOwner() public {
+        (uint8 majorVersion,,) = S(address(stakeTableRegisterTest.proxy())).getVersion();
+        assertEq(majorVersion, 1);
+
+        S proxy = S(address(stakeTableRegisterTest.proxy()));
+        address originalOwner = proxy.owner();
+
+        // Use the current owner as the admin (no ownership transfer needed)
+        vm.startPrank(originalOwner);
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, pauser, originalOwner, 0, emptyCommissions
+        );
+        proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
+        vm.stopPrank();
+
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        (uint8 majorVersionNew,,) = proxyV2.getVersion();
+        assertEq(majorVersionNew, 2);
+
+        // Owner should remain the same (no transfer needed)
+        assertEq(proxyV2.owner(), originalOwner, "Owner should remain unchanged");
+
+        // Original owner should have DEFAULT_ADMIN_ROLE
+        assertTrue(
+            proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), originalOwner),
+            "Owner should have DEFAULT_ADMIN_ROLE"
+        );
+
+        // Verify owner and admin are synchronized
+        assertEq(proxyV2.owner(), originalOwner, "Owner and admin should be synchronized");
+    }
+
+    function test_UpgradeFromV2_RequiresAdminRole() public {
+        (uint8 majorVersion,,) = S(address(stakeTableRegisterTest.proxy())).getVersion();
+        assertEq(majorVersion, 1);
+
+        S proxy = S(address(stakeTableRegisterTest.proxy()));
+        address originalOwner = proxy.owner();
+        address newAdmin = makeAddr("newAdmin");
+
         vm.startPrank(originalOwner);
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
@@ -2433,22 +2539,29 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         vm.stopPrank();
 
         StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
-        (uint8 majorVersionNew,,) = proxyV2.getVersion();
-        assertEq(majorVersionNew, 2);
-
         assertEq(proxyV2.owner(), newAdmin, "Owner should be transferred to new admin");
 
-        assertTrue(
-            proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), newAdmin),
-            "New admin should have DEFAULT_ADMIN_ROLE"
-        );
+        // Now try to upgrade to a new implementation as a non-admin
+        address notAdmin = makeAddr("notAdmin");
+        address newImpl = address(new StakeTableV2());
+        bytes32 adminRole = proxyV2.DEFAULT_ADMIN_ROLE();
 
-        assertFalse(
-            proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), originalOwner),
-            "Original owner should not have DEFAULT_ADMIN_ROLE"
+        vm.startPrank(notAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
+            )
         );
+        proxyV2.upgradeToAndCall(newImpl, "");
+        vm.stopPrank();
 
-        assertEq(proxyV2.owner(), newAdmin, "Owner and admin should be synchronized - no drift");
+        // Verify the admin CAN upgrade
+        vm.startPrank(newAdmin);
+        proxyV2.upgradeToAndCall(newImpl, "");
+        vm.stopPrank();
+
+        (uint8 finalVersion,,) = proxyV2.getVersion();
+        assertEq(finalVersion, 2, "Version should still be 2 after upgrade");
     }
 
     function test_StorageLayout_IsCompatible_V1V2() public {

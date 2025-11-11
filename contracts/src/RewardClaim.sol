@@ -15,6 +15,13 @@ import "./EspTokenV2.sol";
 import "./libraries/RewardMerkleTreeVerifier.sol";
 import "./interfaces/IRewardClaim.sol";
 
+/// @title RewardClaim - Espresso Reward Claim Contract
+/// @notice Allows validators and delegators to claim ESP token rewards based on cryptographic
+/// proofs from the Espresso network.
+/// @dev Governance Architecture:
+/// This contract uses ONLY AccessControlUpgradeable.
+/// - DEFAULT_ADMIN_ROLE: Can upgrade contract, manage roles, update daily limits
+/// - PAUSER_ROLE: Can pause/unpause user facing methods in the contract during emergencies
 contract RewardClaim is
     IRewardClaim,
     Initializable,
