@@ -47,7 +47,7 @@ use vbs::version::StaticVersionType;
 
 use super::{
     data_source::{Provider, SequencerDataSource},
-    BlocksFrontier,
+    AccountProofError, BlocksFrontier,
 };
 use crate::{
     api::RewardAccountProofDataSource,
@@ -104,39 +104,46 @@ impl RewardAccountProofDataSource for SqlStorage {
         &self,
         height: u64,
         account: RewardAccountV1,
-    ) -> anyhow::Result<RewardAccountQueryDataV1> {
-        let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch v1 reward account {account:?}; height {height}"
-        ))?;
+    ) -> Result<RewardAccountQueryDataV1, AccountProofError> {
+        let mut tx = self.read().await.map_err(|err| {
+            AccountProofError::DatabaseError(anyhow::anyhow!(
+                "failed to open read transaction for account {account} at height {height}: {err}"
+            ))
+        })?;
 
         let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
             .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
+            .map_err(|err| {
+                AccountProofError::DatabaseError(anyhow::anyhow!(
+                    "failed to get block height for account {account} at height {height}: {err}"
+                ))
+            })? as u64;
+
+        if block_height == 0 {
+            return Err(AccountProofError::LeafNotFound(format!(
+                "cannot get accounts for height {height}: no blocks available"
+            )));
+        }
 
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            let (tree, _) = load_v1_reward_accounts(&mut tx, height, None, &[account])
-                .await
-                .with_context(|| {
-                    format!("failed to load v1 reward account {account:?} at height {height}")
-                })?;
+            let (tree, _) = load_v1_reward_accounts(&mut tx, height, None, &[account]).await?;
 
-            let (proof, balance) = RewardAccountProofV1::prove(&tree, account.into())
-                .with_context(|| {
-                    format!("reward account {account:?} not available at height {height}")
+            let (proof, balance) =
+                RewardAccountProofV1::prove(&tree, account.into()).ok_or_else(|| {
+                    AccountProofError::AccountNotFound(format!(
+                        "account {account} not available at height {height}: account not found in \
+                         merkle tree"
+                    ))
                 })?;
 
             Ok(RewardAccountQueryDataV1 { balance, proof })
         } else {
-            bail!(
-                "requested height {height} is not yet available (latest block height: \
-                 {block_height})"
-            );
+            Err(AccountProofError::LeafNotFound(format!(
+                "leaf {height} not available: requested height is not yet available (latest block \
+                 height: {block_height})"
+            )))
         }
     }
 
@@ -144,39 +151,46 @@ impl RewardAccountProofDataSource for SqlStorage {
         &self,
         height: u64,
         account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch reward account {account:?}; height {height}"
-        ))?;
+    ) -> Result<RewardAccountQueryDataV2, AccountProofError> {
+        let mut tx = self.read().await.map_err(|err| {
+            AccountProofError::DatabaseError(anyhow::anyhow!(
+                "failed to open read transaction for account {account} at height {height}: {err}"
+            ))
+        })?;
 
         let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
             .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
+            .map_err(|err| {
+                AccountProofError::DatabaseError(anyhow::anyhow!(
+                    "failed to get block height for account {account} at height {height}: {err}"
+                ))
+            })? as u64;
+
+        if block_height == 0 {
+            return Err(AccountProofError::LeafNotFound(format!(
+                "cannot get accounts for height {height}: no blocks available"
+            )));
+        }
 
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            let (tree, _) = load_v2_reward_accounts(&mut tx, height, None, &[account])
-                .await
-                .with_context(|| {
-                    format!("failed to load v2 reward account {account:?} at height {height}")
-                })?;
+            let (tree, _) = load_v2_reward_accounts(&mut tx, height, None, &[account]).await?;
 
-            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
-                .with_context(|| {
-                    format!("reward account {account:?} not available at height {height}")
+            let (proof, balance) =
+                RewardAccountProofV2::prove(&tree, account.into()).ok_or_else(|| {
+                    AccountProofError::AccountNotFound(format!(
+                        "account {account} not available at height {height}: account not found in \
+                         merkle tree"
+                    ))
                 })?;
 
             Ok(RewardAccountQueryDataV2 { balance, proof })
         } else {
-            bail!(
-                "requested height {height} is not yet available (latest block height: \
-                 {block_height})"
-            );
+            Err(AccountProofError::LeafNotFound(format!(
+                "leaf {height} not available: requested height is not yet available (latest block \
+                 height: {block_height})"
+            )))
         }
     }
 }
@@ -203,7 +217,9 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_v1_reward_accounts(&mut tx, height, Some(view), accounts).await
+            load_v1_reward_accounts(&mut tx, height, Some(view), accounts)
+                .await
+                .map_err(Into::into)
         } else {
             let accounts: Vec<_> = accounts
                 .iter()
@@ -240,7 +256,9 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_v2_reward_accounts(&mut tx, height, Some(view), accounts).await
+            load_v2_reward_accounts(&mut tx, height, Some(view), accounts)
+                .await
+                .map_err(Into::into)
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -272,7 +290,9 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_accounts(&mut tx, height, Some(view), accounts).await
+            load_accounts(&mut tx, height, Some(view), accounts)
+                .await
+                .map_err(Into::into)
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -385,7 +405,7 @@ impl RewardAccountProofDataSource for DataSource {
         &self,
         height: u64,
         account: RewardAccountV1,
-    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+    ) -> Result<RewardAccountQueryDataV1, AccountProofError> {
         self.as_ref()
             .load_v1_reward_account_proof(height, account)
             .await
@@ -395,7 +415,7 @@ impl RewardAccountProofDataSource for DataSource {
         &self,
         height: u64,
         account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+    ) -> Result<RewardAccountQueryDataV2, AccountProofError> {
         self.as_ref()
             .load_v2_reward_account_proof(height, account)
             .await
@@ -493,20 +513,22 @@ async fn load_v1_reward_accounts<Mode: TransactionMode>(
     height: u64,
     view: Option<ViewNumber>,
     accounts: &[RewardAccountV1],
-) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+) -> Result<(RewardMerkleTreeV1, Leaf2), AccountProofError> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
-        .context(format!("leaf {height} not available"))?;
+        .map_err(|err| {
+            AccountProofError::LeafNotFound(format!("leaf {height} not available: {err}"))
+        })?;
 
     // Validate that the fetched leaf's view matches the expected view if provided
     if let Some(expected_view) = view {
         if leaf.leaf().view_number() != expected_view {
-            bail!(
-                "View mismatch for v1 reward accounts at height {height}: expected \
-                 {expected_view:?}, got {:?}. The block for height {height} is already finalized",
-                leaf.leaf().view_number()
-            );
+            return Err(AccountProofError::ViewMismatch {
+                height,
+                expected: expected_view,
+                actual: leaf.leaf().view_number(),
+            });
         }
     }
 
@@ -532,22 +554,37 @@ async fn load_v1_reward_accounts<Mode: TransactionMode>(
                 *account,
             )
             .await
-            .context(format!(
-                "fetching v1 reward account {account}; height {}",
+            .map_err(AccountProofError::QueryError)?;
+        match proof.proof.first().ok_or_else(|| {
+            AccountProofError::InvalidProof(format!(
+                "empty proof for account {account}; height {}",
                 header.height()
-            ))?;
-        match proof.proof.first().context(format!(
-            "empty proof for v1 reward account {account}; height {}",
-            header.height()
-        ))? {
+            ))
+        })? {
             MerkleNode::Leaf { pos, elem, .. } => {
-                snapshot.remember(*pos, *elem, proof)?;
+                snapshot.remember(*pos, *elem, proof).map_err(|err| {
+                    AccountProofError::InvalidProof(format!(
+                        "failed to remember account {account} at height {}: {err}",
+                        header.height()
+                    ))
+                })?;
             },
             MerkleNode::Empty => {
-                snapshot.non_membership_remember(*account, proof)?;
+                snapshot
+                    .non_membership_remember(*account, proof)
+                    .map_err(|err| {
+                        AccountProofError::InvalidProof(format!(
+                            "failed to remember non-membership for account {account} at height \
+                             {}: {err}",
+                            header.height()
+                        ))
+                    })?;
             },
             _ => {
-                bail!("Invalid proof");
+                let height = header.height();
+                return Err(AccountProofError::InvalidProof(format!(
+                    "invalid proof for account {account}; height {height}"
+                )));
             },
         }
     }
@@ -561,19 +598,21 @@ async fn load_v2_reward_accounts<Mode: TransactionMode>(
     height: u64,
     view: Option<ViewNumber>,
     accounts: &[RewardAccountV2],
-) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+) -> Result<(RewardMerkleTreeV2, Leaf2), AccountProofError> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
-        .context(format!("leaf {height} not available"))?;
+        .map_err(|err| {
+            AccountProofError::LeafNotFound(format!("leaf {height} not available: {err}"))
+        })?;
 
     if let Some(expected_view) = view {
         if leaf.leaf().view_number() != expected_view {
-            bail!(
-                "View mismatch for v2 reward accounts at height {height}: expected \
-                 {expected_view:?}, got {:?}. The block for height {height} is already finalized",
-                leaf.leaf().view_number()
-            );
+            return Err(AccountProofError::ViewMismatch {
+                height,
+                expected: expected_view,
+                actual: leaf.leaf().view_number(),
+            });
         }
     }
 
@@ -597,22 +636,37 @@ async fn load_v2_reward_accounts<Mode: TransactionMode>(
                 *account,
             )
             .await
-            .context(format!(
-                "fetching reward account {account}; height {}",
+            .map_err(AccountProofError::QueryError)?;
+        match proof.proof.first().ok_or_else(|| {
+            AccountProofError::InvalidProof(format!(
+                "empty proof for account {account}; height {}",
                 header.height()
-            ))?;
-        match proof.proof.first().context(format!(
-            "empty proof for reward account {account}; height {}",
-            header.height()
-        ))? {
+            ))
+        })? {
             MerkleNode::Leaf { pos, elem, .. } => {
-                snapshot.remember(*pos, *elem, proof)?;
+                snapshot.remember(*pos, *elem, proof).map_err(|err| {
+                    AccountProofError::InvalidProof(format!(
+                        "failed to remember account {account} at height {}: {err}",
+                        header.height()
+                    ))
+                })?;
             },
             MerkleNode::Empty => {
-                snapshot.non_membership_remember(*account, proof)?;
+                snapshot
+                    .non_membership_remember(*account, proof)
+                    .map_err(|err| {
+                        AccountProofError::InvalidProof(format!(
+                            "failed to remember non-membership for account {account} at height \
+                             {}: {err}",
+                            header.height()
+                        ))
+                    })?;
             },
             _ => {
-                bail!("Invalid proof");
+                let height = header.height();
+                return Err(AccountProofError::InvalidProof(format!(
+                    "invalid proof for account {account}; height {height}"
+                )));
             },
         }
     }
@@ -625,19 +679,21 @@ async fn load_accounts<Mode: TransactionMode>(
     height: u64,
     view: Option<ViewNumber>,
     accounts: &[FeeAccount],
-) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+) -> Result<(FeeMerkleTree, Leaf2), AccountProofError> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
-        .context(format!("leaf {height} not available"))?;
+        .map_err(|err| {
+            AccountProofError::LeafNotFound(format!("leaf {height} not available: {err}"))
+        })?;
 
     if let Some(expected_view) = view {
         if leaf.leaf().view_number() != expected_view {
-            bail!(
-                "View mismatch for fee accounts at height {height}: expected {expected_view:?}, \
-                 got {:?}. The block for height {height} is already finalized",
-                leaf.leaf().view_number()
-            );
+            return Err(AccountProofError::ViewMismatch {
+                height,
+                expected: expected_view,
+                actual: leaf.leaf().view_number(),
+            });
         }
     }
 
@@ -653,22 +709,37 @@ async fn load_accounts<Mode: TransactionMode>(
                 *account,
             )
             .await
-            .context(format!(
-                "fetching account {account}; height {}",
-                header.height()
-            ))?;
-        match proof.proof.first().context(format!(
-            "empty proof for account {account}; height {}",
-            header.height()
-        ))? {
+            .map_err(AccountProofError::QueryError)?;
+        match proof.proof.first().ok_or_else(|| {
+            let height = header.height();
+            AccountProofError::InvalidProof(format!(
+                "empty proof for account {account}; height {height}"
+            ))
+        })? {
             MerkleNode::Leaf { pos, elem, .. } => {
-                snapshot.remember(*pos, *elem, proof)?;
+                snapshot.remember(*pos, *elem, proof).map_err(|err| {
+                    AccountProofError::InvalidProof(format!(
+                        "failed to remember account {account} at height {}: {err}",
+                        header.height()
+                    ))
+                })?;
             },
             MerkleNode::Empty => {
-                snapshot.non_membership_remember(*account, proof)?;
+                snapshot
+                    .non_membership_remember(*account, proof)
+                    .map_err(|err| {
+                        AccountProofError::InvalidProof(format!(
+                            "failed to remember non-membership for account {account} at height \
+                             {}: {err}",
+                            header.height()
+                        ))
+                    })?;
             },
             _ => {
-                bail!("Invalid proof");
+                let height = header.height();
+                return Err(AccountProofError::InvalidProof(format!(
+                    "invalid proof for account {account}; height {height}"
+                )));
             },
         }
     }
@@ -765,7 +836,11 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     // will be fetched again in load_accounts so the view number will always match
     state.fee_merkle_tree = load_accounts(tx, from_height, None, &fee_accounts)
         .await
-        .context("unable to reconstruct state because accounts are not available at origin")?
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "unable to reconstruct state because accounts are not available at origin: {err}"
+            )
+        })?
         .0;
     ensure!(
         state.fee_merkle_tree.commitment() == parent.block_header().fee_merkle_tree_root(),
@@ -793,10 +868,12 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
                 .collect::<Vec<_>>();
             state.reward_merkle_tree_v1 = load_v1_reward_accounts(tx, from_height, None, &accts)
                 .await
-                .context(
-                    "unable to reconstruct state because v1 reward accounts are not available at \
-                     origin",
-                )?
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "unable to reconstruct state because v1 reward accounts are not available \
+                         at origin: {err}"
+                    )
+                })?
                 .0;
             ensure!(
                 state.reward_merkle_tree_v1.commitment() == expected_root,
@@ -807,10 +884,12 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             state.reward_merkle_tree_v2 =
                 load_v2_reward_accounts(tx, from_height, None, &reward_accounts)
                     .await
-                    .context(
-                        "unable to reconstruct state because v2 reward accounts are not available \
-                         at origin",
-                    )?
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "unable to reconstruct state because v2 reward accounts are not \
+                             available at origin: {err}"
+                        )
+                    })?
                     .0;
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
