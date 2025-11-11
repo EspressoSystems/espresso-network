@@ -2241,16 +2241,9 @@ fn epoch_files(
 mod test {
     use std::marker::PhantomData;
 
-    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
-    use hotshot_contract_adapter::sol_types::{
-        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
-        StakeTableV2::{Delegated, Undelegated},
-        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
-        ValidatorRegisteredV2Legacy,
-    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{

@@ -2954,17 +2954,9 @@ mod testing {
 
 #[cfg(test)]
 mod test {
-
-    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
-    use hotshot_contract_adapter::sol_types::{
-        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
-        StakeTableV2::{Delegated, Undelegated},
-        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
-        ValidatorRegisteredV2Legacy,
-    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
