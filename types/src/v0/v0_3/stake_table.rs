@@ -10,7 +10,8 @@ use derive_more::derive::{From, Into};
 use hotshot::types::{SignatureKey};
 use hotshot_contract_adapter::sol_types::{ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy, StakeTableV2::{
     CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2
-}, UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy, ValidatorRegisteredV2Legacy};
+}, UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy, ValidatorRegisteredV2Legacy, ConsensusKeysUpdatedLegacyOriginal, ConsensusKeysUpdatedV2LegacyOriginal,DelegatedLegacyOriginal,
+UndelegatedLegacyOriginal,ValidatorExitLegacyOriginal,ValidatorRegisteredLegacyOriginal,ValidatorRegisteredV2LegacyOriginal};
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
 };
@@ -145,7 +146,6 @@ pub enum StakeTableEvent {
     CommissionUpdate(CommissionUpdated),
 }
 
-
 #[derive(Clone,serde::Serialize, serde::Deserialize)]
 pub enum StakeTableEventLegacy {
     Register(ValidatorRegisteredLegacy),
@@ -157,6 +157,16 @@ pub enum StakeTableEventLegacy {
     KeyUpdateV2(ConsensusKeysUpdatedV2Legacy),
 }
 
+#[derive(Clone,serde::Serialize, serde::Deserialize)]
+pub enum StakeTableEventLegacyOriginal {
+    Register(ValidatorRegisteredLegacyOriginal),
+    RegisterV2(ValidatorRegisteredV2LegacyOriginal),
+    Deregister(ValidatorExitLegacyOriginal),
+    Delegate(DelegatedLegacyOriginal),
+    Undelegate(UndelegatedLegacyOriginal),
+    KeyUpdate(ConsensusKeysUpdatedLegacyOriginal),
+    KeyUpdateV2(ConsensusKeysUpdatedV2LegacyOriginal),
+}
 
 impl From<StakeTableEventLegacy> for StakeTableEvent {
     fn from(legacy: StakeTableEventLegacy) -> Self {
@@ -180,6 +190,34 @@ impl From<StakeTableEventLegacy> for StakeTableEvent {
                 StakeTableEvent::KeyUpdate(v.into())
             }
             StakeTableEventLegacy::KeyUpdateV2(v) => {
+                StakeTableEvent::KeyUpdateV2(v.into())
+            }
+        }
+    }
+}
+
+impl From<StakeTableEventLegacyOriginal> for StakeTableEvent {
+    fn from(legacy: StakeTableEventLegacyOriginal) -> Self {
+        match legacy {
+            StakeTableEventLegacyOriginal::Register(v) => {
+                StakeTableEvent::Register(v.into())
+            }
+            StakeTableEventLegacyOriginal::RegisterV2(v) => {
+                StakeTableEvent::RegisterV2(v.into())
+            }
+            StakeTableEventLegacyOriginal::Deregister(v) => {
+                StakeTableEvent::Deregister(v.into())
+            }
+            StakeTableEventLegacyOriginal::Delegate(v) => {
+                StakeTableEvent::Delegate(v.into())
+            }
+            StakeTableEventLegacyOriginal::Undelegate(v) => {
+                StakeTableEvent::Undelegate(v.into())
+            }
+            StakeTableEventLegacyOriginal::KeyUpdate(v) => {
+                StakeTableEvent::KeyUpdate(v.into())
+            }
+            StakeTableEventLegacyOriginal::KeyUpdateV2(v) => {
                 StakeTableEvent::KeyUpdateV2(v.into())
             }
         }
