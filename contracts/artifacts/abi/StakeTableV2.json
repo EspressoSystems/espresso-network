@@ -653,7 +653,7 @@
         "internalType": "bytes32"
       },
       {
-        "name": "callerConfirmation",
+        "name": "account",
         "type": "address",
         "internalType": "address"
       }
@@ -1692,6 +1692,21 @@
   {
     "type": "error",
     "name": "BlsKeyAlreadyUsed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CannotRenounceDefaultAdmin",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CannotRenounceOwnership",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CannotRevokeDefaultAdmin",
     "inputs": []
   },
   {

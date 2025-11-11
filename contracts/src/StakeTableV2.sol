@@ -64,12 +64,12 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 ///
-/// Governance: This contract keeps owner() and DEFAULT_ADMIN_ROLE in sync. When you call
-/// transferOwnership() or grantRole(DEFAULT_ADMIN_ROLE, ...), both are updated together.
-///
-/// Note: renounceOwnership(), revokeRole(DEFAULT_ADMIN_ROLE, ...), and renounceRole() are
-/// not overridden. These can create drift between owner() and DEFAULT_ADMIN_ROLE if you
-/// really need that behavior, but generally you should use transferOwnership() instead.
+/// Governance: This contract enforces a single-admin model. `owner()` and
+/// `DEFAULT_ADMIN_ROLE` always reference the same address and can only be
+/// changed via `transferOwnership()` (directly or through
+/// `grantRole(DEFAULT_ADMIN_ROLE, ...)`, which delegates to the transfer). Any
+/// attempt to revoke or renounce the default admin role, or to renounce
+/// ownership, reverts. This removes governance drift.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
     // === Types ===
 
@@ -182,6 +182,12 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
+    /// Attempted to revoke DEFAULT_ADMIN_ROLE which would break single-admin governance
+    error CannotRevokeDefaultAdmin();
+    /// Attempted to renounce DEFAULT_ADMIN_ROLE which would break single-admin governance
+    error CannotRenounceDefaultAdmin();
+    /// Attempted to renounce ownership which would break single-admin governance
+    error CannotRenounceOwnership();
 
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
@@ -219,16 +225,14 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         _grantRole(PAUSER_ROLE, pauser1);
         _grantRole(PAUSER_ROLE, pauser2);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
 
         // Transfer ownership to admin if it's not the current owner
         // This ensures owner() and DEFAULT_ADMIN_ROLE remain synchronized
         // preventing governance drift.
         address previousOwner = owner();
         if (admin != previousOwner) {
-            _grantRole(DEFAULT_ADMIN_ROLE, admin);
             _transferOwnership(admin);
-        } else {
-            _grantRole(DEFAULT_ADMIN_ROLE, admin);
         }
 
         // Default values found to be reasonable in internal discussion, may be
@@ -266,13 +270,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
-    /// @dev Grants the role to new owner and revokes from old owner. renounceOwnership()
-    /// is intentionally not overridden.
-    function transferOwnership(address newOwner)
-        public
-        virtual
-        override
-        onlyRole(DEFAULT_ADMIN_ROLE)
+    /// @dev Grants the role to new owner and revokes from old owner.
+    function transferOwnership(address newOwner) public virtual override 
+    // onlyRole(DEFAULT_ADMIN_ROLE)
     {
         if (newOwner == address(0)) {
             revert OwnableInvalidOwner(address(0));
@@ -287,19 +287,34 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
     }
 
-    /// @notice Grants a role. If granting DEFAULT_ADMIN_ROLE, also transfers ownership.
-    /// @dev revokeRole and renounceRole are not overridden - they can create drift if needed.
-    function grantRole(bytes32 role, address account)
-        public
-        virtual
-        override
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
+    /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first.
+    function grantRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             transferOwnership(account);
             return;
         }
         super.grantRole(role, account);
+    }
+
+    /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    function revokeRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert CannotRevokeDefaultAdmin();
+        }
+        super.revokeRole(role, account);
+    }
+
+    /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    function renounceRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert CannotRenounceDefaultAdmin();
+        }
+        super.renounceRole(role, account);
+    }
+
+    /// @notice Prevent renouncing ownership to preserve the single-admin invariant.
+    function renounceOwnership() public virtual override {
+        revert CannotRenounceOwnership();
     }
 
     /// @notice Withdraw previously delegated funds after a validator has exited
