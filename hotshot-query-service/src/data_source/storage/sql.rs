@@ -562,6 +562,12 @@ impl SqlStorage {
         // Create or connect to the schema for this query service.
         let mut conn = pool.acquire().await?;
 
+        // Disable statement timeout for migrations, as they can take a long time
+        #[cfg(not(feature = "embedded-db"))]
+        query("SET statement_timeout = 0")
+            .execute(conn.as_mut())
+            .await?;
+
         #[cfg(not(feature = "embedded-db"))]
         if config.reset {
             query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
