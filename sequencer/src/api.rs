@@ -1945,7 +1945,7 @@ mod api_tests {
     use hotshot_types::{
         data::{
             ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, DaProposal2, EpochNumber,
-            QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
         },
         event::LeafInfo,
         message::Proposal,
@@ -2249,7 +2249,7 @@ mod api_tests {
                 .unwrap();
 
             // Include VID information for each leaf.
-            let share = AvidMDisperseShare::<SeqTypes> {
+            let share: VidDisperseShare<SeqTypes> = AvidMDisperseShare {
                 view_number: leaf.view_number(),
                 payload_commitment,
                 share: shares[0].clone(),
@@ -2257,9 +2257,11 @@ mod api_tests {
                 epoch: Some(EpochNumber::new(0)),
                 target_epoch: Some(EpochNumber::new(0)),
                 common: avidm_param.clone(),
-            };
+            }
+            .into();
+
             persistence
-                .append_vid2(&share.to_proposal(&privkey).unwrap())
+                .append_vid(&share.to_proposal(&privkey).unwrap())
                 .await
                 .unwrap();
 

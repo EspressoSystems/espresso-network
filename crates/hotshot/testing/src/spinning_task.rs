@@ -288,7 +288,7 @@ where
                                             .entry(key)
                                             .or_insert_with(BTreeMap::new)
                                             .insert(
-                                                proposal.data.target_epoch,
+                                                proposal.data.target_epoch(),
                                                 convert_proposal(proposal),
                                             );
                                     }

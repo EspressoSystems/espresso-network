@@ -552,43 +552,43 @@ mod tests {
             _pd: Default::default(),
         };
 
-        let vid_share0 = vid.clone().to_proposal(&privkey).unwrap().clone();
+        let vid_share0 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
 
-        storage.append_vid2(&vid_share0).await.unwrap();
+        storage.append_vid(&vid_share0).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(ViewNumber::new(0)).await.unwrap(),
-            Some(convert_proposal(vid_share0.clone()))
+            Some(vid_share0.clone())
         );
 
         vid.view_number = ViewNumber::new(1);
 
-        let vid_share1 = vid.clone().to_proposal(&privkey).unwrap().clone();
-        storage.append_vid2(&vid_share1).await.unwrap();
+        let vid_share1 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
+        storage.append_vid(&vid_share1).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(vid.view_number()).await.unwrap(),
-            Some(convert_proposal(vid_share1.clone()))
+            Some(vid_share1.clone())
         );
 
         vid.view_number = ViewNumber::new(2);
 
-        let vid_share2 = vid.clone().to_proposal(&privkey).unwrap().clone();
-        storage.append_vid2(&vid_share2).await.unwrap();
+        let vid_share2 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
+        storage.append_vid(&vid_share2).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(vid.view_number()).await.unwrap(),
-            Some(convert_proposal(vid_share2.clone()))
+            Some(vid_share2.clone())
         );
 
         vid.view_number = ViewNumber::new(3);
 
-        let vid_share3 = vid.clone().to_proposal(&privkey).unwrap().clone();
-        storage.append_vid2(&vid_share3).await.unwrap();
+        let vid_share3 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
+        storage.append_vid(&vid_share3).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(vid.view_number()).await.unwrap(),
-            Some(convert_proposal(vid_share3.clone()))
+            Some(vid_share3.clone())
         );
 
         let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
@@ -1084,7 +1084,10 @@ mod tests {
         for (_, _, vid, da) in &chain {
             tracing::info!(?da, ?vid, "insert proposal");
             storage.append_da2(da, vid_commitment).await.unwrap();
-            storage.append_vid2(vid).await.unwrap();
+            storage
+                .append_vid(&convert_proposal(vid.clone()))
+                .await
+                .unwrap();
         }
 
         // Decide 2 leaves, but fail in event processing.
@@ -1222,18 +1225,20 @@ mod tests {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = AvidMDisperseShare::<SeqTypes> {
-            view_number: ViewNumber::new(0),
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param,
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid_share = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: ViewNumber::new(0),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param,
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
 
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
@@ -1280,7 +1285,7 @@ mod tests {
             .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
             .await
             .unwrap();
-        storage.append_vid2(&vid_share).await.unwrap();
+        storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
             .await
@@ -1308,7 +1313,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap(),
-            convert_proposal(vid_share)
+            vid_share
         );
         assert_eq!(
             storage

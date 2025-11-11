@@ -19,7 +19,7 @@ use super::node_implementation::NodeType;
 use crate::{
     data::{
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
-        VidCommitment, VidDisperseShare, VidDisperseShare1, VidDisperseShare2,
+        VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
@@ -34,37 +34,8 @@ use crate::{
 #[async_trait]
 pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
-    async fn append_vid1(&self, proposal: &Proposal<TYPES, VidDisperseShare1<TYPES>>)
-        -> Result<()>;
-    /// Add a proposal to the stored VID proposals.
-    async fn append_vid2(&self, proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>)
-        -> Result<()>;
+    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()>;
 
-    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()> {
-        let signature = proposal.signature.clone();
-        match &proposal.data {
-            VidDisperseShare::V1(share) => {
-                self.append_vid1(&Proposal {
-                    data: share.clone(),
-                    signature,
-                    _pd: std::marker::PhantomData,
-                })
-                .await
-            },
-            VidDisperseShare::V2(share) => {
-                self.append_vid2(&Proposal {
-                    data: share.clone(),
-                    signature,
-                    _pd: std::marker::PhantomData,
-                })
-                .await
-            },
-            VidDisperseShare::V3(_share) => {
-                // TODO(Chengyu): implement when V3 is defined
-                Err(anyhow!("VID Disperse Share V3 not supported yet"))
-            },
-        }
-    }
     /// Add a proposal to the stored DA proposals.
     async fn append_da(
         &self,

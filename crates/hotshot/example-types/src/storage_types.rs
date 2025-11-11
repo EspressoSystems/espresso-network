@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
-        VidCommitment, VidDisperseShare1, VidDisperseShare2,
+        VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
@@ -36,19 +36,13 @@ use hotshot_types::{
 
 use crate::testable_delay::{DelayConfig, SupportedTraitTypesForAsyncDelay, TestableDelay};
 
-type VidShares1<TYPES> = BTreeMap<
+type VidShares<TYPES> = BTreeMap<
     <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare1<TYPES>>>,
+    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
 >;
-type VidShares2<TYPES> = BTreeMap<
-    <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare2<TYPES>>>,
->;
-
 #[derive(Clone, Debug)]
 pub struct TestStorageState<TYPES: NodeType> {
-    vids1: VidShares1<TYPES>,
-    vids2: VidShares2<TYPES>,
+    vids: VidShares<TYPES>,
     das: HashMap<TYPES::View, Proposal<TYPES, DaProposal<TYPES>>>,
     da2s: HashMap<TYPES::View, Proposal<TYPES, DaProposal2<TYPES>>>,
     pub proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
@@ -74,8 +68,7 @@ pub struct TestStorageState<TYPES: NodeType> {
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
     fn default() -> Self {
         Self {
-            vids1: BTreeMap::new(),
-            vids2: BTreeMap::new(),
+            vids: BTreeMap::new(),
             das: HashMap::new(),
             da2s: HashMap::new(),
             proposals: BTreeMap::new(),
@@ -156,8 +149,8 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     pub async fn last_actioned_epoch(&self) -> Option<TYPES::Epoch> {
         self.inner.read().await.epoch
     }
-    pub async fn vids_cloned(&self) -> VidShares2<TYPES> {
-        self.inner.read().await.vids2.clone()
+    pub async fn vids_cloned(&self) -> VidShares<TYPES> {
+        self.inner.read().await.vids.clone()
     }
 
     pub async fn state_cert_cloned(&self) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
@@ -173,37 +166,17 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
 
 #[async_trait]
 impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
-    async fn append_vid1(
-        &self,
-        proposal: &Proposal<TYPES, VidDisperseShare1<TYPES>>,
-    ) -> Result<()> {
+    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append VID proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         let mut inner = self.inner.write().await;
         inner
-            .vids1
-            .entry(proposal.data.view_number)
+            .vids
+            .entry(proposal.data.view_number())
             .or_default()
-            .insert(proposal.data.recipient_key.clone(), proposal.clone());
-        Ok(())
-    }
-
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append VID proposal to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .vids2
-            .entry(proposal.data.view_number)
-            .or_default()
-            .insert(proposal.data.recipient_key.clone(), proposal.clone());
+            .insert(proposal.data.recipient_key().clone(), proposal.clone());
         Ok(())
     }
 

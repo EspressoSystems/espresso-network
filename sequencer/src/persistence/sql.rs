@@ -50,7 +50,6 @@ use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
         QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare1,
-        VidDisperseShare2,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -1339,15 +1338,13 @@ impl SequencerPersistence for Persistence {
         Ok(proposal)
     }
 
-    async fn append_vid1(
+    async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare1<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number.u64();
-        let payload_hash = proposal.data.payload_commitment;
-        let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-            convert_proposal(proposal.clone());
-        let data_bytes = bincode::serialize(&proposal).unwrap();
+        let view = proposal.data.view_number().u64();
+        let payload_hash = proposal.data.payload_commitment();
+        let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
         let mut tx = self.db.write().await?;
@@ -1361,31 +1358,6 @@ impl SequencerPersistence for Persistence {
         let res = tx.commit().await;
         self.internal_metrics
             .internal_append_vid_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number.u64();
-        let payload_hash = proposal.data.payload_commitment;
-        let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-            convert_proposal(proposal.clone());
-        let data_bytes = bincode::serialize(&proposal).unwrap();
-
-        let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "vid_share2",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, payload_hash.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
-        self.internal_metrics
-            .internal_append_vid2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -3201,18 +3173,20 @@ mod test {
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = AvidMDisperseShare::<SeqTypes> {
-            view_number: ViewNumber::new(0),
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param.clone(),
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid_share = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: ViewNumber::new(0),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param.clone(),
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
 
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
@@ -3266,10 +3240,7 @@ mod test {
             .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
             .await
             .unwrap();
-        storage
-            .append_vid2(&convert_proposal(vid_share.clone()))
-            .await
-            .unwrap();
+        storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
             .await
@@ -3285,17 +3256,13 @@ mod test {
         assert_eq!(
             Some(VidCommon::V1(avidm_param)),
             storage
-                .fetch(VidCommonRequest(VidCommitment::V2(
-                    vid_share.data.payload_commitment
-                )))
+                .fetch(VidCommonRequest(vid_share.data.payload_commitment()))
                 .await
         );
         assert_eq!(
             leaf_payload,
             storage
-                .fetch(PayloadRequest(VidCommitment::V2(
-                    vid_share.data.payload_commitment
-                )))
+                .fetch(PayloadRequest(vid_share.data.payload_commitment()))
                 .await
                 .unwrap()
         );
@@ -3345,18 +3312,20 @@ mod test {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid = AvidMDisperseShare::<SeqTypes> {
-            view_number: data_view,
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param,
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: data_view,
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param,
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
                 epoch: None,
@@ -3398,7 +3367,7 @@ mod test {
         };
 
         tracing::info!(?vid, ?da_proposal, ?quorum_proposal, "append data");
-        storage.append_vid2(&vid).await.unwrap();
+        storage.append_vid(&vid).await.unwrap();
         storage
             .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
             .await
@@ -3417,7 +3386,7 @@ mod test {
             .unwrap();
         assert_eq!(
             storage.load_vid_share(data_view).await.unwrap().unwrap(),
-            convert_proposal(vid)
+            vid
         );
         assert_eq!(
             storage.load_da_proposal(data_view).await.unwrap().unwrap(),
@@ -3604,7 +3573,7 @@ mod test {
             };
 
             storage
-                .append_vid1(&vid.to_proposal(&privkey).unwrap())
+                .append_vid(&convert_proposal(vid.to_proposal(&privkey).unwrap()))
                 .await
                 .unwrap();
             storage
