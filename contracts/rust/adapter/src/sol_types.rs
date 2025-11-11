@@ -264,7 +264,7 @@ impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::StakeTableV2::{
     ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
@@ -320,7 +320,7 @@ event ValidatorRegistered(address indexed account, BN254.G2Point blsVk, EdOnBN25
     clippy::pub_underscore_fields,
     clippy::style
 )]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ValidatorRegisteredLegacy {
     #[allow(missing_docs)]
     pub account: alloy::sol_types::private::Address,
@@ -332,13 +332,38 @@ pub struct ValidatorRegisteredLegacy {
     pub commission: u16,
 }
 
+impl Serialize for ValidatorRegisteredLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.account, &self.blsVk, &self.schnorrVk, self.commission).serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ValidatorRegisteredLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVk, schnorrVk, commission) = <(_, _, _, u16)>::deserialize(deserializer)?;
+        Ok(Self {
+            account,
+            blsVk,
+            schnorrVk,
+            commission,
+        })
+    }
+}
+
 #[allow(
     non_camel_case_types,
     non_snake_case,
     clippy::pub_underscore_fields,
     clippy::style
 )]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ValidatorRegisteredV2Legacy {
     #[allow(missing_docs)]
     pub account: alloy::sol_types::private::Address,
@@ -354,12 +379,48 @@ pub struct ValidatorRegisteredV2Legacy {
     pub schnorrSig: alloy::sol_types::private::Bytes,
 }
 
+impl Serialize for ValidatorRegisteredV2Legacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (
+            &self.account,
+            &self.blsVK,
+            &self.schnorrVK,
+            self.commission,
+            &self.blsSig,
+            &self.schnorrSig,
+        )
+            .serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ValidatorRegisteredV2Legacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVK, schnorrVK, commission, blsSig, schnorrSig) =
+            <(_, _, _, u16, _, _)>::deserialize(deserializer)?;
+        Ok(Self {
+            account,
+            blsVK,
+            schnorrVK,
+            commission,
+            blsSig,
+            schnorrSig,
+        })
+    }
+}
+
 #[derive(Default, Debug, PartialEq, Eq, Hash)]
 /**```solidity
 struct EdOnBN254Point { uint256 x; uint256 y; }
 ```*/
 #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct EdOnBN254PointLegacy {
     #[allow(missing_docs)]
     pub x: alloy::sol_types::private::primitives::aliases::U256,
@@ -367,12 +428,31 @@ pub struct EdOnBN254PointLegacy {
     pub y: alloy::sol_types::private::primitives::aliases::U256,
 }
 
+impl Serialize for EdOnBN254PointLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (self.x, self.y).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EdOnBN254PointLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (x, y) = Deserialize::deserialize(deserializer)?;
+        Ok(Self { x, y })
+    }
+}
+
 #[derive(Default, Debug, PartialEq, Eq, Hash)]
 /**```solidity
 struct G2Point { BaseField x0; BaseField x1; BaseField y0; BaseField y1; }
 ```*/
 #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct G2PointLegacy {
     #[allow(missing_docs)]
     pub x0: <BaseField as alloy::sol_types::SolType>::RustType,
@@ -384,8 +464,28 @@ pub struct G2PointLegacy {
     pub y1: <BaseField as alloy::sol_types::SolType>::RustType,
 }
 
+impl Serialize for G2PointLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.x0, &self.x1, &self.y0, &self.y1).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for G2PointLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (x0, x1, y0, y1) = Deserialize::deserialize(deserializer)?;
+
+        Ok(Self { x0, x1, y0, y1 })
+    }
+}
+
 #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct G1PointLegacy {
     #[allow(missing_docs)]
     pub x: <BaseField as alloy::sol_types::SolType>::RustType,
@@ -393,16 +493,23 @@ pub struct G1PointLegacy {
     pub y: <BaseField as alloy::sol_types::SolType>::RustType,
 }
 
-#[allow(
-    non_camel_case_types,
-    non_snake_case,
-    clippy::pub_underscore_fields,
-    clippy::style
-)]
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ValidatorExitLegacy {
-    #[allow(missing_docs)]
-    pub validator: alloy::sol_types::private::Address,
+impl Serialize for G1PointLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.x, &self.y).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for G1PointLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (x, y) = Deserialize::deserialize(deserializer)?;
+        Ok(Self { x, y })
+    }
 }
 
 #[allow(
@@ -411,7 +518,39 @@ pub struct ValidatorExitLegacy {
     clippy::pub_underscore_fields,
     clippy::style
 )]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
+pub struct ValidatorExitLegacy {
+    #[allow(missing_docs)]
+    pub validator: alloy::sol_types::private::Address,
+}
+
+impl Serialize for ValidatorExitLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.validator,).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidatorExitLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (validator,): (alloy::sol_types::private::Address,) =
+            Deserialize::deserialize(deserializer)?;
+        Ok(Self { validator })
+    }
+}
+
+#[allow(
+    non_camel_case_types,
+    non_snake_case,
+    clippy::pub_underscore_fields,
+    clippy::style
+)]
+#[derive(Clone)]
 pub struct DelegatedLegacy {
     #[allow(missing_docs)]
     pub delegator: alloy::sol_types::private::Address,
@@ -421,13 +560,37 @@ pub struct DelegatedLegacy {
     pub amount: alloy::sol_types::private::primitives::aliases::U256,
 }
 
+impl Serialize for DelegatedLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DelegatedLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
+
+        Ok(Self {
+            delegator,
+            validator,
+            amount,
+        })
+    }
+}
+
 #[allow(
     non_camel_case_types,
     non_snake_case,
     clippy::pub_underscore_fields,
     clippy::style
 )]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct UndelegatedLegacy {
     #[allow(missing_docs)]
     pub delegator: alloy::sol_types::private::Address,
@@ -437,13 +600,37 @@ pub struct UndelegatedLegacy {
     pub amount: alloy::sol_types::private::primitives::aliases::U256,
 }
 
+impl Serialize for UndelegatedLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for UndelegatedLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
+
+        Ok(Self {
+            delegator,
+            validator,
+            amount,
+        })
+    }
+}
+
 #[allow(
     non_camel_case_types,
     non_snake_case,
     clippy::pub_underscore_fields,
     clippy::style
 )]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ConsensusKeysUpdatedLegacy {
     #[allow(missing_docs)]
     pub account: alloy::sol_types::private::Address,
@@ -453,13 +640,38 @@ pub struct ConsensusKeysUpdatedLegacy {
     pub schnorrVK: EdOnBN254PointLegacy,
 }
 
+impl Serialize for ConsensusKeysUpdatedLegacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.account, &self.blsVK, &self.schnorrVK).serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ConsensusKeysUpdatedLegacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVK, schnorrVK) = Deserialize::deserialize(deserializer)?;
+
+        Ok(Self {
+            account,
+            blsVK,
+            schnorrVK,
+        })
+    }
+}
+
 #[allow(
     non_camel_case_types,
     non_snake_case,
     clippy::pub_underscore_fields,
     clippy::style
 )]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ConsensusKeysUpdatedV2Legacy {
     #[allow(missing_docs)]
     pub account: alloy::sol_types::private::Address,
@@ -471,6 +683,40 @@ pub struct ConsensusKeysUpdatedV2Legacy {
     pub blsSig: G1PointLegacy,
     #[allow(missing_docs)]
     pub schnorrSig: alloy::sol_types::private::Bytes,
+}
+
+impl Serialize for ConsensusKeysUpdatedV2Legacy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (
+            &self.account,
+            &self.blsVK,
+            &self.schnorrVK,
+            &self.blsSig,
+            &self.schnorrSig,
+        )
+            .serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ConsensusKeysUpdatedV2Legacy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVK, schnorrVK, blsSig, schnorrSig) =
+            Deserialize::deserialize(deserializer)?;
+        Ok(Self {
+            account,
+            blsVK,
+            schnorrVK,
+            blsSig,
+            schnorrSig,
+        })
+    }
 }
 
 impl From<ValidatorRegisteredLegacy> for ValidatorRegistered {
