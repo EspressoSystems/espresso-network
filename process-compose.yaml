@@ -67,7 +67,7 @@ processes:
   wait-for-v4:
     command: |
       scripts/wait-for-header version 4 http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
-      scripts/wait-for-header new-epochs 4 http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      scripts/wait-for-header new-epochs 1 http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
     namespace: setup
     depends_on:
       deploy-prover-contracts:

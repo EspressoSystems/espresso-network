@@ -44,6 +44,7 @@ case "$MODE" in
         ;;
 esac
 
+echo "Getting hotshot config from: ${SEQUENCER_URL}/config/hotshot"
 ws_url=$(echo "$SEQUENCER_URL" | sed 's|^http://|ws://|' | sed 's|^https://|wss://|')
 blocks_per_epoch=$(curl -sL "${SEQUENCER_URL}/config/hotshot" | jq -r '.config.epoch_height')
 echo "Blocks per epoch: ${blocks_per_epoch}"
