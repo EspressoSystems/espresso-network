@@ -280,7 +280,7 @@ contract V2 is V1 {
 
 ## Deploying the Upgradable Contract
 
-The [OpenZeppelin Upgrade plugins](https://docs.openzeppelin.com/upgrades-plugins/1.x/) are used to assist with upgrades
+The [OpenZeppelin Upgrade plugins](https://docs.openzeppelin.com/upgrades-plugins) are used to assist with upgrades
 so that we can ensure that the base and future implementation contracts are upgrade safe. For example, the
 implementation contract:
 
