@@ -290,7 +290,7 @@ implementation contract:
 - should not make state variables `immutable`.
 
 You can learn more about deploying and upgrading upgradable contracts with OpenZeppelin and Foundry
-[here](https://docs.openzeppelin.com/upgrades-plugins/1.x/foundry-upgrades).
+[here](https://docs.openzeppelin.com/upgrades-plugins/foundry/foundry-upgrades).
 
 ### Upgrading via the Proxy
 
