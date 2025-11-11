@@ -120,7 +120,7 @@ impl RewardAccountProofDataSource for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            let (tree, _) = load_v1_reward_accounts(&mut tx, height, &[account])
+            let (tree, _) = load_v1_reward_accounts(&mut tx, height, None, &[account])
                 .await
                 .with_context(|| {
                     format!("failed to load v1 reward account {account:?} at height {height}")
@@ -160,7 +160,7 @@ impl RewardAccountProofDataSource for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            let (tree, _) = load_v2_reward_accounts(&mut tx, height, &[account])
+            let (tree, _) = load_v2_reward_accounts(&mut tx, height, None, &[account])
                 .await
                 .with_context(|| {
                     format!("failed to load v2 reward account {account:?} at height {height}")
@@ -203,7 +203,7 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_v1_reward_accounts(&mut tx, height, accounts).await
+            load_v1_reward_accounts(&mut tx, height, Some(view), accounts).await
         } else {
             let accounts: Vec<_> = accounts
                 .iter()
@@ -240,7 +240,7 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_v2_reward_accounts(&mut tx, height, accounts).await
+            load_v2_reward_accounts(&mut tx, height, Some(view), accounts).await
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -272,7 +272,7 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_accounts(&mut tx, height, accounts).await
+            load_accounts(&mut tx, height, Some(view), accounts).await
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -491,12 +491,25 @@ async fn load_frontier<Mode: TransactionMode>(
 async fn load_v1_reward_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
+    view: Option<ViewNumber>,
     accounts: &[RewardAccountV1],
 ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
         .context(format!("leaf {height} not available"))?;
+
+    // Validate that the fetched leaf's view matches the expected view if provided
+    if let Some(expected_view) = view {
+        if leaf.leaf().view_number() != expected_view {
+            bail!(
+                "View mismatch for v1 reward accounts at height {height}: expected \
+                 {expected_view:?}, got {:?}. The block for height {height} is already finalized",
+                leaf.leaf().view_number()
+            );
+        }
+    }
+
     let header = leaf.header();
 
     if header.version() < EpochVersion::version()
@@ -546,12 +559,24 @@ async fn load_v1_reward_accounts<Mode: TransactionMode>(
 async fn load_v2_reward_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
+    view: Option<ViewNumber>,
     accounts: &[RewardAccountV2],
 ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
         .context(format!("leaf {height} not available"))?;
+
+    if let Some(expected_view) = view {
+        if leaf.leaf().view_number() != expected_view {
+            bail!(
+                "View mismatch for v2 reward accounts at height {height}: expected \
+                 {expected_view:?}, got {:?}. The block for height {height} is already finalized",
+                leaf.leaf().view_number()
+            );
+        }
+    }
+
     let header = leaf.header();
 
     if header.version() <= EpochVersion::version() {
@@ -598,12 +623,24 @@ async fn load_v2_reward_accounts<Mode: TransactionMode>(
 async fn load_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
+    view: Option<ViewNumber>,
     accounts: &[FeeAccount],
 ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
         .context(format!("leaf {height} not available"))?;
+
+    if let Some(expected_view) = view {
+        if leaf.leaf().view_number() != expected_view {
+            bail!(
+                "View mismatch for fee accounts at height {height}: expected {expected_view:?}, \
+                 got {:?}. The block for height {height} is already finalized",
+                leaf.leaf().view_number()
+            );
+        }
+    }
+
     let header = leaf.header();
 
     let mut snapshot = FeeMerkleTree::from_commitment(header.fee_merkle_tree_root());
@@ -723,7 +760,10 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
         fee_header_dependencies(&mut catchup, tx, instance, &parent, &leaves).await?;
     fee_accounts.extend(dependencies);
     let fee_accounts = fee_accounts.into_iter().collect::<Vec<_>>();
-    state.fee_merkle_tree = load_accounts(tx, from_height, &fee_accounts)
+    // no need to pass view number
+    // because the fetched leaf at from_height
+    // will be fetched again in load_accounts so the view number will always match
+    state.fee_merkle_tree = load_accounts(tx, from_height, None, &fee_accounts)
         .await
         .context("unable to reconstruct state because accounts are not available at origin")?
         .0;
@@ -751,7 +791,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
                 .into_iter()
                 .map(RewardAccountV1::from)
                 .collect::<Vec<_>>();
-            state.reward_merkle_tree_v1 = load_v1_reward_accounts(tx, from_height, &accts)
+            state.reward_merkle_tree_v1 = load_v1_reward_accounts(tx, from_height, None, &accts)
                 .await
                 .context(
                     "unable to reconstruct state because v1 reward accounts are not available at \
@@ -765,7 +805,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
         },
         either::Either::Right(expected_root) => {
             state.reward_merkle_tree_v2 =
-                load_v2_reward_accounts(tx, from_height, &reward_accounts)
+                load_v2_reward_accounts(tx, from_height, None, &reward_accounts)
                     .await
                     .context(
                         "unable to reconstruct state because v2 reward accounts are not available \
