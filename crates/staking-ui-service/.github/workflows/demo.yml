@@ -32,12 +32,30 @@ jobs:
       - name: Build
         run: just build
 
+      - name: Pull Docker images
+        run: just demo::pull
+
+      - name: Start dependency services
+        run: just demo::up l1 espresso-dev-node
+
       - name: Start demo
-        run: just run-local 2>&1 >/tmp/demo-log.txt &
+        run: |
+          just run \
+            --stake-table-address 0xefdc2a236dba7a8f60726b49abc79ee6b22ed445 \
+            --reward-contract-address 0x0000000000000000000000000000000000000000 \
+            --http-providers http://localhost:8545 \
+            --l1-ws-provider ws://localhost:8546 \
+            2>&1 >/tmp/demo-log.txt &
 
       - name: Smoketest
         run: scripts/smoketest-demo.sh
 
       - name: Dump Logs
         if: ${{ failure() }}
-        run: cat /tmp/demo-log.txt
+        run: |
+          just demo::logs
+          cat /tmp/demo-log.txt
+
+      - name: Stop Demo
+        if: ${{ always() }}
+        run: just demo::down
