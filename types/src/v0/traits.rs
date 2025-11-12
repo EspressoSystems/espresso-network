@@ -904,8 +904,6 @@ pub trait SequencerPersistence:
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
 
-    async fn migrate_stake_table_events(&self) -> anyhow::Result<()>;
-
     async fn migrate_storage(&self) -> anyhow::Result<()> {
         tracing::warn!("migrating consensus data...");
 
@@ -916,10 +914,6 @@ pub trait SequencerPersistence:
         self.migrate_quorum_certificates().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");
-
-        tracing::warn!("migrating stake table events");
-        self.migrate_stake_table_events().await?;
-        tracing::warn!("stake table events have been migrated");
 
         Ok(())
     }
