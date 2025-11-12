@@ -7,6 +7,8 @@ pragma solidity ^0.8.0;
 import { Test } from "forge-std/Test.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { EspToken } from "../src/EspToken.sol";
 import { EspTokenV2 } from "../src/EspTokenV2.sol";
 
@@ -90,5 +92,23 @@ contract EspTokenV2Test is Test {
 
         vm.expectRevert(EspTokenV2.ZeroRewardClaimAddress.selector);
         newToken.initializeV2(address(0));
+    }
+
+    function test_renounceOwnership_Reverts() public {
+        address currentOwner = token.owner();
+        assertEq(currentOwner, owner);
+
+        vm.expectRevert(EspTokenV2.OwnershipCannotBeRenounced.selector);
+        token.renounceOwnership();
+
+        assertEq(token.owner(), owner);
+    }
+
+    function test_renounceOwnership_ByNonOwnerReverts() public {
+        vm.prank(user);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user)
+        );
+        token.renounceOwnership();
     }
 }

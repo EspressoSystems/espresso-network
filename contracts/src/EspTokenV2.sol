@@ -16,6 +16,9 @@ contract EspTokenV2 is EspToken {
     /// @notice RewardClaim address cannot be zero
     error ZeroRewardClaimAddress();
 
+    /// @notice Cannot renounce ownership
+    error OwnershipCannotBeRenounced();
+
     constructor() {
         _disableInitializers();
     }
@@ -35,6 +38,13 @@ contract EspTokenV2 is EspToken {
     function mint(address to, uint256 amount) public {
         require(msg.sender == rewardClaim, OnlyRewardClaim());
         _mint(to, amount);
+    }
+
+    /// @notice Cannot renounce ownership
+    /// @dev Override renounceOwnership() to revert, preventing accidental or malicious ownership
+    /// renunciation
+    function renounceOwnership() public virtual override onlyOwner {
+        revert OwnershipCannotBeRenounced();
     }
 
     /// @notice Returns the contract version
