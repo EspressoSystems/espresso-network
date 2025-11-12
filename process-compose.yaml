@@ -576,7 +576,7 @@ processes:
     command: submit-transactions
     environment:
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT}
-      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}/v0/txn_submit
+      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}/txn_submit
     depends_on:
       sequencer0:
         condition: process_healthy
