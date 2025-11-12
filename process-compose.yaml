@@ -10,6 +10,8 @@ availability:
     exit_on_skipped: true
     restart: exit_on_failure
 
+log_location: /tmp/pc-log.txt
+
 environment:
   - ESPRESSO_SEQUENCER_CDN_ENDPOINT=127.0.0.1:${ESPRESSO_CDN_SERVER_PORT}
   - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
@@ -576,7 +578,7 @@ processes:
     command: submit-transactions
     environment:
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT}
-      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}/txn_submit
+      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}/v0/txn_submit
     depends_on:
       sequencer0:
         condition: process_healthy
