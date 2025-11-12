@@ -231,6 +231,13 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_SLOW_STATEMENT_THRESHOLD", value_parser = parse_duration, default_value = "1s")]
     pub(crate) slow_statement_threshold: Duration,
 
+    /// The maximum time a single SQL statement is allowed to run before being canceled.
+    ///
+    /// This helps prevent queries from running indefinitely and consuming resources.
+    /// Set to 10 minutes by default
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
+    pub(crate) statement_timeout: Duration,
+
     /// The minimum number of database connections to maintain at any time.
     ///
     /// The database client will, to the best of its ability, maintain at least `min` open
@@ -311,6 +318,7 @@ impl From<PostgresOptions> for Config {
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
         cfg = cfg.connection_timeout(Duration::from_secs(10240));
         cfg = cfg.slow_statement_threshold(Duration::from_secs(1));
+        cfg = cfg.statement_timeout(Duration::from_secs(600)); // 10 minutes default
 
         cfg
     }
@@ -327,6 +335,7 @@ impl From<SqliteOptions> for Config {
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
         cfg = cfg.connection_timeout(Duration::from_secs(10240));
         cfg = cfg.slow_statement_threshold(Duration::from_secs(2));
+        cfg = cfg.statement_timeout(Duration::from_secs(600));
         cfg
     }
 }
@@ -340,6 +349,7 @@ impl From<PostgresOptions> for Options {
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
+            statement_timeout: Duration::from_secs(600),
             ..Default::default()
         }
     }
@@ -355,6 +365,7 @@ impl From<SqliteOptions> for Options {
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
             uri: None,
+            statement_timeout: Duration::from_secs(600),
             prune: false,
             pruning: Default::default(),
             consensus_pruning: Default::default(),
@@ -387,6 +398,7 @@ impl TryFrom<&Options> for Config {
         cfg = cfg.min_connections(opt.min_connections);
         cfg = cfg.connection_timeout(opt.connection_timeout);
         cfg = cfg.slow_statement_threshold(opt.slow_statement_threshold);
+        cfg = cfg.statement_timeout(opt.statement_timeout);
 
         #[cfg(not(feature = "embedded-db"))]
         {
