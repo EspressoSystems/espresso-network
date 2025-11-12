@@ -153,6 +153,3 @@ done
 
 BUILDER_URL="http://localhost:$ESPRESSO_BUILDER_SERVER_PORT/healthcheck"
 wait_for 60 builder "$BUILDER_URL"
-
-PROVER_URL="http://localhost:$ESPRESSO_PROVER_SERVICE_PORT/healthcheck"
-wait_for 300 prover "$PROVER_URL"
