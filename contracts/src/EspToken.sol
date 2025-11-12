@@ -10,7 +10,17 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
+/// @title EspToken
+/// @notice ERC20 token for the Espresso network, upgradeable via UUPS.
+/// @dev Upgradeability & storage layout (frozen-base pattern)
+/// - V1 is a *frozen base*: never add, remove, or reorder storage here to avoid collisions.
+/// - Future versions (V2, V3, …) should inherit from V1 and append new variables only.
+/// - The `__gap` reserves space in V1; it’s not used by children and should stay untouched.
+/// - Parent OZ contracts manage their own layouts
 contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUpgradeable {
+    /// @dev Storage gap reserved for future versions (see contract-level documentation)
+    uint256[50] private __gap;
+
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
     event Upgrade(address implementation);
 
