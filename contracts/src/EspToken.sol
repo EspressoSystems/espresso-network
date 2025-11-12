@@ -12,15 +12,14 @@ import { UUPSUpgradeable } from
 
 /// @title EspToken
 /// @notice ERC20 token for the Espresso network, upgradeable via UUPS.
-/// @dev Upgradeability & storage layout (frozen-base pattern)
-/// - V1 is a *frozen base*: never add, remove, or reorder storage here to avoid collisions.
-/// - Future versions (V2, V3, …) should inherit from V1 and append new variables only.
-/// - The `__gap` reserves space in V1; it’s not used by children and should stay untouched.
-/// - Parent OZ contracts manage their own layouts
+/// @dev Upgradeability & storage layout (frozen-inheritance pattern)
+/// We intentionally do not use `__gap` slots. Once a version is deployed,
+/// its storage layout is frozen and never modified. New state variables are
+/// added only in a new child contract (V2, V3, …) that inherits from the
+/// previous version and appends fields at the end. This preserves slot order
+/// across upgrades without relying on gaps. (Note: upstream OZ parents may
+/// include their own gaps—those remain untouched.)
 contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUpgradeable {
-    /// @dev Storage gap reserved for future versions (see contract-level documentation)
-    uint256[50] private __gap;
-
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
     event Upgrade(address implementation);
 

@@ -5,19 +5,17 @@ import "./EspToken.sol";
 
 /// @title EspTokenV2
 /// @notice Upgrades EspToken to allow minting by the RewardClaim contract
-/// @dev Upgradeability & storage layout (frozen-base pattern)
-/// - V2 inherits from V1 (frozen base): never add, remove, or reorder storage in V1 to avoid
-/// collisions.
-/// - V2 adds `rewardClaim` (1 slot) and its own `__gap` (50 slots) for future versions.
-/// - Future versions (V3, V4, …) should inherit from V2 and append new variables only.
-/// - The `__gap` in V2 reserves space for V3+; it's not used by children and should stay untouched.
+/// @dev Upgradeability & storage layout (frozen-inheritance pattern)
+/// We intentionally do not use `__gap` slots. Once a version is deployed,
+/// its storage layout is frozen and never modified. New state variables are
+/// added only in a new child contract (V2, V3, …) that inherits from the
+/// previous version and appends fields at the end. This preserves slot order
+/// across upgrades without relying on gaps. (Note: upstream OZ parents may
+/// include their own gaps—those remain untouched.)
 contract EspTokenV2 is EspToken {
     /// @notice Address of the RewardClaim contract authorized to mint tokens
     /// @notice Can only be set once, during initialization.
     address public rewardClaim;
-
-    /// @dev Storage gap reserved for future versions (V3, V4, etc.)
-    uint256[50] private __gap;
 
     /// @notice A non-RewardClaim address attempts to mint
     error OnlyRewardClaim();
