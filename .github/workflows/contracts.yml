@@ -117,6 +117,8 @@ jobs:
           nix develop --accept-flake-config -c cargo build --locked --bin diff-test --profile test
 
       - name: Run ${{ matrix.test-type }} tests
+        env:
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" == "pull_request" ]; then
