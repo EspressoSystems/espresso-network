@@ -86,6 +86,10 @@ jobs:
             command: "just contracts-test-echidna --format text"
             nix-env: ".#echidna"
             with-diff-test: false
+          - test-type: network
+            command: "just contracts-test-network"
+            nix-env: ""
+            with-diff-test: false
     steps:
       - uses: actions/checkout@v4
         with:
