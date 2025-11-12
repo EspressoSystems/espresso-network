@@ -7,7 +7,7 @@ use sequencer::Genesis;
 use vbs::version::StaticVersionType;
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestConfig, TestRequirements},
+    common::{load_genesis_file, NativeDemo, TestRequirements, TestRuntime},
     smoke::assert_native_demo_works,
 };
 
@@ -18,20 +18,18 @@ where
 {
     dotenvy::dotenv()?;
 
-    // The requirements passed to `TestConfig` are ignored here.
-    let testing = TestConfig::new(Default::default()).await.unwrap();
-    println!("Testing upgrade {testing:?}");
+    let runtime = TestRuntime::from_requirements(Default::default())
+        .await
+        .unwrap();
+    println!("Testing upgrade {runtime:?}");
 
     let base_version = Base::version();
     let upgrade_version = Target::version();
 
-    println!("Waiting on readiness");
-    let _ = testing.readiness().await?;
-
-    let initial = testing.test_state().await;
+    let initial = runtime.test_state().await;
     println!("Initial State:{initial}");
 
-    let clients = testing.sequencer_clients;
+    let clients = runtime.config.sequencer_clients.clone();
 
     // Test is limited to those sequencers with correct modules
     // enabled. It would be less fragile if we could discover them.

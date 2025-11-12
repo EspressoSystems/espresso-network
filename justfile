@@ -45,6 +45,9 @@ build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}
     cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
 
+demo-native-fee *args: (build "test" "--no-default-features --features fee")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 

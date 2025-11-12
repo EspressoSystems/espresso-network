@@ -15,13 +15,15 @@ use anyhow::{anyhow, Context, Result};
 use client::SequencerClient;
 use espresso_contract_deployer::build_signer;
 use espresso_types::FeeAmount;
-use futures::future::join_all;
+use futures::{
+    future::{join_all, BoxFuture},
+    FutureExt,
+};
 use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2};
 use sequencer::Genesis;
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 
-// TODO add to .env
 const RECIPIENT_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 const VALIDATOR0_ACCOUNT_INDEX: u32 = 20;
 
@@ -37,18 +39,24 @@ pub fn load_genesis_file(path: impl AsRef<Path>) -> Result<Genesis> {
 }
 
 #[derive(Clone, Debug)]
+pub struct TestRuntime {
+    pub config: TestConfig,
+    pub builder_address: Address,
+    pub reward_claim_address: Option<Address>,
+    pub initial_height: u64,
+    pub initial_txns: u64,
+}
+
+#[derive(Clone, Debug)]
 pub struct TestConfig {
     pub load_generator_url: String,
     pub l1_endpoint: Url,
-    pub espresso: SequencerClient,
-    pub builder_address: Address,
-    pub recipient_address: Address,
-    pub light_client_address: Address,
-    pub reward_claim_address: Option<Address>,
+    pub sequencer_api_url: Url,
     pub prover_url: String,
     pub sequencer_clients: Vec<SequencerClient>,
-    pub initial_height: u64,
-    pub initial_txns: u64,
+    pub light_client_address: Address,
+    pub stake_table_address: Address,
+    pub recipient_address: Address,
     pub requirements: TestRequirements,
 }
 
@@ -123,19 +131,9 @@ fn url_from_port(port: String) -> Result<String> {
 }
 
 impl TestConfig {
-    pub async fn new(requirements: TestRequirements) -> Result<Self> {
-        // Varies between v0 and v3.
+    pub fn from_env(requirements: TestRequirements) -> Result<Self> {
         let load_generator_url =
             url_from_port(dotenvy::var("ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT")?)?;
-
-        let builder_url = {
-            let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
-            let url = Url::from_str(&url)?;
-            wait_for_service(url.clone(), 1000, 200).await.unwrap();
-            url.join("block_info/builderaddress").unwrap()
-        };
-
-        let builder_address = get_builder_address(builder_url).await;
 
         let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER_L1_PORT")?)?;
         let sequencer_api_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?)?;
@@ -152,18 +150,74 @@ impl TestConfig {
 
         let prover_url = url_from_port(dotenvy::var("ESPRESSO_PROVER_SERVICE_PORT")?)?;
 
-        let light_client_proxy_address =
-            dotenvy::var("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")?;
-
-        // Derive reward claim address from contracts
-        // If contracts aren't upgraded yet, this will fail and we'll just set it to None.
-        // Tests will check rewards only after the upgrade happens.
-        let stake_table_addr: Address =
+        let light_client_address =
+            dotenvy::var("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")?.parse::<Address>()?;
+        let stake_table_address: Address =
             dotenvy::var("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")?.parse()?;
-        let provider = ProviderBuilder::new().connect_http(Url::parse(&l1_provider_url)?);
 
+        Ok(Self {
+            load_generator_url,
+            l1_endpoint: Url::parse(&l1_provider_url)?,
+            sequencer_api_url: Url::from_str(&sequencer_api_url)?,
+            prover_url,
+            sequencer_clients,
+            light_client_address,
+            stake_table_address,
+            recipient_address: RECIPIENT_ADDRESS.parse::<Address>()?,
+            requirements,
+        })
+    }
+
+    /// Number of blocks to wait before deeming the test successful
+    pub fn expected_block_height(&self) -> u64 {
+        self.requirements.block_height_increment
+    }
+
+    pub fn expected_txn_count(&self) -> u64 {
+        self.requirements.txn_count_increment
+    }
+
+    /// Get the validator0 address (ACCOUNT_INDEX=20)
+    pub fn validator0_address() -> Address {
+        let mnemonic = dotenvy::var("ESPRESSO_SEQUENCER_ETH_MNEMONIC")
+            .expect("ESPRESSO_SEQUENCER_ETH_MNEMONIC not set");
+        let signer = build_signer(&mnemonic, VALIDATOR0_ACCOUNT_INDEX);
+        signer.address()
+    }
+}
+
+impl TestRuntime {
+    pub async fn initialize(config: TestConfig, timeout_duration: Duration) -> Result<Self> {
+        let builder_url = {
+            let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
+            let url = Url::from_str(&url)?;
+            wait_for_service(url.clone(), 1000, 200).await?;
+            url.join("block_info/builderaddress")?
+        };
+
+        let builder_address = get_builder_address(builder_url).await;
+
+        let client = SequencerClient::new(config.sequencer_api_url.clone());
+
+        let (initial_height, initial_txns) = timeout(timeout_duration, async {
+            loop {
+                match (
+                    client.get_height().await,
+                    client.get_transaction_count().await,
+                ) {
+                    (Ok(height), Ok(txns)) => return (height, txns),
+                    _ => {
+                        sleep(Duration::from_millis(500)).await;
+                    },
+                }
+            }
+        })
+        .await
+        .context("timed out waiting for sequencer to be ready")?;
+
+        let provider = ProviderBuilder::new().connect_http(config.l1_endpoint.clone());
         let reward_claim_address = async {
-            let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+            let stake_table = StakeTableV2::new(config.stake_table_address, &provider);
             let token_address = stake_table.token().call().await.ok()?;
 
             let esp_token = EspTokenV2::new(token_address, &provider);
@@ -177,58 +231,60 @@ impl TestConfig {
         }
         .await;
 
-        println!("Waiting on Builder Address");
+        let mut futures: Vec<BoxFuture<Result<String>>> =
+            vec![wait_for_service(Url::from_str(&config.load_generator_url)?, 1000, 600).boxed()];
 
-        let client = SequencerClient::new(Url::from_str(&sequencer_api_url).unwrap());
-        let initial_height = client.get_height().await.unwrap();
-        let initial_txns = client.get_transaction_count().await.unwrap();
+        for client in &config.sequencer_clients {
+            futures.push(wait_for_sequencer_client(client.clone(), 500, 30).boxed());
+        }
+
+        join_all(futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
-            load_generator_url,
-            l1_endpoint: Url::parse(&l1_provider_url).unwrap(),
-            espresso: client,
-            light_client_address: light_client_proxy_address.parse::<Address>().unwrap(),
-            reward_claim_address,
+            config,
             builder_address,
-            recipient_address: RECIPIENT_ADDRESS.parse::<Address>().unwrap(),
-            prover_url,
-            sequencer_clients,
+            reward_claim_address,
             initial_height,
             initial_txns,
-            requirements,
         })
     }
 
-    /// Number of blocks to wait before deeming the test successful
+    pub async fn from_requirements(requirements: TestRequirements) -> Result<Self> {
+        let config = TestConfig::from_env(requirements)?;
+        Self::initialize(config, Duration::from_secs(30)).await
+    }
+
     pub fn expected_block_height(&self) -> u64 {
-        self.initial_height + self.requirements.block_height_increment
+        self.initial_height + self.config.expected_block_height()
     }
 
     pub fn expected_txn_count(&self) -> u64 {
-        self.initial_txns + self.requirements.txn_count_increment
+        self.initial_txns + self.config.expected_txn_count()
     }
 
     /// Get the finalized block height from the light client
     pub async fn light_client_finalized_block_height(&self) -> u64 {
-        let provider = ProviderBuilder::new().connect_http(self.l1_endpoint.clone());
-        let light_client = LightClientV3::new(self.light_client_address, &provider);
+        let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
+        let light_client = LightClientV3::new(self.config.light_client_address, &provider);
         let finalized_state = light_client.finalizedState().call().await.unwrap();
         finalized_state.blockHeight
     }
 
     /// Return current state  of the test
     pub async fn test_state(&self) -> TestState {
-        let block_height = self.espresso.get_height().await.ok();
-        let txn_count = self.espresso.get_transaction_count().await.unwrap();
+        let client = SequencerClient::new(self.config.sequencer_api_url.clone());
+        let block_height = client.get_height().await.ok();
+        let txn_count = client.get_transaction_count().await.unwrap();
 
-        let builder_balance = self
-            .espresso
+        let builder_balance = client
             .get_espresso_balance(self.builder_address, block_height)
             .await
             .unwrap();
-        let recipient_balance = self
-            .espresso
-            .get_espresso_balance(self.recipient_address, block_height)
+        let recipient_balance = client
+            .get_espresso_balance(self.config.recipient_address, block_height)
             .await
             .unwrap();
 
@@ -246,25 +302,6 @@ impl TestConfig {
         }
     }
 
-    /// Check if services are healthy
-    pub async fn readiness(&self) -> Result<Vec<String>> {
-        join_all(vec![
-            wait_for_service(Url::from_str(&self.load_generator_url).unwrap(), 1000, 600),
-            wait_for_service(Url::from_str(&self.prover_url).unwrap(), 1000, 300),
-        ])
-        .await
-        .into_iter()
-        .collect::<Result<Vec<String>>>()
-    }
-
-    /// Get the validator0 address (ACCOUNT_INDEX=20)
-    pub fn validator0_address() -> Address {
-        let mnemonic = dotenvy::var("ESPRESSO_SEQUENCER_ETH_MNEMONIC")
-            .expect("ESPRESSO_SEQUENCER_ETH_MNEMONIC not set");
-        let signer = build_signer(&mnemonic, VALIDATOR0_ACCOUNT_INDEX);
-        signer.address()
-    }
-
     /// Check claimed rewards for validator0
     /// Returns an error if reward claim contract isn't available yet
     pub async fn claimed_rewards(&self) -> Result<U256> {
@@ -272,10 +309,10 @@ impl TestConfig {
             .reward_claim_address
             .context("Reward claim address not available")?;
 
-        let provider = ProviderBuilder::new().connect_http(self.l1_endpoint.clone());
+        let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
         let reward_claim = RewardClaim::new(reward_claim_address, &provider);
 
-        let validator_address = Self::validator0_address();
+        let validator_address = TestConfig::validator0_address();
         let claimed = reward_claim
             .claimedRewards(validator_address)
             .call()
@@ -337,6 +374,23 @@ async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Res
     })
     .await
     .map_err(|e| anyhow!("Wait for service, timeout: ({}) {}", url, e))?
+}
+
+async fn wait_for_sequencer_client(
+    client: SequencerClient,
+    interval: u64,
+    timeout_duration: u64,
+) -> Result<String> {
+    timeout(Duration::from_secs(timeout_duration), async {
+        loop {
+            if client.get_height().await.is_ok() {
+                return Ok("sequencer ready".to_string());
+            }
+            sleep(Duration::from_millis(interval)).await;
+        }
+    })
+    .await
+    .map_err(|e| anyhow!("Wait for sequencer client, timeout: {}", e))?
 }
 
 pub struct NativeDemo {
