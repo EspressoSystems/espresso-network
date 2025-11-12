@@ -28,7 +28,6 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::{StaticVersionType, Version};
 use vec1::Vec1;
-use vid_disperse::ADVZDisperseShare;
 
 use crate::{
     drb::DrbResult,
@@ -1218,8 +1217,7 @@ impl_has_epoch!(
 impl_has_none_epoch!(
     QuorumProposal<TYPES>,
     DaProposal<TYPES>,
-    UpgradeProposal<TYPES>,
-    ADVZDisperseShare<TYPES>
+    UpgradeProposal<TYPES>
 );
 
 impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapper<TYPES> {

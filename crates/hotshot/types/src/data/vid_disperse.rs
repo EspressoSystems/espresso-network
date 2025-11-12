@@ -17,7 +17,7 @@ use tokio::{task::spawn_blocking, time::Instant};
 use super::ns_table::parse_ns_table;
 use crate::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
-    impl_has_epoch,
+    impl_has_epoch, impl_has_none_epoch,
     message::Proposal,
     simple_vote::HasEpoch,
     stake_table::HSStakeTable,
@@ -190,6 +190,8 @@ pub struct ADVZDisperseShare<TYPES: NodeType> {
     /// a public key of the share recipient
     pub recipient_key: TYPES::SignatureKey,
 }
+
+impl_has_none_epoch!(ADVZDisperseShare<TYPES>);
 
 impl<TYPES: NodeType> HasViewNumber<TYPES> for ADVZDisperseShare<TYPES> {
     fn view_number(&self) -> TYPES::View {
