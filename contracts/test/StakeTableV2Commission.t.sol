@@ -281,7 +281,7 @@ contract StakeTableV2CommissionTest is Test {
 
         uint256 expectedUnlocksAt = block.timestamp + proxy.exitEscrowPeriod();
         vm.expectEmit();
-        emit StakeTableV2.UndelegatedV2(delegator, validator, delegateAmount, expectedUnlocksAt);
+        emit StakeTableV2.UndelegatedV2(delegator, validator, 1, delegateAmount, expectedUnlocksAt);
         proxy.undelegate(validator, delegateAmount);
         vm.stopPrank();
     }

@@ -150,6 +150,12 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::Upgraded(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Upgraded({v:?})"
             )),
+            StakeTableV2Events::UndelegationClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::UndelegationClaimed({v:?})"
+            )),
+            StakeTableV2Events::ValidatorExitClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::ValidatorExitClaimed({v:?})"
+            )),
             StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Withdrawal({v:?})"
             )),
@@ -2936,6 +2942,7 @@ mod tests {
                 validator: val.account,
                 amount,
                 unlocksAt: U256::from(2000u64),
+                undelegationId: 1,
             }),
         };
         assert!(state.apply_event(undelegate_event).unwrap().is_ok());

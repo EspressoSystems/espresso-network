@@ -61,6 +61,12 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// track the total stake in the contract. The activeStake is the
 /// total stake that is not awaiting exit or in exited state.
 ///
+/// 10. Unique undelegation IDs are assigned to each undelegation via an auto-incrementing counter
+/// for better event tracking. The `undelegationIds` public mapping stores IDs alongside the base
+/// `undelegations` mapping. Events `UndelegatedV2`, `UndelegationClaimed`, and
+/// `ValidatorExitClaimed`
+/// include the undelegation ID as an indexed parameter for efficient querying and tracking.
+///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
@@ -102,6 +108,14 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// them to be used once. This for example prevents callers from accidentally registering the
     /// same Schnorr key twice.
     mapping(bytes32 schnorrKey => bool used) public schnorrKeys;
+
+    /// @notice Auto-incrementing counter for unique undelegation IDs
+    /// @dev Initialized to 1 in initializeV2 so that 0 can be used to identify V1 undelegations
+    uint64 private nextUndelegationId;
+
+    /// @notice Mapping from (validator, delegator) to undelegation ID
+    /// @dev Separate from base Undelegation struct since base contract is immutable
+    mapping(address validator => mapping(address delegator => uint64 id)) private undelegationIds;
 
     // === Events ===
 
@@ -147,13 +161,39 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param newMaxIncrease The new maximum commission increase in basis points
     event MaxCommissionIncreaseUpdated(uint16 newMaxIncrease);
 
-    /// @notice A delegator undelegated funds from a validator (V2 with unlocksAt)
+    /// @notice A delegator undelegated funds from a validator (V2 with unlocksAt and
+    /// undelegationId)
     /// @param delegator The address of the delegator
     /// @param validator The address of the validator
+    /// @param undelegationId Unique identifier for this undelegation
     /// @param amount The amount undelegated
     /// @param unlocksAt The timestamp when the funds can be claimed
     event UndelegatedV2(
-        address indexed delegator, address indexed validator, uint256 amount, uint256 unlocksAt
+        address indexed delegator,
+        address indexed validator,
+        uint64 indexed undelegationId,
+        uint256 amount,
+        uint256 unlocksAt
+    );
+
+    /// @notice A delegator claimed an undelegation (V2 with undelegationId)
+    /// @param delegator The address of the delegator
+    /// @param validator The address of the validator
+    /// @param undelegationId Unique identifier for this undelegation
+    /// @param amount The amount claimed
+    event UndelegationClaimed(
+        address indexed delegator,
+        address indexed validator,
+        uint64 indexed undelegationId,
+        uint256 amount
+    );
+
+    /// @notice A delegator claimed funds after validator exit
+    /// @param delegator The address of the delegator
+    /// @param validator The address of the validator
+    /// @param amount The amount claimed
+    event ValidatorExitClaimed(
+        address indexed delegator, address indexed validator, uint256 amount
     );
 
     /// @notice A validator initiated an exit (V2 with unlocksAt)
@@ -190,6 +230,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
 
+    /// No undelegation exists for the given validator and delegator
+    error NoUndelegationFound();
+
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
     constructor() {
@@ -224,6 +267,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         // adjusted before release and updated after release.
         minCommissionIncreaseInterval = 7 days;
         maxCommissionIncrease = 500; // 5%
+
+        // Initialize undelegation IDs to start at 1 (0 is reserved for V1 undelegations)
+        nextUndelegationId = 1;
 
         // initialize commissions (if the contract under upgrade has existing state)
         _initializeCommissions(initialCommissions);
@@ -283,14 +329,32 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         SafeTransferLib.safeTransfer(token, delegator, amount);
 
-        emit Withdrawal(delegator, amount);
+        emit ValidatorExitClaimed(delegator, validator, amount);
     }
 
-    /// @notice Withdraw previously delegated funds after a validator has exited
+    /// @notice Withdraw previously delegated funds after an undelegation
     /// @param validator The validator to withdraw from
-    /// @dev This function is overridden to add pausable functionality
+    /// @dev This function is overridden to add pausable functionality and emit ID in event
     function claimWithdrawal(address validator) public virtual override whenNotPaused {
-        super.claimWithdrawal(validator);
+        address delegator = msg.sender;
+        uint256 amount = undelegations[validator][delegator].amount;
+        if (amount == 0) {
+            revert NothingToWithdraw();
+        }
+
+        if (block.timestamp < undelegations[validator][delegator].unlocksAt) {
+            revert PrematureWithdrawal();
+        }
+
+        // If the undelegation was registered in V1, the ID will be zero.
+        uint64 id = undelegationIds[validator][delegator];
+
+        delete undelegations[validator][delegator];
+        delete undelegationIds[validator][delegator];
+
+        SafeTransferLib.safeTransfer(token, delegator, amount);
+
+        emit UndelegationClaimed(delegator, validator, id, amount);
     }
 
     /// @notice Delegate funds to a validator
@@ -306,7 +370,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param validator The validator to undelegate from
     /// @param amount The amount to undelegate
     /// @dev This function is overridden to add pausable functionality and emit UndelegatedV2
-    /// instead of Undelegated
+    /// @dev The undelegation ID can be retrieved from the UndelegatedV2 event or via
+    /// getUndelegation()
     function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
         ensureValidatorActive(validator);
         address delegator = msg.sender;
@@ -324,13 +389,17 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             revert InsufficientBalance(balance);
         }
 
+        uint64 undelegationId = nextUndelegationId++;
+
         delegations[validator][delegator] -= amount;
         uint256 unlocksAt = block.timestamp + exitEscrowPeriod;
         undelegations[validator][delegator] = Undelegation({ amount: amount, unlocksAt: unlocksAt });
+        undelegationIds[validator][delegator] = undelegationId;
+
         validators[validator].delegatedAmount -= amount;
 
         activeStake -= amount;
-        emit UndelegatedV2(delegator, validator, amount, unlocksAt);
+        emit UndelegatedV2(delegator, validator, undelegationId, amount, unlocksAt);
     }
 
     /// @notice Deregister a validator
@@ -544,6 +613,24 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
         exitEscrowPeriod = newExitEscrowPeriod;
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
+    }
+
+    /// @notice Get details of an undelegation for a (validator, delegator) pair
+    /// @param validator Address of the validator
+    /// @param delegator Address of the delegator
+    /// @return id Unique ID of the undelegation
+    /// @return amount Amount of tokens undelegated
+    /// @return unlocksAt Timestamp when tokens can be claimed
+    function getUndelegation(address validator, address delegator)
+        external
+        view
+        returns (uint64 id, uint256 amount, uint256 unlocksAt)
+    {
+        Undelegation storage u = undelegations[validator][delegator];
+        if (u.amount == 0) {
+            revert NoUndelegationFound();
+        }
+        return (undelegationIds[validator][delegator], u.amount, u.unlocksAt);
     }
 
     function _hashSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK)

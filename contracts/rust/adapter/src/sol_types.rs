@@ -669,7 +669,9 @@ impl Clone for StakeTableV2::StakeTableV2Events {
             Self::RoleAdminChanged(v) => Self::RoleAdminChanged(v.clone()),
             Self::RoleGranted(v) => Self::RoleGranted(v.clone()),
             Self::RoleRevoked(v) => Self::RoleRevoked(v.clone()),
+            Self::UndelegationClaimed(v) => Self::UndelegationClaimed(v.clone()),
             Self::Upgraded(v) => Self::Upgraded(v.clone()),
+            Self::ValidatorExitClaimed(v) => Self::ValidatorExitClaimed(v.clone()),
             Self::Withdrawal(v) => Self::Withdrawal(v.clone()),
         }
     }
@@ -702,7 +704,9 @@ impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
             Self::RoleAdminChanged(v) => write!(f, "RoleAdminChanged({v:?})"),
             Self::RoleGranted(v) => write!(f, "RoleGranted({v:?})"),
             Self::RoleRevoked(v) => write!(f, "RoleRevoked({v:?})"),
+            Self::UndelegationClaimed(v) => write!(f, "UndelegationClaimed({v:?})"),
             Self::Upgraded(v) => write!(f, "Upgraded({v:?})"),
+            Self::ValidatorExitClaimed(v) => write!(f, "ValidatorExitClaimed({v:?})"),
             Self::Withdrawal(v) => write!(f, "Withdrawal({v:?})"),
         }
     }
