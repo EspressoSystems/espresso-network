@@ -26,20 +26,26 @@ CREATE TABLE wallet (
     claimed_rewards TEXT NOT NULL
 );
 
--- Delegations, pending withdrawals, and exits
+-- Active Delegations
 CREATE TABLE delegation (
     delegator TEXT NOT NULL REFERENCES wallet (address),
     node TEXT NOT NULL,
     -- Store as string to preserve precision for U256
     amount TEXT NOT NULL,
-    unlocks_at BIGINT NOT NULL,
-    -- Store as string to preserve precision for U256
-    withdrawal_amount TEXT NOT NULL,
     PRIMARY KEY (delegator, node)
 );
 
 CREATE INDEX delegation_by_node ON delegation (node);
-CREATE INDEX delegation_by_status ON delegation (delegator, unlocks_at, withdrawal_amount);
+
+-- Pending Withdrawals
+CREATE TABLE pending_withdrawals (
+    delegator TEXT NOT NULL REFERENCES wallet (address),
+    node TEXT NOT NULL,
+    withdrawal_type TEXT NOT NULL CHECK(withdrawal_type IN ('undelegation', 'exit')),
+    amount TEXT NOT NULL,
+    unlocks_at BIGINT NOT NULL,
+    PRIMARY KEY (delegator, node, withdrawal_type)
+);
 
 -- Rewards
 -- Stores total accrued rewards for each account

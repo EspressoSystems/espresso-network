@@ -36,7 +36,7 @@ pub struct WalletUpdate {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum WalletDiff {
     /// A change in the total amount of claimed rewards for this wallet.
-    ClaimedRewards(u64),
+    ClaimedRewards(ESPTokenAmount),
 
     /// A new delegation by this wallet to a specific node.
     DelegatedToNode(Delegation),

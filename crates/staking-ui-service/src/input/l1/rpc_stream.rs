@@ -600,7 +600,14 @@ async fn create_block_input(
 }
 #[cfg(test)]
 mod tests {
+    use crate::input::l1;
     use crate::input::l1::testing::ContractDeployment;
+
+    use crate::input::l1::testing::MemoryStorage;
+    use crate::input::l1::{Snapshot, State};
+    use crate::types::common::Ratio;
+    use async_lock::RwLock;
+    use tokio::time::sleep;
 
     use super::*;
     use alloy::providers::ext::AnvilApi;
@@ -1148,5 +1155,189 @@ mod tests {
             stream_commit, provider_commit,
             "Commit mismatch after reset from genesis"
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_state_snapshot_and_events_from_provider() {
+        let anvil = Anvil::new()
+            .block_time(1)
+            .args(["--slots-in-an-epoch", "0"])
+            .spawn();
+        let rpc_url: Url = anvil.endpoint().parse().unwrap();
+
+        let deployment = ContractDeployment::deploy(rpc_url.clone()).await.unwrap();
+
+        let options = L1ClientOptions {
+            http_providers: vec![rpc_url.clone()],
+            stake_table_address: deployment.stake_table_addr,
+            reward_contract_address: deployment.reward_claim_addr,
+            ..Default::default()
+        };
+
+        let stream = RpcStream::new(options.clone()).await.unwrap();
+
+        let provider = ProviderBuilder::new().connect_http(rpc_url.clone());
+        let genesis_block = l1::provider::load_genesis(&provider, deployment.stake_table_addr)
+            .await
+            .unwrap();
+        let genesis_snapshot = Snapshot::empty(genesis_block);
+
+        let storage = MemoryStorage::default();
+        let state = Arc::new(RwLock::new(
+            State::new(storage.clone(), genesis_snapshot.clone())
+                .await
+                .unwrap(),
+        ));
+
+        let background_task = deployment.spawn_task_with_interval(Duration::from_millis(100));
+
+        // Subscribe to the stream in a background task
+        let state_clone = state.clone();
+        let subscription_task =
+            tokio::spawn(async move { State::subscribe(state_clone, stream).await });
+
+        let target_blocks = 400;
+        let genesis_block_number = genesis_block.number();
+
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let current_state = state.read().await;
+            let current_block = current_state.latest_l1_block().number;
+            let blocks_processed = current_block - genesis_block_number;
+
+            println!("Processed {blocks_processed} / {target_blocks} blocks");
+
+            if blocks_processed >= target_blocks {
+                println!("Reached target block: {current_block}");
+                break;
+            }
+        }
+
+        // Stop background operations
+        drop(background_task);
+        subscription_task.abort();
+        let _ = subscription_task.await;
+
+        let subscription_latest_block = state.read().await.latest_l1_block();
+        println!(
+            "Subscription processed up to block: {}",
+            subscription_latest_block.number
+        );
+
+        let state_from_subscription = state.read().await;
+        let subscription_node_set = state_from_subscription
+            .full_node_set(subscription_latest_block.hash)
+            .unwrap()
+            .0
+            .clone();
+
+        let start_block = genesis_block_number + 1;
+        let end_block = subscription_latest_block.number;
+
+        let filter = Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+            ])
+            .address(deployment.stake_table_addr)
+            .from_block(start_block)
+            .to_block(end_block);
+
+        let logs = provider
+            .get_logs(&filter)
+            .await
+            .expect("Failed to fetch logs from L1");
+
+        // Build state from L1 query
+        let mut stake_table_from_l1_query = StakeTableState::new();
+        for log in logs {
+            let st_event =
+                StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).unwrap();
+            if let Ok(stake_table_event) = st_event.try_into() {
+                let result = stake_table_from_l1_query.apply_event(stake_table_event);
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        println!("Expected error applying L1 event: {e:?}");
+                    }
+                    Err(err) => {
+                        panic!("Critical error applying L1 event: {err:?}");
+                    }
+                }
+            }
+        }
+
+        // Compare the states
+        // Both states should have the same set of validators
+        assert_eq!(
+            subscription_node_set.len(),
+            stake_table_from_l1_query.validators().len(),
+            "Number of validators mismatch between subscription and L1 query"
+        );
+
+        // Verify each node exists in both states and compare their values
+        for node in subscription_node_set.values() {
+            let l1_validator = stake_table_from_l1_query.validators().get(&node.address);
+
+            let l1_validator = l1_validator.unwrap();
+
+            // Compare all fields
+            assert_eq!(
+                node.address, l1_validator.account,
+                "Address mismatch for validator {}",
+                node.address
+            );
+
+            assert_eq!(
+                node.stake, l1_validator.stake,
+                "Stake mismatch for validator {}: subscription={}, L1={}",
+                node.address, node.stake, l1_validator.stake
+            );
+
+            assert_eq!(
+                node.staking_key.to_string(),
+                l1_validator.stake_table_key.to_string(),
+                "Staking key mismatch for validator {}: subscription={}, L1={}",
+                node.address,
+                node.staking_key,
+                l1_validator.stake_table_key
+            );
+
+            let l1_commission_ratio = Ratio::new(l1_validator.commission as usize, 10_000);
+            assert_eq!(
+                node.commission, l1_commission_ratio,
+                "Commission mismatch for validator {}: subscription={:?}, L1={:?}",
+                node.address, node.commission, l1_commission_ratio
+            );
+
+            // Verify wallets
+            for (delegator_address, delegated_amount) in &l1_validator.delegators {
+                match state_from_subscription
+                    .wallet(*delegator_address, subscription_latest_block.hash)
+                {
+                    Ok((wallet, _)) => {
+                        let wallet_delegation = wallet.nodes.get(&node.address).expect("not found");
+
+                        assert_eq!(
+                            wallet_delegation.amount, *delegated_amount,
+                            "Delegation amount mismatch: delegator {delegator_address} to validator {}",
+                            node.address,
+                        );
+                    }
+                    Err(e) => {
+                        panic!(
+                            "Delegator {delegator_address} wallet not found in subscription state but exists in L1 validator delegators: {e}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
