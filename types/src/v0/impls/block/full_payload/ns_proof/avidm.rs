@@ -48,7 +48,7 @@ impl AvidMNsProof {
         common: &AvidMCommon,
     ) -> Option<(Vec<Transaction>, NamespaceId)> {
         match commit {
-            VidCommitment::V2(commit) => {
+            VidCommitment::V1(commit) => {
                 match NsAvidMScheme::verify_namespace_proof(common, commit, &self.0) {
                     Ok(Ok(_)) => {
                         let ns_id = ns_table.read_ns_id(&NsIndex(self.0.ns_index))?;
@@ -75,7 +75,7 @@ impl AvidMIncorrectEncodingNsProof {
         commit: &VidCommitment,
         common: &AvidMCommon,
     ) -> Option<Self> {
-        let VidCommitment::V2(commit) = commit else {
+        let VidCommitment::V1(commit) = commit else {
             tracing::error!("Error generating incorrect encoding proof: invalid vid commitment");
             return None;
         };
@@ -123,7 +123,7 @@ impl AvidMIncorrectEncodingNsProof {
         common: &AvidMCommon,
     ) -> Option<(Vec<Transaction>, NamespaceId)> {
         match (commit, self) {
-            (VidCommitment::V2(commit), Self(proof)) => {
+            (VidCommitment::V1(commit), Self(proof)) => {
                 // incorrect encoding proof
                 match proof.verify(common, commit) {
                     Ok(Ok(_)) => {
@@ -200,7 +200,7 @@ mod tests {
                 .collect();
             BlockInfo {
                 block,
-                vid_commit: VidCommitment::V2(vid_commit),
+                vid_commit: VidCommitment::V1(vid_commit),
                 ns_proofs,
             }
         }))

@@ -114,7 +114,7 @@ impl<TYPES: NodeType> AvailableBlockHeaderInputV2Legacy<TYPES> {
                 &self.fee_signature,
                 offered_fee,
                 metadata,
-                &hotshot_types::data::VidCommitment::V1(self.vid_commitment),
+                &hotshot_types::data::VidCommitment::V0(self.vid_commitment),
             )
     }
 }

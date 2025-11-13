@@ -49,7 +49,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare1,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare0,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -1752,7 +1752,7 @@ impl SequencerPersistence for Persistence {
                 let data: Vec<u8> = row.try_get("data")?;
                 let payload_hash: String = row.try_get("payload_hash")?;
 
-                let vid_share: Proposal<SeqTypes, VidDisperseShare1<SeqTypes>> =
+                let vid_share: Proposal<SeqTypes, VidDisperseShare0<SeqTypes>> =
                     bincode::deserialize(&data)?;
                 let vid_share2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(vid_share);
@@ -2892,9 +2892,9 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
             };
 
         match share.data {
-            VidDisperseShare::V1(vid) => Some(VidCommon::V0(vid.common)),
-            VidDisperseShare::V2(vid) => Some(VidCommon::V1(vid.common)),
-            VidDisperseShare::V3(vid) => Some(VidCommon::V2(vid.common)),
+            VidDisperseShare::V0(vid) => Some(VidCommon::V0(vid.common)),
+            VidDisperseShare::V1(vid) => Some(VidCommon::V1(vid.common)),
+            VidDisperseShare::V2(vid) => Some(VidCommon::V2(vid.common)),
         }
     }
 }
@@ -3249,7 +3249,7 @@ mod test {
 
         // Add to database.
         storage
-            .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
+            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
             .unwrap();
         storage.append_vid(&vid_share).await.unwrap();
@@ -3381,7 +3381,7 @@ mod test {
         tracing::info!(?vid, ?da_proposal, ?quorum_proposal, "append data");
         storage.append_vid(&vid).await.unwrap();
         storage
-            .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
+            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
             .unwrap();
         storage
@@ -3556,7 +3556,7 @@ mod test {
                 .disperse(payload_bytes.clone())
                 .unwrap();
 
-            let vid = VidDisperseShare1::<SeqTypes> {
+            let vid = VidDisperseShare0::<SeqTypes> {
                 view_number: ViewNumber::new(i),
                 payload_commitment: Default::default(),
                 share: disperse.shares[0].clone(),
@@ -3589,7 +3589,7 @@ mod test {
                 .await
                 .unwrap();
             storage
-                .append_da(&da_proposal, VidCommitment::V1(disperse.commit))
+                .append_da(&da_proposal, VidCommitment::V0(disperse.commit))
                 .await
                 .unwrap();
 

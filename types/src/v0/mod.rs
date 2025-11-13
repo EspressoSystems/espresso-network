@@ -177,7 +177,7 @@ impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Ve
 
     type Epochs = EpochVersion;
     type DrbAndHeaderUpgrade = DrbAndHeaderUpgradeVersion;
-    type Vid3Upgrade = Vid3UpgradeVersion;
+    type Vid2Upgrade = Vid2UpgradeVersion;
 }
 
 pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
@@ -188,7 +188,7 @@ pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type DaUpgradeVersion = StaticVersion<0, 5>;
-pub type Vid3UpgradeVersion = StaticVersion<0, 6>;
+pub type Vid2UpgradeVersion = StaticVersion<0, 6>;
 
 /// The highest protocol version supported by this version of the software.
 pub type MaxSupportedVersion = DaUpgradeVersion;

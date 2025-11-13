@@ -62,7 +62,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     ) -> Option<Payload<Types>> {
         let client_url = self.client.base_url();
 
-        let PayloadRequest(VidCommitment::V1(advz_commit)) = req else {
+        let PayloadRequest(VidCommitment::V0(advz_commit)) = req else {
             return None;
         };
 
@@ -116,7 +116,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         req: VidCommonRequest,
     ) -> Option<VidCommon> {
         let client_url = self.client.base_url();
-        let VidCommonRequest(VidCommitment::V1(advz_commit)) = req else {
+        let VidCommonRequest(VidCommitment::V0(advz_commit)) = req else {
             return None;
         };
 
@@ -275,7 +275,7 @@ where
 
                 let commit = advz_scheme(num_storage_nodes)
                     .commit_only(bytes)
-                    .map(VidCommitment::V1)
+                    .map(VidCommitment::V0)
                     .inspect_err(|err| {
                         tracing::error!(%err, %req_hash,  %num_storage_nodes, "failed to compute VID commitment (V0)");
                     })
@@ -327,7 +327,7 @@ where
                     &bytes,
                     ns_table::parse_ns_table(bytes.len(), &metadata),
                 )
-                .map(VidCommitment::V2)
+                .map(VidCommitment::V1)
                 .inspect_err(|err| {
                     tracing::error!(%err, %req_hash, "failed to compute AVIDM commitment");
                 })
@@ -373,7 +373,7 @@ where
                     &bytes,
                     ns_table::parse_ns_table(bytes.len(), &metadata),
                 )
-                .map(|(commit, _)| VidCommitment::V3(commit))
+                .map(|(commit, _)| VidCommitment::V2(commit))
                 .inspect_err(|err| {
                     tracing::error!(%err, %req_hash, "failed to compute AvidmGf2 commitment");
                 })
@@ -510,7 +510,7 @@ where
 
         match vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&bytes) {
             Ok(res) => match req.0 {
-                VidCommitment::V1(commit) => {
+                VidCommitment::V0(commit) => {
                     if let VidCommon::V0(common) = res.common {
                         if ADVZScheme::is_consistent(&commit, &common).is_ok() {
                             Some(VidCommon::V0(common))
@@ -526,7 +526,7 @@ where
                         None
                     }
                 },
-                VidCommitment::V2(_) => {
+                VidCommitment::V1(_) => {
                     if let VidCommon::V1(common) = res.common {
                         Some(VidCommon::V1(common))
                     } else {
@@ -534,7 +534,7 @@ where
                         None
                     }
                 },
-                VidCommitment::V3(commit) => {
+                VidCommitment::V2(commit) => {
                     if let VidCommon::V2(common) = res.common {
                         if AvidmGf2Scheme::is_consistent(&commit, &common) {
                             Some(VidCommon::V2(common))
@@ -1500,7 +1500,7 @@ mod test {
     fn random_vid_commit() -> VidCommitment {
         let mut bytes = [0; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
-        VidCommitment::V1(GenericArray::from(bytes).into())
+        VidCommitment::V0(GenericArray::from(bytes).into())
     }
 
     async fn malicious_server(port: u16) {

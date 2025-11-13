@@ -572,14 +572,14 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
                         },
-                        DaConsensusMessage::VidDisperseMsg2(proposal) => {
+                        DaConsensusMessage::VidDisperseMsg1(proposal) => {
                             if !self
                                 .upgrade_lock
                                 .epochs_enabled(proposal.data.view_number())
                                 .await
                             {
                                 tracing::warn!(
-                                    "received DaConsensusMessage::VidDisperseMsg2 for view {} but \
+                                    "received DaConsensusMessage::VidDisperseMsg1 for view {} but \
                                      epochs are not enabled for that view",
                                     proposal.data.view_number()
                                 );
@@ -587,27 +587,27 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             }
                             if self
                                 .upgrade_lock
-                                .upgraded_vid3(proposal.data.view_number())
+                                .upgraded_vid2(proposal.data.view_number())
                                 .await
                             {
                                 tracing::warn!(
-                                    "received DaConsensusMessage::VidDisperseMsg2 for view {} but \
-                                     vid3 upgrade is enabled for that view",
+                                    "received DaConsensusMessage::VidDisperseMsg1 for view {} but \
+                                     vid2 upgrade is enabled for that view",
                                     proposal.data.view_number()
                                 );
                                 return;
                             }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
                         },
-                        DaConsensusMessage::VidDisperseMsg3(proposal) => {
+                        DaConsensusMessage::VidDisperseMsg2(proposal) => {
                             if !self
                                 .upgrade_lock
-                                .upgraded_vid3(proposal.data.view_number())
+                                .upgraded_vid2(proposal.data.view_number())
                                 .await
                             {
                                 tracing::warn!(
                                     "received DaConsensusMessage::VidDisperseMsg2 for view {} but \
-                                     vid3 upgrade is not enabled for that view",
+                                     vid2 upgrade is not enabled for that view",
                                     proposal.data.view_number()
                                 );
                                 return;
@@ -646,7 +646,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 )
                                 .await;
                             },
-                            SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg2(
+                            SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg1(
                                 proposal,
                             )) => {
                                 broadcast_event(
@@ -796,12 +796,12 @@ impl<
                 .upgrade_lock
                 .epochs_enabled(proposal.data.view_number())
                 .await;
-            let upgraded_vid3 = self
+            let upgraded_vid2 = self
                 .upgrade_lock
-                .upgraded_vid3(proposal.data.view_number())
+                .upgraded_vid2(proposal.data.view_number())
                 .await;
             let message = if !epochs_enabled {
-                let vid_share_proposal = if let VidDisperseShare::V1(data) = proposal.data {
+                let vid_share_proposal = if let VidDisperseShare::V0(data) = proposal.data {
                     Proposal {
                         data,
                         signature: proposal.signature,
@@ -820,8 +820,8 @@ impl<
                         DaConsensusMessage::VidDisperseMsg(vid_share_proposal),
                     )),
                 }
-            } else if !upgraded_vid3 {
-                let vid_share_proposal = if let VidDisperseShare::V2(data) = proposal.data {
+            } else if !upgraded_vid2 {
+                let vid_share_proposal = if let VidDisperseShare::V1(data) = proposal.data {
                     Proposal {
                         data,
                         signature: proposal.signature,
@@ -829,7 +829,7 @@ impl<
                     }
                 } else {
                     tracing::warn!(
-                        "Epochs are enabled and Vid3Upgrade is not enabled for view {} but didn't \
+                        "Epochs are enabled and Vid2Upgrade is not enabled for view {} but didn't \
                          receive VidDisperseShare2",
                         proposal.data.view_number()
                     );
@@ -838,11 +838,11 @@ impl<
                 Message {
                     sender: sender.clone(),
                     kind: MessageKind::<TYPES>::from_consensus_message(SequencingMessage::Da(
-                        DaConsensusMessage::VidDisperseMsg2(vid_share_proposal),
+                        DaConsensusMessage::VidDisperseMsg1(vid_share_proposal),
                     )),
                 }
             } else {
-                let vid_share_proposal = if let VidDisperseShare::V3(data) = proposal.data {
+                let vid_share_proposal = if let VidDisperseShare::V2(data) = proposal.data {
                     Proposal {
                         data,
                         signature: proposal.signature,
@@ -850,7 +850,7 @@ impl<
                     }
                 } else {
                     tracing::warn!(
-                        "Vid3Upgrade is enabled for view {} but didn't receive VidDisperseShare3",
+                        "Vid2Upgrade is enabled for view {} but didn't receive VidDisperseShare2",
                         proposal.data.view_number()
                     );
                     return None;
@@ -858,7 +858,7 @@ impl<
                 Message {
                     sender: sender.clone(),
                     kind: MessageKind::<TYPES>::from_consensus_message(SequencingMessage::Da(
-                        DaConsensusMessage::VidDisperseMsg3(vid_share_proposal),
+                        DaConsensusMessage::VidDisperseMsg2(vid_share_proposal),
                     )),
                 }
             };
@@ -1423,16 +1423,16 @@ impl<
                     .upgrade_lock
                     .epochs_enabled(proposal.data.view_number())
                     .await;
-                let upgraded_vid3 = self
+                let upgraded_vid2 = self
                     .upgrade_lock
-                    .upgraded_vid3(proposal.data.view_number())
+                    .upgraded_vid2(proposal.data.view_number())
                     .await;
                 let message = match proposal.data {
-                    VidDisperseShare::V1(data) => {
+                    VidDisperseShare::V0(data) => {
                         if epochs_enabled {
                             tracing::warn!(
-                                "Epochs are enabled for view {} but didn't receive \
-                                 AvidMDisperseShare",
+                                "Epochs are enabled for view {} but still receive \
+                                 VidDisperseShare0",
                                 data.view_number()
                             );
                             return None;
@@ -1448,19 +1448,39 @@ impl<
                             )),
                         )))
                     },
-                    VidDisperseShare::V2(data) => {
+                    VidDisperseShare::V1(data) => {
                         if !epochs_enabled {
                             tracing::warn!(
                                 "Epochs are enabled for view {} but didn't receive \
-                                 VidDisperseShare1",
+                                 VidDisperseShare0",
                                 data.view_number()
                             );
                             return None;
                         }
-                        if upgraded_vid3 {
+                        if upgraded_vid2 {
                             tracing::warn!(
-                                "VID3 upgrade is enabled for view {} but didn't receive \
-                                 VidDisperseShare3",
+                                "VID2 upgrade is enabled for view {} but didn't receive \
+                                 VidDisperseShare2",
+                                data.view_number()
+                            );
+                            return None;
+                        }
+                        let vid_share_proposal = Proposal {
+                            data,
+                            signature: proposal.signature,
+                            _pd: proposal._pd,
+                        };
+                        MessageKind::Data(DataMessage::DataResponse(ResponseMessage::Found(
+                            SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg1(
+                                vid_share_proposal,
+                            )),
+                        )))
+                    },
+                    VidDisperseShare::V2(data) => {
+                        if !upgraded_vid2 {
+                            tracing::warn!(
+                                "VID2 upgrade is not enabled for view {} but receive \
+                                 VidDisperseShare2",
                                 data.view_number()
                             );
                             return None;
@@ -1472,26 +1492,6 @@ impl<
                         };
                         MessageKind::Data(DataMessage::DataResponse(ResponseMessage::Found(
                             SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg2(
-                                vid_share_proposal,
-                            )),
-                        )))
-                    },
-                    VidDisperseShare::V3(data) => {
-                        if !upgraded_vid3 {
-                            tracing::warn!(
-                                "VID3 upgrade is not enabled for view {} but receive \
-                                 VidDisperseShare3",
-                                data.view_number()
-                            );
-                            return None;
-                        }
-                        let vid_share_proposal = Proposal {
-                            data,
-                            signature: proposal.signature,
-                            _pd: proposal._pd,
-                        };
-                        MessageKind::Data(DataMessage::DataResponse(ResponseMessage::Found(
-                            SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg3(
                                 vid_share_proposal,
                             )),
                         )))

@@ -331,7 +331,7 @@ impl Versions for TestVersions {
 
     type Epochs = StaticVersion<0, 4>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid3Upgrade = StaticVersion<0, 6>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -347,7 +347,7 @@ impl Versions for EpochsTestVersions {
 
     type Epochs = StaticVersion<0, 3>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid3Upgrade = StaticVersion<0, 6>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -363,7 +363,7 @@ impl Versions for EpochUpgradeTestVersions {
 
     type Epochs = StaticVersion<0, 4>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid3Upgrade = StaticVersion<0, 6>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -380,7 +380,7 @@ impl Versions for DaCommitteeTestVersions {
     type Epochs = StaticVersion<0, 1>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 1>;
     // TODO(Chengyu): tweak this version
-    type Vid3Upgrade = StaticVersion<0, 6>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[cfg(test)]

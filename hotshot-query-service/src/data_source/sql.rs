@@ -432,7 +432,7 @@ mod test {
             .unwrap_err();
 
         // Re-insert the common data with the share.
-        let share0 = VidShare::V1(disperse.shares[0].clone());
+        let share0 = VidShare::V0(disperse.shares[0].clone());
         let mut tx = ds.write().await.unwrap();
         tx.insert_vid(common.clone(), Some(share0.clone()))
             .await

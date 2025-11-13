@@ -980,7 +980,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
                         .context("failed to deserialize vid_share")?;
                     new_vid_share_bytes = Some(
-                        bincode::serialize(&VidShare::V1(vid_share))
+                        bincode::serialize(&VidShare::V0(vid_share))
                             .context("failed to serialize vid_share")?,
                     );
                 }

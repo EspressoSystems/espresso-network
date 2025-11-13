@@ -27,7 +27,7 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare1,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare0,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -1321,7 +1321,7 @@ impl SequencerPersistence for Persistence {
 
             let bytes = fs::read(&path).context(format!("reading vid share {}", path.display()))?;
             let proposal =
-                bincode::deserialize::<Proposal<SeqTypes, VidDisperseShare1<SeqTypes>>>(&bytes)
+                bincode::deserialize::<Proposal<SeqTypes, VidDisperseShare0<SeqTypes>>>(&bytes)
                     .context(format!("parsing vid share {}", path.display()))?;
 
             let new_vid_path = new_vid_dir.join(view.to_string()).with_extension("txt");
@@ -2561,7 +2561,7 @@ mod test {
                 .disperse(payload_bytes.clone())
                 .unwrap();
 
-            let vid = VidDisperseShare1::<SeqTypes> {
+            let vid = VidDisperseShare0::<SeqTypes> {
                 view_number: ViewNumber::new(i),
                 payload_commitment: Default::default(),
                 share: disperse.shares[0].clone(),
@@ -2597,7 +2597,7 @@ mod test {
 
             tracing::debug!("inserting da for {view}");
             storage
-                .append_da(&da_proposal, VidCommitment::V1(disperse.commit))
+                .append_da(&da_proposal, VidCommitment::V0(disperse.commit))
                 .await
                 .unwrap();
         }

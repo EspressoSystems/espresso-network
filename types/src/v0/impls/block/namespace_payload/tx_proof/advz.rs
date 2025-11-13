@@ -120,7 +120,7 @@ impl ADVZTxProof {
         commit: &VidCommitment,
         common: &VidCommon,
     ) -> bool {
-        let VidCommitment::V1(commit) = commit else {
+        let VidCommitment::V0(commit) = commit else {
             tracing::info!("VID version mismatch");
             return false;
         };

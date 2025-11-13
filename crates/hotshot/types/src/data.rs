@@ -207,9 +207,9 @@ where
 }
 
 /// Type aliases for different versions of VID commitments
-pub type VidCommitment1 = crate::vid::advz::ADVZCommitment;
-pub type VidCommitment2 = crate::vid::avidm::AvidMCommitment;
-pub type VidCommitment3 = crate::vid::avidm_gf2::AvidmGf2Commitment;
+pub type VidCommitment0 = crate::vid::advz::ADVZCommitment;
+pub type VidCommitment1 = crate::vid::avidm::AvidMCommitment;
+pub type VidCommitment2 = crate::vid::avidm_gf2::AvidmGf2Commitment;
 
 /// VID Commitment type
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
@@ -218,14 +218,14 @@ pub type VidCommitment3 = crate::vid::avidm_gf2::AvidmGf2Commitment;
     into = "tagged_base64::TaggedBase64"
 )]
 pub enum VidCommitment {
+    V0(VidCommitment0),
     V1(VidCommitment1),
     V2(VidCommitment2),
-    V3(VidCommitment3),
 }
 
 impl Default for VidCommitment {
     fn default() -> Self {
-        Self::V1(Default::default())
+        Self::V0(Default::default())
     }
 }
 
@@ -244,9 +244,9 @@ impl Debug for VidCommitment {
 impl From<VidCommitment> for TaggedBase64 {
     fn from(val: VidCommitment) -> Self {
         match val {
+            VidCommitment::V0(comm) => comm.into(),
             VidCommitment::V1(comm) => comm.into(),
             VidCommitment::V2(comm) => comm.into(),
-            VidCommitment::V3(comm) => comm.into(),
         }
     }
 }
@@ -254,9 +254,9 @@ impl From<VidCommitment> for TaggedBase64 {
 impl From<&VidCommitment> for TaggedBase64 {
     fn from(val: &VidCommitment) -> Self {
         match val {
+            VidCommitment::V0(comm) => comm.into(),
             VidCommitment::V1(comm) => comm.into(),
             VidCommitment::V2(comm) => comm.into(),
-            VidCommitment::V3(comm) => comm.into(),
         }
     }
 }
@@ -266,9 +266,9 @@ impl TryFrom<TaggedBase64> for VidCommitment {
 
     fn try_from(value: TaggedBase64) -> std::result::Result<Self, Self::Error> {
         match value.tag().as_str() {
-            "HASH" => VidCommitment1::try_from(value).map(Self::V1),
-            "AvidMCommit" => VidCommitment2::try_from(value).map(Self::V2),
-            "AvidmGf2Commit" => VidCommitment3::try_from(value).map(Self::V3),
+            "HASH" => VidCommitment0::try_from(value).map(Self::V0),
+            "AvidMCommit" => VidCommitment1::try_from(value).map(Self::V1),
+            "AvidmGf2Commit" => VidCommitment2::try_from(value).map(Self::V2),
             _ => Err(Tb64Error::InvalidTag),
         }
     }
@@ -279,9 +279,9 @@ impl<'a> TryFrom<&'a TaggedBase64> for VidCommitment {
 
     fn try_from(value: &'a TaggedBase64) -> std::result::Result<Self, Self::Error> {
         match value.tag().as_str() {
-            "HASH" => VidCommitment1::try_from(value).map(Self::V1),
-            "AvidMCommit" => VidCommitment2::try_from(value).map(Self::V2),
-            "AvidmGf2Commit" => VidCommitment3::try_from(value).map(Self::V3),
+            "HASH" => VidCommitment0::try_from(value).map(Self::V0),
+            "AvidMCommit" => VidCommitment1::try_from(value).map(Self::V1),
+            "AvidmGf2Commit" => VidCommitment2::try_from(value).map(Self::V2),
             _ => Err(Tb64Error::InvalidTag),
         }
     }
@@ -303,24 +303,24 @@ impl std::str::FromStr for VidCommitment {
 //     }
 // }
 
+impl From<VidCommitment1> for VidCommitment {
+    fn from(comm: VidCommitment1) -> Self {
+        Self::V1(comm)
+    }
+}
+
 impl From<VidCommitment2> for VidCommitment {
     fn from(comm: VidCommitment2) -> Self {
         Self::V2(comm)
     }
 }
 
-impl From<VidCommitment3> for VidCommitment {
-    fn from(comm: VidCommitment3) -> Self {
-        Self::V3(comm)
-    }
-}
-
 impl AsRef<[u8]> for VidCommitment {
     fn as_ref(&self) -> &[u8] {
         match self {
+            Self::V0(comm) => comm.as_ref(),
             Self::V1(comm) => comm.as_ref(),
             Self::V2(comm) => comm.as_ref(),
-            Self::V3(comm) => comm.as_ref(),
         }
     }
 }
@@ -328,9 +328,9 @@ impl AsRef<[u8]> for VidCommitment {
 impl AsRef<[u8; 32]> for VidCommitment {
     fn as_ref(&self) -> &[u8; 32] {
         match self {
-            Self::V1(comm) => comm.as_ref().as_ref(),
+            Self::V0(comm) => comm.as_ref().as_ref(),
+            Self::V1(comm) => comm.as_ref(),
             Self::V2(comm) => comm.as_ref(),
-            Self::V3(comm) => comm.as_ref(),
         }
     }
 }
@@ -351,7 +351,7 @@ pub fn vid_commitment<V: Versions>(
         let encoded_tx_len = encoded_transactions.len();
         advz_scheme(total_weight)
             .commit_only(encoded_transactions)
-            .map(VidCommitment::V1)
+            .map(VidCommitment::V0)
             .unwrap_or_else(|err| {
                 panic!(
                     "VidScheme::commit_only \
@@ -359,7 +359,7 @@ pub fn vid_commitment<V: Versions>(
                      error: {err}"
                 )
             })
-    } else if version < V::Vid3Upgrade::VERSION {
+    } else if version < V::Vid2Upgrade::VERSION {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
@@ -367,7 +367,7 @@ pub fn vid_commitment<V: Versions>(
             encoded_transactions,
             ns_table::parse_ns_table(encoded_tx_len, metadata),
         )
-        .map(VidCommitment::V2)
+        .map(VidCommitment::V1)
         .unwrap()
     } else {
         let param = init_avidm_gf2_param(total_weight).unwrap();
@@ -377,40 +377,40 @@ pub fn vid_commitment<V: Versions>(
             encoded_transactions,
             ns_table::parse_ns_table(encoded_tx_len, metadata),
         )
-        .map(|(comm, _)| VidCommitment::V3(comm))
+        .map(|(comm, _)| VidCommitment::V2(comm))
         .unwrap()
     }
 }
 
 /// Type aliases for different versions of VID shares
-pub type VidShare1 = crate::vid::advz::ADVZShare;
-pub type VidShare2 = crate::vid::avidm::AvidMShare;
-pub type VidShare3 = crate::vid::avidm_gf2::AvidmGf2Share;
+pub type VidShare0 = crate::vid::advz::ADVZShare;
+pub type VidShare1 = crate::vid::avidm::AvidMShare;
+pub type VidShare2 = crate::vid::avidm_gf2::AvidmGf2Share;
 
 /// VID share type
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum VidShare {
+    V0(VidShare0),
     V1(VidShare1),
     V2(VidShare2),
-    V3(VidShare3),
 }
 
 // TODO(Chengyu): cannot have this
-// impl From<VidShare1> for VidShare {
-//     fn from(share: VidShare1) -> Self {
-//         Self::V1(share)
+// impl From<VidShare0> for VidShare {
+//     fn from(share: VidShare0) -> Self {
+//         Self::V0(share)
 //     }
 // }
+
+impl From<VidShare1> for VidShare {
+    fn from(share: VidShare1) -> Self {
+        Self::V1(share)
+    }
+}
 
 impl From<VidShare2> for VidShare {
     fn from(share: VidShare2) -> Self {
         Self::V2(share)
-    }
-}
-
-impl From<VidShare3> for VidShare {
-    fn from(share: VidShare3) -> Self {
-        Self::V3(share)
     }
 }
 
@@ -426,9 +426,9 @@ pub struct VidDisperseAndDuration<TYPES: NodeType> {
 }
 
 /// Type aliases for different versions of VID disperse
-pub type VidDisperse1<TYPES> = vid_disperse::ADVZDisperse<TYPES>;
-pub type VidDisperse2<TYPES> = vid_disperse::AvidMDisperse<TYPES>;
-pub type VidDisperse3<TYPES> = vid_disperse::AvidmGf2Disperse<TYPES>;
+pub type VidDisperse0<TYPES> = vid_disperse::ADVZDisperse<TYPES>;
+pub type VidDisperse1<TYPES> = vid_disperse::AvidMDisperse<TYPES>;
+pub type VidDisperse2<TYPES> = vid_disperse::AvidmGf2Disperse<TYPES>;
 
 /// VID dispersal data
 ///
@@ -439,11 +439,17 @@ pub type VidDisperse3<TYPES> = vid_disperse::AvidmGf2Disperse<TYPES>;
 #[serde(bound = "TYPES: NodeType")]
 pub enum VidDisperse<TYPES: NodeType> {
     /// Disperse type for first VID version
-    V1(VidDisperse1<TYPES>),
+    V0(VidDisperse0<TYPES>),
     /// Disperse type for AvidM Scheme
-    V2(VidDisperse2<TYPES>),
+    V1(VidDisperse1<TYPES>),
     /// Disperse type for AvidmGf2 Scheme
-    V3(VidDisperse3<TYPES>),
+    V2(VidDisperse2<TYPES>),
+}
+
+impl<TYPES: NodeType> From<VidDisperse0<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: VidDisperse0<TYPES>) -> Self {
+        Self::V0(disperse)
+    }
 }
 
 impl<TYPES: NodeType> From<VidDisperse1<TYPES>> for VidDisperse<TYPES> {
@@ -458,18 +464,12 @@ impl<TYPES: NodeType> From<VidDisperse2<TYPES>> for VidDisperse<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> From<VidDisperse3<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: VidDisperse3<TYPES>) -> Self {
-        Self::V3(disperse)
-    }
-}
-
 impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
     fn view_number(&self) -> TYPES::View {
         match self {
+            Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
             Self::V2(disperse) => disperse.view_number(),
-            Self::V3(disperse) => disperse.view_number(),
         }
     }
 }
@@ -477,9 +477,9 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
 impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperse<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         match self {
+            Self::V0(disperse) => disperse.epoch(),
             Self::V1(disperse) => disperse.epoch(),
             Self::V2(disperse) => disperse.epoch(),
-            Self::V3(disperse) => disperse.epoch(),
         }
     }
 }
@@ -502,9 +502,9 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     ) -> Result<VidDisperseAndDuration<TYPES>> {
         // let version = upgrade_lock.version_infallible(view).await;
         let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
-        let upgraded_vid3 = upgrade_lock.upgraded_vid3(view).await;
+        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view).await;
         if !epochs_enabled {
-            VidDisperse1::calculate_vid_disperse(
+            VidDisperse0::calculate_vid_disperse(
                 payload,
                 membership,
                 view,
@@ -513,10 +513,24 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
             )
             .await
             .map(|(disperse, duration)| VidDisperseAndDuration {
+                disperse: Self::V0(disperse),
+                duration,
+            })
+        } else if !upgraded_vid2 {
+            VidDisperse1::calculate_vid_disperse(
+                payload,
+                membership,
+                view,
+                target_epoch,
+                data_epoch,
+                metadata,
+            )
+            .await
+            .map(|(disperse, duration)| VidDisperseAndDuration {
                 disperse: Self::V1(disperse),
                 duration,
             })
-        } else if !upgraded_vid3 {
+        } else {
             VidDisperse2::calculate_vid_disperse(
                 payload,
                 membership,
@@ -530,52 +544,43 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 disperse: Self::V2(disperse),
                 duration,
             })
-        } else {
-            VidDisperse3::calculate_vid_disperse(
-                payload,
-                membership,
-                view,
-                target_epoch,
-                data_epoch,
-                metadata,
-            )
-            .await
-            .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V3(disperse),
-                duration,
-            })
         }
     }
 
     /// Return the internal payload commitment
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V1(disperse) => VidCommitment::V1(disperse.payload_commitment),
+            Self::V0(disperse) => VidCommitment::V0(disperse.payload_commitment),
+            Self::V1(disperse) => disperse.payload_commitment.into(),
             Self::V2(disperse) => disperse.payload_commitment.into(),
-            Self::V3(disperse) => disperse.payload_commitment.into(),
         }
     }
 
     /// Return a slice reference to the payload commitment. Should be used for signature.
     pub fn payload_commitment_ref(&self) -> &[u8] {
         match self {
+            Self::V0(disperse) => disperse.payload_commitment.as_ref(),
             Self::V1(disperse) => disperse.payload_commitment.as_ref(),
             Self::V2(disperse) => disperse.payload_commitment.as_ref(),
-            Self::V3(disperse) => disperse.payload_commitment.as_ref(),
         }
     }
 
     /// Set the view number
     pub fn set_view_number(&mut self, view_number: <TYPES as NodeType>::View) {
         match self {
+            Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
             Self::V2(share) => share.view_number = view_number,
-            Self::V3(share) => share.view_number = view_number,
         }
     }
 
     pub fn to_shares(self) -> Vec<VidDisperseShare<TYPES>> {
         match self {
+            VidDisperse::V0(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V0(share))
+                .collect(),
             VidDisperse::V1(disperse) => disperse
                 .to_shares()
                 .into_iter()
@@ -586,11 +591,6 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 .into_iter()
                 .map(|share| VidDisperseShare::V2(share))
                 .collect(),
-            VidDisperse::V3(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V3(share))
-                .collect(),
         }
     }
 
@@ -599,6 +599,11 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         proposal: Proposal<TYPES, Self>,
     ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
         match proposal.data {
+            VidDisperse::V0(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
             VidDisperse::V1(disperse) => disperse
                 .to_share_proposals(&proposal.signature)
                 .into_iter()
@@ -609,30 +614,31 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 .into_iter()
                 .map(|proposal| convert_proposal(proposal))
                 .collect(),
-            VidDisperse::V3(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
         }
     }
 }
 
 /// Type aliases for different versions of VID disperse shares
-pub type VidDisperseShare1<TYPES> = vid_disperse::ADVZDisperseShare<TYPES>;
-pub type VidDisperseShare2<TYPES> = vid_disperse::AvidMDisperseShare<TYPES>;
-pub type VidDisperseShare3<TYPES> = vid_disperse::AvidmGf2DisperseShare<TYPES>;
+pub type VidDisperseShare0<TYPES> = vid_disperse::ADVZDisperseShare<TYPES>;
+pub type VidDisperseShare1<TYPES> = vid_disperse::AvidMDisperseShare<TYPES>;
+pub type VidDisperseShare2<TYPES> = vid_disperse::AvidmGf2DisperseShare<TYPES>;
 
 /// VID share and associated metadata for a single node
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound = "TYPES: NodeType")]
 pub enum VidDisperseShare<TYPES: NodeType> {
     /// VID disperse share type for first version VID
-    V1(VidDisperseShare1<TYPES>),
+    V0(VidDisperseShare0<TYPES>),
     /// VID disperse share type after epoch upgrade and VID upgrade
-    V2(VidDisperseShare2<TYPES>),
+    V1(VidDisperseShare1<TYPES>),
     /// VID disperse share type for AvidmGf2 Scheme
-    V3(VidDisperseShare3<TYPES>),
+    V2(VidDisperseShare2<TYPES>),
+}
+
+impl<TYPES: NodeType> From<VidDisperseShare0<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: VidDisperseShare0<TYPES>) -> Self {
+        Self::V0(share)
+    }
 }
 
 impl<TYPES: NodeType> From<VidDisperseShare1<TYPES>> for VidDisperseShare<TYPES> {
@@ -647,12 +653,6 @@ impl<TYPES: NodeType> From<VidDisperseShare2<TYPES>> for VidDisperseShare<TYPES>
     }
 }
 
-impl<TYPES: NodeType> From<VidDisperseShare3<TYPES>> for VidDisperseShare<TYPES> {
-    fn from(share: VidDisperseShare3<TYPES>) -> Self {
-        Self::V3(share)
-    }
-}
-
 impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     /// Consume `self` and return a `Proposal`
     pub fn to_proposal(
@@ -660,9 +660,9 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
     ) -> Option<Proposal<TYPES, Self>> {
         let payload_commitment_ref: &[u8] = match &self {
+            Self::V0(share) => share.payload_commitment.as_ref(),
             Self::V1(share) => share.payload_commitment.as_ref(),
             Self::V2(share) => share.payload_commitment.as_ref(),
-            Self::V3(share) => share.payload_commitment.as_ref(),
         };
         let Ok(signature) = TYPES::SignatureKey::sign(private_key, payload_commitment_ref) else {
             tracing::error!("VID: failed to sign dispersal share payload");
@@ -678,63 +678,63 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     /// Return the internal `recipient_key`
     pub fn recipient_key(&self) -> &TYPES::SignatureKey {
         match self {
+            Self::V0(share) => &share.recipient_key,
             Self::V1(share) => &share.recipient_key,
             Self::V2(share) => &share.recipient_key,
-            Self::V3(share) => &share.recipient_key,
         }
     }
 
     /// Return the payload length in bytes.
     pub fn payload_byte_len(&self) -> u32 {
         match self {
+            Self::V0(share) => share.payload_byte_len(),
             Self::V1(share) => share.payload_byte_len(),
             Self::V2(share) => share.payload_byte_len(),
-            Self::V3(share) => share.payload_byte_len(),
         }
     }
 
     /// Return a reference to the internal payload VID commitment
     pub fn payload_commitment_ref(&self) -> &[u8] {
         match self {
+            Self::V0(share) => share.payload_commitment.as_ref(),
             Self::V1(share) => share.payload_commitment.as_ref(),
             Self::V2(share) => share.payload_commitment.as_ref(),
-            Self::V3(share) => share.payload_commitment.as_ref(),
         }
     }
 
     /// Return the internal payload VID commitment
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V1(share) => VidCommitment::V1(share.payload_commitment),
+            Self::V0(share) => VidCommitment::V0(share.payload_commitment),
+            Self::V1(share) => share.payload_commitment.into(),
             Self::V2(share) => share.payload_commitment.into(),
-            Self::V3(share) => share.payload_commitment.into(),
         }
     }
 
     /// Return the target epoch
     pub fn target_epoch(&self) -> Option<<TYPES as NodeType>::Epoch> {
         match self {
-            Self::V1(_) => None,
+            Self::V0(_) => None,
+            Self::V1(share) => share.target_epoch,
             Self::V2(share) => share.target_epoch,
-            Self::V3(share) => share.target_epoch,
         }
     }
 
     /// Internally verify the share given necessary information
     pub fn verify(&self, total_nodes: usize) -> bool {
         match self {
+            Self::V0(share) => share.verify(total_nodes),
             Self::V1(share) => share.verify(total_nodes),
             Self::V2(share) => share.verify(total_nodes),
-            Self::V3(share) => share.verify(total_nodes),
         }
     }
 
     /// Set the view number
     pub fn set_view_number(&mut self, view_number: <TYPES as NodeType>::View) {
         match self {
+            Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
             Self::V2(share) => share.view_number = view_number,
-            Self::V3(share) => share.view_number = view_number,
         }
     }
 }
@@ -742,9 +742,9 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
 impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare<TYPES> {
     fn view_number(&self) -> TYPES::View {
         match self {
+            Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
             Self::V2(disperse) => disperse.view_number(),
-            Self::V3(disperse) => disperse.view_number(),
         }
     }
 }
@@ -752,9 +752,9 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare<TYPES> {
 impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperseShare<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         match self {
-            Self::V1(_) => None,
+            Self::V0(_) => None,
+            Self::V1(share) => share.epoch(),
             Self::V2(share) => share.epoch(),
-            Self::V3(share) => share.epoch(),
         }
     }
 }
@@ -2093,7 +2093,7 @@ pub mod null_block {
         let vid_result = advz_scheme(num_storage_nodes).commit_only(Vec::new());
 
         match vid_result {
-            Ok(r) => Some(VidCommitment::V1(r)),
+            Ok(r) => Some(VidCommitment::V0(r)),
             Err(_) => None,
         }
     }
@@ -2190,27 +2190,27 @@ mod test {
 
     #[test]
     fn test_vid_commitment_display() {
+        let vc = VidCommitment::V0(VidCommitment0::default());
+        assert_eq!(
+            format!("{vc}"),
+            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+        );
+        assert_eq!(
+            format!("{vc:?}"),
+            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+        );
+
         let vc = VidCommitment::V1(VidCommitment1::default());
         assert_eq!(
             format!("{vc}"),
-            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
         );
         assert_eq!(
             format!("{vc:?}"),
-            "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
         );
 
         let vc = VidCommitment::V2(VidCommitment2::default());
-        assert_eq!(
-            format!("{vc}"),
-            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
-        );
-        assert_eq!(
-            format!("{vc:?}"),
-            "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
-        );
-
-        let vc = VidCommitment::V3(VidCommitment3::default());
         assert_eq!(
             format!("{vc}"),
             "AvidmGf2Commit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACq"

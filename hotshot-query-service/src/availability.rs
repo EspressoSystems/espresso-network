@@ -281,7 +281,7 @@ fn downgrade_vid_common_query_data<Types: NodeType>(
     let VidCommonQueryData {
         height,
         block_hash,
-        payload_hash: VidCommitment::V1(payload_hash),
+        payload_hash: VidCommitment::V0(payload_hash),
         common: VidCommon::V0(common),
     } = data
     else {
@@ -1275,7 +1275,7 @@ mod test {
             assert_eq!(common.height(), block.height());
             assert_eq!(common.block_hash(), block.hash());
             assert_eq!(
-                VidCommitment::V1(common.payload_hash()),
+                VidCommitment::V0(common.payload_hash()),
                 block.payload_hash(),
             );
             assert_eq!(

@@ -187,7 +187,7 @@ pub fn parent_references(view: u64) -> ParentBlockReferences<TestTypes> {
     ParentBlockReferences {
         view_number: <TestTypes as NodeType>::View::new(view),
         leaf_commit: random_commitment(rng),
-        vid_commitment: hotshot_types::data::VidCommitment::V1(
+        vid_commitment: hotshot_types::data::VidCommitment::V0(
             advz_scheme(TEST_NUM_NODES_IN_VID_COMPUTATION)
                 .commit_only(rng.sample_iter(Standard).take(100).collect::<Vec<_>>())
                 .unwrap(),

@@ -260,5 +260,5 @@ pub trait Versions: Clone + Copy + Debug + Send + Sync + 'static {
     type DrbAndHeaderUpgrade: StaticVersionType;
 
     /// The version at which to use VID v3
-    type Vid3Upgrade: StaticVersionType;
+    type Vid2Upgrade: StaticVersionType;
 }

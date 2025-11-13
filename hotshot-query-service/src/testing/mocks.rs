@@ -197,7 +197,7 @@ impl Versions for MockVersions {
     ];
     type Epochs = StaticVersion<0, 4>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid3Upgrade = StaticVersion<0, 6>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 /// A type alias for the mock base version
