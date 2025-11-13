@@ -194,8 +194,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
     for TransactionTaskState<TYPES, V>
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        let builder_timeout = Duration::from_secs(4);
         Self {
-            builder_timeout: handle.builder_timeout(),
+            builder_timeout,
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             cur_view: handle.cur_view().await,
@@ -211,7 +212,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
                 .builder_urls
                 .iter()
                 .cloned()
-                .map(|url| BuilderClient::new(url, handle.builder_timeout()))
+                .map(|url| BuilderClient::new(url, builder_timeout))
                 .collect(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,

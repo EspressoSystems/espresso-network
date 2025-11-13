@@ -152,7 +152,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // is aggressive but still very reasonable for an HTTP request. If that fails with all of
         // our peers, we increase the timeout by 1 second for each successive retry, until we
         // eventually succeed.
-        let timeout_dur = Duration::from_millis(500) * (retry as u32 + 1);
+        let timeout_dur = Duration::from_millis(500) * (retry as u32 + 4);
 
         // Keep track of which peers we make requests to and which succeed (`true`) or fail (`false`),
         // so we can update reliability scores at the end.
