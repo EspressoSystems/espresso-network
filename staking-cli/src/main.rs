@@ -161,6 +161,10 @@ fn decode_and_display_logs(logs: &[Log]) {
                 )),
                 StakeTableV2Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
                 StakeTableV2Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::WithdrawalClaimed(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::ValidatorExitClaimed(e) => {
+                    output_success(format!("event: {e:?}"))
+                },
 
                 _ => {},
             }
