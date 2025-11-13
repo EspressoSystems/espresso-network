@@ -268,3 +268,13 @@ contracts-test-fuzz *args='-vv':
 
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
+
+contracts-test-network *args='-vv':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${ETHERSCAN_API_KEY:-}" ]; then
+        echo "Error: ETHERSCAN_API_KEY must be set to run network tests" >&2
+        echo "Set it in your environment or in .env file" >&2
+        exit 1
+    fi
+    forge test --match-test test_Network_ --jobs 1 {{args}}
