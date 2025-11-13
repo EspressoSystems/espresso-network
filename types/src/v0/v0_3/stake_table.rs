@@ -7,10 +7,11 @@ use alloy::{
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
-use hotshot::types::{SignatureKey};
-use hotshot_contract_adapter::sol_types::{ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy, StakeTableV2::{
-    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2
-}, UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy, ValidatorRegisteredV2Legacy};
+use hotshot::types::SignatureKey;
+use hotshot_contract_adapter::sol_types::StakeTableV2::{
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+    UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
+};
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
 };
@@ -147,47 +148,6 @@ pub enum StakeTableEvent {
     CommissionUpdate(CommissionUpdated),
 }
 
-
-#[derive(Clone,serde::Serialize, serde::Deserialize)]
-pub enum StakeTableEventLegacy {
-    Register(ValidatorRegisteredLegacy),
-    RegisterV2(ValidatorRegisteredV2Legacy),
-    Deregister(ValidatorExitLegacy),
-    Delegate(DelegatedLegacy),
-    Undelegate(UndelegatedLegacy),
-    KeyUpdate(ConsensusKeysUpdatedLegacy),
-    KeyUpdateV2(ConsensusKeysUpdatedV2Legacy),
-}
-
-
-impl From<StakeTableEventLegacy> for StakeTableEvent {
-    fn from(legacy: StakeTableEventLegacy) -> Self {
-        match legacy {
-            StakeTableEventLegacy::Register(v) => {
-                StakeTableEvent::Register(v.into())
-            }
-            StakeTableEventLegacy::RegisterV2(v) => {
-                StakeTableEvent::RegisterV2(v.into())
-            }
-            StakeTableEventLegacy::Deregister(v) => {
-                StakeTableEvent::Deregister(v.into())
-            }
-            StakeTableEventLegacy::Delegate(v) => {
-                StakeTableEvent::Delegate(v.into())
-            }
-            StakeTableEventLegacy::Undelegate(v) => {
-                StakeTableEvent::Undelegate(v.into())
-            }
-            StakeTableEventLegacy::KeyUpdate(v) => {
-                StakeTableEvent::KeyUpdate(v.into())
-            }
-            StakeTableEventLegacy::KeyUpdateV2(v) => {
-                StakeTableEvent::KeyUpdateV2(v.into())
-            }
-        }
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum StakeTableError {
     #[error("Validator {0:#x} already registered")]
@@ -221,7 +181,7 @@ pub enum StakeTableError {
     #[error("Stake table event decode error {0}")]
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
-    EventSortingError(#[from] EventSortingError)
+    EventSortingError(#[from] EventSortingError),
 }
 
 #[derive(Debug, Error)]
@@ -284,5 +244,5 @@ pub enum EventSortingError {
     MissingLogIndex,
 
     #[error("Invalid stake table V2 event")]
-    InvalidStakeTableV2Event
+    InvalidStakeTableV2Event,
 }
