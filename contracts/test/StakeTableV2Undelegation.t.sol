@@ -127,7 +127,7 @@ contract StakeTableV2UndelegationTest is Test {
         vm.warp(block.timestamp + ESCROW_PERIOD);
 
         vm.expectEmit();
-        emit StakeTableV2.UndelegationClaimed(delegator1, validator1, id, 100 ether);
+        emit StakeTableV2.WithdrawalClaimed(delegator1, validator1, id, 100 ether);
 
         vm.prank(delegator1);
         proxy.claimWithdrawal(validator1);
@@ -275,14 +275,15 @@ contract StakeTableV2UndelegationTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             StakeTableV2.initializeV2.selector, pauser, admin, 0, emptyCommissions
         );
+        StakeTableV2 implementation = new StakeTableV2();
         vm.prank(admin);
-        v1StakeTable.upgradeToAndCall(address(new StakeTableV2()), initData);
+        v1StakeTable.upgradeToAndCall(address(implementation), initData);
 
         StakeTableV2 v2StakeTable = StakeTableV2(address(v1StakeTable));
 
         vm.expectEmit();
         // Undelegations from V1 StakeTable have ID 0
-        emit StakeTableV2.UndelegationClaimed(v1Delegator, v1Validator, 0, 200 ether);
+        emit StakeTableV2.WithdrawalClaimed(v1Delegator, v1Validator, 0, 200 ether);
 
         vm.prank(v1Delegator);
         v2StakeTable.claimWithdrawal(v1Validator);

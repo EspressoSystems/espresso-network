@@ -150,8 +150,8 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::Upgraded(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Upgraded({v:?})"
             )),
-            StakeTableV2Events::UndelegationClaimed(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::UndelegationClaimed({v:?})"
+            StakeTableV2Events::WithdrawalClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::WithdrawalClaimed({v:?})"
             )),
             StakeTableV2Events::ValidatorExitClaimed(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::ValidatorExitClaimed({v:?})"

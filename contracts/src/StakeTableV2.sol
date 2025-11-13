@@ -63,7 +63,7 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 ///
 /// 10. Unique undelegation IDs are assigned to each undelegation via an auto-incrementing counter
 /// for better event tracking. The `undelegationIds` public mapping stores IDs alongside the base
-/// `undelegations` mapping. Events `UndelegatedV2`, `UndelegationClaimed`, and
+/// `undelegations` mapping. Events `UndelegatedV2`, `WithdrawalClaimed`, and
 /// `ValidatorExitClaimed`
 /// include the undelegation ID as an indexed parameter for efficient querying and tracking.
 ///
@@ -181,7 +181,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param validator The address of the validator
     /// @param undelegationId Unique identifier for this undelegation
     /// @param amount The amount claimed
-    event UndelegationClaimed(
+    event WithdrawalClaimed(
         address indexed delegator,
         address indexed validator,
         uint64 indexed undelegationId,
@@ -354,7 +354,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         SafeTransferLib.safeTransfer(token, delegator, amount);
 
-        emit UndelegationClaimed(delegator, validator, id, amount);
+        emit WithdrawalClaimed(delegator, validator, id, amount);
     }
 
     /// @notice Delegate funds to a validator
