@@ -11,9 +11,6 @@ import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUpgradeable {
-    /// @notice upgrade event when the proxy updates the implementation it's pointing to
-    event Upgrade(address implementation);
-
     /// @notice since the constructor initializes storage on this contract we disable it
     /// @dev storage is on the proxy contract since it calls this contract via delegatecall
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -37,9 +34,8 @@ contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUp
     }
 
     /// @notice only the owner can authorize an upgrade
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
-        emit Upgrade(newImplementation);
-    }
+    // solhint-disable-next-line no-empty-blocks
+    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     /// @notice Use this to get the implementation contract version
     function getVersion()

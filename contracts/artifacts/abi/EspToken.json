@@ -393,19 +393,6 @@
   },
   {
     "type": "event",
-    "name": "Upgrade",
-    "inputs": [
-      {
-        "name": "implementation",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "Upgraded",
     "inputs": [
       {
