@@ -973,12 +973,13 @@ pub async fn get_leader_and_fetch_missing_rewards(
         }
     } else {
         let missing_reward_accts = validated_state.forgotten_reward_accounts_v2(reward_accounts);
-
+        let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
         if !missing_reward_accts.is_empty() {
             tracing::warn!(
                 parent_height,
                 ?parent_view,
                 ?missing_reward_accts,
+                %reward_merkle_tree_root,
                 "fetching missing reward accounts from peers"
             );
 
@@ -988,7 +989,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
                     instance_state,
                     parent_height,
                     parent_view,
-                    validated_state.reward_merkle_tree_v2.commitment(),
+                    reward_merkle_tree_root,
                     missing_reward_accts,
                 )
                 .await?;

@@ -435,10 +435,21 @@ pub mod mock {
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub struct MockStateCatchup {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
+        delay: std::time::Duration,
+    }
+
+    impl Default for MockStateCatchup {
+        fn default() -> Self {
+            Self {
+                backoff: Default::default(),
+                state: Default::default(),
+                delay: std::time::Duration::ZERO,
+            }
+        }
     }
 
     impl FromIterator<(ViewNumber, Arc<ValidatedState>)> for MockStateCatchup {
@@ -446,7 +457,15 @@ pub mod mock {
             Self {
                 backoff: Default::default(),
                 state: iter.into_iter().collect(),
+                delay: std::time::Duration::ZERO,
             }
+        }
+    }
+
+    impl MockStateCatchup {
+        pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
+            self.delay = delay;
+            self
         }
     }
 
@@ -471,6 +490,8 @@ pub mod mock {
             fee_merkle_tree_root: FeeMerkleCommitment,
             accounts: &[FeeAccount],
         ) -> anyhow::Result<Vec<FeeAccountProof>> {
+            tokio::time::sleep(self.delay).await;
+
             let src = &self.state[&view].fee_merkle_tree;
             assert_eq!(src.commitment(), fee_merkle_tree_root);
 
@@ -483,9 +504,9 @@ pub mod mock {
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
                     .context(format!("response missing fee account {account}"))?;
-                proof
-                    .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for fee account {account}"))?;
+                proof.verify(&fee_merkle_tree_root).context(format!(
+                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -500,6 +521,8 @@ pub mod mock {
             view: ViewNumber,
             mt: &mut BlockMerkleTree,
         ) -> anyhow::Result<()> {
+            tokio::time::sleep(self.delay).await;
+
             tracing::info!("catchup: fetching frontier for view {view}");
             let src = &self.state[&view].block_merkle_tree;
 
@@ -522,6 +545,8 @@ pub mod mock {
             _retry: usize,
             _commitment: Commitment<ChainConfig>,
         ) -> anyhow::Result<ChainConfig> {
+            tokio::time::sleep(self.delay).await;
+
             Ok(ChainConfig::default())
         }
 

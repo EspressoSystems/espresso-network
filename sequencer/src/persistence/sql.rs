@@ -16,9 +16,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{
-        EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy, Validator,
-    },
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     StakeTableHash, ValidatorMap,
 };
@@ -232,6 +230,13 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_SLOW_STATEMENT_THRESHOLD", value_parser = parse_duration, default_value = "1s")]
     pub(crate) slow_statement_threshold: Duration,
 
+    /// The maximum time a single SQL statement is allowed to run before being canceled.
+    ///
+    /// This helps prevent queries from running indefinitely and consuming resources.
+    /// Set to 10 minutes by default
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
+    pub(crate) statement_timeout: Duration,
+
     /// The minimum number of database connections to maintain at any time.
     ///
     /// The database client will, to the best of its ability, maintain at least `min` open
@@ -312,6 +317,7 @@ impl From<PostgresOptions> for Config {
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
         cfg = cfg.connection_timeout(Duration::from_secs(10240));
         cfg = cfg.slow_statement_threshold(Duration::from_secs(1));
+        cfg = cfg.statement_timeout(Duration::from_secs(600)); // 10 minutes default
 
         cfg
     }
@@ -328,6 +334,7 @@ impl From<SqliteOptions> for Config {
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
         cfg = cfg.connection_timeout(Duration::from_secs(10240));
         cfg = cfg.slow_statement_threshold(Duration::from_secs(2));
+        cfg = cfg.statement_timeout(Duration::from_secs(600));
         cfg
     }
 }
@@ -341,6 +348,7 @@ impl From<PostgresOptions> for Options {
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
+            statement_timeout: Duration::from_secs(600),
             ..Default::default()
         }
     }
@@ -356,6 +364,7 @@ impl From<SqliteOptions> for Options {
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
             uri: None,
+            statement_timeout: Duration::from_secs(600),
             prune: false,
             pruning: Default::default(),
             consensus_pruning: Default::default(),
@@ -388,6 +397,7 @@ impl TryFrom<&Options> for Config {
         cfg = cfg.min_connections(opt.min_connections);
         cfg = cfg.connection_timeout(opt.connection_timeout);
         cfg = cfg.slow_statement_threshold(opt.slow_statement_threshold);
+        cfg = cfg.statement_timeout(opt.statement_timeout);
 
         #[cfg(not(feature = "embedded-db"))]
         {
@@ -2031,123 +2041,6 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 10_000;
-        let mut tx = self.db.read().await?;
-
-        let migration_status = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows 
-         FROM epoch_migration 
-         WHERE table_name = 'stake_table_events'",
-        )
-        .fetch_optional(tx.as_mut())
-        .await?;
-
-        let mut offset = if let Some((completed, migrated_rows)) = migration_status {
-            if completed {
-                tracing::info!("Migration already completed for stake_table_events");
-                return Ok(());
-            }
-            tracing::info!(
-                "Resuming stake_table_events migration from offset={}",
-                migrated_rows
-            );
-            migrated_rows
-        } else {
-            tracing::info!("No existing migration entry for stake_table_events, starting from 0");
-            0
-        };
-
-        tracing::warn!("migrating stake_table_events…");
-
-        loop {
-            let mut rtx = self.db.read().await?;
-            let rows = query(
-                "SELECT l1_block, log_index, event 
-             FROM stake_table_events
-             ORDER BY l1_block, log_index
-             LIMIT $1 OFFSET $2",
-            )
-            .bind(batch_size)
-            .bind(offset)
-            .fetch_all(rtx.as_mut())
-            .await?;
-            drop(rtx);
-
-            if rows.is_empty() {
-                break;
-            }
-
-            let mut values = Vec::new();
-
-            for row in rows.iter() {
-                let l1_block: i64 = row.try_get("l1_block")?;
-                let log_index: i64 = row.try_get("log_index")?;
-                let event_value: serde_json::Value = row.try_get("event")?;
-
-                // deserialize legacy
-                let legacy_event: StakeTableEventLegacy =
-                    serde_json::from_value(event_value.clone())
-                        .context("Failed to deserialize legacy stake_table_event")?;
-
-                let new_event: StakeTableEvent = legacy_event.into();
-                let event_json = serde_json::to_value(new_event)?;
-
-                values.push((l1_block, log_index, event_json));
-            }
-
-            // Insert batch into new table
-            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
-                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
-            );
-
-            query_builder.push_values(values, |mut b, (l1_block, log_index, event)| {
-                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
-            });
-            query_builder.push(
-                " ON CONFLICT (l1_block, log_index) 
-      DO UPDATE SET event = EXCLUDED.event",
-            );
-
-            let mut wtx = self.db.write().await?;
-            query_builder.build().execute(wtx.as_mut()).await?;
-
-            // update migration progress
-            offset += rows.len() as i64;
-
-            wtx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("stake_table_events".to_string(), false, offset)],
-            )
-            .await?;
-            wtx.commit().await?;
-
-            tracing::info!(
-                "stake_table_events migration progress: rows={} offset={}",
-                rows.len(),
-                offset
-            );
-
-            if rows.len() < batch_size as usize {
-                break;
-            }
-        }
-        let mut wtx = self.db.write().await?;
-        wtx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("stake_table_events".to_string(), true, offset)],
-        )
-        .await?;
-        wtx.commit().await?;
-
-        tracing::warn!("migration complete for stake_table_events");
-
-        Ok(())
-    }
     async fn store_next_epoch_quorum_certificate(
         &self,
         high_qc: NextEpochQuorumCertificate2<SeqTypes>,
@@ -3061,17 +2954,9 @@ mod testing {
 
 #[cfg(test)]
 mod test {
-
-    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
-    use hotshot_contract_adapter::sol_types::{
-        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
-        StakeTableV2::{Delegated, Undelegated},
-        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
-        ValidatorRegisteredV2Legacy,
-    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
@@ -3712,161 +3597,6 @@ mod test {
         );
 
         storage.migrate_storage().await.unwrap();
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stake_table_events_migration() {
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-
-        let storage = opt.create().await.unwrap();
-
-        let validator = espresso_types::testing::TestValidator::random();
-
-        let delegator = Address::random();
-
-        let legacy_events: Vec<(i64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
-            (
-                1,
-                1,
-                StakeTableEventLegacy::Register(ValidatorRegisteredLegacy {
-                    account: validator.account,
-                    blsVk: validator.bls_vk.into(),
-                    schnorrVk: validator.schnorr_vk.into(),
-                    commission: validator.commission,
-                }),
-                StakeTableEvent::Register((&validator).into()),
-            ),
-            (
-                1,
-                2,
-                StakeTableEventLegacy::RegisterV2(ValidatorRegisteredV2Legacy {
-                    account: validator.account,
-                    blsVK: validator.bls_vk.into(),
-                    schnorrVK: validator.schnorr_vk.into(),
-                    commission: validator.commission,
-                    blsSig: validator.bls_sig.into(),
-                    schnorrSig: validator.schnorr_sig.clone(),
-                }),
-                StakeTableEvent::RegisterV2((&validator).into()),
-            ),
-            (
-                1,
-                3,
-                StakeTableEventLegacy::KeyUpdate(ConsensusKeysUpdatedLegacy {
-                    account: validator.account,
-                    blsVK: validator.bls_vk.into(),
-                    schnorrVK: validator.schnorr_vk.into(),
-                }),
-                StakeTableEvent::KeyUpdate((&validator).into()),
-            ),
-            (
-                1,
-                4,
-                StakeTableEventLegacy::KeyUpdateV2(ConsensusKeysUpdatedV2Legacy {
-                    account: validator.account,
-                    blsVK: validator.bls_vk.into(),
-                    schnorrVK: validator.schnorr_vk.into(),
-                    blsSig: validator.bls_sig.into(),
-                    schnorrSig: validator.schnorr_sig.clone(),
-                }),
-                StakeTableEvent::KeyUpdateV2((&validator).into()),
-            ),
-            (
-                1,
-                5,
-                StakeTableEventLegacy::Deregister(ValidatorExitLegacy {
-                    validator: validator.account,
-                }),
-                StakeTableEvent::Deregister((&validator).into()),
-            ),
-            (
-                1,
-                6,
-                StakeTableEventLegacy::Delegate(DelegatedLegacy {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-                StakeTableEvent::Delegate(Delegated {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-            ),
-            (
-                1,
-                7,
-                StakeTableEventLegacy::Undelegate(UndelegatedLegacy {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-                StakeTableEvent::Undelegate(Undelegated {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-            ),
-        ];
-
-        let mut tx = storage.db.write().await.unwrap();
-
-        for (block, log_index, legacy_event, _) in &legacy_events {
-            let legacy_json = serde_json::to_value(legacy_event).unwrap();
-            query(
-                "INSERT INTO stake_table_events (l1_block, log_index, event)
-             VALUES ($1, $2, $3)",
-            )
-            .bind(block)
-            .bind(log_index)
-            .bind(legacy_json)
-            .execute(tx.as_mut())
-            .await
-            .unwrap();
-        }
-
-        tx.commit().await.unwrap();
-
-        storage.migrate_stake_table_events().await.unwrap();
-
-        let mut tx = storage.db.read().await.unwrap();
-
-        let (completed, migrated_rows) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows 
-         FROM epoch_migration 
-         WHERE table_name = 'stake_table_events'",
-        )
-        .fetch_one(tx.as_mut())
-        .await
-        .unwrap();
-        assert!(completed, "migration should be marked as completed");
-        assert_eq!(
-            migrated_rows,
-            legacy_events.len() as i64,
-            "all rows should be migrated"
-        );
-
-        for (block, log_index, _, expected_event) in legacy_events {
-            let row = query(
-                "SELECT event 
-             FROM stake_table_events 
-             WHERE l1_block = $1 AND log_index = $2",
-            )
-            .bind(block)
-            .bind(log_index)
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
-
-            let event_value: serde_json::Value = row.try_get("event").unwrap();
-            let migrated_event: StakeTableEvent = serde_json::from_value(event_value).unwrap();
-
-            assert_eq!(
-                migrated_event, expected_event,
-                "event migrated incorrectly from legacy"
-            );
-        }
     }
 }
 
