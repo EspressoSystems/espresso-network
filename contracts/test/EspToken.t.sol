@@ -321,6 +321,7 @@ contract EspTokenUpgradabilityTest is Test {
         address currentOwner = token.owner();
         assertEq(currentOwner, admin);
 
+        vm.prank(admin);
         vm.expectRevert(EspToken.OwnershipCannotBeRenounced.selector);
         token.renounceOwnership();
 
