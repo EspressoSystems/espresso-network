@@ -10,6 +10,15 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
+/// @title EspToken
+/// @notice ERC20 token for the Espresso network, upgradeable via UUPS.
+/// @dev Upgradeability & storage layout (frozen-inheritance pattern)
+/// We intentionally do not use `__gap` slots. Once a version is deployed,
+/// its storage layout is frozen and never modified. New state variables are
+/// added only in a new child contract (V2, V3, …) that inherits from the
+/// previous version and appends fields at the end. This preserves slot order
+/// across upgrades without relying on gaps. (Note: upstream OZ parents may
+/// include their own gaps—those remain untouched.)
 contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice since the constructor initializes storage on this contract we disable it
     /// @dev storage is on the proxy contract since it calls this contract via delegatecall
