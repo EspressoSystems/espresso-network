@@ -316,4 +316,24 @@ contract EspTokenUpgradabilityTest is Test {
         timelock.execute(address(token), 0, transferOwnershipData, bytes32(0), bytes32(0));
         vm.stopPrank();
     }
+
+    function test_renounceOwnership_Reverts() public {
+        address currentOwner = token.owner();
+        assertEq(currentOwner, admin);
+
+        vm.expectRevert(EspToken.OwnershipCannotBeRenounced.selector);
+        token.renounceOwnership();
+
+        assertEq(token.owner(), admin);
+    }
+
+    function test_renounceOwnership_ByNonOwnerReverts() public {
+        vm.prank(tokenGrantRecipient);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, tokenGrantRecipient
+            )
+        );
+        token.renounceOwnership();
+    }
 }

@@ -93,22 +93,4 @@ contract EspTokenV2Test is Test {
         vm.expectRevert(EspTokenV2.ZeroRewardClaimAddress.selector);
         newToken.initializeV2(address(0));
     }
-
-    function test_renounceOwnership_Reverts() public {
-        address currentOwner = token.owner();
-        assertEq(currentOwner, owner);
-
-        vm.expectRevert(EspTokenV2.OwnershipCannotBeRenounced.selector);
-        token.renounceOwnership();
-
-        assertEq(token.owner(), owner);
-    }
-
-    function test_renounceOwnership_ByNonOwnerReverts() public {
-        vm.prank(user);
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user)
-        );
-        token.renounceOwnership();
-    }
 }
