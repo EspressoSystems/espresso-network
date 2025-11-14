@@ -53,7 +53,7 @@ use crate::{
     api::RewardAccountProofDataSource,
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{sql::Options, ChainConfigPersistence},
-    state::compute_state_update,
+    state::verify_state_update,
     SeqTypes,
 };
 
@@ -797,14 +797,22 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
 
     // Apply subsequent headers to compute the later state.
     for proposal in leaves {
-        state = compute_state_update(&state, instance, &catchup, &parent, &proposal)
+        let (new_state, _) = state
+            .apply_header(
+                &instance,
+                &catchup,
+                &parent,
+                proposal.block_header(),
+                proposal.block_header().version(),
+                proposal.view_number(),
+            )
             .await
-            .context(format!(
-                "unable to reconstruct state because state update {} failed",
-                proposal.height(),
-            ))?
-            .0;
+            .context("applying header")?;
+
+        verify_state_update(&new_state, &proposal).context("verifying state update")?;
+
         parent = proposal;
+        state = new_state;
     }
 
     tracing::info!(from_height, ?to_view, "successfully reconstructed state");
