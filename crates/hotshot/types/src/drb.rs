@@ -45,9 +45,7 @@ pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
                 upgrade_difficulty
             } else {
                 base_difficulty
-            };
-            tracing::info!("Selected DRB difficulty {selected_drb_difficulty}.");
-            selected_drb_difficulty
+            }
         })
     })
 }
