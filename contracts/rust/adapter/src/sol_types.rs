@@ -308,8 +308,10 @@ impl Clone for StakeTableV2::StakeTableV2Events {
             Self::ValidatorRegistered(v) => Self::ValidatorRegistered(*v),
             Self::ValidatorRegisteredV2(v) => Self::ValidatorRegisteredV2(v.clone()),
             Self::ValidatorExit(v) => Self::ValidatorExit(*v),
+            Self::ValidatorExitV2(v) => Self::ValidatorExitV2(v.clone()),
             Self::Delegated(v) => Self::Delegated(*v),
             Self::Undelegated(v) => Self::Undelegated(*v),
+            Self::UndelegatedV2(v) => Self::UndelegatedV2(v.clone()),
             Self::ConsensusKeysUpdated(v) => Self::ConsensusKeysUpdated(*v),
             Self::ConsensusKeysUpdatedV2(v) => Self::ConsensusKeysUpdatedV2(v.clone()),
             Self::CommissionUpdated(v) => Self::CommissionUpdated(v.clone()),
@@ -325,7 +327,9 @@ impl Clone for StakeTableV2::StakeTableV2Events {
             Self::RoleAdminChanged(v) => Self::RoleAdminChanged(v.clone()),
             Self::RoleGranted(v) => Self::RoleGranted(v.clone()),
             Self::RoleRevoked(v) => Self::RoleRevoked(v.clone()),
+            Self::WithdrawalClaimed(v) => Self::WithdrawalClaimed(v.clone()),
             Self::Upgraded(v) => Self::Upgraded(v.clone()),
+            Self::ValidatorExitClaimed(v) => Self::ValidatorExitClaimed(v.clone()),
             Self::Withdrawal(v) => Self::Withdrawal(v.clone()),
         }
     }
@@ -337,8 +341,10 @@ impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
             Self::ValidatorRegistered(_) => write!(f, "ValidatorRegistered(_)"),
             Self::ValidatorRegisteredV2(_) => write!(f, "ValidatorRegisteredV2(_)"),
             Self::ValidatorExit(v) => write!(f, "ValidatorExit({v:?})"),
+            Self::ValidatorExitV2(v) => write!(f, "ValidatorExitV2({v:?})"),
             Self::Delegated(v) => write!(f, "Delegated({v:?})"),
             Self::Undelegated(v) => write!(f, "Undelegated({v:?})"),
+            Self::UndelegatedV2(v) => write!(f, "UndelegatedV2({v:?})"),
             Self::ConsensusKeysUpdated(_) => write!(f, "ConsensusKeysUpdated(_)"),
             Self::ConsensusKeysUpdatedV2(_) => write!(f, "ConsensusKeysUpdatedV2(_)"),
             Self::CommissionUpdated(v) => write!(f, "CommissionUpdated({v:?})"),
@@ -356,7 +362,9 @@ impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
             Self::RoleAdminChanged(v) => write!(f, "RoleAdminChanged({v:?})"),
             Self::RoleGranted(v) => write!(f, "RoleGranted({v:?})"),
             Self::RoleRevoked(v) => write!(f, "RoleRevoked({v:?})"),
+            Self::WithdrawalClaimed(v) => write!(f, "WithdrawalClaimed({v:?})"),
             Self::Upgraded(v) => write!(f, "Upgraded({v:?})"),
+            Self::ValidatorExitClaimed(v) => write!(f, "ValidatorExitClaimed({v:?})"),
             Self::Withdrawal(v) => write!(f, "Withdrawal({v:?})"),
         }
     }

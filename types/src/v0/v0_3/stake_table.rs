@@ -7,9 +7,11 @@ use alloy::{
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
-use hotshot::types::{SignatureKey};
-use hotshot_contract_adapter::sol_types::{   StakeTableV2::{
-    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2}};
+use hotshot::types::SignatureKey;
+use hotshot_contract_adapter::sol_types::StakeTableV2::{
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+    UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
+};
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
 };
@@ -137,8 +139,10 @@ pub enum StakeTableEvent {
     Register(ValidatorRegistered),
     RegisterV2(ValidatorRegisteredV2),
     Deregister(ValidatorExit),
+    DeregisterV2(ValidatorExitV2),
     Delegate(Delegated),
     Undelegate(Undelegated),
+    UndelegateV2(UndelegatedV2),
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
     CommissionUpdate(CommissionUpdated),
@@ -177,7 +181,7 @@ pub enum StakeTableError {
     #[error("Stake table event decode error {0}")]
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
-    EventSortingError(#[from] EventSortingError)
+    EventSortingError(#[from] EventSortingError),
 }
 
 #[derive(Debug, Error)]
@@ -240,5 +244,5 @@ pub enum EventSortingError {
     MissingLogIndex,
 
     #[error("Invalid stake table V2 event")]
-    InvalidStakeTableV2Event
+    InvalidStakeTableV2Event,
 }
