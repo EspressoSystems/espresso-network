@@ -19,6 +19,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
+    membership::fetcher::Leaf2FetcherTrait,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
     testable_delay::DelayConfig,
@@ -107,6 +108,8 @@ where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
     <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
 {
     type Event = Event<TYPES>;
     type Error = Error;
@@ -249,16 +252,18 @@ where
 
                                 let storage = node.handle.storage().clone();
 
-                                let membership = Arc::new(RwLock::new(
-                                    <TYPES as NodeType>::Membership::new::<I>(
+                                let membership =
+                                    Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
                                         node.handle.hotshot.config.known_nodes_with_stake.clone(),
                                         node.handle.hotshot.config.known_da_nodes.clone(),
-                                        node.handle.storage().clone(),
-                                        generated_network.clone(),
-                                        node.handle.public_key().clone(),
+                                        Default::default(),
+                                        Leaf2FetcherTrait::<TYPES>::new::<I>(
+                                            generated_network.clone(),
+                                            node.handle.storage().clone(),
+                                            node.handle.public_key().clone(),
+                                        ),
                                         node.handle.hotshot.config.epoch_height,
-                                    ),
-                                ));
+                                    )));
                                 let memberships = EpochMembershipCoordinator::new(
                                     membership,
                                     node.handle.hotshot.config.epoch_height,

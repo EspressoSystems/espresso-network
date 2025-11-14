@@ -20,7 +20,7 @@ use hotshot_types::{
     data::{fake_commitment, vid_commitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
-        block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
+        block_contents::GENESIS_VID_NUM_STORAGE_NODES, election::Membership, metrics::NoMetrics,
         node_implementation::Versions, EncodeBytes,
     },
 };
@@ -64,7 +64,7 @@ pub fn build_instance_state<V: Versions>(
     );
 
     let coordinator = EpochMembershipCoordinator::new(
-        Arc::new(RwLock::new(EpochCommittees::new_stake(
+        Arc::new(RwLock::new(EpochCommittees::new(
             vec![],
             Default::default(),
             None,

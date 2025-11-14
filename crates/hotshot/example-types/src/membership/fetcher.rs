@@ -22,6 +22,14 @@ use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinaryS
 
 use crate::storage_types::TestStorage;
 
+pub trait Leaf2FetcherTrait<TYPES: NodeType>: Send + Sync {
+    fn new<I: NodeImplementation<TYPES>>(
+        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+        storage: TestStorage<TYPES>,
+        public_key: TYPES::SignatureKey,
+    ) -> Self;
+}
+
 pub struct Leaf2Fetcher<TYPES: NodeType> {
     pub network_functions: NetworkFunctions<TYPES>,
     pub storage: TestStorage<TYPES>,
@@ -72,8 +80,8 @@ pub fn network_functions<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     NetworkFunctions { direct_message }
 }
 
-impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
-    pub fn new<I: NodeImplementation<TYPES>>(
+impl<TYPES: NodeType> Leaf2FetcherTrait<TYPES> for Leaf2Fetcher<TYPES> {
+    fn new<I: NodeImplementation<TYPES>>(
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
         storage: TestStorage<TYPES>,
         public_key: TYPES::SignatureKey,
@@ -89,7 +97,9 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             network_receiver: None,
         }
     }
+}
 
+impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
     pub fn set_external_channel(&mut self, mut network_receiver: Receiver<Event<TYPES>>) {
         let public_key = self.public_key.clone();
         let storage = self.storage.clone();

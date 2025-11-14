@@ -10,7 +10,7 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     traits::{
         election::{Membership, NoStakeTableHash},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::transition_block_for_epoch,
@@ -81,8 +81,10 @@ impl<
     type Error = anyhow::Error;
     type StakeTableHash = NoStakeTableHash;
     type Storage = TestStorage<TYPES>;
+    type Fetcher = Leaf2Fetcher<TYPES>;
+    type FixedBlockReward = ();
 
-    fn new<I: NodeImplementation<TYPES>>(
+    /*fn new<I: NodeImplementation<TYPES>>(
         quorum_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         da_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         storage: Self::Storage,
@@ -95,6 +97,25 @@ impl<
         Self {
             inner: TestStakeTable::new(
                 quorum_members.into_iter().map(Into::into).collect(),
+                da_members.into_iter().map(Into::into).collect(),
+            ),
+            epochs: HashSet::new(),
+            drbs: HashSet::new(),
+            fetcher: RwLock::new(fetcher).into(),
+            epoch_height,
+        }
+    }*/
+
+    fn new(
+        committee_members: Vec<PeerConfig<TYPES>>,
+        da_members: Vec<PeerConfig<TYPES>>,
+        _fixed_block_reward: Self::FixedBlockReward,
+        fetcher: Self::Fetcher,
+        epoch_height: u64,
+    ) -> Self {
+        Self {
+            inner: TestStakeTable::new(
+                committee_members.into_iter().map(Into::into).collect(),
                 da_members.into_iter().map(Into::into).collect(),
             ),
             epochs: HashSet::new(),

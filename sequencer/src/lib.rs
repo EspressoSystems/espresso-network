@@ -57,6 +57,7 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateSignKey},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
+        election::Membership,
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
@@ -531,7 +532,7 @@ where
     fetcher.spawn_update_loop().await;
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     // Create the HotShot membership
-    let mut membership = EpochCommittees::new_stake(
+    let mut membership = EpochCommittees::new(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
@@ -1279,7 +1280,7 @@ pub mod testing {
             fetcher.spawn_update_loop().await;
 
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-            let mut membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,

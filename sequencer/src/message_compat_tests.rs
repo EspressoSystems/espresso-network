@@ -29,7 +29,8 @@ use hotshot_types::{
     simple_certificate::{DaCertificate, QuorumCertificate, UpgradeCertificate},
     simple_vote::{DaData, DaVote, QuorumData, QuorumVote, UpgradeProposalData, UpgradeVote},
     traits::{
-        node_implementation::ConsensusTime, signature_key::SignatureKey, BlockPayload, EncodeBytes,
+        election::Membership, node_implementation::ConsensusTime, signature_key::SignatureKey,
+        BlockPayload, EncodeBytes,
     },
 };
 use pretty_assertions::assert_eq;
@@ -67,7 +68,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let epoch_height = 10;
 
     let membership = EpochMembershipCoordinator::new(
-        Arc::new(RwLock::new(EpochCommittees::new_stake(
+        Arc::new(RwLock::new(EpochCommittees::new(
             committee.clone(),
             committee,
             None,

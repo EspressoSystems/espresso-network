@@ -6,7 +6,9 @@ use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
+    data::EpochNumber,
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{election::Membership, states::InstanceState},
     HotShotConfig,
 };
 #[cfg(any(test, feature = "testing"))]
@@ -185,7 +187,7 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+        let membership = Arc::new(RwLock::new(EpochCommittees::new(
             vec![],
             Default::default(),
             None,
@@ -217,7 +219,7 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+        let membership = Arc::new(RwLock::new(EpochCommittees::new(
             vec![],
             Default::default(),
             None,
@@ -247,7 +249,7 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+        let membership = Arc::new(RwLock::new(EpochCommittees::new(
             vec![],
             Default::default(),
             None,
@@ -342,7 +344,7 @@ impl Default for NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+        let membership = Arc::new(RwLock::new(EpochCommittees::new(
             vec![],
             Default::default(),
             None,

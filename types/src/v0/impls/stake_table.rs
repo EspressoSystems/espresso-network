@@ -40,7 +40,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -1727,95 +1727,6 @@ impl EpochCommittees {
             .cloned()
     }
 
-    // We need a constructor to match our concrete type.
-    pub fn new_stake(
-        // TODO remove `new` from trait and rename this to `new`.
-        // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        committee_members: Vec<PeerConfig<SeqTypes>>,
-        da_members: Vec<PeerConfig<SeqTypes>>,
-        fixed_block_reward: Option<RewardAmount>,
-        fetcher: Fetcher,
-        epoch_height: u64,
-    ) -> Self {
-        // For each member, get the stake table entry
-        let stake_table: Vec<_> = committee_members
-            .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
-            .cloned()
-            .collect();
-
-        let eligible_leaders = stake_table.clone();
-        // For each member, get the stake table entry
-        let da_members: Vec<_> = da_members
-            .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
-            .cloned()
-            .collect();
-
-        // Index the stake table by public key
-        let indexed_stake_table: HashMap<PubKey, _> = stake_table
-            .iter()
-            .map(|peer_config| {
-                (
-                    PubKey::public_key(&peer_config.stake_table_entry),
-                    peer_config.clone(),
-                )
-            })
-            .collect();
-
-        // Index the stake table by public key
-        let indexed_da_members: HashMap<PubKey, _> = da_members
-            .iter()
-            .map(|peer_config| {
-                (
-                    PubKey::public_key(&peer_config.stake_table_entry),
-                    peer_config.clone(),
-                )
-            })
-            .collect();
-
-        let da_committee = DaCommittee {
-            committee: da_members,
-            indexed_committee: indexed_da_members,
-        };
-
-        let members = NonEpochCommittee {
-            eligible_leaders,
-            stake_table,
-            indexed_stake_table,
-            da_committee,
-        };
-
-        let mut map = HashMap::new();
-        let epoch_committee = EpochCommittee {
-            eligible_leaders: members.eligible_leaders.clone(),
-            stake_table: members
-                .stake_table
-                .iter()
-                .map(|x| (PubKey::public_key(&x.stake_table_entry), x.clone()))
-                .collect(),
-            validators: Default::default(),
-            address_mapping: HashMap::new(),
-            block_reward: Default::default(),
-            stake_table_hash: None,
-            header: None,
-        };
-        map.insert(Epoch::genesis(), epoch_committee.clone());
-        // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
-        map.insert(Epoch::genesis() + 1u64, epoch_committee.clone());
-
-        Self {
-            non_epoch_committee: members,
-            da_committees: BTreeMap::new(),
-            state: map,
-            randomized_committees: BTreeMap::new(),
-            first_epoch: None,
-            fixed_block_reward,
-            fetcher: Arc::new(fetcher),
-            epoch_height,
-        }
-    }
-
     pub async fn reload_stake(&mut self, limit: u64) {
         match self.fetcher.fetch_fixed_block_reward().await {
             Ok(block_reward) => {
@@ -1932,19 +1843,94 @@ impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
     type Storage = ();
     type StakeTableHash = StakeTableState;
+    type Fetcher = Fetcher;
+    type FixedBlockReward = Option<RewardAmount>;
 
-    // DO NOT USE. Dummy constructor to comply w/ trait.
-    fn new<I: NodeImplementation<SeqTypes>>(
-        // TODO remove `new` from trait and remove this fn as well.
-        // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        _committee_members: Vec<PeerConfig<SeqTypes>>,
-        _da_members: Vec<PeerConfig<SeqTypes>>,
-        _storage: Self::Storage,
-        _network: Arc<<I as NodeImplementation<SeqTypes>>::Network>,
-        _public_key: <SeqTypes as NodeType>::SignatureKey,
-        _epoch_height: u64,
+    // We need a constructor to match our concrete type.
+    fn new(
+        committee_members: Vec<PeerConfig<SeqTypes>>,
+        da_members: Vec<PeerConfig<SeqTypes>>,
+        fixed_block_reward: Option<RewardAmount>,
+        fetcher: Fetcher,
+        epoch_height: u64,
     ) -> Self {
-        panic!("This function has been replaced with new_stake()");
+        // For each member, get the stake table entry
+        let stake_table: Vec<_> = committee_members
+            .iter()
+            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
+            .cloned()
+            .collect();
+
+        let eligible_leaders = stake_table.clone();
+        // For each member, get the stake table entry
+        let da_members: Vec<_> = da_members
+            .iter()
+            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
+            .cloned()
+            .collect();
+
+        // Index the stake table by public key
+        let indexed_stake_table: HashMap<PubKey, _> = stake_table
+            .iter()
+            .map(|peer_config| {
+                (
+                    PubKey::public_key(&peer_config.stake_table_entry),
+                    peer_config.clone(),
+                )
+            })
+            .collect();
+
+        // Index the stake table by public key
+        let indexed_da_members: HashMap<PubKey, _> = da_members
+            .iter()
+            .map(|peer_config| {
+                (
+                    PubKey::public_key(&peer_config.stake_table_entry),
+                    peer_config.clone(),
+                )
+            })
+            .collect();
+
+        let da_committee = DaCommittee {
+            committee: da_members,
+            indexed_committee: indexed_da_members,
+        };
+
+        let members = NonEpochCommittee {
+            eligible_leaders,
+            stake_table,
+            indexed_stake_table,
+            da_committee,
+        };
+
+        let mut map = HashMap::new();
+        let epoch_committee = EpochCommittee {
+            eligible_leaders: members.eligible_leaders.clone(),
+            stake_table: members
+                .stake_table
+                .iter()
+                .map(|x| (PubKey::public_key(&x.stake_table_entry), x.clone()))
+                .collect(),
+            validators: Default::default(),
+            address_mapping: HashMap::new(),
+            block_reward: Default::default(),
+            stake_table_hash: None,
+            header: None,
+        };
+        map.insert(Epoch::genesis(), epoch_committee.clone());
+        // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
+        map.insert(Epoch::genesis() + 1u64, epoch_committee.clone());
+
+        Self {
+            non_epoch_committee: members,
+            da_committees: BTreeMap::new(),
+            state: map,
+            randomized_committees: BTreeMap::new(),
+            first_epoch: None,
+            fixed_block_reward,
+            fetcher: Arc::new(fetcher),
+            epoch_height,
+        }
     }
 
     /// Get the stake table for the current view
