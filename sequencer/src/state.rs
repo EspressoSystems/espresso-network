@@ -50,32 +50,40 @@ pub(crate) async fn compute_state_update(
     );
     ensure!(
         state.block_merkle_tree.commitment() == parent_header.block_merkle_tree_root(),
-        "internal error! in-memory block tree {:?} does not match parent header {:?}",
+        "internal error! in-memory block tree {:?} does not match parent header {:?}\nfull \
+         in-memory block tree {:?}",
         state.block_merkle_tree.commitment(),
-        parent_header.block_merkle_tree_root()
+        parent_header.block_merkle_tree_root(),
+        state.block_merkle_tree,
     );
     ensure!(
         state.fee_merkle_tree.commitment() == parent_header.fee_merkle_tree_root(),
-        "internal error! in-memory fee tree {:?} does not match parent header {:?}",
+        "internal error! in-memory fee tree {:?} does not match parent header {:?}\nfull \
+         in-memory fee tree {:?}",
         state.fee_merkle_tree.commitment(),
-        parent_header.fee_merkle_tree_root()
+        parent_header.fee_merkle_tree_root(),
+        state.fee_merkle_tree,
     );
 
     match parent_header.reward_merkle_tree_root() {
         Either::Left(v1_root) => {
             ensure!(
                 state.reward_merkle_tree_v1.commitment() == v1_root,
-                "internal error! in-memory v1 reward tree {:?} does not match parent header {:?}",
+                "internal error! in-memory v1 reward tree {:?} does not match parent header \
+                 {:?}\nfull in-memory v1 reward tree {:?}",
                 state.reward_merkle_tree_v1.commitment(),
-                v1_root
+                v1_root,
+                state.reward_merkle_tree_v1,
             )
         },
         Either::Right(v2_root) => {
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == v2_root,
-                "internal error! in-memory v2 reward tree {:?} does not match parent header {:?}",
+                "internal error! in-memory v2 reward tree {:?} does not match parent header \
+                 {:?}\nfull in-memory v2 reward tree {:?}",
                 state.reward_merkle_tree_v2.commitment(),
-                v2_root
+                v2_root,
+                state.reward_merkle_tree_v2,
             )
         },
     }
