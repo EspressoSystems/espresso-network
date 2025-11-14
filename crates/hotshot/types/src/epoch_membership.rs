@@ -316,7 +316,10 @@ where
         .await
         {
             Ok(drb_result) => {
-                tracing::warn!(?drb_result, "DRB result for epoch {epoch:?} retrieved from peers. Updating membership.");
+                tracing::warn!(
+                    ?drb_result,
+                    "DRB result for epoch {epoch:?} retrieved from peers. Updating membership."
+                );
                 self.membership
                     .write()
                     .await
