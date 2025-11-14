@@ -206,7 +206,7 @@ pub async fn compute_drb_result(
         difficulty_level: drb_input.difficulty_level,
     };
 
-    tracing::error!("DRB calculated for epoch {}", drb_input.epoch);
+    tracing::warn!("Completed DRB calculation. Result: {:?}", final_drb_input);
 
     let store_drb_progress = store_drb_progress.clone();
     tokio::spawn(async move {
