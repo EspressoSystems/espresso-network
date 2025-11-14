@@ -106,7 +106,13 @@ pub async fn compute_drb_result(
     let mut drb_input = drb_input;
 
     if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
-        if loaded_drb_input.iteration >= drb_input.iteration {
+        if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+            tracing::error!(
+                "We are calculating the DRB result with input {drb_input:?}, but we had \
+                 previously stored {loaded_drb_input:?} with a different difficulty level for \
+                 this epoch. Discarding the value from storage"
+            );
+        } else if loaded_drb_input.iteration >= drb_input.iteration {
             drb_input = loaded_drb_input;
         }
     }
