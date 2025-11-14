@@ -8,7 +8,7 @@ use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
     sol_types::{
         EspToken::{self, EspTokenErrors},
-        StakeTable::{self, StakeTableErrors},
+        StakeTableV2::{self, StakeTableV2Errors},
     },
 };
 
@@ -40,11 +40,11 @@ pub async fn delegate(
         "delegate {} ESP to {validator_address}",
         format_ether(amount)
     );
-    let st = StakeTable::new(stake_table, provider);
+    let st = StakeTableV2::new(stake_table, provider);
     st.delegate(validator_address, amount)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 pub async fn undelegate(
@@ -57,21 +57,29 @@ pub async fn undelegate(
         "undelegate {} ESP from {validator_address}",
         format_ether(amount)
     );
-    let st = StakeTable::new(stake_table, provider);
+    let st = StakeTableV2::new(stake_table, provider);
     st.undelegate(validator_address, amount)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 #[cfg(test)]
 mod test {
+    use hotshot_contract_adapter::{
+        sol_types::StakeTableV2, stake_table::StakeTableContractVersion,
+    };
+    use rstest::rstest;
+
     use super::*;
     use crate::{deploy::TestSystem, receipt::ReceiptExt};
 
+    #[rstest]
+    #[case(StakeTableContractVersion::V1)]
+    #[case(StakeTableContractVersion::V2)]
     #[tokio::test]
-    async fn test_delegate() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+    async fn test_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
+        let system = TestSystem::deploy_version(version).await?;
         system.register_validator().await?;
         let validator_address = system.deployer_address;
 
@@ -86,16 +94,19 @@ mod test {
         .assert_success()
         .await?;
 
-        let event = receipt.decoded_log::<StakeTable::Delegated>().unwrap();
+        let event = receipt.decoded_log::<StakeTableV2::Delegated>().unwrap();
         assert_eq!(event.validator, validator_address);
         assert_eq!(event.amount, amount);
 
         Ok(())
     }
 
+    #[rstest]
+    #[case(StakeTableContractVersion::V1)]
+    #[case(StakeTableContractVersion::V2)]
     #[tokio::test]
-    async fn test_undelegate() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+    async fn test_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
+        let system = TestSystem::deploy_version(version).await?;
         let amount = U256::from(123);
         system.register_validator().await?;
         system.delegate(amount).await?;
@@ -111,9 +122,27 @@ mod test {
         .assert_success()
         .await?;
 
-        let event = receipt.decoded_log::<StakeTable::Undelegated>().unwrap();
-        assert_eq!(event.validator, validator_address);
-        assert_eq!(event.amount, amount);
+        match version {
+            StakeTableContractVersion::V1 => {
+                let event = receipt.decoded_log::<StakeTableV2::Undelegated>().unwrap();
+                assert_eq!(event.validator, validator_address);
+                assert_eq!(event.amount, amount);
+            },
+            StakeTableContractVersion::V2 => {
+                let event = receipt
+                    .decoded_log::<StakeTableV2::UndelegatedV2>()
+                    .unwrap();
+                assert_eq!(event.validator, validator_address);
+                assert_eq!(event.amount, amount);
+                let block = system
+                    .provider
+                    .get_block_by_number(receipt.block_number.unwrap().into())
+                    .await?
+                    .unwrap();
+                let expected_unlock = block.header.timestamp + system.exit_escrow_period.as_secs();
+                assert_eq!(event.unlocksAt, U256::from(expected_unlock));
+            },
+        }
 
         Ok(())
     }

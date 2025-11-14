@@ -302,7 +302,14 @@ pub enum Commands {
         #[clap(long, default_value_t = 5)]
         num_validators: u16,
 
-        #[arg(long, value_enum, default_value_t = DelegationConfig::default())]
+        /// The number of delegators to create per validator.
+        ///
+        /// If not specified, a random number (2-5) of delegators is created per validator.
+        /// Must be <= 100,000.
+        #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
+        num_delegators_per_validator: Option<u64>,
+
+        #[arg(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = DelegationConfig::default())]
         delegation_config: DelegationConfig,
     },
     /// Export validator node signatures for address validation.

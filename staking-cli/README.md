@@ -348,3 +348,32 @@ Format handling:
 - File extension auto-detection: `.json` and `.toml` files are automatically parsed in the correct format
 - Stdin defaults to JSON: `cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99`
 - Explicit format for stdin: `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
+
+### Native Demo Staking
+
+The `stake-for-demo` command is used to set up validators and delegators for testing purposes.
+
+    staking-cli stake-for-demo --num-validators 5
+
+Configuration options:
+
+- `--num-validators`: Number of validators to register (default: 5)
+- `--num-delegators-per-validator`: Number of delegators per validator (default: random 2-5, max: 100,000)
+- `--delegation-config`: Delegation configuration mode (default: variable-amounts)
+  - `equal-amounts`: All validators have equal delegation amounts
+  - `variable-amounts`: Variable delegation amounts per validator
+  - `multiple-delegators`: Multiple delegators per validator
+  - `no-self-delegation`: Validators do not self-delegate
+
+Environment variables:
+
+- `NUM_DELEGATORS_PER_VALIDATOR`: Set the number of delegators per validator
+- `DELEGATION_CONFIG`: Set the delegation configuration mode
+
+Example usage:
+
+    # Create 10 validators with 50 delegators each
+    staking-cli stake-for-demo --num-validators 10 --num-delegators-per-validator 50
+
+    # Using environment variables with native demo
+    env NUM_DELEGATORS_PER_VALIDATOR=1000 DELEGATION_CONFIG=no-self-delegation just demo-native-drb-header

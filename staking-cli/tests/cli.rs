@@ -299,12 +299,16 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
     system.warp_to_unlock_time().await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
+    let expected_event = match version {
+        StakeTableContractVersion::V1 => "Withdrawal",
+        StakeTableContractVersion::V2 => "WithdrawalClaimed",
+    };
     cmd.arg("claim-withdrawal")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .assert()
         .success()
-        .stdout(str::contains("Withdrawal"));
+        .stdout(str::contains(expected_event));
     Ok(())
 }
 
@@ -318,12 +322,16 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
     system.warp_to_unlock_time().await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
+    let expected_event = match version {
+        StakeTableContractVersion::V1 => "Withdrawal",
+        StakeTableContractVersion::V2 => "ValidatorExitClaimed",
+    };
     cmd.arg("claim-validator-exit")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .assert()
         .success()
-        .stdout(str::contains("Withdrawal"));
+        .stdout(str::contains(expected_event));
     Ok(())
 }
 
