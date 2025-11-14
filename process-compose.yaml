@@ -1,5 +1,8 @@
 version: "3"
 
+# When adding/removing native processes (non-docker commands), update the NATIVE_PROCESSES
+# array in scripts/cleanup-process-compose to ensure proper cleanup on test failures.
+
 availability:
   # terminate process compose if process exits
   run-forever: &run-forever

@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    io::{stderr, stdout, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::{Child, Command},
     str::FromStr,
@@ -394,27 +394,43 @@ async fn wait_for_sequencer_client(
 }
 
 pub struct NativeDemo {
-    _child: Child,
+    child: Child,
 }
 
 impl Drop for NativeDemo {
     fn drop(&mut self) {
-        // It would be preferable to send a SIGINT or similar to the process that we started
-        // originally but despite quite some effort this never worked for the process-compose
-        // process started from within the scripts/demo-native script.
-        //
-        // Using `process-compose down` seems to pretty reliably stop the process-compose process
-        // and all the services it started.
-        println!("Terminating process compose");
-        let res = Command::new("process-compose")
-            .arg("down")
-            .stdout(stdout())
-            .stderr(stderr())
-            .spawn()
-            .expect("process-compose runs")
-            .wait()
-            .unwrap();
-        println!("process-compose down exited with: {res}");
+        println!("Terminating demo-native process");
+        // Send SIGTERM to allow the EXIT trap in scripts/demo-native to run cleanup.
+        // child.kill() sends SIGKILL which cannot be caught, so we use the kill command.
+        let pid = self.child.id();
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status();
+
+        // Wait up to 20 seconds for graceful shutdown
+        for i in 0..20 {
+            match self.child.try_wait() {
+                Ok(Some(_)) => {
+                    println!("demo-native process exited after {} seconds", i);
+                    return;
+                },
+                Ok(None) => {
+                    println!("waiting for demo-native to exit");
+                    std::thread::sleep(Duration::from_secs(1));
+                },
+                Err(e) => {
+                    println!("Error checking process status: {}", e);
+                    break;
+                },
+            }
+        }
+
+        // Force kill if still running after 10 seconds
+        println!("Force killing demo-native process after timeout");
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        println!("demo-native process terminated");
     }
 }
 
@@ -431,6 +447,24 @@ impl NativeDemo {
                 .clone(),
         );
         let workspace_dir = crate_dir.parent().expect("crate_dir has a parent");
+
+        // Clean up any leftover processes from previous test runs
+        println!("Running cleanup before starting demo...");
+        let cleanup_script = workspace_dir.join("scripts/cleanup-process-compose");
+        let cleanup_status = Command::new("bash")
+            .arg(&cleanup_script)
+            .current_dir(workspace_dir)
+            .status()
+            .context("failed to execute cleanup script")?;
+
+        if !cleanup_status.success() {
+            return Err(anyhow!(
+                "Failed to clean up before starting demo.\nThis usually means there are leftover \
+                 processes from a previous run.\nTry running 'scripts/cleanup-process-compose' \
+                 manually."
+            ));
+        }
+        println!("Cleanup complete, starting demo...");
 
         let mut cmd = Command::new("bash");
 
@@ -501,6 +535,6 @@ impl NativeDemo {
 
         println!("process-compose started ...");
 
-        Ok(Self { _child: child })
+        Ok(Self { child })
     }
 }

@@ -18,9 +18,10 @@ ESPRESSO_BASE_STORAGE_PATH=$(mktemp -d -t espresso-XXXXXXXX)
 export ESPRESSO_BASE_STORAGE_PATH
 echo "Using sequencer storage path: $ESPRESSO_BASE_STORAGE_PATH"
 
-# If keeping the storage path, to keep it around, run with env CI=true
-trap "exit" INT TERM
-trap cleanup EXIT
+# If keeping the storage path is desired, run with env CI=true Forward signals to process-compose
+# child process
+trap 'kill -TERM "$PC_PID" 2>/dev/null' INT TERM
+
 cleanup(){
     # Don't run cleanup if running in the CI. We may be running process-compose
     # with --detach and the cleanup will remove the storage path while the
@@ -31,7 +32,13 @@ cleanup(){
     else
         echo "Cleaning up sequencer storage path: $ESPRESSO_BASE_STORAGE_PATH"
         rm -rv "$ESPRESSO_BASE_STORAGE_PATH"
+
+        SCRIPT_DIR="$(dirname "$(readlink -fm "$0")")"
+        "$SCRIPT_DIR/cleanup-process-compose"
     fi
 }
 
-process-compose "$@"
+process-compose "$@" &
+PC_PID=$!
+wait "$PC_PID"  # Interrupted by signal, trap runs
+wait "$PC_PID" 2>/dev/null || true  # Actually wait for process-compose to exit

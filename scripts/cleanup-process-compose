@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# Cleanup script for espresso-network demo
+#
+# This script safely terminates all processes and containers started by the native demo.
+# It's called automatically by scripts/demo-native when the demo exits (via trap).
+#
+# Key features:
+# - Only kills processes running from this project directory (checks /proc/$pid/cwd)
+# - Cleans up Docker containers and networks
+# - Safe to run multiple times
+#
+set -e
+
+echo "Cleaning up espresso-network demo..."
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# List of native processes managed by process-compose
+# Update this list when adding/removing processes in process-compose.yaml
+NATIVE_PROCESSES=(
+    sequencer
+    orchestrator
+    state-relay-server
+    cdn-marshal
+    cdn-broker
+    permissionless-builder
+    submit-transactions
+    nasty-client
+    node-metrics
+    state-prover
+    espresso-bridge
+    staking-cli
+)
+
+# Helper function to safely kill processes only if they're running from this project
+kill_project_processes() {
+    local proc_name=$1
+    local signal=$2
+
+    pgrep "$proc_name" 2>/dev/null | while read -r pid; do
+        if [ -d "/proc/$pid" ]; then
+            local proc_cwd
+            proc_cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || echo "")
+
+            if [[ "$proc_cwd" == "$PROJECT_DIR"* ]]; then
+                echo "Killing $proc_name (pid $pid) from $proc_cwd"
+                kill -"$signal" "$pid" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+# 1. Stop process-compose (only if running from this project directory)
+echo "Stopping process-compose..."
+kill_project_processes "process-compose" TERM
+sleep 2
+kill_project_processes "process-compose" KILL
+
+# 2. Stop all docker containers via docker compose
+echo "Stopping docker services..."
+docker compose down --remove-orphans --volumes 2>/dev/null || echo "docker-compose not running or already stopped"
+
+# 3. Kill lingering native processes (only if running from this project directory)
+echo "Killing native processes from $PROJECT_DIR..."
+for proc in "${NATIVE_PROCESSES[@]}"; do
+    kill_project_processes "$proc" TERM
+done
+
+sleep 2
+
+# Force kill if still running
+for proc in "${NATIVE_PROCESSES[@]}"; do
+    kill_project_processes "$proc" KILL
+done
+
+echo "Cleanup complete!"
