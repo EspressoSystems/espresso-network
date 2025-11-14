@@ -43,11 +43,13 @@ pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
     Arc::new(move |view| {
         let upgrade_lock = upgrade_lock.clone();
         Box::pin(async move {
-            if upgrade_lock.upgraded_drb_and_header(view).await {
+            let selected_drb_difficulty = if upgrade_lock.upgraded_drb_and_header(view).await {
                 upgrade_difficulty
             } else {
                 base_difficulty
-            }
+            };
+            tracing::info!("Selected DRB difficulty {selected_drb_difficulty}.");
+            selected_drb_difficulty
         })
     })
 }
