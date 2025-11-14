@@ -98,13 +98,19 @@ impl From<RequestError> for Error {
 
 impl From<anyhow::Error> for Error {
     fn from(err: anyhow::Error) -> Self {
-        Self::internal().context(err)
+        Self {
+            message: format!("{err:#}"),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 }
 
 impl From<sqlx::Error> for Error {
     fn from(err: sqlx::Error) -> Self {
-        Self::internal().context(err)
+        Self {
+            message: format!("{err:#}"),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 }
 
