@@ -269,7 +269,7 @@ where
             };
         }
         let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
-        tracing::error!("Fetching epochs: {epochs:?}");
+        tracing::warn!("Fetching stake tables for epochs: {epochs:?}");
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
