@@ -20,6 +20,9 @@ import { UUPSUpgradeable } from
 /// across upgrades without relying on gaps. (Note: upstream OZ parents may
 /// include their own gaps—those remain untouched.)
 contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUpgradeable {
+    /// @notice Cannot renounce ownership
+    error OwnershipCannotBeRenounced();
+
     /// @notice since the constructor initializes storage on this contract we disable it
     /// @dev storage is on the proxy contract since it calls this contract via delegatecall
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -45,6 +48,13 @@ contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUp
     /// @notice only the owner can authorize an upgrade
     // solhint-disable-next-line no-empty-blocks
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
+
+    /// @notice Cannot renounce ownership
+    /// @dev Override renounceOwnership() to revert, preventing accidental or malicious ownership
+    /// renunciation
+    function renounceOwnership() public virtual override onlyOwner {
+        revert OwnershipCannotBeRenounced();
+    }
 
     /// @notice Use this to get the implementation contract version
     function getVersion()
