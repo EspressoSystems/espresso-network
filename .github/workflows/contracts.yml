@@ -68,6 +68,7 @@ jobs:
     timeout-minutes: 90
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - test-type: forge
@@ -85,6 +86,10 @@ jobs:
           - test-type: echidna
             command: "just contracts-test-echidna --format text"
             nix-env: ".#echidna"
+            with-diff-test: false
+          - test-type: network
+            command: "just contracts-test-network"
+            nix-env: ""
             with-diff-test: false
     steps:
       - uses: actions/checkout@v4
@@ -112,6 +117,8 @@ jobs:
           nix develop --accept-flake-config -c cargo build --locked --bin diff-test --profile test
 
       - name: Run ${{ matrix.test-type }} tests
+        env:
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" == "pull_request" ]; then
