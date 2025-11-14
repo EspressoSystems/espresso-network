@@ -6,7 +6,7 @@
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>anyhow::Result;
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>hotshot_contract_adapter::{
 <a href=#8 id=8 data-nosnippet>8</a>    evm::DecodeRevert <span class="kw">as _</span>,
-<a href=#9 id=9 data-nosnippet>9</a>    sol_types::StakeTable::{<span class="self">self</span>, StakeTableErrors},
+<a href=#9 id=9 data-nosnippet>9</a>    sol_types::StakeTableV2::{<span class="self">self</span>, StakeTableV2Errors},
 <a href=#10 id=10 data-nosnippet>10</a>};
 <a href=#11 id=11 data-nosnippet>11</a>
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">pub async fn </span>claim_withdrawal(
@@ -14,11 +14,11 @@
 <a href=#14 id=14 data-nosnippet>14</a>    stake_table: Address,
 <a href=#15 id=15 data-nosnippet>15</a>    validator_address: Address,
 <a href=#16 id=16 data-nosnippet>16</a>) -&gt; <span class="prelude-ty">Result</span>&lt;PendingTransactionBuilder&lt;Ethereum&gt;&gt; {
-<a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">let </span>st = StakeTable::new(stake_table, provider);
+<a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">let </span>st = StakeTableV2::new(stake_table, provider);
 <a href=#18 id=18 data-nosnippet>18</a>    st.claimWithdrawal(validator_address)
 <a href=#19 id=19 data-nosnippet>19</a>        .send()
 <a href=#20 id=20 data-nosnippet>20</a>        .<span class="kw">await
-<a href=#21 id=21 data-nosnippet>21</a>        </span>.maybe_decode_revert::&lt;StakeTableErrors&gt;()
+<a href=#21 id=21 data-nosnippet>21</a>        </span>.maybe_decode_revert::&lt;StakeTableV2Errors&gt;()
 <a href=#22 id=22 data-nosnippet>22</a>}
 <a href=#23 id=23 data-nosnippet>23</a>
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">pub async fn </span>claim_validator_exit(
@@ -26,11 +26,11 @@
 <a href=#26 id=26 data-nosnippet>26</a>    stake_table: Address,
 <a href=#27 id=27 data-nosnippet>27</a>    validator_address: Address,
 <a href=#28 id=28 data-nosnippet>28</a>) -&gt; <span class="prelude-ty">Result</span>&lt;PendingTransactionBuilder&lt;Ethereum&gt;&gt; {
-<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">let </span>st = StakeTable::new(stake_table, provider);
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">let </span>st = StakeTableV2::new(stake_table, provider);
 <a href=#30 id=30 data-nosnippet>30</a>    st.claimValidatorExit(validator_address)
 <a href=#31 id=31 data-nosnippet>31</a>        .send()
 <a href=#32 id=32 data-nosnippet>32</a>        .<span class="kw">await
-<a href=#33 id=33 data-nosnippet>33</a>        </span>.maybe_decode_revert::&lt;StakeTableErrors&gt;()
+<a href=#33 id=33 data-nosnippet>33</a>        </span>.maybe_decode_revert::&lt;StakeTableV2Errors&gt;()
 <a href=#34 id=34 data-nosnippet>34</a>}
 <a href=#35 id=35 data-nosnippet>35</a>
 <a href=#36 id=36 data-nosnippet>36</a><span class="attr">#[cfg(test)]
@@ -55,30 +55,34 @@
 <a href=#55 id=55 data-nosnippet>55</a>            </span>.assert_success()
 <a href=#56 id=56 data-nosnippet>56</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#57 id=57 data-nosnippet>57</a>
-<a href=#58 id=58 data-nosnippet>58</a>        <span class="kw">let </span>event = receipt.decoded_log::&lt;StakeTable::Withdrawal&gt;().unwrap();
-<a href=#59 id=59 data-nosnippet>59</a>        <span class="macro">assert_eq!</span>(event.amount, amount);
-<a href=#60 id=60 data-nosnippet>60</a>
-<a href=#61 id=61 data-nosnippet>61</a>        <span class="prelude-val">Ok</span>(())
-<a href=#62 id=62 data-nosnippet>62</a>    }
-<a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="attr">#[tokio::test]
-<a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">async fn </span>test_claim_validator_exit() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#66 id=66 data-nosnippet>66</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#67 id=67 data-nosnippet>67</a>        <span class="kw">let </span>amount = U256::from(<span class="number">123</span>);
-<a href=#68 id=68 data-nosnippet>68</a>        system.register_validator().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#69 id=69 data-nosnippet>69</a>        system.delegate(amount).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#70 id=70 data-nosnippet>70</a>        system.deregister_validator().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#71 id=71 data-nosnippet>71</a>        system.warp_to_unlock_time().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#72 id=72 data-nosnippet>72</a>
-<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>validator_address = system.deployer_address;
-<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">let </span>receipt = claim_validator_exit(<span class="kw-2">&amp;</span>system.provider, system.stake_table, validator_address)
-<a href=#75 id=75 data-nosnippet>75</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#76 id=76 data-nosnippet>76</a>            </span>.assert_success()
-<a href=#77 id=77 data-nosnippet>77</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#78 id=78 data-nosnippet>78</a>
-<a href=#79 id=79 data-nosnippet>79</a>        <span class="kw">let </span>event = receipt.decoded_log::&lt;StakeTable::Withdrawal&gt;().unwrap();
-<a href=#80 id=80 data-nosnippet>80</a>        <span class="macro">assert_eq!</span>(event.amount, amount);
-<a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a>        <span class="prelude-val">Ok</span>(())
-<a href=#83 id=83 data-nosnippet>83</a>    }
-<a href=#84 id=84 data-nosnippet>84</a>}</code></pre></div></section></main></body></html>
+<a href=#58 id=58 data-nosnippet>58</a>        <span class="kw">let </span>event = receipt
+<a href=#59 id=59 data-nosnippet>59</a>            .decoded_log::&lt;StakeTableV2::WithdrawalClaimed&gt;()
+<a href=#60 id=60 data-nosnippet>60</a>            .unwrap();
+<a href=#61 id=61 data-nosnippet>61</a>        <span class="macro">assert_eq!</span>(event.amount, amount);
+<a href=#62 id=62 data-nosnippet>62</a>
+<a href=#63 id=63 data-nosnippet>63</a>        <span class="prelude-val">Ok</span>(())
+<a href=#64 id=64 data-nosnippet>64</a>    }
+<a href=#65 id=65 data-nosnippet>65</a>
+<a href=#66 id=66 data-nosnippet>66</a>    <span class="attr">#[tokio::test]
+<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">async fn </span>test_claim_validator_exit() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#68 id=68 data-nosnippet>68</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#69 id=69 data-nosnippet>69</a>        <span class="kw">let </span>amount = U256::from(<span class="number">123</span>);
+<a href=#70 id=70 data-nosnippet>70</a>        system.register_validator().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#71 id=71 data-nosnippet>71</a>        system.delegate(amount).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#72 id=72 data-nosnippet>72</a>        system.deregister_validator().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#73 id=73 data-nosnippet>73</a>        system.warp_to_unlock_time().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#74 id=74 data-nosnippet>74</a>
+<a href=#75 id=75 data-nosnippet>75</a>        <span class="kw">let </span>validator_address = system.deployer_address;
+<a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">let </span>receipt = claim_validator_exit(<span class="kw-2">&amp;</span>system.provider, system.stake_table, validator_address)
+<a href=#77 id=77 data-nosnippet>77</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#78 id=78 data-nosnippet>78</a>            </span>.assert_success()
+<a href=#79 id=79 data-nosnippet>79</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#80 id=80 data-nosnippet>80</a>
+<a href=#81 id=81 data-nosnippet>81</a>        <span class="kw">let </span>event = receipt
+<a href=#82 id=82 data-nosnippet>82</a>            .decoded_log::&lt;StakeTableV2::ValidatorExitClaimed&gt;()
+<a href=#83 id=83 data-nosnippet>83</a>            .unwrap();
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="macro">assert_eq!</span>(event.amount, amount);
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="prelude-val">Ok</span>(())
+<a href=#87 id=87 data-nosnippet>87</a>    }
+<a href=#88 id=88 data-nosnippet>88</a>}</code></pre></div></section></main></body></html>
