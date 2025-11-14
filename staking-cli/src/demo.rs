@@ -433,6 +433,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
         token_holder: &(impl Provider + WalletProvider<Wallet = EthereumWallet>),
         stake_table: Address,
         validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
+        num_delegators_per_validator: Option<u64>,
         config: DelegationConfig,
     ) -> Result<Self, CreateTransactionsError> {
         tracing::info!(%stake_table, "staking to stake table contract for demo");
@@ -501,7 +502,10 @@ impl StakingTransactions<HttpProviderWithWallet> {
             DelegationConfig::MultipleDelegators | DelegationConfig::NoSelfDelegation
         ) {
             for validator in &validator_info {
-                for _ in 0..rng.gen_range(2..=5) {
+                let delegators_per_validator = num_delegators_per_validator
+                    .map(|n| n as usize)
+                    .unwrap_or_else(|| rng.gen_range(2..=5));
+                for _ in 0..delegators_per_validator {
                     let random_amount: u64 = rng.gen_range(100..=500);
                     delegator_info.push(DelegatorConfig {
                         validator: validator.signer.address(),
@@ -626,6 +630,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
 pub async fn stake_for_demo(
     config: &Config,
     num_validators: u16,
+    num_delegators_per_validator: Option<u64>,
     delegation_config: DelegationConfig,
 ) -> Result<()> {
     tracing::info!("staking to stake table contract for demo");
@@ -675,6 +680,7 @@ pub async fn stake_for_demo(
         &grant_recipient,
         config.stake_table_address,
         validator_keys,
+        num_delegators_per_validator,
         delegation_config,
     )
     .await?
@@ -711,6 +717,7 @@ mod test {
             &system.provider,
             system.stake_table,
             keys,
+            None,
             config,
         )
         .await?
@@ -802,6 +809,42 @@ mod test {
         Ok(())
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_configurable_delegators_per_validator() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = vec![
+            TestSystem::gen_keys(&mut rng),
+            TestSystem::gen_keys(&mut rng),
+        ];
+
+        StakingTransactions::create(
+            system.rpc_url.clone(),
+            &system.provider,
+            system.stake_table,
+            keys,
+            Some(10),
+            DelegationConfig::MultipleDelegators,
+        )
+        .await?
+        .apply_all()
+        .await?;
+        let l1_block_number = system.provider.get_block_number().await?;
+        let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
+
+        assert_eq!(st.len(), 2);
+
+        let val1 = &st[0];
+        let val2 = &st[1];
+
+        // Each validator should have exactly 10 additional delegators plus self-delegation
+        assert_eq!(val1.delegators.len(), 11);
+        assert_eq!(val2.delegators.len(), 11);
+
+        Ok(())
+    }
+
     enum Failure {
         Esp,
         Eth,
@@ -842,6 +885,7 @@ mod test {
             &system.provider,
             system.stake_table,
             keys,
+            None,
             DelegationConfig::EqualAmounts,
         )
         .await;
@@ -877,6 +921,7 @@ mod test {
             &system.provider,
             system.stake_table,
             keys,
+            None,
             config,
         )
         .await?
