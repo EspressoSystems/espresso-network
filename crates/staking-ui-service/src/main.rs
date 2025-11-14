@@ -6,7 +6,7 @@ use futures::{FutureExt, future::try_join_all};
 use log_panics::BacktraceMode;
 use staking_ui_service::{
     Result, app,
-    input::l1::{self, RpcStream, Snapshot, options::L1ClientOptions},
+    input::l1::{self, RpcCatchup, RpcStream, Snapshot, options::L1ClientOptions},
     persistence::sql,
 };
 use tokio::time::sleep;
@@ -83,11 +83,14 @@ impl Options {
         tracing::info!(?genesis_block, "loaded L1 genesis");
         let genesis = Snapshot::empty(genesis_block);
 
+        let l1_catchup = RpcCatchup::new(&self.l1_options)?;
         let l1_input = RpcStream::new(self.l1_options).await?;
         let storage = sql::Persistence::new(&self.persistence).await?;
 
         // Create server state.
-        let l1 = Arc::new(RwLock::new(l1::State::new(storage, genesis).await?));
+        let l1 = Arc::new(RwLock::new(
+            l1::State::new(storage, genesis, &l1_catchup).await?,
+        ));
         let app = app::State::new(l1.clone());
 
         // Create tasks that will run in parallel.

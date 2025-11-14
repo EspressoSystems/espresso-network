@@ -73,6 +73,14 @@ pub struct L1ClientOptions {
     )]
     pub l1_rate_limit_delay: Option<Duration>,
 
+    /// Maximum number of L1 blocks that can be scanned for events in a single query.
+    #[clap(
+        long,
+        env = "ESPRESSO_STAKING_SERVICE_L1_EVENTS_MAX_BLOCK_RANGE",
+        default_value = "10000"
+    )]
+    pub l1_events_max_block_range: u64,
+
     /// HTTP providers to use for L1 RPC requests.
     #[clap(long, env = "ESPRESSO_STAKING_SERVICE_L1_HTTP", value_delimiter = ',', num_args = 1..)]
     pub http_providers: Vec<Url>,
@@ -102,6 +110,7 @@ impl Default for L1ClientOptions {
             l1_consecutive_failure_tolerance: 10,
             l1_failover_revert: Duration::from_secs(1800),
             l1_rate_limit_delay: None,
+            l1_events_max_block_range: 10000,
             http_providers: Vec::new(),
             l1_ws_provider: None,
             stake_table_address: Address::ZERO,

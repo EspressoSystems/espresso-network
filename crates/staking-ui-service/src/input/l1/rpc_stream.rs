@@ -4,22 +4,19 @@ use super::{
     BlockInput, L1Event, ResettableStream, options::L1ClientOptions,
     switching_transport::SwitchingTransport,
 };
+use crate::input::l1::provider::get_events;
 use crate::types::common::Address;
 use crate::{Error, Result, types::common::L1BlockId};
-use alloy::transports::{RpcError, TransportErrorKind};
 use alloy::{
     eips::BlockId,
     network::Ethereum,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
     rpc::types::{Filter, Header},
-    sol_types::SolEventInterface,
 };
 use futures::{
     future,
     stream::{self, BoxStream, Stream, StreamExt},
 };
-use hotshot_contract_adapter::sol_types::RewardClaim::RewardClaimEvents;
-use hotshot_contract_adapter::sol_types::StakeTableV2::StakeTableV2Events;
 use std::{
     pin::Pin,
     sync::Arc,
@@ -436,7 +433,7 @@ async fn try_get_events_from_header(
     header: &Header,
     stake_table_address: Address,
     reward_contract_address: Address,
-) -> Result<(Vec<L1Event>, Header), RpcError<TransportErrorKind>> {
+) -> Result<(Vec<L1Event>, Header)> {
     // Check bloom filter with header
     let has_logs = header.logs_bloom.contains_raw_log(stake_table_address, &[])
         || header
@@ -448,44 +445,16 @@ async fn try_get_events_from_header(
     }
 
     // try fetching the events with the block hash
-    let filter = Filter::new()
-        .at_block_hash(header.hash)
-        .address(vec![stake_table_address, reward_contract_address]);
-
-    let logs = provider.get_logs(&filter).await?;
-
-    // Decode events from logs
-    let mut events = Vec::new();
-    let block_number = header.number;
-
-    for log in logs {
-        // Try to decode stake table event
-        if log.address() == stake_table_address {
-            let event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "failed to decode stake table event at block {block_number}, tx {:?}: {e:?}",
-                        log.transaction_hash
-                    );
-                });
-            events.push(L1Event::StakeTable(Arc::new(event)));
-            continue;
-        }
-
-        // Try to decode reward claim event
-        if log.address() == reward_contract_address {
-            let event = RewardClaimEvents::decode_raw_log(log.topics(), &log.data().data)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "failed to decode reward claim event at block {block_number}, tx {:?}: {e:?}",
-                     log.transaction_hash
-                    );
-                });
-            events.push(L1Event::Reward(Arc::new(event)));
-            continue;
-        }
-    }
-
+    let events = get_events(
+        provider,
+        Filter::new().at_block_hash(header.hash),
+        stake_table_address,
+        reward_contract_address,
+    )
+    .await?
+    .into_iter()
+    .map(|(_, _, event)| event)
+    .collect();
     Ok((events, header.clone()))
 }
 
@@ -604,6 +573,7 @@ mod tests {
     use crate::input::l1::testing::ContractDeployment;
 
     use crate::input::l1::testing::MemoryStorage;
+    use crate::input::l1::testing::NoCatchup;
     use crate::input::l1::{Snapshot, State};
     use crate::types::common::Ratio;
     use async_lock::RwLock;
@@ -959,15 +929,15 @@ mod tests {
                 match event {
                     L1Event::StakeTable(stake_event) => {
                         println!("Stream event: {stake_event:?}");
-                        let result = stake_table_state_from_stream
-                            .apply_event((**stake_event).clone().try_into().unwrap());
-                        match result {
-                            Ok(Ok(())) => {}
-                            Ok(Err(e)) => {
-                                println!("Expected error: {e:?}");
-                            }
-                            Err(err) => {
-                                panic!("Critical stake table error: {err:?}");
+                        if let Ok(event) = (**stake_event).clone().try_into() {
+                            match stake_table_state_from_stream.apply_event(event) {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    println!("Expected error: {e:?}");
+                                }
+                                Err(err) => {
+                                    panic!("Critical stake table error: {err:?}");
+                                }
                             }
                         }
                     }
@@ -981,47 +951,10 @@ mod tests {
         println!(
             "Fetching events from blocks {start_block} to {end_block} directly from rpc provider"
         );
-
         let provider = ProviderBuilder::new().connect_http(rpc_url.clone());
-
-        let filter = Filter::new()
-            .events([
-                ValidatorRegistered::SIGNATURE,
-                ValidatorRegisteredV2::SIGNATURE,
-                ValidatorExit::SIGNATURE,
-                Delegated::SIGNATURE,
-                Undelegated::SIGNATURE,
-                ConsensusKeysUpdated::SIGNATURE,
-                ConsensusKeysUpdatedV2::SIGNATURE,
-                CommissionUpdated::SIGNATURE,
-            ])
-            .address(deployment.stake_table_addr)
-            .from_block(start_block)
-            .to_block(end_block);
-
-        let logs = provider
-            .get_logs(&filter)
-            .await
-            .expect("Failed to fetch logs");
-
-        // Apply events from range query to a fresh state
-        let mut stake_table_state_from_provider = StakeTableState::new();
-
-        for log in logs {
-            let st_event =
-                StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).unwrap();
-            let event = st_event.try_into().unwrap();
-            let result = stake_table_state_from_provider.apply_event(event);
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    println!("Expected error: {err:?}");
-                }
-                Err(err) => {
-                    panic!("Critical err: {err:?}");
-                }
-            }
-        }
+        let stake_table_state_from_provider =
+            fetch_stake_table_state_from_provider(&provider, &deployment, start_block, end_block)
+                .await;
 
         let stream_commit = stake_table_state_from_stream.commit();
         let provider_commit = stake_table_state_from_provider.commit();
@@ -1107,7 +1040,26 @@ mod tests {
         println!(
             "Fetching events from blocks {start_block} to {end_block} directly from rpc provider"
         );
+        let stake_table_state_from_provider =
+            fetch_stake_table_state_from_provider(&provider, &deployment, start_block, end_block)
+                .await;
 
+        // Compare the commits
+        let stream_commit = stake_table_state_from_stream.commit();
+        let provider_commit = stake_table_state_from_provider.commit();
+
+        assert_eq!(
+            stream_commit, provider_commit,
+            "Commit mismatch after reset from genesis"
+        );
+    }
+
+    async fn fetch_stake_table_state_from_provider(
+        provider: &impl Provider,
+        deployment: &ContractDeployment,
+        start_block: u64,
+        end_block: u64,
+    ) -> StakeTableState {
         let filter = Filter::new()
             .events([
                 ValidatorRegistered::SIGNATURE,
@@ -1119,23 +1071,26 @@ mod tests {
                 ConsensusKeysUpdatedV2::SIGNATURE,
                 CommissionUpdated::SIGNATURE,
             ])
-            .address(deployment.stake_table_addr)
             .from_block(start_block)
             .to_block(end_block);
-
-        let logs = provider
-            .get_logs(&filter)
-            .await
-            .expect("Failed to fetch logs");
+        let events = get_events(
+            &provider,
+            filter,
+            deployment.stake_table_addr,
+            deployment.reward_claim_addr,
+        )
+        .await
+        .unwrap();
 
         // Apply events from range query to a fresh state
-        let mut stake_table_state_from_provider = StakeTableState::new();
+        let mut state = StakeTableState::new();
 
-        for log in logs {
-            let st_event =
-                StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).unwrap();
-            let event = st_event.try_into().unwrap();
-            let result = stake_table_state_from_provider.apply_event(event);
+        for (_, _, event) in events {
+            let L1Event::StakeTable(st_event) = event else {
+                panic!("got unexpected non-stake table event");
+            };
+            let event = st_event.as_ref().clone().try_into().unwrap();
+            let result = state.apply_event(event);
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
@@ -1147,14 +1102,7 @@ mod tests {
             }
         }
 
-        // Compare the commits
-        let stream_commit = stake_table_state_from_stream.commit();
-        let provider_commit = stake_table_state_from_provider.commit();
-
-        assert_eq!(
-            stream_commit, provider_commit,
-            "Commit mismatch after reset from genesis"
-        );
+        state
     }
 
     #[tokio::test]
@@ -1185,7 +1133,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
         let state = Arc::new(RwLock::new(
-            State::new(storage.clone(), genesis_snapshot.clone())
+            State::new(storage.clone(), genesis_snapshot.clone(), &NoCatchup)
                 .await
                 .unwrap(),
         ));
@@ -1235,44 +1183,9 @@ mod tests {
         let start_block = genesis_block_number + 1;
         let end_block = subscription_latest_block.number;
 
-        let filter = Filter::new()
-            .events([
-                ValidatorRegistered::SIGNATURE,
-                ValidatorRegisteredV2::SIGNATURE,
-                ValidatorExit::SIGNATURE,
-                Delegated::SIGNATURE,
-                Undelegated::SIGNATURE,
-                ConsensusKeysUpdated::SIGNATURE,
-                ConsensusKeysUpdatedV2::SIGNATURE,
-                CommissionUpdated::SIGNATURE,
-            ])
-            .address(deployment.stake_table_addr)
-            .from_block(start_block)
-            .to_block(end_block);
-
-        let logs = provider
-            .get_logs(&filter)
-            .await
-            .expect("Failed to fetch logs from L1");
-
-        // Build state from L1 query
-        let mut stake_table_from_l1_query = StakeTableState::new();
-        for log in logs {
-            let st_event =
-                StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).unwrap();
-            if let Ok(stake_table_event) = st_event.try_into() {
-                let result = stake_table_from_l1_query.apply_event(stake_table_event);
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        println!("Expected error applying L1 event: {e:?}");
-                    }
-                    Err(err) => {
-                        panic!("Critical error applying L1 event: {err:?}");
-                    }
-                }
-            }
-        }
+        let stake_table_from_l1_query =
+            fetch_stake_table_state_from_provider(&provider, &deployment, start_block, end_block)
+                .await;
 
         // Compare the states
         // Both states should have the same set of validators

@@ -108,7 +108,7 @@ mod test {
         input::l1::{
             BlockInput, Snapshot,
             testing::{
-                MemoryStorage, VecStream, block_id, block_snapshot, subscribe_until,
+                MemoryStorage, NoCatchup, VecStream, block_id, block_snapshot, subscribe_until,
                 validator_registered_event,
             },
         },
@@ -179,9 +179,13 @@ mod test {
 
         // Start with an empty state.
         let l1 = Arc::new(RwLock::new(
-            l1::State::new(MemoryStorage::default(), Snapshot::empty(block_snapshot(1)))
-                .await
-                .unwrap(),
+            l1::State::new(
+                MemoryStorage::default(),
+                Snapshot::empty(block_snapshot(1)),
+                &NoCatchup,
+            )
+            .await
+            .unwrap(),
         ));
 
         // Register a node so that we have some non-empty state and updates.

@@ -3,7 +3,10 @@
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
     time::Duration,
 };
@@ -193,6 +196,46 @@ impl ResettableStream for VecStream {
         if let Some(reorg) = self.reorg.take() {
             self.inputs = reorg;
         }
+    }
+}
+
+/// [`L1Catchup`] implementation which never does catchup.
+///
+/// In other words, this provider always pretends that the given starting block is the latest block.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoCatchup;
+
+impl L1Catchup for NoCatchup {
+    async fn fast_forward(&self, _from: u64) -> Result<Vec<(L1BlockId, Timestamp, Vec<L1Event>)>> {
+        Ok(vec![])
+    }
+}
+
+/// [`L1Catchup`] implementation which supplies a predefined event sequence.
+#[derive(Clone, Debug)]
+pub struct CatchupFromEvents {
+    events: Vec<(L1BlockId, Timestamp, Vec<L1Event>)>,
+}
+
+impl CatchupFromEvents {
+    pub fn from_blocks(blocks: impl IntoIterator<Item = BlockInput>) -> Self {
+        Self {
+            events: blocks
+                .into_iter()
+                .map(|input| (input.block, input.timestamp, input.events))
+                .collect(),
+        }
+    }
+}
+
+impl L1Catchup for CatchupFromEvents {
+    async fn fast_forward(&self, from: u64) -> Result<Vec<(L1BlockId, Timestamp, Vec<L1Event>)>> {
+        Ok(self
+            .events
+            .iter()
+            .skip_while(|(id, ..)| id.number <= from)
+            .cloned()
+            .collect())
     }
 }
 
@@ -538,7 +581,7 @@ pub fn validator_registered_event(mut rng: impl RngCore + CryptoRng) -> Validato
 pub struct InputGenerator {
     #[debug("Iterator")]
     events: Box<dyn Iterator<Item = L1Event>>,
-    next_block: u64,
+    next_block: Option<u64>,
     rng: StdRng,
 }
 
@@ -553,9 +596,15 @@ impl InputGenerator {
     pub fn from_events(events: impl IntoIterator<Item = L1Event> + 'static) -> Self {
         Self {
             events: Box::new(events.into_iter()),
-            next_block: 0,
+            next_block: Some(0),
             rng: StdRng::from_seed(Default::default()),
         }
+    }
+
+    /// A generator like `self`, but the next block yielded will have number `from`.
+    pub fn from_block(mut self, from: u64) -> Self {
+        self.next_block = Some(from);
+        self
     }
 }
 
@@ -567,11 +616,17 @@ impl Iterator for InputGenerator {
         let n_events = self.rng.gen_range(0..5);
 
         // Generate block.
-        let mut input = BlockInput::empty(self.next_block);
+        let mut input = BlockInput::empty(self.next_block?);
         for _ in 0..n_events {
-            input.events.push(self.events.next()?);
+            let Some(event) = self.events.next() else {
+                // If we run out of events, finish the current block, to ensure we use all the
+                // events that did get yielded. But then stop producing more blocks.
+                self.next_block = None;
+                break;
+            };
+            input.events.push(event);
         }
-        self.next_block += 1;
+        self.next_block = self.next_block.map(|b| b + 1);
         Some(input)
     }
 }
@@ -750,10 +805,10 @@ impl ContractDeployment {
             .address(Contract::EspTokenProxy)
             .ok_or_else(|| Error::internal().context("Token address not found"))?;
 
-        println!("Deployed contracts:");
-        println!("StakeTable: {stake_table_addr}");
-        println!("RewardClaim: {reward_claim_addr}");
-        println!("Token: {token_addr}");
+        tracing::info!("Deployed contracts:");
+        tracing::info!("StakeTable: {stake_table_addr}");
+        tracing::info!("RewardClaim: {reward_claim_addr}");
+        tracing::info!("Token: {token_addr}");
 
         Ok(Self {
             rpc_url,
@@ -807,11 +862,21 @@ impl ContractDeployment {
     }
 
     pub fn spawn_task(&self) -> BackgroundStakeTableOps {
-        BackgroundStakeTableOps::spawn(self.rpc_url.clone(), self.stake_table_addr, None)
+        BackgroundStakeTableOps::spawn(
+            self.rpc_url.clone(),
+            self.stake_table_addr,
+            Arc::new(false.into()),
+            None,
+        )
     }
 
     pub fn spawn_task_with_interval(&self, interval: Duration) -> BackgroundStakeTableOps {
-        BackgroundStakeTableOps::spawn(self.rpc_url.clone(), self.stake_table_addr, Some(interval))
+        BackgroundStakeTableOps::spawn(
+            self.rpc_url.clone(),
+            self.stake_table_addr,
+            Arc::new(false.into()),
+            Some(interval),
+        )
     }
 }
 
@@ -906,28 +971,36 @@ impl BackgroundTaskState {
                     })
                     .collect();
 
-                if staking_txns.apply_all().await.is_ok() {
-                    println!(
-                        "Background: Registered validator #{} with {} delegators",
-                        self.validator_index,
-                        delegator_infos.len(),
-                    );
+                match staking_txns.apply_all().await {
+                    Ok(_) => {
+                        tracing::info!(
+                            "Background: Registered validator #{} with {} delegators",
+                            self.validator_index,
+                            delegator_infos.len(),
+                        );
 
-                    for delegator_info in &delegator_infos {
-                        self.delegator_providers
-                            .insert(delegator_info.address, delegator_info.provider.clone());
+                        for delegator_info in &delegator_infos {
+                            self.delegator_providers
+                                .insert(delegator_info.address, delegator_info.provider.clone());
+                        }
+
+                        self.registered_validators.push(ValidatorInfo {
+                            index: self.validator_index,
+                            address: signer.address(),
+                            provider: validator_provider,
+                            delegators: delegator_infos,
+                        });
                     }
-
-                    self.registered_validators.push(ValidatorInfo {
-                        index: self.validator_index,
-                        address: signer.address(),
-                        provider: validator_provider,
-                        delegators: delegator_infos,
-                    });
+                    Err(err) => {
+                        tracing::error!(
+                            "Background: Failed to register validator #{}: {err:#}",
+                            self.validator_index
+                        );
+                    }
                 }
             }
             Err(e) => {
-                eprintln!(
+                tracing::error!(
                     "Background: Failed to create staking transactions for validator #{}: {e:?}",
                     self.validator_index
                 );
@@ -972,16 +1045,17 @@ impl BackgroundTaskState {
             .await
         {
             Ok(pending) => match pending.get_receipt().await {
-                Ok(receipt) => println!(
+                Ok(receipt) => tracing::info!(
                     "Background: Updated keys for validator #{} (tx: {:?})",
-                    validator.index, receipt.transaction_hash
+                    validator.index,
+                    receipt.transaction_hash
                 ),
-                Err(e) => println!(
+                Err(e) => tracing::error!(
                     "Background: Failed to get receipt for validator #{}: {e:?}",
                     validator.index
                 ),
             },
-            Err(e) => println!(
+            Err(e) => tracing::error!(
                 "Background: Failed to update keys for validator #{}: {e:?}",
                 validator.index
             ),
@@ -1026,7 +1100,7 @@ impl BackgroundTaskState {
             {
                 Ok(pending_tx) => match pending_tx.get_receipt().await {
                     Ok(receipt) => {
-                        println!(
+                        tracing::info!(
                             "Background: Undelegated {} ESP from validator #{} by delegator {:?} (tx: {:?})",
                             undelegate_amount / U256::from(10).pow(U256::from(18)),
                             validator.index,
@@ -1035,12 +1109,12 @@ impl BackgroundTaskState {
                         );
                         self.pending_undelegations.insert(key);
                     }
-                    Err(e) => println!(
+                    Err(e) => tracing::error!(
                         "Background: Failed to get undelegate receipt for validator #{}: {e:?}",
                         validator.index
                     ),
                 },
-                Err(e) => println!(
+                Err(e) => tracing::error!(
                     "Background: Failed to undelegate from validator #{}: {e:?}",
                     validator.index
                 ),
@@ -1063,7 +1137,7 @@ impl BackgroundTaskState {
         {
             Ok(pending) => match pending.get_receipt().await {
                 Ok(_) => {
-                    println!("Background: Validator #{} deregistered", validator.index);
+                    tracing::info!("Background: Validator #{} deregistered", validator.index);
 
                     for delegator in &validator.delegators {
                         let key = (validator.address, delegator.address);
@@ -1072,13 +1146,13 @@ impl BackgroundTaskState {
 
                     self.registered_validators.remove(idx);
                 }
-                Err(e) => println!(
+                Err(e) => tracing::error!(
                     "Background: Failed to get deregister receipt for validator #{}: {e:?}",
                     validator.index
                 ),
             },
             Err(e) => {
-                println!(
+                tracing::error!(
                     "Background: Failed to deregister validator #{}: {e:?}",
                     validator.index
                 );
@@ -1124,9 +1198,10 @@ impl BackgroundTaskState {
             match result {
                 Ok(pending_tx) => match pending_tx.get_receipt().await {
                     Ok(receipt) => {
-                        println!(
+                        tracing::info!(
                             "Background: Withdrawal from {:?} (tx: {:?})",
-                            validator_addr, receipt.transaction_hash
+                            validator_addr,
+                            receipt.transaction_hash
                         );
                         if is_exit {
                             self.pending_exits.remove(&key);
@@ -1134,12 +1209,14 @@ impl BackgroundTaskState {
                             self.pending_undelegations.remove(&key);
                         }
                     }
-                    Err(e) => println!("Background: Failed to get withdrawal receipt: {e:?}"),
+                    Err(e) => {
+                        tracing::error!("Background: Failed to get withdrawal receipt: {e:?}")
+                    }
                 },
                 Err(e) => {
                     // if exit escrow period is not over
                     if !e.to_string().contains("0x5a774357") {
-                        println!("Background: Withdrawal failed: {e:?}");
+                        tracing::error!("Background: Withdrawal failed: {e:?}");
                     }
                 }
             }
@@ -1148,21 +1225,33 @@ impl BackgroundTaskState {
 }
 
 impl BackgroundStakeTableOps {
-    pub fn spawn(rpc_url: Url, stake_table_addr: Address, interval: Option<Duration>) -> Self {
+    pub fn spawn(
+        rpc_url: Url,
+        stake_table_addr: Address,
+        cancel: Arc<AtomicBool>,
+        interval: Option<Duration>,
+    ) -> Self {
         let interval = interval.unwrap_or(Duration::from_millis(500));
 
         let task_handle = tokio::spawn(async move {
             let mut state = BackgroundTaskState::new(rpc_url, stake_table_addr);
 
-            loop {
+            while !cancel.load(Ordering::SeqCst) {
                 let event = state.rng.gen_range(0..5);
                 state.run(event).await;
                 sleep(interval).await;
             }
+            tracing::info!("background stake table ops exiting");
         });
 
         Self {
             task_handle: Some(task_handle),
+        }
+    }
+
+    pub async fn join(mut self) {
+        if let Some(handle) = self.task_handle.take() {
+            handle.await.ok();
         }
     }
 }

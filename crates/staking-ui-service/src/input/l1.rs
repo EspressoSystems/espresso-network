@@ -31,9 +31,11 @@ use crate::{
 
 pub mod options;
 pub mod provider;
+mod rpc_catchup;
 mod rpc_stream;
 pub mod switching_transport;
 
+pub use rpc_catchup::RpcCatchup;
 pub use rpc_stream::RpcStream;
 pub mod testing;
 
@@ -63,8 +65,8 @@ impl<S: L1Persistence> State<S> {
     ///
     /// Previously saved state will be loaded from `storage` if possible. If there is no previous
     /// state in storage, the given genesis state will be used.
-    pub async fn new(storage: S, genesis: Snapshot) -> Result<Self> {
-        let state = match storage.finalized_snapshot().await? {
+    pub async fn new(storage: S, genesis: Snapshot, catchup: &impl L1Catchup) -> Result<Self> {
+        let mut state = match storage.finalized_snapshot().await? {
             Some(snapshot) => {
                 tracing::info!(?snapshot.block, "starting from saved snapshot");
                 snapshot
@@ -75,6 +77,36 @@ impl<S: L1Persistence> State<S> {
                 genesis
             }
         };
+
+        // If our starting snapshot is far behind the L1, use a specialized catchup mechanism which
+        // is faster and cheaper than processing all the intervening blocks one by one.
+        let catchup_inputs = catchup
+            .fast_forward(state.block.number())
+            .await
+            .map_err(|err| err.context("catching up to L1"))?;
+        if !catchup_inputs.is_empty() {
+            let mut node_set_diff = vec![];
+            let mut wallets_diff = vec![];
+
+            for (id, timestamp, events) in catchup_inputs {
+                let (input_node_set_diff, input_wallets_diff) = state.apply(id, timestamp, &events);
+
+                // Break wallets diff into individual (address, diff) pairs.
+                let input_wallets_diff =
+                    input_wallets_diff.into_iter().flat_map(|(address, diffs)| {
+                        diffs.into_iter().map(move |diff| (address, diff))
+                    });
+
+                node_set_diff.extend(input_node_set_diff);
+                wallets_diff.extend(input_wallets_diff);
+            }
+
+            // Persist updates.
+            storage
+                .apply_events(state.block, node_set_diff, wallets_diff)
+                .await
+                .map_err(|err| err.context("saving events from catchup"))?;
+        }
 
         let finalized = BlockData {
             state,
@@ -409,7 +441,8 @@ impl BlockData {
         // Cloning entire state in order to apply updates and get the new state. This is cheap
         // thanks to the magic of immutable data structures.
         let mut state = self.state.clone();
-        let (node_set_update, wallets_update) = state.apply(input);
+        let (node_set_update, wallets_update) =
+            state.apply(input.block, input.timestamp, &input.events);
         Self {
             state,
             node_set_update: Some(node_set_update),
@@ -496,9 +529,11 @@ impl Snapshot {
     /// Transform the state snapshot by applying a new L1 block.
     ///
     /// Returns the updates that were made while applying the block.
-    fn apply(
+    fn apply<'a>(
         &mut self,
-        input: &BlockInput,
+        id: L1BlockId,
+        timestamp: Timestamp,
+        events: impl IntoIterator<Item = &'a L1Event>,
     ) -> (Vec<FullNodeSetDiff>, BTreeMap<Address, Vec<WalletDiff>>) {
         // Keep track of changes we apply.
         let mut node_set_update = vec![];
@@ -506,16 +541,16 @@ impl Snapshot {
 
         // Update the L1 block information.
         self.block = L1BlockSnapshot {
-            id: input.block,
-            timestamp: input.timestamp,
+            id,
+            timestamp,
             // The exit escrow period doesn't change unless we get an event saying so.
             exit_escrow_period: self.block.exit_escrow_period,
         };
 
-        for event in &input.events {
+        for event in events {
             // Convert contract events into either node set or wallet updates, and apply updates
             // to state snapshots.
-            let (nodes_diff, wallets_diff) = self.handle_event(input, event);
+            let (nodes_diff, wallets_diff) = self.handle_event(timestamp, event);
             for diff in nodes_diff {
                 self.node_set.apply(&diff);
                 node_set_update.push(diff);
@@ -536,7 +571,7 @@ impl Snapshot {
     #[tracing::instrument(skip(self))]
     fn handle_event(
         &mut self,
-        input: &BlockInput,
+        timestamp: Timestamp,
         event: &L1Event,
     ) -> (Vec<FullNodeSetDiff>, Vec<(Address, WalletDiff)>) {
         tracing::debug!("processing L1 event");
@@ -580,7 +615,7 @@ impl Snapshot {
                         return Default::default();
                     }
 
-                    let exit_time = input.timestamp + self.block.exit_escrow_period;
+                    let exit_time = timestamp + self.block.exit_escrow_period;
                     let node_diff = FullNodeSetDiff::NodeExit(NodeExit {
                         address: ev.validator,
                         exit_time,
@@ -708,7 +743,7 @@ impl Snapshot {
                         delegator: ev.delegator,
                         node: ev.validator,
                         amount: ev.amount,
-                        available_time: input.timestamp + self.block.exit_escrow_period,
+                        available_time: timestamp + self.block.exit_escrow_period,
                     };
                     let wallet_diff = WalletDiff::UndelegatedFromNode(pending_withdrawal);
 
@@ -1047,6 +1082,27 @@ pub trait ResettableStream: Unpin + Stream<Item = BlockInput> {
     fn reset(&mut self, number: u64) -> impl Send + Future<Output = ()>;
 }
 
+/// Fast, cheap catchup for a state which is lagging far behind the L1.
+pub trait L1Catchup {
+    /// Fetch all events since block `from` to the latest finalized block.
+    ///
+    /// This method bypasses the normal mode of block-by-block state updates, which is good in the
+    /// common case when we are streaming new L1 heads as they appear (~every 12 seconds), but which
+    /// can be extremely slow and expensive if we have a long way to catch up.
+    ///
+    /// If catchup is necessary, returns a sequence of inputs for _only the blocks which have
+    /// events_. Together, these inputs will update the [`L1BlockSnapshot`] to the latest finalized
+    /// block and will contain all relevant events from all L1 blocks between `from` (exclusive) and
+    /// the new finalized block (inclusive). But there will be no input corresponding to L1 blocks
+    /// which do not have events.
+    ///
+    /// If `from` is already up to date, returns an empty list.
+    fn fast_forward(
+        &self,
+        from: u64,
+    ) -> impl Send + Future<Output = Result<Vec<(L1BlockId, Timestamp, Vec<L1Event>)>>>;
+}
+
 /// Persistent storage for the L1 data.
 pub trait L1Persistence: Send {
     /// Fetch the latest persisted snapshot.
@@ -1074,6 +1130,7 @@ mod test {
     use hotshot_contract_adapter::sol_types::StakeTableV2::{
         Delegated, ExitEscrowPeriodUpdated, Undelegated, ValidatorExit, Withdrawal,
     };
+    use pretty_assertions::assert_eq;
     use tide_disco::{Error as _, StatusCode};
 
     use super::{
@@ -1083,8 +1140,8 @@ mod test {
 
     use crate::{
         input::l1::testing::{
-            EventGenerator, InputGenerator, block_snapshot, subscribe_until,
-            validator_registered_event,
+            CatchupFromEvents, EventGenerator, InputGenerator, NoCatchup, block_snapshot,
+            subscribe_until, validator_registered_event,
         },
         types::common::{Delegation, Ratio},
     };
@@ -1565,7 +1622,9 @@ mod test {
         let genesis = Snapshot::empty(block_snapshot(0));
         let storage = MemoryStorage::default();
         let state = Arc::new(RwLock::new(
-            State::new(storage.clone(), genesis.clone()).await.unwrap(),
+            State::new(storage.clone(), genesis.clone(), &NoCatchup)
+                .await
+                .unwrap(),
         ));
         // Initializing the state should cause a genesis snapshot to be saved.
         assert_eq!(
@@ -1586,7 +1645,9 @@ mod test {
         // Restart and check that we reload the finalized snapshot (and don't use the genesis, for
         // which we will pass in some nonsense).
         let genesis = Snapshot::empty(block_snapshot(1000));
-        let state = State::new(storage.clone(), genesis).await.unwrap();
+        let state = State::new(storage.clone(), genesis, &NoCatchup)
+            .await
+            .unwrap();
         assert_eq!(state.blocks.len(), 1);
         assert_eq!(state.blocks[0].block(), block_snapshot(1));
 
@@ -1859,5 +1920,62 @@ mod test {
         assert_eq!(wallet.nodes.len(), 0);
         assert_eq!(wallet.pending_undelegations.len(), 0);
         assert_eq!(wallet.pending_exits.len(), 0);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_catchup_consistency() {
+        // Generate a bunch of events. We will break these events into blocks and replay them two
+        // ways:
+        // * One state applies the events block by block as in normal operation
+        // * One state starts from genesis and applies all events at once
+        //
+        // They should end up with the same state snapshot.
+        let events = EventGenerator::default().take(500).collect::<Vec<_>>();
+
+        // Both states will start from the same genesis, the only difference is one starts before
+        // the blocks are generated, and one starts later and needs to catch up.
+        let genesis = Snapshot::empty(block_snapshot(0));
+
+        // Segment events into blocks (starting from block 1).
+        let blocks = InputGenerator::from_events(events.clone())
+            .from_block(1)
+            .collect::<Vec<_>>();
+        let last_block = blocks.last().unwrap();
+
+        // Start the normal state.
+        let state_block_by_block = Arc::new(RwLock::new(
+            State::new(MemoryStorage::default(), genesis.clone(), &NoCatchup)
+                .await
+                .unwrap(),
+        ));
+        let mut stream = VecStream::infinite();
+        for block in &blocks {
+            stream.push(block.clone());
+        }
+        let state_block_by_block = subscribe_until(&state_block_by_block, stream, |state| {
+            state.latest_l1_block().number == last_block.block.number
+        })
+        .await;
+
+        // Have a state do fast catchup from genesis.
+        let state_catchup = State::new(
+            MemoryStorage::default(),
+            genesis,
+            &CatchupFromEvents::from_blocks(blocks.clone()),
+        )
+        .await
+        .unwrap();
+
+        // Both states end up with the same snapshot.
+        assert_eq!(
+            state_block_by_block.blocks.last().unwrap().state,
+            state_catchup.blocks.last().unwrap().state
+        );
+
+        // The normal state has the whole history.
+        assert_eq!(state_block_by_block.blocks.len(), 1 + blocks.len());
+
+        // The caught up state only has the latest block.
+        assert_eq!(state_catchup.blocks.len(), 1);
     }
 }

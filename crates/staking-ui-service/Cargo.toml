@@ -38,11 +38,7 @@ log-panics = { version = "2.0", features = ["with-backtrace"] }
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", features = [
-    "sqlite",
-    "runtime-tokio",
-    "migrate",
-] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "migrate"] }
 surf-disco = "0.9"
 tagged-base64 = "0.4"
 tide-disco = "0.9"
@@ -67,6 +63,7 @@ staking-cli = { git = "https://github.com/EspressoSystems/espresso-network.git",
 staking-ui-service = { path = ".", features = ["testing"] }
 
 portpicker = "0.1"
+pretty_assertions = "1"
 tempfile = "3"
 test-log = { version = "0.2", features = [
     "color",

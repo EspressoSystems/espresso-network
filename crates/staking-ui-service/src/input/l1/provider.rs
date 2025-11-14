@@ -1,13 +1,18 @@
 //! Ad hoc L1 client functions.
 
+use std::sync::Arc;
+
 use crate::{
     Error, Result,
-    error::ensure,
-    input::l1::L1BlockSnapshot,
-    types::common::{Address, L1BlockId},
+    error::{ResultExt, ensure},
+    input::l1::{L1BlockSnapshot, L1Event},
+    types::common::{Address, L1BlockId, Timestamp},
 };
-use alloy::{eips::BlockId, providers::Provider};
-use hotshot_contract_adapter::sol_types::StakeTableV2;
+use alloy::{eips::BlockId, providers::Provider, rpc::types::Filter, sol_types::SolEventInterface};
+use hotshot_contract_adapter::sol_types::{
+    RewardClaim::RewardClaimEvents,
+    StakeTableV2::{self, StakeTableV2Events},
+};
 
 /// Get the Espresso stake table genesis block.
 pub async fn load_genesis(
@@ -80,6 +85,78 @@ pub async fn load_genesis(
         timestamp: block.header.timestamp,
         exit_escrow_period,
     })
+}
+
+pub(super) async fn get_events(
+    provider: &impl Provider,
+    filter: Filter,
+    stake_table_address: Address,
+    reward_contract_address: Address,
+) -> Result<Vec<(L1BlockId, Timestamp, L1Event)>> {
+    let filter = filter.address(vec![stake_table_address, reward_contract_address]);
+    let logs = provider
+        .get_logs(&filter)
+        .await
+        .context(|| Error::internal().context("getting L1 logs"))?;
+
+    // Decode events from logs
+    let mut events = Vec::new();
+
+    for log in logs {
+        let hash = log.block_hash.ok_or_else(|| {
+            Error::internal().context(format!("event log missing block hash: {log:?}"))
+        })?;
+        let block = provider
+            .get_block(hash.into())
+            .await
+            .context(|| Error::internal().context(format!("getting header for log {log:?}")))?
+            .ok_or_else(|| {
+                Error::internal().context(format!("header for log {log:?} not available"))
+            })?;
+        let id = L1BlockId {
+            number: block.number(),
+            hash,
+            parent: block.header.parent_hash,
+        };
+        let timestamp = block.header.timestamp;
+
+        // Try to decode stake table event
+        if log.address() == stake_table_address {
+            let event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)
+                .unwrap_or_else(|e| {
+                    // This is a panic, not an error, as it should be impossible to successfully
+                    // retrieve an event from the stake table address but not be able to decode it.
+                    panic!(
+                        "failed to decode event from stake table {stake_table_address}, tx {:?}: {e:#}",
+                        log.transaction_hash
+                    );
+                });
+            events.push((id, timestamp, L1Event::StakeTable(Arc::new(event))));
+            continue;
+        }
+
+        // Try to decode reward claim event
+        if log.address() == reward_contract_address {
+            let event = RewardClaimEvents::decode_raw_log(log.topics(), &log.data().data)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to decode event from reward contract {reward_contract_address}, tx {:?}: {e:#}",
+                        log.transaction_hash
+                    );
+                });
+            events.push((id, timestamp, L1Event::Reward(Arc::new(event))));
+            continue;
+        }
+
+        tracing::warn!(
+            ?log,
+            %stake_table_address,
+            %reward_contract_address,
+            "filter returned event which is not from either contract"
+        );
+    }
+
+    Ok(events)
 }
 
 #[cfg(test)]
