@@ -316,7 +316,7 @@ where
         .await
         {
             Ok(drb_result) => {
-                tracing::error!("Adding DRB result for epoch {epoch:?}");
+                tracing::warn!(?drb_result, "DRB result for epoch {epoch:?} retrieved from peers. Updating membership.");
                 self.membership
                     .write()
                     .await
@@ -539,7 +539,6 @@ fn spawn_catchup<T: NodeType>(
     epoch: T::Epoch,
     epoch_tx: Sender<Result<EpochMembership<T>>>,
 ) {
-    tracing::error!("Spawning catchup for epoch {epoch}");
     tokio::spawn(async move {
         coordinator.clone().catchup(epoch, epoch_tx).await;
     });
