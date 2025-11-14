@@ -493,7 +493,12 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         bytes memory message = abi.encode(validator);
         BLSSig.verifyBlsSig(message, blsSig, blsVK);
 
+        if (schnorrSig.length != 64) {
+            revert InvalidSchnorrSig();
+        }
+
         blsKeys[_hashBlsKey(blsVK)] = true;
+        schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
 
         emit ConsensusKeysUpdatedV2(validator, blsVK, schnorrVK, blsSig, schnorrSig);
     }
