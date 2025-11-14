@@ -12,7 +12,7 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
 
     println!("{:#?}", requirements);
 
-    let runtime = TestRuntime::from_requirements(requirements.clone()).await?;
+    let mut runtime = TestRuntime::from_requirements(requirements.clone()).await?;
 
     let initial = runtime.test_state().await;
     println!("Initial State: {initial}");
@@ -80,6 +80,9 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
         }
 
         if let Some(deadline_height) = requirements.reward_claim_deadline_block_height {
+            if runtime.reward_claim_address.is_none() {
+                let _ = runtime.refresh_reward_claim_address().await;
+            }
             if new.block_height.unwrap() >= deadline_height {
                 assert!(new.rewards_claimed > U256::ZERO);
                 println!(

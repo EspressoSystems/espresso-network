@@ -257,6 +257,25 @@ impl TestRuntime {
         Self::initialize(config, Duration::from_secs(30)).await
     }
 
+    /// Refresh the reward claim address from the contract
+    /// Call this after the reward claim contract has been deployed
+    pub async fn refresh_reward_claim_address(&mut self) -> Result<()> {
+        let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
+        let stake_table = StakeTableV2::new(self.config.stake_table_address, &provider);
+        let token_address = stake_table.token().call().await?;
+
+        let esp_token = EspTokenV2::new(token_address, &provider);
+        let reward_claim_addr = esp_token.rewardClaim().call().await?;
+
+        self.reward_claim_address = if reward_claim_addr == Address::ZERO {
+            None
+        } else {
+            Some(reward_claim_addr)
+        };
+
+        Ok(())
+    }
+
     pub fn expected_block_height(&self) -> u64 {
         self.initial_height + self.config.expected_block_height()
     }
