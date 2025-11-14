@@ -556,6 +556,11 @@
   },
   {
     "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "UUPSUnauthorizedCallContext",
     "inputs": []
   },
