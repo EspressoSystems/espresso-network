@@ -53,7 +53,7 @@ use crate::{
         EpochTransitionIndicator,
     },
     vid::{
-        advz::advz_scheme,
+        advz::{advz_scheme, ADVZScheme},
         avidm::{init_avidm_param, AvidMScheme},
         avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
     },
@@ -379,6 +379,46 @@ pub fn vid_commitment<V: Versions>(
         )
         .map(|(comm, _)| VidCommitment::V2(comm))
         .unwrap()
+    }
+}
+
+/// Type aliases for different versions of VID commons
+pub type VidCommon0 = crate::vid::advz::ADVZCommon;
+pub type VidCommon1 = crate::vid::avidm::AvidMCommon;
+pub type VidCommon2 = crate::vid::avidm_gf2::AvidmGf2Common;
+
+/// VID Common type to be shared among parties.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub enum VidCommon {
+    V0(VidCommon0),
+    V1(VidCommon1),
+    V2(VidCommon2),
+}
+
+impl From<VidCommon1> for VidCommon {
+    fn from(comm: VidCommon1) -> Self {
+        Self::V1(comm)
+    }
+}
+
+impl From<VidCommon2> for VidCommon {
+    fn from(comm: VidCommon2) -> Self {
+        Self::V2(comm)
+    }
+}
+
+impl VidCommon {
+    pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
+        match (self, comm) {
+            (Self::V0(common), VidCommitment::V0(comm)) => {
+                ADVZScheme::is_consistent(comm, common).is_ok()
+            },
+            (Self::V1(_), VidCommitment::V1(_)) => true,
+            (Self::V2(common), VidCommitment::V2(comm)) => {
+                AvidmGf2Scheme::is_consistent(comm, common)
+            },
+            _ => false,
+        }
     }
 }
 

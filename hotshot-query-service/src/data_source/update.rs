@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use futures::future::Future;
 use hotshot::types::{Event, EventType};
 use hotshot_types::{
-    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidDisperseShare, VidShare},
+    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare},
     event::LeafInfo,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
@@ -38,7 +38,7 @@ use crate::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
         UpdateAvailabilityData, VidCommonQueryData,
     },
-    Header, Payload, VidCommon,
+    Header, Payload,
 };
 
 /// An extension trait for types which implement the update trait for each API module.

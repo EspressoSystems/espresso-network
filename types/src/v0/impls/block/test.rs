@@ -2,11 +2,12 @@
 use std::collections::BTreeMap;
 
 use hotshot::traits::BlockPayload;
-use hotshot_query_service::{
-    availability::{QueryablePayload, VerifiableInclusion},
-    VidCommon,
+use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    traits::EncodeBytes,
+    vid::advz::advz_scheme,
 };
-use hotshot_types::{data::VidCommitment, traits::EncodeBytes, vid::advz::advz_scheme};
 use jf_advz::VidScheme;
 use rand::RngCore;
 

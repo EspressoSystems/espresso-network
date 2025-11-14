@@ -1,5 +1,7 @@
-use hotshot_query_service::VidCommon;
-use hotshot_types::{data::VidCommitment, vid::avidm::AvidMShare};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    vid::avidm::AvidMShare,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{

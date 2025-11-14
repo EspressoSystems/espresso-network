@@ -14,7 +14,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{Leaf, Leaf2, VidCommitment, VidShare},
+    data::{Leaf, Leaf2, VidCommitment, VidCommon, VidShare},
     simple_certificate::QuorumCertificate2,
     traits::{
         self,
@@ -28,9 +28,7 @@ use jf_advz::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
 
-use crate::{
-    types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction, VidCommon,
-};
+use crate::{types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction};
 
 pub type LeafHash<Types> = Commitment<Leaf2<Types>>;
 pub type LeafHashLegacy<Types> = Commitment<Leaf<Types>>;

@@ -19,7 +19,7 @@ use derivative::Derivative;
 use derive_more::From;
 use futures::future::{BoxFuture, FutureExt};
 use hotshot_types::{
-    data::VidShare,
+    data::{VidCommon, VidShare},
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 
@@ -41,7 +41,7 @@ use crate::{
     },
     fetching::{self, request, Callback},
     types::HeightIndexed,
-    Header, Payload, QueryResult, VidCommon,
+    Header, Payload, QueryResult,
 };
 
 pub(super) type VidCommonFetcher<Types, S, P> =

@@ -383,7 +383,10 @@ mod generic_test {
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
-    use hotshot_types::{data::VidShare, vid::advz::advz_scheme};
+    use hotshot_types::{
+        data::{VidCommon, VidShare},
+        vid::advz::advz_scheme,
+    };
     use jf_advz::VidScheme;
 
     use super::*;
@@ -420,8 +423,7 @@ mod test {
             &TestInstanceState::default(),
         )
         .await;
-        let common =
-            VidCommonQueryData::new(leaf.header().clone(), crate::VidCommon::V0(disperse.common));
+        let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
         ds.append(BlockInfo::new(leaf, None, Some(common.clone()), None))
             .await
             .unwrap();

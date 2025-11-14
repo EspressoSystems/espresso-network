@@ -1,5 +1,5 @@
-use hotshot_query_service::{availability::VerifiableInclusion, VidCommon};
-use hotshot_types::data::VidCommitment;
+use hotshot_query_service::availability::VerifiableInclusion;
+use hotshot_types::data::{VidCommitment, VidCommon};
 use serde::{Deserialize, Serialize};
 
 use super::{v0_1::ADVZTxProof, v0_3::AvidMTxProof, Index, NsTable, Payload, Transaction};

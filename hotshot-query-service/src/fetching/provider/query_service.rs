@@ -13,7 +13,7 @@
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_types::{
-    data::{ns_table, VidCommitment},
+    data::{ns_table, VidCommitment, VidCommon},
     traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
     vid::{
         advz::{advz_scheme, ADVZScheme},
@@ -33,7 +33,7 @@ use crate::{
     },
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
-    Error, Header, Payload, VidCommon,
+    Error, Header, Payload,
 };
 
 /// Data availability provider backed by another instance of this query service.
@@ -509,47 +509,15 @@ where
         };
 
         match vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&bytes) {
-            Ok(res) => match req.0 {
-                VidCommitment::V0(commit) => {
-                    if let VidCommon::V0(common) = res.common {
-                        if ADVZScheme::is_consistent(&commit, &common).is_ok() {
-                            Some(VidCommon::V0(common))
-                        } else {
-                            tracing::error!(
-                                %client_url, ?req, ?commit, ?common,
-                                "VID V0 common data is inconsistent with commitment"
-                            );
-                            None
-                        }
-                    } else {
-                        tracing::warn!(?req, ?res, "Expect VID common data but found None");
-                        None
-                    }
-                },
-                VidCommitment::V1(_) => {
-                    if let VidCommon::V1(common) = res.common {
-                        Some(VidCommon::V1(common))
-                    } else {
-                        tracing::warn!(?req, ?res, "Expect VID common data but found None");
-                        None
-                    }
-                },
-                VidCommitment::V2(commit) => {
-                    if let VidCommon::V2(common) = res.common {
-                        if AvidmGf2Scheme::is_consistent(&commit, &common) {
-                            Some(VidCommon::V2(common))
-                        } else {
-                            tracing::error!(
-                                %client_url, ?req, ?commit, ?common,
-                                "VID V2 common data is inconsistent with commitment"
-                            );
-                            None
-                        }
-                    } else {
-                        tracing::warn!(?req, ?res, "Expect VID common data but found None");
-                        None
-                    }
-                },
+            Ok(res) => {
+                if !res.common().is_consistent(&req.0) {
+                    tracing::error!(
+                        %client_url, ?req, ?res.common,
+                        "fetched inconsistent VID common data"
+                    );
+                    return None;
+                }
+                Some(res.common)
             },
             Err(err) => {
                 tracing::info!(

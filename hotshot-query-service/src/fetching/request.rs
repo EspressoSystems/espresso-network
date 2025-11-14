@@ -15,11 +15,14 @@
 use std::{fmt::Debug, hash::Hash};
 
 use derive_more::{From, Into};
-use hotshot_types::{data::VidCommitment, traits::node_implementation::NodeType};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    traits::node_implementation::NodeType,
+};
 
 use crate::{
     availability::{LeafHash, LeafQueryData, QcHash},
-    Payload, VidCommon,
+    Payload,
 };
 
 /// A request for a resource.

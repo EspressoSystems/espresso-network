@@ -33,10 +33,9 @@ use hotshot_query_service::{
         TransactionWithProofQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
-    VidCommon,
 };
 use hotshot_types::{
-    data::vid_commitment,
+    data::{vid_commitment, VidCommon},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
     },

@@ -18,7 +18,7 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{QuorumProposal, VidCommitment, ViewNumber},
+    data::{QuorumProposal, VidCommitment, VidCommon, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::node_implementation::{NodeType, Versions},
 };
@@ -38,7 +38,6 @@ use crate::{
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
     types::HeightIndexed,
-    VidCommon,
 };
 
 pub type MockHeader = TestBlockHeader;

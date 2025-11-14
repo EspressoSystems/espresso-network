@@ -788,7 +788,7 @@ pub mod node_tests {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidShare, ViewNumber},
+        data::{vid_commitment, VidCommitment, VidCommon, VidShare, ViewNumber},
         simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::{
             block_contents::{BlockHeader, EncodeBytes},
@@ -812,7 +812,7 @@ pub mod node_tests {
             sleep,
         },
         types::HeightIndexed,
-        Header, Leaf2, VidCommon,
+        Header, Leaf2,
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
