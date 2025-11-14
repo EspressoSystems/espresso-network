@@ -949,6 +949,7 @@ pub mod testing {
                         &deployer,
                         st_addr,
                         validators,
+                        None,
                         DelegationConfig::default(),
                     )
                     .await

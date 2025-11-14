@@ -1478,6 +1478,7 @@ pub mod test_helpers {
                 &deployer,
                 stake_table_address,
                 network_config.staking_priv_keys(),
+                None,
                 delegation_config,
             )
             .await

@@ -1583,6 +1583,7 @@ mod tests {
             &deployer,
             st_addr,
             validators,
+            None,
             DelegationConfig::MultipleDelegators,
         )
         .await
