@@ -1,125 +1,174 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This script waits for specific conditions on the sequencer by polling HTTP endpoints.
+# We use HTTP polling instead of websockets for portability - only requires curl and jq
+# instead of websocat, which is less commonly available.
+#
+# Dependencies: curl, jq, bash
+
 MODE="${1:-}"
-SEQUENCER_URL="http://localhost:24000"
+SEQUENCER_URL="${SEQUENCER_URL:-http://localhost:24000}"
+POLL_INTERVAL="${POLL_INTERVAL:-5}"
 
 show_usage() {
-    echo "Usage:"
-    echo "  $0 version <target-minor-version> [sequencer-url]"
-    echo "  $0 new-epochs <num-epochs> [sequencer-url]"
-    echo ""
-    echo "Examples:"
-    echo "  $0 version 4"
-    echo "  $0 version 4 http://localhost:24000"
-    echo "  $0 new-epochs 2"
-    echo "  $0 new-epochs 2 http://localhost:24000"
-    exit 1
+  cat <<'EOF'
+Usage:
+  $0 version <target-minor-version>
+  $0 new-epochs <num-epochs>
+
+Environment Variables:
+  SEQUENCER_URL - Sequencer URL (default: http://localhost:24000)
+  POLL_INTERVAL - Polling interval in seconds (default: 5)
+
+Examples:
+  $0 version 4
+  $0 new-epochs 2
+  POLL_INTERVAL=1 $0 version 4
+  SEQUENCER_URL=http://localhost:24000 $0 version 4
+EOF
+  exit 1
 }
 
-if [ -z "$MODE" ]; then
-    show_usage
+get_block_height() {
+  curl -sL "${SEQUENCER_URL}/status/block-height" 2>/dev/null || echo ""
+}
+
+get_header_at_height() {
+  local height="$1"
+  curl -sL "${SEQUENCER_URL}/v0/availability/header/${height}" 2>/dev/null || echo ""
+}
+
+is_valid_value() {
+  local value="$1"
+  [[ -n "$value" && "$value" != "null" ]]
+}
+
+retry_with_message() {
+  local message="$1"
+  echo "$message, retrying in ${POLL_INTERVAL}s..."
+  sleep "$POLL_INTERVAL"
+}
+
+wait_for_version() {
+  local target_minor="$1"
+
+  echo "Waiting for sequencer to upgrade to version 0.${target_minor}..."
+  echo "Polling sequencer at ${SEQUENCER_URL} every ${POLL_INTERVAL}s..."
+
+  while true; do
+    local height
+    height=$(get_block_height)
+
+    if ! is_valid_value "$height"; then
+      retry_with_message "Failed to get block height"
+      continue
+    fi
+
+    local header
+    header=$(get_header_at_height "$height")
+
+    if ! is_valid_value "$header"; then
+      retry_with_message "Failed to get header at height ${height}"
+      continue
+    fi
+
+    local minor height_from_header
+    minor=$(echo "$header" | jq -r '.version.Version.minor' 2>/dev/null || echo "")
+    height_from_header=$(echo "$header" | jq -r '.fields.height' 2>/dev/null || echo "")
+
+    if is_valid_value "$minor" && is_valid_value "$height_from_header"; then
+      echo "v0.${minor} height=${height_from_header}"
+
+      if [[ "$minor" == "$target_minor" ]]; then
+        echo "Version 0.${target_minor} detected at height ${height_from_header}!"
+        exit 0
+      fi
+    fi
+
+    sleep "$POLL_INTERVAL"
+  done
+}
+
+wait_for_epochs() {
+  local num_epochs="$1"
+  local blocks_per_epoch="$2"
+
+  echo "Waiting for ${num_epochs} new epoch(s) to pass..."
+
+  local initial_height
+  initial_height=$(get_block_height)
+  echo "Current block height: ${initial_height}"
+
+  local initial_epoch target_epoch
+  initial_epoch=$((initial_height / blocks_per_epoch))
+  target_epoch=$((initial_epoch + num_epochs))
+  echo "Initial epoch: ${initial_epoch}, Target epoch: ${target_epoch}"
+  echo "Polling sequencer at ${SEQUENCER_URL} every ${POLL_INTERVAL}s..."
+
+  local last_reported_epoch=-1
+
+  while true; do
+    local height
+    height=$(get_block_height)
+
+    if ! is_valid_value "$height"; then
+      retry_with_message "Failed to get block height"
+      continue
+    fi
+
+    local current_epoch
+    current_epoch=$((height / blocks_per_epoch))
+
+    if [[ "$current_epoch" != "$last_reported_epoch" ]]; then
+      echo "Height: ${height}, Epoch: ${current_epoch}"
+      last_reported_epoch=$current_epoch
+    fi
+
+    if [[ "$current_epoch" -ge "$target_epoch" ]]; then
+      echo "Reached epoch ${current_epoch} (${num_epochs} epochs from initial epoch ${initial_epoch})!"
+      exit 0
+    fi
+
+    sleep "$POLL_INTERVAL"
+  done
+}
+
+if [[ -z "$MODE" ]]; then
+  show_usage
 fi
 
 case "$MODE" in
-    version)
-        TARGET_MINOR_VERSION="${2:-}"
-        if [ -z "$TARGET_MINOR_VERSION" ]; then
-            echo "Error: target-minor-version is required for 'version' mode"
-            show_usage
-        fi
-        SEQUENCER_URL="${3:-$SEQUENCER_URL}"
-        ;;
-    new-epochs)
-        NUM_EPOCHS="${2:-}"
-        if [ -z "$NUM_EPOCHS" ]; then
-            echo "Error: num-epochs is required for 'new-epochs' mode"
-            show_usage
-        fi
-        SEQUENCER_URL="${3:-$SEQUENCER_URL}"
-        ;;
-    *)
-        echo "Error: unknown mode '$MODE'"
-        show_usage
-        ;;
+version)
+  TARGET_MINOR_VERSION="${2:-}"
+  if [[ -z "$TARGET_MINOR_VERSION" ]]; then
+    echo "Error: target-minor-version is required for 'version' mode" >&2
+    show_usage
+  fi
+  ;;
+new-epochs)
+  NUM_EPOCHS="${2:-}"
+  if [[ -z "$NUM_EPOCHS" ]]; then
+    echo "Error: num-epochs is required for 'new-epochs' mode" >&2
+    show_usage
+  fi
+  ;;
+*)
+  echo "Error: unknown mode '$MODE'" >&2
+  show_usage
+  ;;
 esac
 
 echo "Getting hotshot config from: ${SEQUENCER_URL}/config/hotshot"
-ws_url=$(echo "$SEQUENCER_URL" | sed 's|^http://|ws://|' | sed 's|^https://|wss://|')
 blocks_per_epoch=$(curl -sL "${SEQUENCER_URL}/config/hotshot" | jq -r '.config.epoch_height')
 echo "Blocks per epoch: ${blocks_per_epoch}"
 
-if [ "$MODE" = "version" ]; then
-    echo "Waiting for sequencer to upgrade to version 0.${TARGET_MINOR_VERSION}..."
-    echo "Connecting to sequencer header stream at ${SEQUENCER_URL}..."
-
-    while true; do
-        set +o pipefail
-        websocat "${ws_url}/v0/availability/stream/headers/0" 2>&1 | \
-            while read -r line; do
-                echo "$line" | jq -r '"v0.\(.version.Version.minor) height=\(.fields.height)"' 2>/dev/null || echo "$line"
-                minor=$(echo "$line" | jq -r '.version.Version.minor' 2>/dev/null || echo "")
-                height=$(echo "$line" | jq -r '.fields.height' 2>/dev/null || echo "")
-
-                if [ "$minor" = "$TARGET_MINOR_VERSION" ]; then
-                    echo "Version 0.${TARGET_MINOR_VERSION} detected at height ${height}!"
-                    exit 0
-                fi
-            done
-
-        pipe_status=("${PIPESTATUS[@]}")
-        set -o pipefail
-
-        while_exit=${pipe_status[1]}
-
-        if [ "$while_exit" -eq 0 ]; then
-            exit 0
-        fi
-
-        echo "Connection failed or stream interrupted, retrying in 5 seconds..."
-        sleep 5
-    done
-
-elif [ "$MODE" = "new-epochs" ]; then
-    echo "Waiting for ${NUM_EPOCHS} new epoch(s) to pass..."
-
-    current_height=$(curl -sL "${SEQUENCER_URL}/status/block-height")
-    echo "Current block height: ${current_height}"
-
-    initial_epoch=$((current_height / blocks_per_epoch))
-    target_epoch=$((initial_epoch + NUM_EPOCHS))
-    echo "Initial epoch: ${initial_epoch}, Target epoch: ${target_epoch}"
-    echo "Connecting to sequencer header stream at ${SEQUENCER_URL}..."
-
-    while true; do
-        set +o pipefail
-        websocat "${ws_url}/v0/availability/stream/headers/${current_height}" 2>&1 | \
-            while read -r line; do
-                height=$(echo "$line" | jq -r '.fields.height' 2>/dev/null || echo "")
-
-                if [ -n "$height" ]; then
-                    current_epoch=$((height / blocks_per_epoch))
-                    echo "Height: ${height}, Epoch: ${current_epoch}"
-
-                    if [ "$current_epoch" -ge "$target_epoch" ]; then
-                        echo "Reached epoch ${current_epoch} (${NUM_EPOCHS} epochs from initial epoch ${initial_epoch})!"
-                        exit 0
-                    fi
-                else
-                    echo "$line" | jq -r '"v0.\(.version.Version.minor) height=\(.fields.height)"' 2>/dev/null || echo "$line"
-                fi
-            done
-
-        pipe_status=("${PIPESTATUS[@]}")
-        set -o pipefail
-
-        while_exit=${pipe_status[1]}
-
-        if [ "$while_exit" -eq 0 ]; then
-            exit 0
-        fi
-
-        echo "Connection failed or stream interrupted, retrying in 5 seconds..."
-        sleep 5
-    done
+if [[ "$MODE" == "new-epochs" ]]; then
+  if [[ -z "$blocks_per_epoch" || "$blocks_per_epoch" == "null" || "$blocks_per_epoch" -eq 0 ]]; then
+    echo "Error: blocks_per_epoch is 0 or invalid. Epochs are not supported in this version." >&2
+    exit 1
+  fi
+  wait_for_epochs "$NUM_EPOCHS" "$blocks_per_epoch"
+elif [[ "$MODE" == "version" ]]; then
+  wait_for_version "$TARGET_MINOR_VERSION"
 fi

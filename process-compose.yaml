@@ -66,8 +66,10 @@ processes:
 
   wait-for-v4:
     command: |
-      scripts/wait-for-header version 4 http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
-      scripts/wait-for-header new-epochs 1 http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
+      scripts/wait-for-header version 4
+      scripts/wait-for-header new-epochs 1
+    environment:
+      - SEQUENCER_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
     namespace: setup
     depends_on:
       deploy-prover-contracts:
@@ -652,7 +654,7 @@ processes:
 
   sequencer-db-1:
     command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_SEQUENCER1_DB_PORT}:5432 postgres
+      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_SEQUENCER1_DB_PORT}:5432 postgres 
     environment:
       - POSTGRES_PASSWORD=password
       - POSTGRES_USER=root

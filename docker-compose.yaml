@@ -72,11 +72,12 @@ services:
         condition: service_completed_successfully
 
   wait-for-v4:
-    image: ghcr.io/vi/websocat
+    image: badouralix/curl-jq
     command: |
-      /scripts/wait-for-header version 4 http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
-      /scripts/wait-for-header new-epochs 1 http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
-
+      /scripts/wait-for-header version 4
+      /scripts/wait-for-header new-epochs 1
+    environment:
+      - SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
     volumes:
       - ./scripts:/scripts:ro
     depends_on:
