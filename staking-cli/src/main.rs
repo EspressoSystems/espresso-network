@@ -413,14 +413,20 @@ pub async fn main() -> Result<()> {
         },
         Commands::StakeForDemo {
             num_validators,
+            num_delegators_per_validator,
             delegation_config,
         } => {
             tracing::info!(
                 "Staking for demo with {num_validators} validators and config {delegation_config}"
             );
-            stake_for_demo(&config, num_validators, delegation_config)
-                .await
-                .unwrap();
+            stake_for_demo(
+                &config,
+                num_validators,
+                num_delegators_per_validator,
+                delegation_config,
+            )
+            .await
+            .unwrap();
             return Ok(());
         },
         Commands::Transfer { amount, to } => {
