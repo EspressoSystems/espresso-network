@@ -11,9 +11,9 @@ use alloy::{
         Address, U256,
     },
     providers::{PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider},
-    rpc::types::TransactionReceipt,
+    rpc::{client::RpcClient, types::TransactionReceipt},
     signers::local::PrivateKeySigner,
-    transports::TransportError,
+    transports::{http::Http, TransportError},
 };
 use anyhow::Result;
 use clap::ValueEnum;
@@ -440,9 +440,13 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         let token = fetch_token_address(rpc_url.clone(), stake_table).await?;
 
+        // Create shared HTTP client to reuse connection pool across all providers. Avoids creating
+        // too many connections to our geth node.
+        let shared_client = RpcClient::new(Http::new(rpc_url), /*is_local*/ true);
+
         let token_holder_provider = ProviderBuilder::new()
             .wallet(token_holder.wallet().clone())
-            .connect_http(rpc_url.clone());
+            .connect_client(shared_client.clone());
 
         tracing::info!("ESP token address: {token}");
         let token_holder_addr = token_holder.default_signer_address();
@@ -548,7 +552,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
             providers.entry(address).or_insert_with(|| {
                 ProviderBuilder::new()
                     .wallet(EthereumWallet::from(validator.signer.clone()))
-                    .connect_http(rpc_url.clone())
+                    .connect_client(shared_client.clone())
             });
 
             let payload =
@@ -568,7 +572,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
             providers.entry(address).or_insert_with(|| {
                 ProviderBuilder::new()
                     .wallet(EthereumWallet::from(delegator.signer.clone()))
-                    .connect_http(rpc_url.clone())
+                    .connect_client(shared_client.clone())
             });
 
             approvals.push_back(StakeTableTx::Approve {
