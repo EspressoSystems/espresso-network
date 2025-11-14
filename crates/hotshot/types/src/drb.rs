@@ -41,7 +41,7 @@ pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
     let upgrade_difficulty = config.drb_upgrade_difficulty;
     Arc::new(move |version| {
         Box::pin(async move {
-            if version >= V::DrbAndHeaderUpgrade::VERSION {
+            let selected_drb_difficulty = if version >= V::DrbAndHeaderUpgrade::VERSION {
                 upgrade_difficulty
             } else {
                 base_difficulty
