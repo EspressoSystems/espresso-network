@@ -104,6 +104,7 @@ pub async fn proposals_with_transactions(
         ),
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&payload, &metadata),
         metadata,
+        <TestVersions as Versions>::Base::VERSION,
     );
 
     let genesis_qc = QuorumCertificate::<TestTypes>::genesis::<TestVersions>(
