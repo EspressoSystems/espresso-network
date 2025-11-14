@@ -6,8 +6,7 @@ use either::Either;
 use espresso_types::{
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    ValidatedState,
+    BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
@@ -374,7 +373,7 @@ where
                 )
                 .await
             {
-                Ok((state, delta)) => {
+                Ok((state, delta, _)) => {
                     verify_state_update(&state, leaf.leaf()).context("verifying state update")?;
                     if let Err(err) =
                         update_state_storage(&parent_state, &state, delta, &storage, &leaf).await

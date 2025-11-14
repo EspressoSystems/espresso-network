@@ -797,7 +797,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
 
     // Apply subsequent headers to compute the later state.
     for proposal in leaves {
-        let (new_state, _) = state
+        let (new_state, ..) = state
             .apply_header(
                 &instance,
                 &catchup,
