@@ -288,24 +288,31 @@
 <a href=#288 id=288 data-nosnippet>288</a>        </span><span class="attr">#[clap(long, default_value_t = <span class="number">5</span>)]
 <a href=#289 id=289 data-nosnippet>289</a>        </span>num_validators: u16,
 <a href=#290 id=290 data-nosnippet>290</a>
-<a href=#291 id=291 data-nosnippet>291</a>        <span class="attr">#[arg(long, value_enum, default_value_t = DelegationConfig::default())]
-<a href=#292 id=292 data-nosnippet>292</a>        </span>delegation_config: DelegationConfig,
-<a href=#293 id=293 data-nosnippet>293</a>    },
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="doccomment">/// Export validator node signatures for address validation.
-<a href=#295 id=295 data-nosnippet>295</a>    </span>ExportNodeSignatures {
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="doccomment">/// The Ethereum address to sign.
-<a href=#297 id=297 data-nosnippet>297</a>        </span><span class="attr">#[clap(long)]
-<a href=#298 id=298 data-nosnippet>298</a>        </span>address: Address,
-<a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="doccomment">/// The BLS private key for signing.
-<a href=#301 id=301 data-nosnippet>301</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_bls_priv_key, env = <span class="string">"BLS_PRIVATE_KEY"</span>)]
-<a href=#302 id=302 data-nosnippet>302</a>        </span>consensus_private_key: BLSPrivKey,
-<a href=#303 id=303 data-nosnippet>303</a>
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="doccomment">/// The Schnorr private key for signing.
-<a href=#305 id=305 data-nosnippet>305</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_state_priv_key, env = <span class="string">"SCHNORR_PRIVATE_KEY"</span>)]
-<a href=#306 id=306 data-nosnippet>306</a>        </span>state_private_key: StateSignKey,
-<a href=#307 id=307 data-nosnippet>307</a>
-<a href=#308 id=308 data-nosnippet>308</a>        <span class="attr">#[clap(flatten)]
-<a href=#309 id=309 data-nosnippet>309</a>        </span>output_args: signature::OutputArgs,
-<a href=#310 id=310 data-nosnippet>310</a>    },
-<a href=#311 id=311 data-nosnippet>311</a>}</code></pre></div></section></main></body></html>
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="doccomment">/// The number of delegators to create per validator.
+<a href=#292 id=292 data-nosnippet>292</a>        ///
+<a href=#293 id=293 data-nosnippet>293</a>        /// If not specified, a random number (2-5) of delegators is created per validator.
+<a href=#294 id=294 data-nosnippet>294</a>        /// Must be &lt;= 100,000.
+<a href=#295 id=295 data-nosnippet>295</a>        </span><span class="attr">#[clap(long, env = <span class="string">"NUM_DELEGATORS_PER_VALIDATOR"</span>, value_parser = <span class="macro">clap::value_parser!</span>(u64).range(..=<span class="number">100000</span>))]
+<a href=#296 id=296 data-nosnippet>296</a>        </span>num_delegators_per_validator: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#297 id=297 data-nosnippet>297</a>
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="attr">#[arg(long, value_enum, env = <span class="string">"DELEGATION_CONFIG"</span>, default_value_t = DelegationConfig::default())]
+<a href=#299 id=299 data-nosnippet>299</a>        </span>delegation_config: DelegationConfig,
+<a href=#300 id=300 data-nosnippet>300</a>    },
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="doccomment">/// Export validator node signatures for address validation.
+<a href=#302 id=302 data-nosnippet>302</a>    </span>ExportNodeSignatures {
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="doccomment">/// The Ethereum address to sign.
+<a href=#304 id=304 data-nosnippet>304</a>        </span><span class="attr">#[clap(long)]
+<a href=#305 id=305 data-nosnippet>305</a>        </span>address: Address,
+<a href=#306 id=306 data-nosnippet>306</a>
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="doccomment">/// The BLS private key for signing.
+<a href=#308 id=308 data-nosnippet>308</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_bls_priv_key, env = <span class="string">"BLS_PRIVATE_KEY"</span>)]
+<a href=#309 id=309 data-nosnippet>309</a>        </span>consensus_private_key: BLSPrivKey,
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="doccomment">/// The Schnorr private key for signing.
+<a href=#312 id=312 data-nosnippet>312</a>        </span><span class="attr">#[clap(long, value_parser = parse::parse_state_priv_key, env = <span class="string">"SCHNORR_PRIVATE_KEY"</span>)]
+<a href=#313 id=313 data-nosnippet>313</a>        </span>state_private_key: StateSignKey,
+<a href=#314 id=314 data-nosnippet>314</a>
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="attr">#[clap(flatten)]
+<a href=#316 id=316 data-nosnippet>316</a>        </span>output_args: signature::OutputArgs,
+<a href=#317 id=317 data-nosnippet>317</a>    },
+<a href=#318 id=318 data-nosnippet>318</a>}</code></pre></div></section></main></body></html>
