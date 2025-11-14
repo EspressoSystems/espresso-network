@@ -7,7 +7,7 @@
 use std::{
     collections::BTreeMap,
     sync::{atomic::AtomicBool, Arc},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
