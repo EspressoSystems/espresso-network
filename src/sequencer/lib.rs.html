@@ -390,7 +390,7 @@
 <a href=#390 id=390 data-nosnippet>390</a>    network_config.config.stake_table_capacity = stake_table_capacity;
 <a href=#391 id=391 data-nosnippet>391</a>
 <a href=#392 id=392 data-nosnippet>392</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(da_committees) = <span class="kw-2">&amp;</span>genesis.da_committees {
-<a href=#393 id=393 data-nosnippet>393</a>        <span class="macro">tracing::warn!</span>(<span class="string">"setting da_committees from genesis"</span>);
+<a href=#393 id=393 data-nosnippet>393</a>        <span class="macro">tracing::warn!</span>(<span class="string">"setting da_committees from genesis: {da_committees:?}"</span>);
 <a href=#394 id=394 data-nosnippet>394</a>        network_config.config.da_committees = da_committees.clone();
 <a href=#395 id=395 data-nosnippet>395</a>    }
 <a href=#396 id=396 data-nosnippet>396</a>
