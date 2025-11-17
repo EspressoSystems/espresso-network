@@ -6191,7 +6191,6 @@ mod test {
             &mut contracts,
             deployer_addr,
             deployer_addr,
-            deployer_addr,
         )
         .await?;
 
