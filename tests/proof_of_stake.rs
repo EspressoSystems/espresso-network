@@ -1,15 +1,9 @@
 use std::time::{Duration, Instant};
 
-use alloy::primitives::U256;
 use anyhow::Result;
 use espresso_types::SeqTypes;
-use hotshot_types::{
-    stake_table::StakeTableEntry,
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
-    PeerConfig,
-};
+use hotshot_types::PeerConfig;
 use sequencer::api::data_source::StakeTableWithEpochNumber;
-use tagged_base64::TaggedBase64;
 use url::Url;
 
 use crate::{
@@ -111,11 +105,7 @@ async fn test_native_demo_da_committee() -> Result<()> {
         assert_da_stake_table(
             Default::default(),
             committee.start_epoch,
-            &committee
-                .committee
-                .iter()
-                .map(|member| member)
-                .collect::<Vec<&PeerConfig<SeqTypes>>>(),
+            &committee.committee.iter().collect::<Vec<_>>(),
         )
         .await?;
     }
@@ -226,9 +216,9 @@ async fn assert_da_stake_table(
             .cloned()
             .cloned()
             .collect::<Vec<PeerConfig<SeqTypes>>>();
-        expected.sort_by_key(|e| e.stake_table_entry.stake_key.clone());
+        expected.sort_by_key(|e| e.stake_table_entry.stake_key);
         let mut actual = da_stake_table.stake_table.clone();
-        actual.sort_by_key(|e| e.stake_table_entry.stake_key.clone());
+        actual.sort_by_key(|e| e.stake_table_entry.stake_key);
 
         assert_eq!(
             expected, actual,

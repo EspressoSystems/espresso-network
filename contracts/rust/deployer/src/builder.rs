@@ -394,9 +394,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             Contract::StakeTableV2 => {
                 let use_multisig = self.use_multisig;
                 let dry_run = self.dry_run;
-                let multisig_pauser = self.multisig_pauser.context(
-                    "Multisig pauser address must be set for the upgrade to StakeTableV2",
-                )?;
+                // Default to deployer address if pauser not explicitly set (for local demos)
+                let multisig_pauser = self.multisig_pauser.unwrap_or(admin);
                 let l1_client = L1Client::new(vec![self.rpc_url.clone()])?;
                 tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
                 if use_multisig {
@@ -503,9 +502,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
                 // RewardClaimProxy only needs one pauser
-                let pauser = self.multisig_pauser.context(
-                    "Multisig pauser address must be set for RewardClaimProxy deployment",
-                )?;
+                // Default to deployer address if pauser not explicitly set (for local demos)
+                let deployer_addr = provider.default_signer_address();
+                let pauser = self.multisig_pauser.unwrap_or(deployer_addr);
 
                 // RewardClaim uses SafeExitTimelock (longer delay) since it can mint tokens
                 // and users need time to react to upgrades. Can be paused in emergencies.
