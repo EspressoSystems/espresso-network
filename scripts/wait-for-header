@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 # This script waits for specific conditions on the sequencer by polling HTTP endpoints.
 # We use HTTP polling instead of websockets for portability - only requires curl and jq
 # instead of websocat, which is less commonly available.
 #
-# Dependencies: curl, jq, bash
+# Dependencies: curl, jq, sh
 
 MODE="${1:-}"
 SEQUENCER_URL="${SEQUENCER_URL:-http://localhost:24000}"
@@ -41,7 +41,7 @@ get_header_at_height() {
 
 is_valid_value() {
   local value="$1"
-  [[ -n "$value" && "$value" != "null" ]]
+  [ -n "$value" ] && [ "$value" != "null" ]
 }
 
 retry_with_message() {
@@ -80,7 +80,7 @@ wait_for_version() {
     if is_valid_value "$minor" && is_valid_value "$height_from_header"; then
       echo "v0.${minor} height=${height_from_header}"
 
-      if [[ "$minor" == "$target_minor" ]]; then
+      if [ "$minor" = "$target_minor" ]; then
         echo "Version 0.${target_minor} detected at height ${height_from_header}!"
         exit 0
       fi
@@ -120,12 +120,12 @@ wait_for_epochs() {
     local current_epoch
     current_epoch=$((height / blocks_per_epoch))
 
-    if [[ "$current_epoch" != "$last_reported_epoch" ]]; then
+    if [ "$current_epoch" != "$last_reported_epoch" ]; then
       echo "Height: ${height}, Epoch: ${current_epoch}"
       last_reported_epoch=$current_epoch
     fi
 
-    if [[ "$current_epoch" -ge "$target_epoch" ]]; then
+    if [ "$current_epoch" -ge "$target_epoch" ]; then
       echo "Reached epoch ${current_epoch} (${num_epochs} epochs from initial epoch ${initial_epoch})!"
       exit 0
     fi
@@ -134,21 +134,21 @@ wait_for_epochs() {
   done
 }
 
-if [[ -z "$MODE" ]]; then
+if [ -z "$MODE" ]; then
   show_usage
 fi
 
 case "$MODE" in
 version)
   TARGET_MINOR_VERSION="${2:-}"
-  if [[ -z "$TARGET_MINOR_VERSION" ]]; then
+  if [ -z "$TARGET_MINOR_VERSION" ]; then
     echo "Error: target-minor-version is required for 'version' mode" >&2
     show_usage
   fi
   ;;
 new-epochs)
   NUM_EPOCHS="${2:-}"
-  if [[ -z "$NUM_EPOCHS" ]]; then
+  if [ -z "$NUM_EPOCHS" ]; then
     echo "Error: num-epochs is required for 'new-epochs' mode" >&2
     show_usage
   fi
@@ -163,12 +163,12 @@ echo "Getting hotshot config from: ${SEQUENCER_URL}/config/hotshot"
 blocks_per_epoch=$(curl -sL "${SEQUENCER_URL}/config/hotshot" | jq -r '.config.epoch_height')
 echo "Blocks per epoch: ${blocks_per_epoch}"
 
-if [[ "$MODE" == "new-epochs" ]]; then
-  if [[ -z "$blocks_per_epoch" || "$blocks_per_epoch" == "null" || "$blocks_per_epoch" -eq 0 ]]; then
+if [ "$MODE" = "new-epochs" ]; then
+  if [ -z "$blocks_per_epoch" ] || [ "$blocks_per_epoch" = "null" ] || [ "$blocks_per_epoch" -eq 0 ]; then
     echo "Error: blocks_per_epoch is 0 or invalid. Epochs are not supported in this version." >&2
     exit 1
   fi
   wait_for_epochs "$NUM_EPOCHS" "$blocks_per_epoch"
-elif [[ "$MODE" == "version" ]]; then
+elif [ "$MODE" = "version" ]; then
   wait_for_version "$TARGET_MINOR_VERSION"
 fi
