@@ -4,9 +4,11 @@ use std::{cmp::max, sync::Arc, time::Duration};
 use anyhow::{bail, ensure, Context};
 use either::Either;
 use espresso_types::{
+    traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
+    ValidatedState,
 };
 use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
@@ -30,56 +32,89 @@ use crate::{
     NodeState, SeqTypes,
 };
 
-pub(crate) fn verify_state_update(state: &ValidatedState, leaf: &Leaf2) -> anyhow::Result<()> {
+pub(crate) async fn compute_state_update(
+    parent_state: &ValidatedState,
+    instance: &NodeState,
+    peers: &impl StateCatchup,
+    parent_leaf: &Leaf2,
+    proposed_leaf: &Leaf2,
+) -> anyhow::Result<(ValidatedState, Delta)> {
+    let header = proposed_leaf.block_header();
+
+    let (state, delta, total_rewards_distributed) = parent_state
+        .apply_header(
+            instance,
+            peers,
+            parent_leaf,
+            header,
+            header.version(),
+            proposed_leaf.view_number(),
+        )
+        .await?;
+
     // Check internal consistency.
-    let parent_header = leaf.block_header();
     ensure!(
-        state.chain_config.commit() == parent_header.chain_config().commit(),
-        "internal error! in-memory chain config {:?} does not match parent header {:?}",
+        state.chain_config.commit() == header.chain_config().commit(),
+        "internal error! in-memory chain config {:?} does not match header {:?}",
         state.chain_config,
-        parent_header.chain_config(),
+        header.chain_config(),
     );
     ensure!(
-        state.block_merkle_tree.commitment() == parent_header.block_merkle_tree_root(),
-        "internal error! in-memory block tree {:?} does not match parent header {:?}\nfull \
-         in-memory block tree {:?}",
+        state.block_merkle_tree.commitment() == header.block_merkle_tree_root(),
+        "internal error! in-memory block tree {} does not match header {}",
         state.block_merkle_tree.commitment(),
-        parent_header.block_merkle_tree_root(),
-        state.block_merkle_tree,
+        header.block_merkle_tree_root()
     );
     ensure!(
-        state.fee_merkle_tree.commitment() == parent_header.fee_merkle_tree_root(),
-        "internal error! in-memory fee tree {:?} does not match parent header {:?}\nfull \
-         in-memory fee tree {:?}",
+        state.fee_merkle_tree.commitment() == header.fee_merkle_tree_root(),
+        "internal error! in-memory fee tree {} does not match header {}",
         state.fee_merkle_tree.commitment(),
-        parent_header.fee_merkle_tree_root(),
-        state.fee_merkle_tree,
+        header.fee_merkle_tree_root()
     );
 
-    match parent_header.reward_merkle_tree_root() {
+    match header.reward_merkle_tree_root() {
         Either::Left(v1_root) => {
             ensure!(
                 state.reward_merkle_tree_v1.commitment() == v1_root,
-                "internal error! in-memory v1 reward tree {:?} does not match parent header \
-                 {:?}\nfull in-memory v1 reward tree {:?}",
+                "internal error! in-memory v1 reward tree {} does not match header {}",
                 state.reward_merkle_tree_v1.commitment(),
-                v1_root,
-                state.reward_merkle_tree_v1,
+                v1_root
             )
         },
         Either::Right(v2_root) => {
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == v2_root,
-                "internal error! in-memory v2 reward tree {:?} does not match parent header \
-                 {:?}\nfull in-memory v2 reward tree {:?}",
+                "internal error! in-memory v2 reward tree {} does not match header {}",
                 state.reward_merkle_tree_v2.commitment(),
-                v2_root,
-                state.reward_merkle_tree_v2,
+                v2_root
             )
         },
     }
 
-    Ok(())
+    if header.version() >= DrbAndHeaderUpgradeVersion::version() {
+        let Some(actual_total) = total_rewards_distributed else {
+            bail!(
+                "internal error! total_rewards_distributed is None for version {:?}",
+                header.version()
+            );
+        };
+
+        let Some(proposed_total) = header.total_reward_distributed() else {
+            bail!(
+                "internal error! proposed header.total_reward_distributed() is None for version \
+                 {:?}",
+                header.version()
+            );
+        };
+
+        ensure!(
+            proposed_total == actual_total,
+            "Total rewards mismatch: proposed header has {proposed_total} but actual total is \
+             {actual_total}",
+        );
+    }
+
+    Ok((state, delta))
 }
 
 async fn store_state_update(
@@ -213,22 +248,34 @@ async fn store_state_update(
 #[tracing::instrument(
     skip_all,
     fields(
-        view = ?proposed_leaf.leaf().view_number(),
-        height = proposed_leaf.height(),
+        node_id = instance.node_id,
+        view = ?parent_leaf.leaf().view_number(),
+        height = parent_leaf.height(),
     ),
 )]
-pub(crate) async fn update_state_storage<T>(
+async fn update_state_storage<T>(
     parent_state: &ValidatedState,
-    state: &ValidatedState,
-    delta: Delta,
     storage: &Arc<T>,
+    instance: &NodeState,
+    peers: &impl StateCatchup,
+    parent_leaf: &LeafQueryData<SeqTypes>,
     proposed_leaf: &LeafQueryData<SeqTypes>,
-) -> anyhow::Result<()>
+) -> anyhow::Result<ValidatedState>
 where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
     let parent_chain_config = parent_state.chain_config;
+
+    let (state, delta) = compute_state_update(
+        parent_state,
+        instance,
+        peers,
+        &parent_leaf.leaf().clone(),
+        &proposed_leaf.leaf().clone(),
+    )
+    .await
+    .context("computing state update")?;
 
     tracing::debug!("storing state update");
     let mut tx = storage
@@ -255,7 +302,7 @@ where
     }
 
     tx.commit().await?;
-    Ok(())
+    Ok(state)
 }
 
 async fn store_genesis_state<T>(
@@ -362,33 +409,23 @@ where
                 ?leaf,
                 "updating persistent merklized state"
             );
-            match parent_state
-                .apply_header(
-                    &instance,
-                    &peers,
-                    parent_leaf.leaf(),
-                    leaf.header(),
-                    leaf.header().version(),
-                    leaf.leaf().view_number(),
-                )
-                .await
+            match update_state_storage(
+                &parent_state,
+                &storage,
+                &instance,
+                &peers,
+                &parent_leaf,
+                &leaf,
+            )
+            .await
             {
-                Ok((state, delta, _)) => {
-                    verify_state_update(&state, leaf.leaf()).context("verifying state update")?;
-                    if let Err(err) =
-                        update_state_storage(&parent_state, &state, delta, &storage, &leaf).await
-                    {
-                        tracing::error!(height = leaf.height(), "failed to update state: {err:#}");
-                        // If we fail, delay for a second and retry.
-                        sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
+                Ok(state) => {
                     parent_leaf = leaf;
                     parent_state = state;
                     break;
                 },
                 Err(err) => {
-                    tracing::error!(height = leaf.height(), "failed to apply header: {err:#}");
+                    tracing::error!(height = leaf.height(), "failed to update state: {err:#}");
                     // If we fail, delay for a second and retry.
                     sleep(Duration::from_secs(1)).await;
                 },
