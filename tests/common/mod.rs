@@ -260,12 +260,16 @@ impl TestRuntime {
     /// Refresh the reward claim address from the contract
     /// Call this after the reward claim contract has been deployed
     pub async fn refresh_reward_claim_address(&mut self) -> Result<()> {
+        println!("Refreshing reward claim address");
         let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
         let stake_table = StakeTableV2::new(self.config.stake_table_address, &provider);
+        println!("stake table address: {}", self.config.stake_table_address);
         let token_address = stake_table.token().call().await?;
+        println!("token address: {token_address}");
 
         let esp_token = EspTokenV2::new(token_address, &provider);
         let reward_claim_addr = esp_token.rewardClaim().call().await?;
+        println!("reward claim address: {reward_claim_addr}");
 
         self.reward_claim_address = if reward_claim_addr == Address::ZERO {
             None
