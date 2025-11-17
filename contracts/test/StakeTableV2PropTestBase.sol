@@ -204,8 +204,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         StakeTable(payable(address(proxy))).upgradeToAndCall(
             address(stakeTableV2Impl),
             abi.encodeWithSignature(
-                "initializeV2(address,address,address,uint256,(address,uint16)[])",
-                admin,
+                "initializeV2(address,address,uint256,(address,uint16)[])",
                 admin,
                 admin,
                 0,

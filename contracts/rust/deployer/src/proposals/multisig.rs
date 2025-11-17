@@ -586,10 +586,10 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 
     if !dry_run {
         tracing::info!(
-                "EspTokenProxy upgrade proposal sent. Send this link to the signers to \
+            "EspTokenProxy upgrade proposal sent. Send this link to the signers to \
                  sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-                owner_addr
-            );
+            owner_addr
+        );
     }
 
     Ok(result)
@@ -598,8 +598,7 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 pub struct StakeTableV2UpgradeParams {
     pub rpc_url: String,
     pub multisig_address: Address,
-    pub pauser1: Address,
-    pub pauser2: Address,
+    pub pauser: Address,
     pub dry_run: Option<bool>,
 }
 
@@ -639,14 +638,9 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     }
     // TODO: check if owner is a SAFE multisig
 
-    let (_init_commissions, _init_active_stake, init_data) = crate::prepare_stake_table_v2_upgrade(
-        l1_client,
-        proxy_addr,
-        params.pauser1,
-        params.pauser2,
-        owner_addr,
-    )
-    .await?;
+    let (_init_commissions, _init_active_stake, init_data) =
+        crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, params.pauser, owner_addr)
+            .await?;
 
     let stake_table_v2_addr = contracts
         .deploy(

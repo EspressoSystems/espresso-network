@@ -345,12 +345,7 @@
     "name": "initializeV2",
     "inputs": [
       {
-        "name": "pauser1",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "pauser2",
+        "name": "pauser",
         "type": "address",
         "internalType": "address"
       },

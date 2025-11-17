@@ -41,7 +41,7 @@ contract StakeTableV2GovernanceTest is Test {
         S baseProxy = S(address(stakeTableRegisterTest.stakeTable()));
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, pauser, initialOwner, 0, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, initialOwner, 0, emptyCommissions
         );
         baseProxy.upgradeToAndCall(address(new StakeTableV2()), initData);
         proxy = StakeTableV2(address(baseProxy));

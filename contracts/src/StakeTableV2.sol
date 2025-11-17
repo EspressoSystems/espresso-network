@@ -197,8 +197,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Reinitialize the contract
     ///
-    /// @param pauser1 The first address to be granted the pauser role
-    /// @param pauser2 The second address to be granted the pauser role
+    /// @param pauser The address to be granted the pauser role
     /// @param admin The address to be granted the default admin role and ownership.
     /// This should be a timelock contract address, multisig, or another governance address.
     /// @param initialActiveStake The initial active stake in the contract
@@ -212,19 +211,16 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev Sets up roles and transfers ownership to admin. The deployer picks the admin
     /// address (timelock, multisig, etc.) based on config.
     function initializeV2(
-        address pauser1,
-        address pauser2,
+        address pauser,
         address admin,
         uint256 initialActiveStake,
         InitialCommission[] calldata initialCommissions
     ) public onlyOwner reinitializer(2) {
         require(admin != address(0), ZeroAddress());
-        require(pauser1 != address(0), ZeroAddress());
-        require(pauser2 != address(0), ZeroAddress());
+        require(pauser != address(0), ZeroAddress());
         __AccessControl_init();
 
-        _grantRole(PAUSER_ROLE, pauser1);
-        _grantRole(PAUSER_ROLE, pauser2);
+        _grantRole(PAUSER_ROLE, pauser);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
 
         // Transfer ownership to admin if it's not the current owner

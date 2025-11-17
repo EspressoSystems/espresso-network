@@ -1231,21 +1231,13 @@ contract StakeTableUpgradeV2Test is Test {
             abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
         );
         StakeTableV2(address(proxy)).initializeV2(
-            makeAddr("pauser1"),
-            makeAddr("pauser2"),
-            makeAddr("admin"),
-            0,
-            new StakeTableV2.InitialCommission[](0)
+            makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
         );
         vm.stopPrank();
 
         vm.startPrank(stakeTableRegisterTest.admin());
         StakeTableV2(address(proxy)).initializeV2(
-            makeAddr("pauser1"),
-            makeAddr("pauser2"),
-            makeAddr("admin"),
-            0,
-            new StakeTableV2.InitialCommission[](0)
+            makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
         );
         vm.stopPrank();
     }
@@ -1260,13 +1252,12 @@ contract StakeTableUpgradeV2Test is Test {
         (uint8 majorVersion,,) = proxy.getVersion();
         assertEq(majorVersion, 1, "Should start with V1");
 
-        address pauser1 = makeAddr("pauser1");
-        address pauser2 = makeAddr("pauser2");
+        address pauser = makeAddr("pauser");
         address defaultAdmin = makeAddr("defaultAdmin");
         StakeTableV2.InitialCommission[] memory emptyCommissions;
 
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser1, pauser2, defaultAdmin, 0, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, defaultAdmin, 0, emptyCommissions
         );
 
         StakeTableV2 newImpl = new StakeTableV2();
@@ -1280,12 +1271,7 @@ contract StakeTableUpgradeV2Test is Test {
             proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), defaultAdmin),
             "Admin should have DEFAULT_ADMIN_ROLE"
         );
-        assertTrue(
-            proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser1), "Pauser1 should have PAUSER_ROLE"
-        );
-        assertTrue(
-            proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser2), "Pauser2 should have PAUSER_ROLE"
-        );
+        assertTrue(proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser), "Pauser should have PAUSER_ROLE");
         assertEq(proxyV2.owner(), defaultAdmin, "Owner should be admin");
         assertFalse(
             proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), currentOwner),
@@ -1992,7 +1978,6 @@ contract StakeTableUpgradeV2Test is Test {
                 StakeTableV2.initializeV2.selector,
                 stakeTableRegisterTest.admin(),
                 stakeTableRegisterTest.admin(),
-                stakeTableRegisterTest.admin(),
                 initialBalance / 2,
                 initialCommissions
             )
@@ -2042,7 +2027,6 @@ contract StakeTableUpgradeV2Test is Test {
             newImpl,
             abi.encodeWithSelector(
                 StakeTableV2.initializeV2.selector,
-                adminAddr,
                 adminAddr,
                 adminAddr,
                 initialBalance,
@@ -2442,7 +2426,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         address admin = proxy.owner();
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, pauser, admin, 0, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, admin, 0, emptyCommissions
         );
         proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
 
@@ -2464,7 +2448,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         vm.startPrank(admin);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         StakeTableV2.InitialCommission[] memory emptyCommissions;
-        stakeTableV2.initializeV2(pauser, pauser, admin, 0, emptyCommissions);
+        stakeTableV2.initializeV2(pauser, admin, 0, emptyCommissions);
     }
 
     function test_InitializeV2_TransfersOwnershipToAdmin() public {
@@ -2500,7 +2484,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         vm.startPrank(originalOwner);
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, pauser, originalOwner, 0, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, originalOwner, 0, emptyCommissions
         );
         proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
         vm.stopPrank();
@@ -2533,7 +2517,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         vm.startPrank(originalOwner);
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, pauser, newAdmin, 0, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, newAdmin, 0, emptyCommissions
         );
         proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
         vm.stopPrank();
@@ -2848,9 +2832,8 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         vm.stopPrank();
     }
 
-    function test_BothInitializedPausersCanPauseAndUnpause() public {
-        address pauser1 = makeAddr("pauser1");
-        address pauser2 = makeAddr("pauser2");
+    function test_InitializedPauserCanPauseAndUnpause() public {
+        address pauserAddress = makeAddr("pauser");
 
         (uint8 majorVersion,,) = S(address(stakeTableRegisterTest.proxy())).getVersion();
         assertEq(majorVersion, 1);
@@ -2860,7 +2843,7 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         address admin = proxy.owner();
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser1, pauser2, admin, 0, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauserAddress, admin, 0, emptyCommissions
         );
         proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
         vm.stopPrank();
@@ -2869,38 +2852,21 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         (uint8 majorVersionNew,,) = proxyV2.getVersion();
         assertEq(majorVersionNew, 2);
 
-        // Verify both pausers have the PAUSER_ROLE
-        assertTrue(proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser1));
-        assertTrue(proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser2));
+        // Verify pauser has the PAUSER_ROLE
+        assertTrue(proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauserAddress));
 
-        // Test pauser1 can pause
-        vm.startPrank(pauser1);
+        // Test pauser can pause
+        vm.startPrank(pauserAddress);
         vm.expectEmit(false, false, false, true, address(proxyV2));
-        emit PausableUpgradeable.Paused(pauser1);
+        emit PausableUpgradeable.Paused(pauserAddress);
         proxyV2.pause();
         assertTrue(proxyV2.paused());
         vm.stopPrank();
 
-        // Test pauser2 can unpause
-        vm.startPrank(pauser2);
+        // Test same pauser can unpause
+        vm.startPrank(pauserAddress);
         vm.expectEmit(false, false, false, true, address(proxyV2));
-        emit PausableUpgradeable.Unpaused(pauser2);
-        proxyV2.unpause();
-        assertFalse(proxyV2.paused());
-        vm.stopPrank();
-
-        // Test pauser2 can pause
-        vm.startPrank(pauser2);
-        vm.expectEmit(false, false, false, true, address(proxyV2));
-        emit PausableUpgradeable.Paused(pauser2);
-        proxyV2.pause();
-        assertTrue(proxyV2.paused());
-        vm.stopPrank();
-
-        // Test pauser1 can unpause
-        vm.startPrank(pauser1);
-        vm.expectEmit(false, false, false, true, address(proxyV2));
-        emit PausableUpgradeable.Unpaused(pauser1);
+        emit PausableUpgradeable.Unpaused(pauserAddress);
         proxyV2.unpause();
         assertFalse(proxyV2.paused());
         vm.stopPrank();
