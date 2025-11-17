@@ -12,7 +12,11 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{
+        election::Membership, node_implementation::ConsensusTime,
+        signature_key::StakeTableEntryType,
+    },
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree_compat::{
@@ -41,7 +45,7 @@ use crate::{
         RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, SeqTypes,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);
@@ -778,6 +782,28 @@ impl RewardDistributor {
     }
 }
 
+async fn pre_populate_reward_merkle_tree(
+    coordinator: EpochMembershipCoordinator<SeqTypes>,
+    validated_state: &mut ValidatedState,
+    epoch: EpochNumber,
+) -> anyhow::Result<()> {
+    let epoch_membership = coordinator.stake_table_for_epoch(Some(epoch)).await?;
+    let membership = epoch_membership.coordinator.membership().read().await;
+
+    let reward_merkle_tree_v2 = &mut validated_state.reward_merkle_tree_v2;
+    for peer_config in epoch_membership.stake_table().await.0 {
+        let address = peer_config.stake_table_entry.public_key();
+        let validator = membership.get_validator_config(&epoch, address)?;
+        *reward_merkle_tree_v2 = reward_merkle_tree_v2
+            .persistent_update(RewardAccountV2(validator.account), RewardAmount(U256::ZERO))?;
+        for delegator in validator.delegators.keys() {
+            *reward_merkle_tree_v2 = reward_merkle_tree_v2
+                .persistent_update(RewardAccountV2(*delegator), RewardAmount(U256::ZERO))?;
+        }
+    }
+    Ok(())
+}
+
 /// Distributes the block reward for a given block height
 ///
 /// Rewards are only distributed if the block belongs to an epoch beyond the second epoch.
@@ -839,6 +865,13 @@ pub async fn distribute_block_reward(
         instance_state.fixed_block_reward().await?
     };
 
+    // If we just upgraded to V4 from any version we should pre-poplute the merkle tree
+    // with accounts from the stake table, giving each address 0 initial balance
+    if version >= DrbAndHeaderUpgradeVersion::version()
+        && parent_header.version() < DrbAndHeaderUpgradeVersion::version()
+    {
+        pre_populate_reward_merkle_tree(coordinator.clone(), validated_state, epoch).await?;
+    }
     // If we are in the DRB + header upgrade
     // and the parent block is from V3 (which does not have a previously distributed reward field),
     // we need to recompute the previously distributed rewards
