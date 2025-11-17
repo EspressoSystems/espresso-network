@@ -19,13 +19,13 @@ if ! $healthy; then
     exit 1
 fi
 
-initial_l1_block=$(curl -s http://localhost:8080/v0/l1/block/latest | jq .number)
+initial_l1_block=$(curl -s http://localhost:8080/v0/staking/l1/block/latest | jq .number)
 echo "Service healthy, initial L1 block: ${initial_l1_block}"
 
 # Wait for L1 block height to increase
 increased=false
 for i in $(seq $L1_TIMEOUT); do
-    l1_block=$(curl -s http://localhost:8080/v0/l1/block/latest | jq .number)
+    l1_block=$(curl -s http://localhost:8080/v0/staking/l1/block/latest | jq .number)
     if [[ $l1_block > $initial_l1_block ]]; then
         echo "L1 block increased from ${initial_l1_block} to ${l1_block}"
         increased=true

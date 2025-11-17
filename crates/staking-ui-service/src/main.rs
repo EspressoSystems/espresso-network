@@ -195,11 +195,19 @@ mod test {
         client.connect(None).await;
 
         // Check that L1 blocks are increasing.
-        let initial_l1_block: L1BlockId = client.get("l1/block/latest").send().await.unwrap();
+        let initial_l1_block: L1BlockId = client
+            .get("v0/staking/l1/block/latest")
+            .send()
+            .await
+            .unwrap();
         tracing::info!(?initial_l1_block, "client connected");
         loop {
             sleep(Duration::from_secs(1)).await;
-            let l1_block: L1BlockId = client.get("l1/block/latest").send().await.unwrap();
+            let l1_block: L1BlockId = client
+                .get("v0/staking/l1/block/latest")
+                .send()
+                .await
+                .unwrap();
             if l1_block.number > initial_l1_block.number {
                 tracing::info!(?initial_l1_block, ?l1_block, "L1 block increased");
                 break;

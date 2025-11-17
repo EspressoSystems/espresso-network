@@ -41,7 +41,7 @@ where
         {
             let mut api = app
                 .module::<Error, Version>(
-                    "",
+                    "staking",
                     toml::from_str::<toml::Value>(include_str!("../api/api.toml"))
                         .context(Error::internal)?,
                 )
@@ -175,14 +175,14 @@ mod test {
 
         // Get latest block.
         tracing::info!("test latest block");
-        let block: L1BlockId = client.get("/l1/block/latest").send().await.unwrap();
+        let block: L1BlockId = client.get("staking/l1/block/latest").send().await.unwrap();
         assert_eq!(block, block_id(2));
 
         // Get blocks by number.
         for number in 1..3 {
             tracing::info!(number, "test block by number");
             let block: L1BlockId = client
-                .get(&format!("/l1/block/{number}"))
+                .get(&format!("staking/l1/block/{number}"))
                 .send()
                 .await
                 .unwrap();
@@ -192,7 +192,7 @@ mod test {
         // Query for old block.
         tracing::info!("test old block");
         let err = client
-            .get::<L1BlockId>("/l1/block/0")
+            .get::<L1BlockId>("staking/l1/block/0")
             .send()
             .await
             .unwrap_err();
@@ -201,7 +201,7 @@ mod test {
         // Query for future block.
         tracing::info!("test future block");
         let err = client
-            .get::<L1BlockId>("/l1/block/3")
+            .get::<L1BlockId>("staking/l1/block/3")
             .send()
             .await
             .unwrap_err();
@@ -247,7 +247,7 @@ mod test {
 
         tracing::info!("genesis snapshot should be empty");
         let snapshot: FullNodeSetSnapshot = client
-            .get(&format!("/nodes/all/{:x}", block_id(1).hash))
+            .get(&format!("staking/nodes/all/{:x}", block_id(1).hash))
             .send()
             .await
             .unwrap();
@@ -256,7 +256,7 @@ mod test {
 
         tracing::info!("updates should be unavailable for genesis state");
         let err = client
-            .get::<FullNodeSetUpdate>(&format!("/nodes/all/updates/{:x}", block_id(1).hash))
+            .get::<FullNodeSetUpdate>(&format!("staking/nodes/all/updates/{:x}", block_id(1).hash))
             .send()
             .await
             .unwrap_err();
@@ -264,7 +264,7 @@ mod test {
 
         tracing::info!("next snapshot should contain the registered validator");
         let snapshot: FullNodeSetSnapshot = client
-            .get(&format!("/nodes/all/{:x}", block_id(2).hash))
+            .get(&format!("staking/nodes/all/{:x}", block_id(2).hash))
             .send()
             .await
             .unwrap();
@@ -273,7 +273,7 @@ mod test {
 
         tracing::info!("next update should contain the registration event");
         let update: FullNodeSetUpdate = client
-            .get(&format!("nodes/all/updates/{:x}", block_id(2).hash))
+            .get(&format!("staking/nodes/all/updates/{:x}", block_id(2).hash))
             .send()
             .await
             .unwrap();
@@ -282,13 +282,16 @@ mod test {
 
         tracing::info!("queries at unknown block hash should return 404");
         let err = client
-            .get::<FullNodeSetSnapshot>(&format!("nodes/all/{:x}", block_id(100).hash))
+            .get::<FullNodeSetSnapshot>(&format!("stakingnodes/all/{:x}", block_id(100).hash))
             .send()
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         let err = client
-            .get::<FullNodeSetUpdate>(&format!("nodes/all/updates/{:x}", block_id(100).hash))
+            .get::<FullNodeSetUpdate>(&format!(
+                "staking/nodes/all/updates/{:x}",
+                block_id(100).hash
+            ))
             .send()
             .await
             .unwrap_err();
@@ -350,7 +353,7 @@ mod test {
 
         // unknown address
         let err = client
-            .get::<WalletSnapshot>(&format!("/wallet/{unknown_address}/{block_2_hash}"))
+            .get::<WalletSnapshot>(&format!("staking/wallet/{unknown_address}/{block_2_hash}"))
             .send()
             .await
             .unwrap_err();
@@ -358,7 +361,9 @@ mod test {
 
         // unknown address
         let err = client
-            .get::<WalletUpdate>(&format!("/wallet/{unknown_address}/updates/{block_2_hash}"))
+            .get::<WalletUpdate>(&format!(
+                "staking/wallet/{unknown_address}/updates/{block_2_hash}"
+            ))
             .send()
             .await
             .unwrap_err();
@@ -366,14 +371,17 @@ mod test {
 
         // unknown block
         let err = client
-            .get::<WalletSnapshot>(&format!("/wallet/{delegator}/{}", block_id(100).hash))
+            .get::<WalletSnapshot>(&format!(
+                "staking/wallet/{delegator}/{}",
+                block_id(100).hash
+            ))
             .send()
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
 
         let snapshot: WalletSnapshot = client
-            .get(&format!("/wallet/{delegator}/{block_2_hash}"))
+            .get(&format!("staking/wallet/{delegator}/{block_2_hash}"))
             .send()
             .await
             .unwrap();
@@ -389,7 +397,9 @@ mod test {
 
         // Test update at block 2
         let update: WalletUpdate = client
-            .get(&format!("/wallet/{delegator}/updates/{block_2_hash}"))
+            .get(&format!(
+                "staking/wallet/{delegator}/updates/{block_2_hash}"
+            ))
             .send()
             .await
             .unwrap();
@@ -406,7 +416,7 @@ mod test {
         tracing::info!("test wallet snapshot after undelegation");
         let block_3_hash = block_id(3).hash;
         let snapshot: WalletSnapshot = client
-            .get(&format!("/wallet/{delegator}/{block_3_hash}"))
+            .get(&format!("staking/wallet/{delegator}/{block_3_hash}"))
             .send()
             .await
             .unwrap();
@@ -421,7 +431,9 @@ mod test {
 
         tracing::info!("test wallet update for undelegation");
         let update: WalletUpdate = client
-            .get(&format!("/wallet/{delegator}/updates/{block_3_hash}"))
+            .get(&format!(
+                "staking/wallet/{delegator}/updates/{block_3_hash}"
+            ))
             .send()
             .await
             .unwrap();

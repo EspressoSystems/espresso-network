@@ -127,4 +127,4 @@ The primary purpose of this service is to be a backend for the staking UI. You c
 version of the UI against the local demo of the staking UI service using [your browser](https://bookish-doodle-kq5le1n.pages.github.io/?path=/story/sites-delegation-ui--local-dev-net&args=stakeTableContractAddress:0xefdc2a236dba7a8f60726b49abc79ee6b22ed445;espTokenContractAddress:0x80f43505d8d1a739504eb4237eb15b2e0048da8d&globals=backgrounds.grid:!true;outline:!true).
 
 At the bottom of the page, you will need to set the value of the `l1ValidatorServiceURL` control to
-`http://localshot:8080/v0/`.
+`http://localshot:8080/v0/staking`.
