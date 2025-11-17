@@ -1460,7 +1460,9 @@ impl SequencerPersistence for Persistence {
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
-            if loaded_drb_input.iteration >= drb_input.iteration {
+            if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+                tracing::error!("Overwriting {loaded_drb_input:?} in storage with {drb_input:?}");
+            } else if loaded_drb_input.iteration >= drb_input.iteration {
                 anyhow::bail!(
                     "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
                     loaded_drb_input,

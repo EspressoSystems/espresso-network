@@ -170,6 +170,7 @@ impl TestView {
             payload_commitment,
             builder_commitment,
             metadata,
+            genesis_version,
         );
 
         let quorum_proposal_inner = QuorumProposalWrapper::<TestTypes> {
@@ -442,6 +443,7 @@ impl TestView {
             builder_commitment,
             metadata,
             random,
+            version,
         };
 
         let proposal = QuorumProposalWrapper::<TestTypes> {
