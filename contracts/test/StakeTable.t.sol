@@ -1025,6 +1025,14 @@ contract StakeTableUpgradeV2Test is Test {
         return stakeTableRegisterTest.stakeTable();
     }
 
+    function token() public view returns (EspToken) {
+        return stakeTableRegisterTest.token();
+    }
+
+    function tokenGrantRecipient() public view returns (address) {
+        return stakeTableRegisterTest.tokenGrantRecipient();
+    }
+
     function registerValidatorOnStakeTableV1(
         address _validator,
         string memory _seed,
@@ -1457,16 +1465,24 @@ contract StakeTableUpgradeV2Test is Test {
         // undelegate
         uint256 amountUndelegated = originalDelegateAmount / 3;
         uint256 remainderDelegation = originalDelegateAmount - amountUndelegated;
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Undelegated(delegator, validator, amountUndelegated);
+        vm.expectEmit();
+        emit StakeTableV2.UndelegatedV2(
+            delegator,
+            validator,
+            0,
+            amountUndelegated,
+            block.timestamp + stakeTable.exitEscrowPeriod()
+        );
         stakeTable.undelegate(validator, amountUndelegated);
         vm.stopPrank();
         assertEq(stakeTable.activeStake(), originalDelegateAmount - amountUndelegated);
 
         // Validator Exits
         vm.startPrank(validator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorExit(validator);
+        vm.expectEmit();
+        emit StakeTableV2.ValidatorExitV2(
+            validator, block.timestamp + stakeTable.exitEscrowPeriod()
+        );
         stakeTable.deregisterValidator();
         vm.stopPrank();
         assertEq(stakeTable.activeStake(), 0);
@@ -1500,7 +1516,7 @@ contract StakeTableUpgradeV2Test is Test {
         );
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, remainderDelegation);
+        emit StakeTableV2.ValidatorExitClaimed(delegator, validator, remainderDelegation);
         stakeTable.claimValidatorExit(validator);
         vm.stopPrank();
         assertEq(stakeTable.activeStake(), 0);
@@ -1521,8 +1537,11 @@ contract StakeTableUpgradeV2Test is Test {
             0,
             "the validator's delegatedAmount should be zero since the user has called undelegate and claimWithdrawalExit"
         );
-        uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
-        assertEq(delegatedAmount, 0, "the delegator's delegation should be zero");
+        assertEq(
+            stakeTable.delegations(validator, delegator),
+            0,
+            "the delegator's delegation should be zero"
+        );
         (uint256 undelegatedAmount,) = stakeTable.undelegations(validator, delegator);
         assertEq(
             undelegatedAmount,
@@ -1532,8 +1551,8 @@ contract StakeTableUpgradeV2Test is Test {
 
         // now claim the previous undelegation
         vm.startPrank(delegator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, amountUndelegated);
+        vm.expectEmit(true, true, true, true, address(stakeTable));
+        emit StakeTableV2.WithdrawalClaimed(delegator, validator, 0, amountUndelegated);
         stakeTable.claimWithdrawal(validator);
         vm.stopPrank();
         assertEq(stakeTable.activeStake(), 0);
@@ -1579,8 +1598,10 @@ contract StakeTableUpgradeV2Test is Test {
 
         // validator exits
         vm.startPrank(validator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorExit(validator);
+        vm.expectEmit();
+        emit StakeTableV2.ValidatorExitV2(
+            validator, block.timestamp + stakeTable.exitEscrowPeriod()
+        );
         stakeTable.deregisterValidator();
         vm.stopPrank();
         assertEq(stakeTable.activeStake(), 0);
@@ -1607,7 +1628,7 @@ contract StakeTableUpgradeV2Test is Test {
 
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, amountDelegated);
+        emit StakeTableV2.ValidatorExitClaimed(delegator, validator, amountDelegated);
         stakeTable.claimValidatorExit(validator);
         vm.stopPrank();
         assertEq(stakeTable.activeStake(), 0);
@@ -1666,8 +1687,14 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(stakeTable.activeStake(), amountDelegated / 3 + amountDelegated / 3);
 
         // undelegate 1/3 of balance from validator1
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Undelegated(delegator, validator1, amountDelegated / 3);
+        vm.expectEmit();
+        emit StakeTableV2.UndelegatedV2(
+            delegator,
+            validator1,
+            0,
+            amountDelegated / 3,
+            block.timestamp + stakeTable.exitEscrowPeriod()
+        );
         stakeTable.undelegate(validator1, amountDelegated / 3);
         (uint256 amountUndelegated, uint256 unlocksAt) =
             stakeTable.undelegations(validator1, delegator);
@@ -1687,8 +1714,14 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(stakeTable.activeStake(), amountDelegated / 3);
 
         // undelegate from validator 2
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Undelegated(delegator, validator2, amountDelegated / 3);
+        vm.expectEmit();
+        emit StakeTableV2.UndelegatedV2(
+            delegator,
+            validator2,
+            1,
+            amountDelegated / 3,
+            block.timestamp + stakeTable.exitEscrowPeriod()
+        );
         stakeTable.undelegate(validator2, amountDelegated / 3);
         (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator2, delegator);
         assertEq(amountUndelegated, amountDelegated / 3);
@@ -1707,8 +1740,8 @@ contract StakeTableUpgradeV2Test is Test {
 
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
         uint256 delegatorBalanceBefore = stakeTable.token().balanceOf(delegator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, amountDelegated / 3);
+        vm.expectEmit(true, true, true, true, address(stakeTable));
+        emit StakeTableV2.WithdrawalClaimed(delegator, validator1, 0, amountDelegated / 3);
         stakeTable.claimWithdrawal(validator1);
         assertEq(
             stakeTable.token().balanceOf(delegator), delegatorBalanceBefore + amountDelegated / 3
@@ -1717,8 +1750,8 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(stakeTable.activeStake(), 0);
 
         delegatorBalanceBefore = stakeTable.token().balanceOf(delegator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, amountDelegated / 3);
+        vm.expectEmit(true, true, true, true, address(stakeTable));
+        emit StakeTableV2.WithdrawalClaimed(delegator, validator2, 1, amountDelegated / 3);
         stakeTable.claimWithdrawal(validator2);
         assertEq(
             stakeTable.token().balanceOf(delegator), delegatorBalanceBefore + amountDelegated / 3
@@ -1756,8 +1789,14 @@ contract StakeTableUpgradeV2Test is Test {
 
         // undelegate a 1/3 of the balance
         uint256 amountToUndelegate = amountFirstDelegated / 3;
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Undelegated(delegator, validator, amountToUndelegate);
+        vm.expectEmit();
+        emit StakeTableV2.UndelegatedV2(
+            delegator,
+            validator,
+            0,
+            amountToUndelegate,
+            block.timestamp + stakeTable.exitEscrowPeriod()
+        );
         stakeTable.undelegate(validator, amountToUndelegate);
         assertEq(stakeTable.activeStake(), amountFirstDelegated - amountToUndelegate);
         assertEq(
@@ -1784,8 +1823,8 @@ contract StakeTableUpgradeV2Test is Test {
 
         // claim the withdrawal
         uint256 delegatorBalanceBefore = stakeTable.token().balanceOf(delegator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, amountToUndelegate);
+        vm.expectEmit(true, true, true, true, address(stakeTable));
+        emit StakeTableV2.WithdrawalClaimed(delegator, validator, 0, amountToUndelegate);
         stakeTable.claimWithdrawal(validator);
         assertEq(
             stakeTable.token().balanceOf(delegator), delegatorBalanceBefore + amountToUndelegate
@@ -1853,8 +1892,8 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectRevert(S.UndelegationAlreadyExists.selector);
         stakeTable.undelegate(validator, 1 ether);
 
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, 2 ether);
+        vm.expectEmit(true, true, true, true, address(stakeTable));
+        emit StakeTableV2.WithdrawalClaimed(delegator, validator, 0, 2 ether);
         stakeTable.claimWithdrawal(validator);
         assertEq(stakeTable.token().balanceOf(delegator), initialBalance - 3 ether + 2 ether);
 
@@ -1862,8 +1901,10 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(stakeTable.activeStake(), 1 ether);
 
         // now the delegator can undelegate again
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Undelegated(delegator, validator, 1 ether);
+        vm.expectEmit();
+        emit StakeTableV2.UndelegatedV2(
+            delegator, validator, 1, 1 ether, block.timestamp + stakeTable.exitEscrowPeriod()
+        );
         stakeTable.undelegate(validator, 1 ether);
         assertEq(stakeTable.activeStake(), 0);
 
@@ -1881,8 +1922,8 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(unlocksAt, block.timestamp + stakeTable.exitEscrowPeriod());
 
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, 1 ether);
+        vm.expectEmit(true, true, true, true, address(stakeTable));
+        emit StakeTableV2.WithdrawalClaimed(delegator, validator, 1, 1 ether);
         stakeTable.claimWithdrawal(validator);
         assertEq(stakeTable.activeStake(), 0);
 
@@ -1930,8 +1971,8 @@ contract StakeTableUpgradeV2Test is Test {
         assertEq(stakeTable.activeStake(), 1 ether);
 
         vm.warp(block.timestamp + stakeTable.exitEscrowPeriod());
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.Withdrawal(delegator, 2 ether);
+        vm.expectEmit(true, true, true, true, address(stakeTable));
+        emit StakeTableV2.WithdrawalClaimed(delegator, validator, 0, 2 ether);
         stakeTable.claimWithdrawal(validator);
 
         assertEq(stakeTable.activeStake(), 1 ether);
@@ -2033,6 +2074,61 @@ contract StakeTableUpgradeV2Test is Test {
                 initialCommissions
             )
         );
+        vm.stopPrank();
+    }
+
+    function test_updateConsensusKeysV2_RevertWhen_InvalidSchnorrSigLength() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        registerValidatorOnStakeTableV2(validator, "1", 0, proxyV2);
+
+        (
+            BN254.G2Point memory blsVK2,
+            EdOnBN254.EdOnBN254Point memory schnorrVK2,
+            BN254.G1Point memory blsSig2
+        ) = stakeTableRegisterTest.genClientWallet(validator, "2");
+
+        vm.startPrank(validator);
+        bytes memory invalidSchnorrSig = new bytes(32);
+        vm.expectRevert(StakeTableV2.InvalidSchnorrSig.selector);
+        proxyV2.updateConsensusKeysV2(blsVK2, schnorrVK2, blsSig2, invalidSchnorrSig);
+        vm.stopPrank();
+    }
+
+    function test_updateConsensusKeysV2_RevertWhen_SchnorrKeyAlreadyUsed() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+
+        address validator1 = makeAddr("validator1");
+        address validator2 = makeAddr("validator2");
+
+        StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
+        registerValidatorOnStakeTableV2(validator1, "1", 0, proxyV2);
+
+        (
+            BN254.G2Point memory blsVK2,
+            EdOnBN254.EdOnBN254Point memory schnorrVK2,
+            BN254.G1Point memory blsSig2
+        ) = stakeTableRegisterTest.genClientWallet(validator1, "2");
+
+        bytes memory schnorrSig = new bytes(64);
+        vm.startPrank(validator1);
+        proxyV2.updateConsensusKeysV2(blsVK2, schnorrVK2, blsSig2, schnorrSig);
+        vm.stopPrank();
+
+        (BN254.G2Point memory blsVK3,, BN254.G1Point memory blsSig3) =
+            stakeTableRegisterTest.genClientWallet(validator2, "3");
+
+        vm.startPrank(validator2);
+        vm.expectRevert(StakeTableV2.SchnorrKeyAlreadyUsed.selector);
+        proxyV2.registerValidatorV2(blsVK3, schnorrVK2, blsSig3, schnorrSig, 0);
         vm.stopPrank();
     }
 }

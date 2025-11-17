@@ -528,6 +528,7 @@ async fn main() -> anyhow::Result<()> {
                     .address(Contract::StakeTableProxy)
                     .expect("stake table deployed"),
                 staking_priv_keys,
+                None,
                 DelegationConfig::default(),
             )
             .await?

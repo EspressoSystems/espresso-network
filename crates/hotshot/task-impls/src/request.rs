@@ -314,7 +314,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
             // First check if we got the data before continuing
             while !Self::cancel_vid_request_task(
                 &consensus,
-                &sender,
                 &public_key,
                 &view,
                 &shutdown_flag,
@@ -360,7 +359,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
     /// Returns true if we got the data we wanted, a shutdown event was received, or the view has moved on.
     async fn cancel_vid_request_task(
         consensus: &OuterConsensus<TYPES>,
-        sender: &Sender<Arc<HotShotEvent<TYPES>>>,
         public_key: &<TYPES as NodeType>::SignatureKey,
         view: &TYPES::View,
         shutdown_flag: &Arc<AtomicBool>,
@@ -376,14 +374,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         if let Some(vid_shares) = maybe_vid_shares {
             tracing::debug!("Send own vid share: {vid_shares:?}, my id {id:?}");
             for vid_share in vid_shares.values() {
-                broadcast_event(
-                    Arc::new(HotShotEvent::VidShareRecv(
-                        public_key.clone(),
-                        vid_share.clone(),
-                    )),
-                    sender,
-                )
-                .await;
                 target_epochs.remove(&vid_share.data.target_epoch());
             }
         }

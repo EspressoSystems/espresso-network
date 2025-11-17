@@ -484,7 +484,15 @@ func (b *BlockPayload) BuilderCommitment() (*BuilderCommitment, error) {
 	return &builderCommitment, nil
 }
 
-func (b *BuilderCommitment) ToTaggedSting() (string, error) {
+type PayloadQueryData struct {
+	Height 		 uint64 	   `json:"height"`
+	BlockHash    *TaggedBase64 `json:"block_hash"`
+	Hash 		 *TaggedBase64 `json:"hash"`
+	Size 		 uint64 	   `json:"size"`
+	BlockPayload *BlockPayload `json:"data"`
+}
+
+func (b *BuilderCommitment) ToTaggedString() (string, error) {
 	tagged, err := tagged_base64.New("BUILDER_COMMITMENT", b[:])
 	if err != nil {
 		return "", err

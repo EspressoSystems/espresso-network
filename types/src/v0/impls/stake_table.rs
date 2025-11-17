@@ -27,7 +27,8 @@ use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
     StakeTableV2::{
         self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-        StakeTableV2Events, Undelegated, ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
+        StakeTableV2Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
+        ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 use hotshot_types::{
@@ -109,8 +110,10 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::ValidatorRegistered(v) => Ok(StakeTableEvent::Register(v)),
             StakeTableV2Events::ValidatorRegisteredV2(v) => Ok(StakeTableEvent::RegisterV2(v)),
             StakeTableV2Events::ValidatorExit(v) => Ok(StakeTableEvent::Deregister(v)),
+            StakeTableV2Events::ValidatorExitV2(v) => Ok(StakeTableEvent::DeregisterV2(v)),
             StakeTableV2Events::Delegated(v) => Ok(StakeTableEvent::Delegate(v)),
             StakeTableV2Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
+            StakeTableV2Events::UndelegatedV2(v) => Ok(StakeTableEvent::UndelegateV2(v)),
             StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
             StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
             StakeTableV2Events::CommissionUpdated(v) => Ok(StakeTableEvent::CommissionUpdate(v)),
@@ -146,6 +149,12 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             )),
             StakeTableV2Events::Upgraded(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Upgraded({v:?})"
+            )),
+            StakeTableV2Events::WithdrawalClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::WithdrawalClaimed({v:?})"
+            )),
+            StakeTableV2Events::ValidatorExitClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::ValidatorExitClaimed({v:?})"
             )),
             StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Withdrawal({v:?})"
@@ -340,11 +349,12 @@ impl StakeTableState {
                 });
             },
 
-            StakeTableEvent::Deregister(exit) => {
-                self.validator_exits.insert(exit.validator);
+            StakeTableEvent::Deregister(ValidatorExit { validator })
+            | StakeTableEvent::DeregisterV2(ValidatorExitV2 { validator, .. }) => {
+                self.validator_exits.insert(validator);
                 self.validators
-                    .shift_remove(&exit.validator)
-                    .ok_or(StakeTableError::ValidatorNotFound(exit.validator))?;
+                    .shift_remove(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
             },
 
             StakeTableEvent::Delegate(delegated) => {
@@ -372,13 +382,17 @@ impl StakeTableState {
                     .or_insert(amount);
             },
 
-            StakeTableEvent::Undelegate(undelegated) => {
-                let Undelegated {
-                    delegator,
-                    validator,
-                    amount,
-                } = undelegated;
-
+            StakeTableEvent::Undelegate(Undelegated {
+                delegator,
+                validator,
+                amount,
+            })
+            | StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                delegator,
+                validator,
+                amount,
+                ..
+            }) => {
                 let val = self
                     .validators
                     .get_mut(&validator)
@@ -632,8 +646,14 @@ impl std::fmt::Debug for StakeTableEvent {
             StakeTableEvent::Register(event) => write!(f, "Register({:?})", event.account),
             StakeTableEvent::RegisterV2(event) => write!(f, "RegisterV2({:?})", event.account),
             StakeTableEvent::Deregister(event) => write!(f, "Deregister({:?})", event.validator),
+            StakeTableEvent::DeregisterV2(event) => {
+                write!(f, "DeregisterV2({:?})", event.validator)
+            },
             StakeTableEvent::Delegate(event) => write!(f, "Delegate({:?})", event.delegator),
             StakeTableEvent::Undelegate(event) => write!(f, "Undelegate({:?})", event.delegator),
+            StakeTableEvent::UndelegateV2(event) => {
+                write!(f, "UndelegateV2({:?})", event.delegator)
+            },
             StakeTableEvent::KeyUpdate(event) => write!(f, "KeyUpdate({:?})", event.account),
             StakeTableEvent::KeyUpdateV2(event) => write!(f, "KeyUpdateV2({:?})", event.account),
             StakeTableEvent::CommissionUpdate(event) => {
@@ -976,8 +996,10 @@ impl Fetcher {
                                 ValidatorRegistered::SIGNATURE,
                                 ValidatorRegisteredV2::SIGNATURE,
                                 ValidatorExit::SIGNATURE,
+                                ValidatorExitV2::SIGNATURE,
                                 Delegated::SIGNATURE,
                                 Undelegated::SIGNATURE,
+                                UndelegatedV2::SIGNATURE,
                                 ConsensusKeysUpdated::SIGNATURE,
                                 ConsensusKeysUpdatedV2::SIGNATURE,
                                 CommissionUpdated::SIGNATURE,
@@ -2865,21 +2887,31 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_deregister_validator() {
+    #[rstest]
+    #[case::v1(StakeTableContractVersion::V1)]
+    #[case::v2(StakeTableContractVersion::V2)]
+    fn test_deregister_validator(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::new();
         let val = TestValidator::random();
 
         let reg = StakeTableEvent::Register((&val).into());
         state.apply_event(reg).unwrap().unwrap();
 
-        let dereg = StakeTableEvent::Deregister((&val).into());
+        let dereg = match version {
+            StakeTableContractVersion::V1 => StakeTableEvent::Deregister((&val).into()),
+            StakeTableContractVersion::V2 => StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+                validator: val.account,
+                unlocksAt: U256::from(1000u64),
+            }),
+        };
         assert!(state.apply_event(dereg).unwrap().is_ok());
         assert!(!state.validators.contains_key(&val.account));
     }
 
-    #[test]
-    fn test_delegate_and_undelegate() {
+    #[rstest]
+    #[case::v1(StakeTableContractVersion::V1)]
+    #[case::v2(StakeTableContractVersion::V2)]
+    fn test_delegate_and_undelegate(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::new();
         let val = TestValidator::random();
         state
@@ -2899,11 +2931,20 @@ mod tests {
         let validator = state.validators.get(&val.account).unwrap();
         assert_eq!(validator.delegators.get(&delegator).cloned(), Some(amount));
 
-        let undelegate_event = StakeTableEvent::Undelegate(Undelegated {
-            delegator,
-            validator: val.account,
-            amount,
-        });
+        let undelegate_event = match version {
+            StakeTableContractVersion::V1 => StakeTableEvent::Undelegate(Undelegated {
+                delegator,
+                validator: val.account,
+                amount,
+            }),
+            StakeTableContractVersion::V2 => StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                delegator,
+                validator: val.account,
+                amount,
+                unlocksAt: U256::from(2000u64),
+                undelegationId: 1,
+            }),
+        };
         assert!(state.apply_event(undelegate_event).unwrap().is_ok());
         let validator = state.validators.get(&val.account).unwrap();
         assert!(!validator.delegators.contains_key(&delegator));

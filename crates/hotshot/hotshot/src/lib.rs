@@ -293,7 +293,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         };
 
         debug!("Setting DRB difficulty selector in membership");
-        let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
+        let drb_difficulty_selector = drb_difficulty_selector::<_, V>(&config);
 
         membership_coordinator
             .set_drb_difficulty_selector(drb_difficulty_selector)

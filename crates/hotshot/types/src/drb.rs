@@ -9,9 +9,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Instant};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use vbs::version::{StaticVersionType, Version};
 
 use crate::{
-    message::UpgradeLock,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
@@ -31,19 +31,17 @@ pub struct DrbInput {
     pub difficulty_level: u64,
 }
 
-pub type DrbDifficultySelectorFn<TYPES> =
-    Arc<dyn Fn(<TYPES as NodeType>::View) -> BoxFuture<'static, u64> + Send + Sync + 'static>;
+pub type DrbDifficultySelectorFn =
+    Arc<dyn Fn(Version) -> BoxFuture<'static, u64> + Send + Sync + 'static>;
 
 pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
-    upgrade_lock: UpgradeLock<TYPES, V>,
     config: &HotShotConfig<TYPES>,
-) -> DrbDifficultySelectorFn<TYPES> {
+) -> DrbDifficultySelectorFn {
     let base_difficulty = config.drb_difficulty;
     let upgrade_difficulty = config.drb_upgrade_difficulty;
-    Arc::new(move |view| {
-        let upgrade_lock = upgrade_lock.clone();
+    Arc::new(move |version| {
         Box::pin(async move {
-            if upgrade_lock.upgraded_drb_and_header(view).await {
+            if version >= V::DrbAndHeaderUpgrade::VERSION {
                 upgrade_difficulty
             } else {
                 base_difficulty
@@ -108,7 +106,13 @@ pub async fn compute_drb_result(
     let mut drb_input = drb_input;
 
     if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
-        if loaded_drb_input.iteration >= drb_input.iteration {
+        if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+            tracing::error!(
+                "We are calculating the DRB result with input {drb_input:?}, but we had \
+                 previously stored {loaded_drb_input:?} with a different difficulty level for \
+                 this epoch. Discarding the value from storage"
+            );
+        } else if loaded_drb_input.iteration >= drb_input.iteration {
             drb_input = loaded_drb_input;
         }
     }

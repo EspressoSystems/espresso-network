@@ -880,6 +880,7 @@ impl TestNetwork {
             &deployer,
             stake_table_address,
             staking_priv_keys,
+            None,
             delegation_config,
         )
         .await

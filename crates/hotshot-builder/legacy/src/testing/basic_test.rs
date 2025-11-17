@@ -153,6 +153,7 @@ mod tests {
                             num_transactions: 0,
                         },
                         random: 1, // arbitrary
+                        version: <TestVersions as Versions>::Base::VERSION,
                     },
                     view_number: ViewNumber::new(0),
                     justify_qc: previous_jc.clone(),
@@ -325,6 +326,7 @@ mod tests {
                         timestamp_millis: round as u64 * 1_000,
                         metadata,
                         random: 1, // arbitrary
+                        version: <TestVersions as Versions>::Base::VERSION,
                     };
 
                     let justify_qc = {

@@ -203,6 +203,9 @@ pub trait BlockHeader<TYPES: NodeType>:
     /// Get the metadata.
     fn metadata(&self) -> &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata;
 
+    /// Get the protocol version for this block.
+    fn version(&self) -> Version;
+
     /// Get the builder commitment
     fn builder_commitment(&self) -> BuilderCommitment;
 
