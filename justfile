@@ -278,3 +278,8 @@ contracts-test-network *args='-vv':
         exit 1
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
+
+# Run mutation testing on validate_and_apply_header
+# Config in .cargo/mutants.toml targets types/src/v0/impls/state.rs
+mutants *args:
+    cargo mutants -p espresso-types {{args}}
