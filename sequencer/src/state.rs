@@ -40,7 +40,7 @@ pub(crate) async fn compute_state_update(
 ) -> anyhow::Result<(ValidatedState, Delta)> {
     let header = proposed_leaf.block_header();
 
-    let (state, delta, total_rewards_distributed) = parent_state
+    let (state, delta) = parent_state
         .apply_header(
             instance,
             peers,
@@ -88,29 +88,6 @@ pub(crate) async fn compute_state_update(
                 v2_root
             )
         },
-    }
-
-    if header.version() >= DrbAndHeaderUpgradeVersion::version() {
-        let Some(actual_total) = total_rewards_distributed else {
-            bail!(
-                "internal error! total_rewards_distributed is None for version {:?}",
-                header.version()
-            );
-        };
-
-        let Some(proposed_total) = header.total_reward_distributed() else {
-            bail!(
-                "internal error! proposed header.total_reward_distributed() is None for version \
-                 {:?}",
-                header.version()
-            );
-        };
-
-        ensure!(
-            proposed_total == actual_total,
-            "Total rewards mismatch: proposed header has {proposed_total} but actual total is \
-             {actual_total}",
-        );
     }
 
     Ok((state, delta))
