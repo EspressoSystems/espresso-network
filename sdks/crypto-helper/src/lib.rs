@@ -6,8 +6,10 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     BlockMerkleCommitment, BlockMerkleTree, Header, NsProof, NsTable, Transaction,
 };
-use hotshot_query_service::VidCommon;
-use hotshot_types::{data::VidCommitment, light_client::hash_bytes_to_field};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    light_client::hash_bytes_to_field,
+};
 use jf_merkle_tree_compat::prelude::{MerkleNode, MerkleProof, MerkleTreeScheme, Sha3Node};
 use primitive_types::U256;
 use sha2::{Digest, Sha256};
