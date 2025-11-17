@@ -213,6 +213,10 @@ pub enum Commands {
         /// The commission to charge delegators
         #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
         commission: Commission,
+
+        /// Metadata URL for the validator (max 2048 bytes)
+        #[clap(long, env = "METADATA_URI", value_parser = parse::validate_metadata_uri)]
+        metadata_uri: Url,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -226,6 +230,12 @@ pub enum Commands {
         /// The new commission rate to set
         #[clap(long, value_parser = parse::parse_commission, env = "NEW_COMMISSION")]
         new_commission: Commission,
+    },
+    /// Update validator metadata URL.
+    UpdateMetadataUri {
+        /// The new metadata URL to set (max 2048 bytes)
+        #[clap(long, env = "METADATA_URI", value_parser = parse::validate_metadata_uri)]
+        metadata_uri: Url,
     },
     /// Approve stake table contract to move tokens
     Approve {

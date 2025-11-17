@@ -159,6 +159,9 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Withdrawal({v:?})"
             )),
+            StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
+            )),
         }
     }
 }
@@ -2497,6 +2500,7 @@ pub mod testing {
                 commission: value.commission,
                 blsSig: value.bls_sig.into(),
                 schnorrSig: value.schnorr_sig.clone(),
+                metadataUri: "dummy-meta".to_string(),
             }
         }
     }

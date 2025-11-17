@@ -128,6 +128,8 @@ async fn test_cli_register_validator(
                 .arg(system.state_private_key_str()?)
                 .arg("--commission")
                 .arg("12.34")
+                .arg("--metadata-uri")
+                .arg("https://example.com/metadata")
                 .assert()
                 .success()
                 .stdout(str::contains("ValidatorRegistered"));
@@ -140,6 +142,8 @@ async fn test_cli_register_validator(
                 .arg(system.state_private_key_str()?)
                 .arg("--commission")
                 .arg("12.34")
+                .arg("--metadata-uri")
+                .arg("https://example.com/metadata")
                 .assert()
                 .failure()
                 .stderr(str::contains("zero Ethereum balance"));
@@ -626,6 +630,77 @@ async fn test_cli_delegate_ledger() -> Result<()> {
     Ok(())
 }
 
+#[test_log::test(rstest::rstest)]
+#[case::empty("", "relative URL without a base")]
+#[case::too_long(&format!("https://example.com/{}", "a".repeat(2030)), "metadata URI cannot exceed 2048 bytes")]
+#[tokio::test]
+async fn test_cli_register_validator_metadata_uri_validation(
+    #[case] uri: &str,
+    #[case] expected_error: &str,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--metadata-uri")
+        .arg(uri)
+        .assert()
+        .failure()
+        .stderr(str::contains(expected_error));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::empty("", "relative URL without a base")]
+#[case::too_long(&format!("https://example.com/{}", "a".repeat(2030)), "metadata URI cannot exceed 2048 bytes")]
+#[tokio::test]
+async fn test_cli_update_metadata_uri_validation(
+    #[case] uri: &str,
+    #[case] expected_error: &str,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(uri)
+        .assert()
+        .failure()
+        .stderr(str::contains(expected_error));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_metadata_uri() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let updated_uri = "https://example.com/updated-metadata.json";
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(updated_uri)
+        .assert()
+        .success()
+        .stdout(str::contains("MetadataUriUpdated"))
+        .stdout(str::contains(system.deployer_address.to_string()))
+        .stdout(str::contains(updated_uri));
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_all_operations_manual_inspect(
     #[case] version: StakeTableContractVersion,
@@ -641,6 +716,8 @@ async fn test_cli_all_operations_manual_inspect(
         .arg(system.state_private_key_str()?)
         .arg("--commission")
         .arg("12.34")
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata")
         .assert()
         .success()
         .get_output()
