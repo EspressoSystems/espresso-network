@@ -203,18 +203,21 @@
 <a href=#203 id=203 data-nosnippet>203</a>    <span class="doccomment">/// Get the metadata.
 <a href=#204 id=204 data-nosnippet>204</a>    </span><span class="kw">fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata;
 <a href=#205 id=205 data-nosnippet>205</a>
-<a href=#206 id=206 data-nosnippet>206</a>    <span class="doccomment">/// Get the builder commitment
-<a href=#207 id=207 data-nosnippet>207</a>    </span><span class="kw">fn </span>builder_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderCommitment;
+<a href=#206 id=206 data-nosnippet>206</a>    <span class="doccomment">/// Get the protocol version for this block.
+<a href=#207 id=207 data-nosnippet>207</a>    </span><span class="kw">fn </span>version(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Version;
 <a href=#208 id=208 data-nosnippet>208</a>
-<a href=#209 id=209 data-nosnippet>209</a>    <span class="doccomment">/// Get the light client state
-<a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt;;
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="doccomment">/// Get the builder commitment
+<a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">fn </span>builder_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderCommitment;
 <a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// Returns the `auth_root` value for versions &gt;= V4 (`DrbAndHeaderUpgrade`).
-<a href=#213 id=213 data-nosnippet>213</a>    ///
-<a href=#214 id=214 data-nosnippet>214</a>    /// For versions &lt; V4, this will return `None`.
-<a href=#215 id=215 data-nosnippet>215</a>    ///
-<a href=#216 id=216 data-nosnippet>216</a>    /// The `auth_root` is a 32-byte hash calculated using the reward Merkle tree
-<a href=#217 id=217 data-nosnippet>217</a>    /// digest and other values.  
-<a href=#218 id=218 data-nosnippet>218</a>    /// It is used by the reward claim contract to verify the reward claim
-<a href=#219 id=219 data-nosnippet>219</a>    </span><span class="kw">fn </span>auth_root(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;FixedBytes&lt;<span class="number">32</span>&gt;&gt;;
-<a href=#220 id=220 data-nosnippet>220</a>}</code></pre></div></section></main></body></html>
+<a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// Get the light client state
+<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt;;
+<a href=#214 id=214 data-nosnippet>214</a>
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="doccomment">/// Returns the `auth_root` value for versions &gt;= V4 (`DrbAndHeaderUpgrade`).
+<a href=#216 id=216 data-nosnippet>216</a>    ///
+<a href=#217 id=217 data-nosnippet>217</a>    /// For versions &lt; V4, this will return `None`.
+<a href=#218 id=218 data-nosnippet>218</a>    ///
+<a href=#219 id=219 data-nosnippet>219</a>    /// The `auth_root` is a 32-byte hash calculated using the reward Merkle tree
+<a href=#220 id=220 data-nosnippet>220</a>    /// digest and other values.  
+<a href=#221 id=221 data-nosnippet>221</a>    /// It is used by the reward claim contract to verify the reward claim
+<a href=#222 id=222 data-nosnippet>222</a>    </span><span class="kw">fn </span>auth_root(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;FixedBytes&lt;<span class="number">32</span>&gt;&gt;;
+<a href=#223 id=223 data-nosnippet>223</a>}</code></pre></div></section></main></body></html>

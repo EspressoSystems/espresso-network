@@ -293,7 +293,7 @@
 <a href=#293 id=293 data-nosnippet>293</a>        };
 <a href=#294 id=294 data-nosnippet>294</a>
 <a href=#295 id=295 data-nosnippet>295</a>        <span class="macro">debug!</span>(<span class="string">"Setting DRB difficulty selector in membership"</span>);
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="kw">let </span>drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), <span class="kw-2">&amp;</span>config);
+<a href=#296 id=296 data-nosnippet>296</a>        <span class="kw">let </span>drb_difficulty_selector = drb_difficulty_selector::&lt;<span class="kw">_</span>, V&gt;(<span class="kw-2">&amp;</span>config);
 <a href=#297 id=297 data-nosnippet>297</a>
 <a href=#298 id=298 data-nosnippet>298</a>        membership_coordinator
 <a href=#299 id=299 data-nosnippet>299</a>            .set_drb_difficulty_selector(drb_difficulty_selector)
