@@ -18,7 +18,7 @@ where
 {
     dotenvy::dotenv()?;
 
-    let runtime = TestRuntime::from_requirements(Default::default())
+    let mut runtime = TestRuntime::from_requirements(Default::default())
         .await
         .unwrap();
     println!("Testing upgrade {runtime:?}");

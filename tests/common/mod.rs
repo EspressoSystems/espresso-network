@@ -257,23 +257,20 @@ impl TestRuntime {
         Self::initialize(config, Duration::from_secs(30)).await
     }
 
-    /// Refresh the reward claim address from the contract
+    /// Update the reward claim address from the contract
     /// Call this after the reward claim contract has been deployed
-    pub async fn refresh_reward_claim_address(&mut self) -> Result<()> {
-        println!("Refreshing reward claim address");
+    pub async fn update_reward_claim_address(&mut self) -> Result<()> {
         let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
         let stake_table = StakeTableV2::new(self.config.stake_table_address, &provider);
-        println!("stake table address: {}", self.config.stake_table_address);
         let token_address = stake_table.token().call().await?;
-        println!("token address: {token_address}");
 
         let esp_token = EspTokenV2::new(token_address, &provider);
         let reward_claim_addr = esp_token.rewardClaim().call().await?;
-        println!("reward claim address: {reward_claim_addr}");
 
         self.reward_claim_address = if reward_claim_addr == Address::ZERO {
             None
         } else {
+            println!("Updated reward claim address: {reward_claim_addr}");
             Some(reward_claim_addr)
         };
 
@@ -297,7 +294,7 @@ impl TestRuntime {
     }
 
     /// Return current state  of the test
-    pub async fn test_state(&self) -> TestState {
+    pub async fn test_state(&mut self) -> TestState {
         let client = SequencerClient::new(self.config.sequencer_api_url.clone());
         let block_height = client.get_height().await.ok();
         let txn_count = client.get_transaction_count().await.unwrap();
@@ -313,6 +310,7 @@ impl TestRuntime {
 
         let light_client_finalized_block_height = self.light_client_finalized_block_height().await;
 
+        let _ = self.update_reward_claim_address().await;
         let rewards_claimed = self.claimed_rewards().await.unwrap_or(U256::ZERO);
 
         TestState {
@@ -326,11 +324,12 @@ impl TestRuntime {
     }
 
     /// Check claimed rewards for validator0
-    /// Returns an error if reward claim contract isn't available yet
+    /// Returns U256::ZERO if reward claim contract isn't available yet
     pub async fn claimed_rewards(&self) -> Result<U256> {
-        let reward_claim_address = self
-            .reward_claim_address
-            .context("Reward claim address not available")?;
+        let reward_claim_address = match self.reward_claim_address {
+            Some(addr) => addr,
+            None => return Ok(U256::ZERO),
+        };
 
         let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
         let reward_claim = RewardClaim::new(reward_claim_address, &provider);
