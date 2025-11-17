@@ -307,6 +307,7 @@ jobs:
           - test-name: test_native_demo_pos_upgrade
           - test-name: test_native_demo_drb_header_upgrade
           - test-name: test_native_demo_fee_to_drb_header_upgrade
+          - test-name: test_native_demo_da_committee
 
       fail-fast: false
     runs-on: ubuntu-latest
@@ -372,6 +373,7 @@ jobs:
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
+      - uses: ./.github/actions/free-disk-space
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.

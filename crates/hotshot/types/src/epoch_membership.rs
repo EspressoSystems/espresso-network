@@ -269,6 +269,8 @@ where
                 }
             };
         }
+        let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
+        tracing::warn!("Fetching stake tables for epochs: {epochs:?}");
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
@@ -301,6 +303,7 @@ where
         let root_leaf = match self.fetch_stake_table(epoch).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
+                tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
                 self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                     .await;
                 return;
@@ -314,6 +317,10 @@ where
         .await
         {
             Ok(drb_result) => {
+                tracing::warn!(
+                    ?drb_result,
+                    "DRB result for epoch {epoch:?} retrieved from peers. Updating membership."
+                );
                 self.membership
                     .write()
                     .await
