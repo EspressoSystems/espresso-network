@@ -21,7 +21,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v3
@@ -41,11 +41,11 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Test
-        run: cargo llvm-cov --no-report nextest
+        run: cargo llvm-cov --no-report nextest --ignore-filename-regex testing.rs
         timeout-minutes: 20
 
       - name: Coverage Report
-        run: cargo llvm-cov report --lcov --output-path lcov.info
+        run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex testing.rs
       
       - name: Coveralls upload
         uses: coverallsapp/github-action@main

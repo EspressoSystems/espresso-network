@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use serde::{Deserialize, Serialize};
-use tide_disco::{RequestError, StatusCode};
+use tide_disco::{Error as _, RequestError, StatusCode};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Error {
@@ -110,6 +110,15 @@ impl From<sqlx::Error> for Error {
         Self {
             message: format!("{err:#}"),
             status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+impl From<hotshot_query_service::Error> for Error {
+    fn from(err: hotshot_query_service::Error) -> Self {
+        Self {
+            status: err.status(),
+            message: err.to_string(),
         }
     }
 }

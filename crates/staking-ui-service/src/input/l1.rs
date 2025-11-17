@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
+    time::Duration,
 };
 
 use alloy::primitives::BlockHash;
@@ -15,6 +16,7 @@ use hotshot_contract_adapter::sol_types::{
     StakeTableV2::{StakeTableV2Events, ValidatorRegistered, ValidatorRegisteredV2},
 };
 use hotshot_types::light_client::StateVerKey;
+use tokio::time::sleep;
 use tracing::instrument;
 
 use crate::{
@@ -263,6 +265,9 @@ impl<S: L1Persistence> State<S> {
                 } else {
                     break;
                 }
+
+                // Back off before retrying.
+                sleep(Duration::from_secs(1)).await;
             }
         }
         Err(Error::internal().context("L1 block stream ended unexpectedly"))

@@ -4,7 +4,8 @@ use crate::types::common::Address;
 use crate::{Result, input::l1::switching_transport::SwitchingTransport};
 use alloy::{providers::RootProvider, rpc::client::RpcClient};
 use clap::Parser;
-use std::{str::FromStr, time::Duration};
+use espresso_types::parse_duration;
+use std::time::Duration;
 use tide_disco::Url;
 
 /// Configuration for an Rpc Stream client.
@@ -129,18 +130,4 @@ impl L1ClientOptions {
     pub(super) fn rate_limit_delay(&self) -> Duration {
         self.l1_rate_limit_delay.unwrap_or(self.l1_retry_delay)
     }
-}
-
-#[derive(Clone, Debug, derive_more::Error, derive_more::Display)]
-#[display("Failed to parse duration {reason}")]
-pub struct ParseDurationError {
-    reason: String,
-}
-
-pub fn parse_duration(s: &str) -> std::result::Result<Duration, ParseDurationError> {
-    cld::ClDuration::from_str(s)
-        .map(Duration::from)
-        .map_err(|err| ParseDurationError {
-            reason: err.to_string(),
-        })
 }

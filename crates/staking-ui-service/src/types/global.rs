@@ -1,8 +1,7 @@
 //! Types that make up the global state API.
 
-use super::common::{
-    ActiveNodeSetEntry, EpochAndBlock, L1BlockInfo, NodeExit, NodeSetEntry, ParticipationChange,
-};
+use super::common::{ActiveNodeSetEntry, EpochAndBlock, L1BlockInfo, NodeExit, NodeSetEntry};
+use alloy::primitives::Address;
 use bitvec::vec::BitVec;
 use serde::{Deserialize, Serialize};
 
@@ -64,13 +63,19 @@ pub struct ActiveNodeSetUpdate {
 pub enum ActiveNodeSetDiff {
     /// Update sent out every Espresso block.
     NewBlock {
-        /// The leaders since the last block, and their new participation rates.
+        /// The index of the leader who produced this block.
         ///
-        /// In most cases, there will just be a single entry in this list, increasing the
-        /// participation rate of the leader that proposed this new block. However, if there were
-        /// view timeouts between the last block and this one, this list will also include the
-        /// leaders of those views, decreasing their participation rates.
-        leaders: Vec<ParticipationChange>,
+        /// This causes the indicated node's leader participation rate to be increased, the
+        /// numerator and denominator both increasing by one.
+        leader: usize,
+
+        /// The indices of the leaders of any failed views between the last block and this one.
+        ///
+        /// This causes the indicated nodes' leader participation rates to be decreased, the
+        /// denominator increasing by one for each time a node appears in this list. Note that it is
+        /// possible, though not especially likely, for the same index to appear more than once in
+        /// the list (hence why we use an explicit list and not a bitset).
+        failed_leaders: Vec<usize>,
 
         /// A bitmap defining the set of nodes which voted on this block.
         ///
@@ -86,5 +91,5 @@ pub enum ActiveNodeSetDiff {
     },
 
     /// Upon entering a new epoch, replace the current active node set with an entirely new set.
-    NewEpoch(Vec<ActiveNodeSetEntry>),
+    NewEpoch(Vec<Address>),
 }

@@ -8,6 +8,7 @@ license = "mit"
 default = []
 testing = [
     "espresso-contract-deployer",
+    "espresso-types/testing",
     "hotshot-state-prover",
     "jf-signature",
     "rand",
@@ -28,10 +29,12 @@ cld = "0.5"
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",
 ] }
+derivative = "2"
 derive_more = "2.0"
 espresso-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 futures = "0.3"
 hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-network.git" }
+hotshot-query-service = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 im = { version = "15", features = ["serde"] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
@@ -64,6 +67,10 @@ staking-ui-service = { path = ".", features = ["testing"] }
 
 portpicker = "0.1"
 pretty_assertions = "1"
+sequencer = { git = "https://github.com/EspressoSystems/espresso-network.git", features = [
+    "embedded-db",
+    "testing",
+] }
 tempfile = "3"
 test-log = { version = "0.2", features = [
     "color",
