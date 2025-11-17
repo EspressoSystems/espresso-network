@@ -372,6 +372,7 @@ jobs:
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
+      - uses: ./.github/actions/free-disk-space
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.
