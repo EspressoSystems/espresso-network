@@ -52,6 +52,37 @@ A representation of short binary strings consisting of:
 * A `~`
 * A URL-safe base64-encoded byte string. The final byte of the encoded data is a CRC-8 checksum over
   the tag and the payload.
+
+### `Delegation`
+
+```json
+{
+    "delegator": Hex,
+    "node": Hex,
+    "amount": BigInt
+}
+```
+
+### `PendingWithdrawal`
+
+```json
+{
+    "delegator": Hex,
+    "node": Hex,
+    "amount": BigInt,
+    "available_time": integer
+}
+```
+
+### `Withdrawal`
+
+```json
+{
+    "delegator": Hex,
+    "node": Hex,
+    "amount": BigInt
+}
+```
 """
 
 [route.l1_block_latest]
@@ -120,13 +151,67 @@ This is available for unfinalized L1 blocks up to the latest head.
             "NodeUpdate": NodeSetEntry
         } |
         {
-            "NodeExit": { 
+            "NodeExit": {
                 "address": Hex,
                 "exit_time": integer
             }
         }
     ]
     "l1_block": L1BlockInfo
+}
+```
+"""
+
+[route.wallet_snapshot]
+PATH = ["/wallet/:address/:hash"]
+":address" = "Literal"
+":hash" = "Literal"
+DOC = """
+Get a snapshot of the requested wallet state at the specified L1 block.
+
+Returns a complete snapshot of the wallet state including active delegations, pending undelegations,
+pending exits from exited nodes, and claimed rewards.
+
+Requests for unknown wallet addresses will return `404 Not Found`.
+### Returns
+
+```json
+{
+    "nodes": [Delegation],
+    "pending_undelegations": [PendingWithdrawal],
+    "pending_exits": [PendingWithdrawal],
+    "claimed_rewards": BigInt,
+    "l1_block": L1BlockInfo
+}
+```
+"""
+
+[route.wallet_update]
+PATH = ["/wallet/:address/updates/:hash"]
+":address" = "Literal"
+":hash" = "Literal"
+DOC = """
+Get the list of changes to apply to the requested wallet's current snapshot as a result of L1 block `:hash`.
+
+This is available for unfinalized L1 blocks up to the latest head. The client typically polls this
+endpoint with sequential block hashes (obtained from `/l1/block`) every few seconds, once they have
+established an initial snapshot.
+
+Requests for unknown wallet addresses will return `404 Not Found`.
+
+### Returns
+
+```json
+{
+    "l1_block": L1BlockInfo,
+    "diff": [
+        { "ClaimedRewards": integer } |
+        { "DelegatedToNode": Delegation } |
+        { "UndelegatedFromNode": PendingWithdrawal } |
+        { "NodeExited": PendingWithdrawal } |
+        { "UndelegationWithdrawal": Withdrawal } |
+        { "NodeExitWithdrawal": Withdrawal }
+    ]
 }
 ```
 """
