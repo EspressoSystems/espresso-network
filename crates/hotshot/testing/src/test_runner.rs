@@ -21,6 +21,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
+    membership::fetcher::Leaf2FetcherTrait,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
@@ -75,6 +76,8 @@ where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
     <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
 {
     /// execute test
     ///
@@ -400,12 +403,15 @@ where
                             context: LateNodeContext::UninitializedContext(
                                 LateNodeContextParameters {
                                     storage: storage.clone(),
-                                    memberships: <TYPES as NodeType>::Membership::new::<I>(
+                                    memberships: <TYPES as NodeType>::Membership::new(
                                         config.known_nodes_with_stake.clone(),
                                         config.known_da_nodes.clone(),
-                                        storage.clone(),
-                                        network.clone(),
-                                        public_key.clone(),
+                                        Default::default(),
+                                        Leaf2FetcherTrait::<TYPES>::new::<I>(
+                                            network.clone(),
+                                            storage.clone(),
+                                            public_key.clone(),
+                                        ),
                                         config.epoch_height,
                                     ),
                                     config,
@@ -437,12 +443,15 @@ where
                     let hotshot = Self::add_node_with_config(
                         node_id,
                         network.clone(),
-                        <TYPES as NodeType>::Membership::new::<I>(
+                        <TYPES as NodeType>::Membership::new(
                             config.known_nodes_with_stake.clone(),
                             config.known_da_nodes.clone(),
-                            storage.clone(),
-                            network.clone(),
-                            public_key.clone(),
+                            Default::default(),
+                            Leaf2FetcherTrait::<TYPES>::new::<I>(
+                                network.clone(),
+                                storage.clone(),
+                                public_key.clone(),
+                            ),
                             config.epoch_height,
                         ),
                         initializer,
@@ -463,12 +472,15 @@ where
                 uninitialized_nodes.push((
                     node_id,
                     network.clone(),
-                    <TYPES as NodeType>::Membership::new::<I>(
+                    <TYPES as NodeType>::Membership::new(
                         config.known_nodes_with_stake.clone(),
                         config.known_da_nodes.clone(),
-                        storage.clone(),
-                        network,
-                        public_key.clone(),
+                        Default::default(),
+                        Leaf2FetcherTrait::<TYPES>::new::<I>(
+                            network.clone(),
+                            storage.clone(),
+                            public_key.clone(),
+                        ),
                         config.epoch_height,
                     ),
                     config,

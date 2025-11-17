@@ -27,7 +27,10 @@ use hotshot::{
     types::{SignatureKey, SystemContextHandle},
     HotShotInitializer, SystemContext,
 };
-use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
+use hotshot_example_types::{
+    membership::fetcher::Leaf2FetcherTrait, state_types::TestInstanceState,
+    storage_types::TestStorage,
+};
 use hotshot_query_service::{
     data_source,
     fetching::provider::NoFetching,
@@ -241,12 +244,15 @@ async fn init_consensus(
 
                 let storage: TestStorage<MockTypes> = TestStorage::default();
 
-                let membership = MockMembership::new::<MockNodeImpl>(
+                let membership = MockMembership::new(
                     known_nodes_with_stake_clone.clone(),
                     known_nodes_with_stake_clone,
-                    storage.clone(),
-                    network.clone(),
-                    pub_keys[node_id],
+                    (),
+                    Leaf2FetcherTrait::<MockTypes>::new::<MockNodeImpl>(
+                        network.clone(),
+                        storage.clone(),
+                        pub_keys[node_id],
+                    ),
                     config.epoch_height,
                 );
 

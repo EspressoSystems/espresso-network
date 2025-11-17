@@ -12,7 +12,7 @@ use std::{
 use async_broadcast::Sender;
 use async_lock::RwLock;
 use hotshot::traits::implementations::MemoryNetwork;
-use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+use hotshot_example_types::{membership::fetcher::Leaf2FetcherTrait, node_types::{MemoryImpl, TestTypes, TestVersions}};
 use hotshot_task::task::{ConsensusTaskRegistry, Task};
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkEventTaskState};
 use hotshot_testing::{
@@ -59,14 +59,15 @@ async fn test_network_task() {
 
     let all_nodes = config.known_nodes_with_stake.clone();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
-        MemoryImpl,
-    >(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
-        storage.clone(),
-        network.clone(),
-        public_key,
+        (),
+        Leaf2FetcherTrait::<TestTypes>::new::<MemoryImpl>(
+            network.clone(),
+            storage.clone(),
+            public_key,
+        ),
         config.epoch_height,
     )));
     let coordinator =
@@ -239,14 +240,15 @@ async fn test_network_storage_fail() {
     let all_nodes = config.known_nodes_with_stake.clone();
     let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
-        MemoryImpl,
-    >(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
-        storage.clone(),
-        network.clone(),
-        public_key,
+        (),
+        Leaf2FetcherTrait::<TestTypes>::new::<MemoryImpl>(
+            network.clone(),
+            storage.clone(),
+            public_key,
+        ),
         config.epoch_height,
     )));
     let coordinator =

@@ -15,12 +15,8 @@ use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
 use crate::{
-    data::Leaf2,
-    drb::DrbResult,
-    event::Event,
-    stake_table::HSStakeTable,
-    traits::{node_implementation::NodeImplementation, signature_key::StakeTableEntryType},
-    PeerConfig,
+    data::Leaf2, drb::DrbResult, event::Event, stake_table::HSStakeTable,
+    traits::signature_key::StakeTableEntryType, PeerConfig,
 };
 
 pub struct NoStakeTableHash;
@@ -41,15 +37,18 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     type StakeTableHash: Committable;
 
+    /// Fetcher type used to populate stake tables
+    type Fetcher;
+
+    /// Fixed block reward (used only in V3). starting from V4, block reward is dynamic
+    type FixedBlockReward;
+
     /// Create a committee
-    fn new<I: NodeImplementation<TYPES>>(
-        // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
-        // but they should not have voting power.
-        stake_committee_members: Vec<PeerConfig<TYPES>>,
-        da_committee_members: Vec<PeerConfig<TYPES>>,
-        storage: Self::Storage,
-        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
-        public_key: TYPES::SignatureKey,
+    fn new(
+        committee_members: Vec<PeerConfig<TYPES>>,
+        da_members: Vec<PeerConfig<TYPES>>,
+        fixed_block_reward: Self::FixedBlockReward,
+        fetcher: Self::Fetcher,
         epoch_height: u64,
     ) -> Self;
 

@@ -24,7 +24,10 @@ use hotshot::{
     types::{Event, SystemContextHandle},
     HotShotInitializer, SystemContext,
 };
-use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
+use hotshot_example_types::{
+    membership::fetcher::Leaf2FetcherTrait, state_types::TestInstanceState,
+    storage_types::TestStorage,
+};
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
@@ -192,15 +195,17 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                         ));
                         let hs_storage: TestStorage<MockTypes> = TestStorage::default();
 
-                        let membership =
-                            Arc::new(RwLock::new(MockMembership::new::<MockNodeImpl>(
-                                known_nodes_with_stake_clone.clone(),
-                                known_nodes_with_stake_clone,
-                                hs_storage.clone(),
+                        let membership = Arc::new(RwLock::new(MockMembership::new(
+                            known_nodes_with_stake_clone.clone(),
+                            known_nodes_with_stake_clone,
+                            (),
+                            Leaf2FetcherTrait::<MockTypes>::new::<MockNodeImpl>(
                                 network.clone(),
+                                hs_storage.clone(),
                                 pub_keys[node_id],
-                                config.epoch_height,
-                            )));
+                            ),
+                            config.epoch_height,
+                        )));
 
                         membership
                             .write()
