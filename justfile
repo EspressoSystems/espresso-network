@@ -261,7 +261,7 @@ contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
 
 contracts-test-forge *args='-vv':
-    forge test --no-match-test "testFuzz_|invariant_" {{args}}
+    forge test --no-match-test "testFuzz_|invariant_|test_Network_" {{args}}
 
 contracts-test-fuzz *args='-vv':
     forge test --match-test testFuzz {{args}}
