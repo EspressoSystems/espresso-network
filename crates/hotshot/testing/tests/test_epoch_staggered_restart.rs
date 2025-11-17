@@ -18,14 +18,16 @@ use hotshot_testing::{
     test_builder::TestDescription,
 };
 
+const NUM_NODES: u64 = 14;
+
 cross_tests!(
     TestName: test_staggered_restart_transition_block,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [EpochsTestVersions],
-    Ignore: true,
+    Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -36,9 +38,9 @@ cross_tests!(
       }
 
       let mut down_regular_nodes = vec![];
-      for i in 4..20 {
+      for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
-              idx: i,
+              idx: i as usize,
               updown: NodeAction::RestartDown(0),
           });
       }
@@ -60,15 +62,15 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(140),
+                  duration: Duration::from_secs(340),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
-          // Make sure we keep committing rounds after the catchup, but not the full 50.
-          num_successful_views: 22,
+          // Make sure we keep committing rounds after the catchup
+          num_successful_views: 50,
           expected_view_failures: vec![8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
           possible_view_failures: vec![6, 7, 21, 22, 23, 24, 25, 28],
-          decide_timeout: Duration::from_secs(120),
+          decide_timeout: Duration::from_secs(200),
           ..Default::default()
       };
 
@@ -83,7 +85,7 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -94,9 +96,9 @@ cross_tests!(
       }
 
       let mut down_regular_nodes = vec![];
-      for i in 4..20 {
+      for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
-              idx: i,
+              idx: i as usize,
               updown: NodeAction::RestartDown(0),
           });
       }
@@ -118,15 +120,15 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(140),
+                  duration: Duration::from_secs(340),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
-          // Make sure we keep committing rounds after the catchup, but not the full 50.
-          num_successful_views: 22,
+          // Make sure we keep committing rounds after the catchup
+          num_successful_views: 50,
           expected_view_failures: vec![9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
           possible_view_failures: vec![7, 8, 21, 22, 23, 24, 25, 27],
-          decide_timeout: Duration::from_secs(120),
+          decide_timeout: Duration::from_secs(200),
           ..Default::default()
       };
 
@@ -141,7 +143,7 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(20,4);
+      let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
 
       let mut down_da_nodes = vec![];
       for i in 2..4 {
@@ -152,9 +154,9 @@ cross_tests!(
       }
 
       let mut down_regular_nodes = vec![];
-      for i in 4..20 {
+      for i in 4..NUM_NODES {
           down_regular_nodes.push(ChangeNode {
-              idx: i,
+              idx: i as usize,
               updown: NodeAction::RestartDown(0),
           });
       }
@@ -176,15 +178,15 @@ cross_tests!(
       metadata.completion_task_description =
           CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
               TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(140),
+                  duration: Duration::from_secs(340),
               },
           );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
-          // Make sure we keep committing rounds after the catchup, but not the full 50.
-          num_successful_views: 22,
+          // Make sure we keep committing rounds after the catchup
+          num_successful_views: 50,
           expected_view_failures: vec![12, 13, 14, 15, 16, 17, 18, 19, 20],
           possible_view_failures: vec![11, 21, 22, 23, 24],
-          decide_timeout: Duration::from_secs(120),
+          decide_timeout: Duration::from_secs(200),
           ..Default::default()
       };
 
