@@ -17,6 +17,8 @@ extend-exclude = [
   "sdks/go/types/common/consts.go",
   "sequencer/src/genesis.rs",
   "data/insta_snapshots",
+  "tests/proof_of_stake.rs",
+  "data/genesis/demo-da-committees.toml"
 ]
 
 [default.extend-words]
