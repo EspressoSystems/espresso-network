@@ -105,7 +105,10 @@ async fn test_native_demo_da_committee() -> Result<()> {
         assert_da_stake_table(
             Default::default(),
             committee.start_epoch,
-            &committee.committee.iter().collect::<Vec<_>>(),
+            &committee
+                .committee
+                .iter()
+                .collect::<Vec<&PeerConfig<SeqTypes>>>(),
         )
         .await?;
     }
