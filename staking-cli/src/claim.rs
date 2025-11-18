@@ -6,7 +6,7 @@ use alloy::{
 use anyhow::Result;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
-    sol_types::StakeTable::{self, StakeTableErrors},
+    sol_types::StakeTableV2::{self, StakeTableV2Errors},
 };
 
 pub async fn claim_withdrawal(
@@ -14,11 +14,11 @@ pub async fn claim_withdrawal(
     stake_table: Address,
     validator_address: Address,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let st = StakeTable::new(stake_table, provider);
+    let st = StakeTableV2::new(stake_table, provider);
     st.claimWithdrawal(validator_address)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 pub async fn claim_validator_exit(
@@ -26,11 +26,11 @@ pub async fn claim_validator_exit(
     stake_table: Address,
     validator_address: Address,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let st = StakeTable::new(stake_table, provider);
+    let st = StakeTableV2::new(stake_table, provider);
     st.claimValidatorExit(validator_address)
         .send()
         .await
-        .maybe_decode_revert::<StakeTableErrors>()
+        .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
 #[cfg(test)]
@@ -55,7 +55,9 @@ mod test {
             .assert_success()
             .await?;
 
-        let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
+        let event = receipt
+            .decoded_log::<StakeTableV2::WithdrawalClaimed>()
+            .unwrap();
         assert_eq!(event.amount, amount);
 
         Ok(())
@@ -76,7 +78,9 @@ mod test {
             .assert_success()
             .await?;
 
-        let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
+        let event = receipt
+            .decoded_log::<StakeTableV2::ValidatorExitClaimed>()
+            .unwrap();
         assert_eq!(event.amount, amount);
 
         Ok(())

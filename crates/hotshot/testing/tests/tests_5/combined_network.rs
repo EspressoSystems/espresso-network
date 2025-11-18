@@ -34,11 +34,6 @@ async fn test_combined_network() {
             num_successful_views: 25,
             ..Default::default()
         },
-        completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        ),
         ..TestDescription::default_multiple_rounds()
     };
 
@@ -229,12 +224,6 @@ async fn test_stress_combined_network_fuzzy() {
             next_view_timeout: 10_000,
             ..Default::default()
         },
-
-        completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(120),
-            },
-        ),
         ..TestDescription::default_stress()
     }
     .set_num_nodes(20, 20);

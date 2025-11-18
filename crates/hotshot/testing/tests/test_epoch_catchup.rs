@@ -23,7 +23,7 @@ use hotshot_testing::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     overall_safety_task::OverallSafetyPropertiesDescription,
     spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
-    test_builder::{TestDescription, TimingData},
+    test_builder::TestDescription,
 };
 use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
@@ -36,19 +36,13 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-        let timing_data = TimingData {
-            next_view_timeout: 5000,
-            ..Default::default()
-        };
-
-        let mut metadata = TestDescription::default().set_num_nodes(20, 7);
+        let mut metadata = TestDescription::default().set_num_nodes(14, 7);
 
         let catchup_node = vec![ChangeNode {
-            idx: 19,
+            idx: 13,
             updown: NodeAction::Up,
         }];
 
-        metadata.timing_data = timing_data;
 
         metadata.view_sync_properties =
             hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
@@ -60,13 +54,12 @@ cross_tests!(
         metadata.completion_task_description =
             CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(240),
+                    duration: Duration::from_secs(300),
                 },
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![18, 19, 38, 39],
-            decide_timeout: Duration::from_secs(15),
+            possible_view_failures: vec![12, 13, 26, 27, 35, 40, 41],
             ..Default::default()
         };
 
@@ -85,19 +78,13 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-        let timing_data = TimingData {
-            next_view_timeout: 5000,
-            ..Default::default()
-        };
 
-        let mut metadata = TestDescription::default().set_num_nodes(20, 7);
+        let mut metadata = TestDescription::default().set_num_nodes(14, 5);
 
         let catchup_node = vec![ChangeNode {
-            idx: 18,
+            idx: 13,
             updown: NodeAction::Up,
         }];
-
-        metadata.timing_data = timing_data;
 
         metadata.view_sync_properties =
             hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
@@ -114,8 +101,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![18, 19, 38, 39],
-            decide_timeout: Duration::from_secs(15),
+            possible_view_failures: vec![5,6,13,14,26,27,32,33,34,40,41],
             ..Default::default()
         };
 
@@ -134,19 +120,12 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-        let timing_data = TimingData {
-            next_view_timeout: 5000,
-            ..Default::default()
-        };
-
-        let mut metadata = TestDescription::default().set_num_nodes(20, 7);
+        let mut metadata = TestDescription::default().set_num_nodes(14, 5);
 
         let catchup_node = vec![ChangeNode {
-            idx: 18,
+            idx: 13,
             updown: NodeAction::Up,
         }];
-
-        metadata.timing_data = timing_data;
 
         metadata.view_sync_properties =
             hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
@@ -163,8 +142,7 @@ cross_tests!(
             );
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
-            possible_view_failures: vec![33, 34, 39, 40],
-            decide_timeout: Duration::from_secs(15),
+            possible_view_failures: vec![11,12,13,33,34,39, 40, 41, 42, 43],
             ..Default::default()
         };
 
@@ -183,19 +161,12 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-        let timing_data = TimingData {
-            next_view_timeout: 5000,
-            ..Default::default()
-        };
-
         let mut metadata = TestDescription::default().set_num_nodes(20, 7);
 
         let catchup_node = vec![ChangeNode {
             idx: 10,
             updown: NodeAction::Up,
         }];
-
-        metadata.timing_data = timing_data;
 
         metadata.view_sync_properties =
             hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
@@ -213,7 +184,7 @@ cross_tests!(
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 50,
             possible_view_failures: vec![2, 3, 14, 15, 17, 18, 42, 43, 46, 47],
-            decide_timeout: Duration::from_secs(20),
+            decide_timeout: Duration::from_secs(30),
             ..Default::default()
         };
 

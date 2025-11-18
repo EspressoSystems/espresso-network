@@ -1,8 +1,9 @@
 pub mod create_node_validator_api;
 
-use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
+use std::{fmt, future::Future, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
+use anyhow::Context;
 use espresso_types::{v0_3::Validator, BackoffParams, SeqTypes};
 use futures::{
     channel::mpsc::{self, SendError, Sender},
@@ -18,7 +19,7 @@ use indexmap::IndexMap;
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
 use tide_disco::{api::ApiError, socket::Connection, Api};
-use tokio::{spawn, task::JoinHandle};
+use tokio::{spawn, task::JoinHandle, time::timeout};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
 
@@ -413,25 +414,52 @@ impl From<std::io::Error> for GetNodeIdentityFromUrlError {
 /// populated with the data retrieved from the Sequencer status metrics API.
 /// If no [NodeIdentity] is found, it will return a
 /// [GetNodeIdentityFromUrlError::NoNodeIdentity] error.
-pub async fn get_node_identity_from_url(
-    url: url::Url,
-) -> Result<NodeIdentity, GetNodeIdentityFromUrlError> {
-    let client = reqwest::Client::new();
+pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIdentity> {
+    // Create a new reqwest client using Rustls TLS
+    let client = reqwest::ClientBuilder::new()
+        .use_rustls_tls()
+        .build()
+        .with_context(|| "failed to build reqwest client")?;
 
-    let completed_url = url.join("v0/status/metrics")?;
-    let request = client.get(completed_url).build()?;
-    let response = client.execute(request).await?;
-    let response_bytes = response.bytes().await?;
+    // Join the URL with the status metrics API path
+    let completed_url = url
+        .join("v0/status/metrics")
+        .with_context(|| "failed to join URL")?;
 
-    let buffered_response = std::io::BufReader::new(&*response_bytes);
-    let scrape = prometheus_parse::Scrape::parse(buffered_response.lines())?;
+    // Send the request (with a timeout)
+    let response = timeout(Duration::from_secs(5), client.get(completed_url).send())
+        .await
+        .with_context(|| "timed out while sending request")?
+        .with_context(|| "failed to send request")?;
 
+    // If the response was not 200, error
+    if response.status() != 200 {
+        return Err(anyhow::anyhow!(
+            "failed to get node identity from URL. status: {}",
+            response.status()
+        ));
+    }
+
+    // Get the response text (with a timeout)
+    let response_text = timeout(Duration::from_secs(5), response.text())
+        .await
+        .with_context(|| "timed out while getting response text")?
+        .with_context(|| "failed to get response text")?;
+
+    // Get the response lines
+    let response_lines = response_text.lines().map(|line| Ok(line.to_string()));
+
+    // Parse the response lines into a scrape
+    let scrape = prometheus_parse::Scrape::parse(response_lines)
+        .with_context(|| "failed to parse scrape")?;
+
+    // Get the node identity from the scrape
     if let Some(node_identity) = node_identity_from_scrape(scrape) {
         let mut node_identity = node_identity;
         node_identity.public_url = Some(url);
         Ok(node_identity)
     } else {
-        Err(GetNodeIdentityFromUrlError::NoNodeIdentity)
+        Err(anyhow::anyhow!("no node identity found in scrape"))
     }
 }
 
@@ -1130,7 +1158,7 @@ impl ProcessNodeIdentityUrlStreamTask {
             let node_identity = match node_identity_result {
                 Ok(node_identity) => node_identity,
                 Err(err) => {
-                    tracing::warn!("get node identity from url failed.  bad base url?: {}", err);
+                    tracing::warn!("Failed to get node identity from url: {}", err);
                     continue;
                 },
             };

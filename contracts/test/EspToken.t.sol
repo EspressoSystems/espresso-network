@@ -7,6 +7,7 @@ pragma solidity ^0.8.0;
 // Libraries
 import { Test } from "forge-std/Test.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { IERC1967 } from "@openzeppelin/contracts/interfaces/IERC1967.sol";
 
 // Target contracts
 import { EspToken } from "../src/EspToken.sol";
@@ -54,6 +55,8 @@ contract EspTokenUpgradabilityTest is Test {
     function testUpgrade() public {
         EspTokenV2 tokenV2 = new EspTokenV2();
         vm.startPrank(admin);
+        vm.expectEmit();
+        emit IERC1967.Upgraded(address(tokenV2));
         token.upgradeToAndCall(address(tokenV2), "");
         vm.stopPrank();
         assertEq(token.name(), name);
@@ -312,5 +315,26 @@ contract EspTokenUpgradabilityTest is Test {
         );
         timelock.execute(address(token), 0, transferOwnershipData, bytes32(0), bytes32(0));
         vm.stopPrank();
+    }
+
+    function test_renounceOwnership_Reverts() public {
+        address currentOwner = token.owner();
+        assertEq(currentOwner, admin);
+
+        vm.prank(admin);
+        vm.expectRevert(EspToken.OwnershipCannotBeRenounced.selector);
+        token.renounceOwnership();
+
+        assertEq(token.owner(), admin);
+    }
+
+    function test_renounceOwnership_ByNonOwnerReverts() public {
+        vm.prank(tokenGrantRecipient);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, tokenGrantRecipient
+            )
+        );
+        token.renounceOwnership();
     }
 }

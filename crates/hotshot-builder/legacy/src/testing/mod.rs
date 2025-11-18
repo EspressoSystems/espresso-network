@@ -180,6 +180,7 @@ pub async fn calc_proposal_msg<V: Versions>(
         timestamp_millis: round as u64 * 1_000,
         metadata,
         random: 1, // arbitrary
+        version: <TestVersions as Versions>::Base::VERSION,
     };
 
     let justify_qc = match prev_quorum_proposal.as_ref() {

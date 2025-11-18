@@ -104,6 +104,7 @@ impl SimulatedChainState {
             timestamp_millis: self.round.u64() * 1_000,
             metadata,
             random: 1, // arbitrary
+            version: <TestVersions as Versions>::Base::VERSION,
         };
 
         let justify_qc = match self.previous_quorum_proposal.as_ref() {
