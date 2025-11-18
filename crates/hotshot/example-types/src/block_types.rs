@@ -277,6 +277,8 @@ pub struct TestBlockHeader {
     pub timestamp_millis: u64,
     /// random
     pub random: u64,
+    /// version
+    pub version: Version,
 }
 
 impl TestBlockHeader {
@@ -285,6 +287,7 @@ impl TestBlockHeader {
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
         metadata: TestMetadata,
+        version: Version,
     ) -> Self {
         let parent = parent_leaf.block_header();
 
@@ -313,23 +316,7 @@ impl TestBlockHeader {
             timestamp,
             timestamp_millis,
             random,
-        }
-    }
-}
-
-impl Default for TestBlockHeader {
-    fn default() -> Self {
-        let metadata = TestMetadata {
-            num_transactions: 0,
-        };
-        Self {
-            block_number: 0,
-            payload_commitment: Default::default(),
-            builder_commitment: Default::default(),
-            metadata,
-            timestamp: 0,
-            timestamp_millis: 0,
-            random: 0,
+            version,
         }
     }
 }
@@ -352,7 +339,7 @@ impl<
         builder_commitment: BuilderCommitment,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         _builder_fee: BuilderFee<TYPES>,
-        _version: Version,
+        version: Version,
         _view_number: u64,
     ) -> Result<Self, Self::Error> {
         Self::run_delay_settings_from_config(&instance_state.delay_config).await;
@@ -361,6 +348,7 @@ impl<
             payload_commitment,
             builder_commitment,
             metadata,
+            version,
         ))
     }
 
@@ -389,6 +377,7 @@ impl<
             timestamp: 0,
             timestamp_millis: 0,
             random: 0,
+            version: genesis_version,
         }
     }
 
@@ -406,6 +395,10 @@ impl<
 
     fn builder_commitment(&self) -> BuilderCommitment {
         self.builder_commitment.clone()
+    }
+
+    fn version(&self) -> Version {
+        self.version
     }
 
     fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState> {

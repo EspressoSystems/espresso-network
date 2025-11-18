@@ -1186,6 +1186,10 @@ impl BlockHeader<SeqTypes> for Header {
         self.height()
     }
 
+    fn version(&self) -> Version {
+        self.version()
+    }
+
     fn payload_commitment(&self) -> VidCommitment {
         self.payload_commitment()
     }

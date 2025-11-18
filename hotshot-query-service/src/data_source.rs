@@ -1017,6 +1017,7 @@ pub mod node_tests {
                     num_transactions: 7, // arbitrary
                 },
                 random: 1, // arbitrary
+                version: <TestVersions as Versions>::Base::VERSION,
             };
 
             let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(

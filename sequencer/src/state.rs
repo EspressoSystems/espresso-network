@@ -33,7 +33,7 @@ use crate::{
 };
 
 pub(crate) async fn compute_state_update(
-    state: &ValidatedState,
+    parent_state: &ValidatedState,
     instance: &NodeState,
     peers: &impl StateCatchup,
     parent_leaf: &Leaf2,
@@ -41,47 +41,7 @@ pub(crate) async fn compute_state_update(
 ) -> anyhow::Result<(ValidatedState, Delta)> {
     let header = proposed_leaf.block_header();
 
-    // Check internal consistency.
-    let parent_header = parent_leaf.block_header();
-    ensure!(
-        state.chain_config.commit() == parent_header.chain_config().commit(),
-        "internal error! in-memory chain config {:?} does not match parent header {:?}",
-        state.chain_config,
-        parent_header.chain_config(),
-    );
-    ensure!(
-        state.block_merkle_tree.commitment() == parent_header.block_merkle_tree_root(),
-        "internal error! in-memory block tree {} does not match parent header {}",
-        state.block_merkle_tree.commitment(),
-        parent_header.block_merkle_tree_root()
-    );
-    ensure!(
-        state.fee_merkle_tree.commitment() == parent_header.fee_merkle_tree_root(),
-        "internal error! in-memory fee tree {} does not match parent header {}",
-        state.fee_merkle_tree.commitment(),
-        parent_header.fee_merkle_tree_root()
-    );
-
-    match parent_header.reward_merkle_tree_root() {
-        Either::Left(v1_root) => {
-            ensure!(
-                state.reward_merkle_tree_v1.commitment() == v1_root,
-                "internal error! in-memory v1 reward tree {} does not match parent header {}",
-                state.reward_merkle_tree_v1.commitment(),
-                v1_root
-            )
-        },
-        Either::Right(v2_root) => {
-            ensure!(
-                state.reward_merkle_tree_v2.commitment() == v2_root,
-                "internal error! in-memory v2 reward tree {} does not match parent header {}",
-                state.reward_merkle_tree_v2.commitment(),
-                v2_root
-            )
-        },
-    }
-
-    let (state, delta, total_rewards_distributed) = state
+    let (state, delta, total_rewards_distributed) = parent_state
         .apply_header(
             instance,
             peers,
@@ -91,6 +51,45 @@ pub(crate) async fn compute_state_update(
             proposed_leaf.view_number(),
         )
         .await?;
+
+    // Check internal consistency.
+    ensure!(
+        state.chain_config.commit() == header.chain_config().commit(),
+        "internal error! in-memory chain config {:?} does not match header {:?}",
+        state.chain_config,
+        header.chain_config(),
+    );
+    ensure!(
+        state.block_merkle_tree.commitment() == header.block_merkle_tree_root(),
+        "internal error! in-memory block tree {} does not match header {}",
+        state.block_merkle_tree.commitment(),
+        header.block_merkle_tree_root()
+    );
+    ensure!(
+        state.fee_merkle_tree.commitment() == header.fee_merkle_tree_root(),
+        "internal error! in-memory fee tree {} does not match header {}",
+        state.fee_merkle_tree.commitment(),
+        header.fee_merkle_tree_root()
+    );
+
+    match header.reward_merkle_tree_root() {
+        Either::Left(v1_root) => {
+            ensure!(
+                state.reward_merkle_tree_v1.commitment() == v1_root,
+                "internal error! in-memory v1 reward tree {} does not match header {}",
+                state.reward_merkle_tree_v1.commitment(),
+                v1_root
+            )
+        },
+        Either::Right(v2_root) => {
+            ensure!(
+                state.reward_merkle_tree_v2.commitment() == v2_root,
+                "internal error! in-memory v2 reward tree {} does not match header {}",
+                state.reward_merkle_tree_v2.commitment(),
+                v2_root
+            )
+        },
+    }
 
     if header.version() >= DrbAndHeaderUpgradeVersion::version() {
         let Some(actual_total) = total_rewards_distributed else {

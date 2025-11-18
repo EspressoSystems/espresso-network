@@ -328,6 +328,7 @@ async fn progress_round_with_transactions(
             timestamp_millis: round * 1_000,
             metadata,
             random: 0,
+            version: <TestVersions as Versions>::Base::VERSION,
         };
 
         let qc_proposal = QuorumProposalWrapper::<TestTypes> {

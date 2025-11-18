@@ -128,7 +128,7 @@ func TestEspressoDaProposalEvent(t *testing.T) {
 	require.Nil(t, err)
 	builderCommitment, err := blockPayload.BuilderCommitment()
 	require.Nil(t, err)
-	builderCommitmentTagged, err := builderCommitment.ToTaggedSting()
+	builderCommitmentTagged, err := builderCommitment.ToTaggedString()
 	require.Nil(t, err)
 	require.Equal(t, builderCommitmentTagged, ReferenceBuilderCommitment.String())
 }

@@ -42,9 +42,9 @@ use crate::{
         BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_ge_epoch_root,
-        is_last_block, is_transition_block, option_epoch_from_block_number, BuilderCommitment,
-        LeafCommitment, StateAndDelta, Terminator,
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
+        is_transition_block, option_epoch_from_block_number, BuilderCommitment, LeafCommitment,
+        StateAndDelta, Terminator,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -1406,24 +1406,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let old_epoch = epoch_from_block_number(parent_leaf.height(), self.epoch_height);
 
         new_epoch - 1 == old_epoch && is_last_block(parent_leaf.height(), self.epoch_height)
-    }
-
-    /// Returns true if our high QC is for the block equal or greater than the root epoch block
-    pub fn is_high_qc_ge_root_block(&self) -> bool {
-        let Some(leaf) = self.saved_leaves.get(&self.high_qc().data.leaf_commit) else {
-            tracing::trace!("We don't have a leaf corresponding to the high QC");
-            return false;
-        };
-        let block_height = leaf.height();
-        is_ge_epoch_root(block_height, self.epoch_height)
-    }
-
-    pub fn is_high_qc_last_block(&self) -> bool {
-        let Some(block_height) = self.high_qc().data.block_number else {
-            tracing::warn!("We don't have a block number for the high QC");
-            return false;
-        };
-        is_last_block(block_height, self.epoch_height)
     }
 }
 

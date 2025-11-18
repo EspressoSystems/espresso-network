@@ -15,6 +15,7 @@ use crate::{
     event::Event,
     stake_table::HSStakeTable,
     traits::{
+        block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         storage::{
@@ -60,7 +61,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     store_drb_result_fn: StoreDrbResultFn<TYPES>,
 
     /// Callback function to select a DRB difficulty based on the view number of the seed
-    pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn<TYPES>>>>,
+    pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -117,7 +118,7 @@ where
     /// Set the DRB difficulty selector
     pub async fn set_drb_difficulty_selector(
         &self,
-        drb_difficulty_selector: DrbDifficultySelectorFn<TYPES>,
+        drb_difficulty_selector: DrbDifficultySelectorFn,
     ) {
         let mut drb_difficulty_selector_writer = self.drb_difficulty_selector.write().await;
 
@@ -268,6 +269,8 @@ where
                 }
             };
         }
+        let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
+        tracing::warn!("Fetching stake tables for epochs: {epochs:?}");
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
@@ -300,6 +303,7 @@ where
         let root_leaf = match self.fetch_stake_table(epoch).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
+                tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
                 self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                     .await;
                 return;
@@ -313,6 +317,10 @@ where
         .await
         {
             Ok(drb_result) => {
+                tracing::warn!(
+                    ?drb_result,
+                    "DRB result for epoch {epoch:?} retrieved from peers. Updating membership."
+                );
                 self.membership
                     .write()
                     .await
@@ -499,7 +507,7 @@ where
             ));
         };
 
-        let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
+        let drb_difficulty = drb_difficulty_selector(root_leaf.block_header().version()).await;
 
         let mut drb_seed_input = [0u8; 32];
         let len = drb_seed_input_vec.len().min(32);

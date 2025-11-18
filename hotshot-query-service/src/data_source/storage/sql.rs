@@ -479,6 +479,26 @@ impl Config {
             .log_slow_statements(LevelFilter::Warn, threshold);
         self
     }
+
+    /// Set the maximum time a single SQL statement is allowed to run before being canceled.
+    ///
+    /// This helps prevent queries from running indefinitely even when the client is dropped
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn statement_timeout(mut self, timeout: Duration) -> Self {
+        // Format duration as milliseconds
+        // PostgreSQL interprets values without units as milliseconds
+        let timeout_ms = timeout.as_millis();
+        self.db_opt = self
+            .db_opt
+            .options([("statement_timeout", timeout_ms.to_string())]);
+        self
+    }
+
+    /// not supported for SQLite.
+    #[cfg(feature = "embedded-db")]
+    pub fn statement_timeout(self, _timeout: Duration) -> Self {
+        self
+    }
 }
 
 /// Storage for the APIs provided in this crate, backed by a remote PostgreSQL database.
@@ -541,6 +561,12 @@ impl SqlStorage {
 
         // Create or connect to the schema for this query service.
         let mut conn = pool.acquire().await?;
+
+        // Disable statement timeout for migrations, as they can take a long time
+        #[cfg(not(feature = "embedded-db"))]
+        query("SET statement_timeout = 0")
+            .execute(conn.as_mut())
+            .await?;
 
         #[cfg(not(feature = "embedded-db"))]
         if config.reset {

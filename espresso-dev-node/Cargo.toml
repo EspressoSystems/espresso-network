@@ -42,9 +42,9 @@ hotshot-query-service = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 portpicker = { workspace = true }
 rand = { workspace = true }
-test-log = { workspace = true }
 rstest = { workspace = true }
 surf-disco = { workspace = true }
+test-log = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

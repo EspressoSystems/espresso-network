@@ -232,22 +232,23 @@ impl SequencerPersistence for NoStorage {
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,

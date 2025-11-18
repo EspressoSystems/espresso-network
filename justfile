@@ -261,10 +261,20 @@ contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
 
 contracts-test-forge *args='-vv':
-    forge test --no-match-test "testFuzz_|invariant_" {{args}}
+    forge test --no-match-test "testFuzz_|invariant_|test_Network_" {{args}}
 
 contracts-test-fuzz *args='-vv':
     forge test --match-test testFuzz {{args}}
 
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
+
+contracts-test-network *args='-vv':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${ETHERSCAN_API_KEY:-}" ]; then
+        echo "Error: ETHERSCAN_API_KEY must be set to run network tests" >&2
+        echo "Set it in your environment or in .env file" >&2
+        exit 1
+    fi
+    forge test --match-test test_Network_ --jobs 1 {{args}}
