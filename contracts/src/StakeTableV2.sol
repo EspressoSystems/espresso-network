@@ -325,20 +325,35 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
     /// @dev Grants the role to new owner and revokes from old owner.
-    function transferOwnership(address newOwner) public virtual override 
-    // onlyRole(DEFAULT_ADMIN_ROLE)
+    /// @dev Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
+    /// super.transferOwnership() which requires onlyOwner.
+    /// This ensures that only the current admin (who holds both ownership and DEFAULT_ADMIN_ROLE)
+    /// can transfer ownership.
+    function transferOwnership(address newOwner)
+        public
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
     {
         if (newOwner == address(0)) {
             revert OwnableInvalidOwner(address(0));
         }
         address oldOwner = owner();
 
+        // Handle self-transfer: OpenZeppelin allows it, so we do too. Just emit the event.
+        // In super.grantRole, self-revocation is allowed but it's a no-op and doesn't change the
+        // role so we don't call it here
+        if (oldOwner == newOwner) {
+            super.transferOwnership(newOwner);
+            return;
+        }
+
+        // Grant role first, then transfer ownership, then revoke from old owner.
+        // This order ensures newOwner has the role before becoming owner, maintaining the
+        // invariant, only one admin/owner at a time.
         super.grantRole(DEFAULT_ADMIN_ROLE, newOwner);
         super.transferOwnership(newOwner);
-        // Only revoke if transferring to a different address to prevent self-revocation
-        if (oldOwner != newOwner) {
-            _revokeRole(DEFAULT_ADMIN_ROLE, oldOwner);
-        }
+        _revokeRole(DEFAULT_ADMIN_ROLE, oldOwner);
     }
 
     /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first.
