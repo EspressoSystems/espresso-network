@@ -92,7 +92,7 @@ services:
         condition: service_healthy
 
   stake-for-demo:
-    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
+    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:${DOCKER_TAG:-main}
     command: staking-cli stake-for-demo
     environment:
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
