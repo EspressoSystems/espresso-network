@@ -279,6 +279,7 @@ impl StakeTableState {
                     )));
                 }
 
+                // All checks ok, applying changes
                 self.used_bls_keys.insert(stake_table_key);
                 self.used_schnorr_keys.insert(state_ver_key.clone());
 
@@ -333,6 +334,7 @@ impl StakeTableState {
                     ));
                 }
 
+                // All checks ok, applying changes
                 self.used_bls_keys.insert(stake_table_key);
                 self.used_schnorr_keys.insert(state_ver_key.clone());
 
@@ -351,6 +353,7 @@ impl StakeTableState {
                     return Err(StakeTableError::ValidatorNotFound(exit.validator));
                 }
 
+                // All checks ok, applying changes
                 self.validator_exits.insert(exit.validator);
                 self.validators.shift_remove(&exit.validator);
             },
@@ -372,6 +375,7 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
+                // All checks ok, applying changes
                 // This cannot overflow in practice
                 val.stake = val.stake.checked_add(amount).unwrap_or_else(|| {
                     panic!(
@@ -422,21 +426,12 @@ impl StakeTableState {
                     return Err(StakeTableError::InsufficientStake);
                 }
 
-                let new_delegator_stake =
-                    delegator_stake.checked_sub(amount).unwrap_or_else(|| {
-                        panic!(
-                            "delegator stake underflow: delegator={delegator}, \
-                             stake={delegator_stake}, amount={amount}"
-                        )
-                    });
+                // Can unwrap because check above passed
+                let new_delegator_stake = delegator_stake.checked_sub(amount).unwrap();
 
-                val.stake = val.stake.checked_sub(amount).unwrap_or_else(|| {
-                    panic!(
-                        "validator stake underflow: validator={validator}, stake={}, \
-                         amount={amount}",
-                        val.stake
-                    )
-                });
+                // Can unwrap because check above passed
+                // All checks ok, applying changes
+                val.stake = val.stake.checked_sub(amount).unwrap();
 
                 if new_delegator_stake.is_zero() {
                     val.delegators.remove(&delegator);
@@ -473,8 +468,10 @@ impl StakeTableState {
                     )));
                 }
 
+                // All checks ok, applying changes
                 self.used_bls_keys.insert(stake_table_key);
                 self.used_schnorr_keys.insert(state_ver_key.clone());
+                // Can unwrap because check above passed
                 let validator = self.validators.get_mut(&account).unwrap_or_else(|| {
                     panic!("validator {account} must exist after contains_key check")
                 });
@@ -517,9 +514,11 @@ impl StakeTableState {
                     ));
                 }
 
+                // All checks ok, applying changes
                 self.used_bls_keys.insert(stake_table_key);
                 self.used_schnorr_keys.insert(state_ver_key.clone());
 
+                // Can unwrap because check above passed
                 let validator = self.validators.get_mut(&account).unwrap_or_else(|| {
                     panic!("validator {account} must exist after contains_key check")
                 });
@@ -615,14 +614,7 @@ pub(crate) fn select_active_validator_set(
         return Err(StakeTableError::NoValidValidators);
     }
 
-    let maximum_stake = valid_validators
-        .values()
-        .map(|v| v.stake)
-        .max()
-        .ok_or_else(|| {
-            tracing::error!("Could not compute maximum stake from filtered validators");
-            StakeTableError::MissingMaximumStake
-        })?;
+    let maximum_stake = valid_validators.values().map(|v| v.stake).max().unwrap();
 
     let minimum_stake = maximum_stake
         .checked_div(U256::from(VID_TARGET_TOTAL_STAKE))
