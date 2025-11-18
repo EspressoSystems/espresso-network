@@ -21,7 +21,7 @@ use hotshot_types::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
     },
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use rand::Rng;
 use vbs::version::StaticVersionType;
@@ -266,8 +266,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let anchored_leaf = initializer.anchor_leaf;
         let instance_state = initializer.instance_state;
 
-        let (internal_tx, mut internal_rx) = internal_channel;
-        let (mut external_tx, mut external_rx) = external_channel;
+        let (internal_tx, internal_rx) = internal_channel;
+        let (mut external_tx, external_rx) = external_channel;
+
+        let mut internal_rx = internal_rx.new_receiver();
+
+        let mut external_rx = external_rx.new_receiver();
+
+        // Allow overflow on the internal channel as well. We don't want to block consensus if we
+        // have a slow receiver
+        internal_rx.set_overflow(true);
+        // Allow overflow on the external channel, otherwise sending to it may block.
+        external_rx.set_overflow(true);
 
         membership_coordinator
             .set_external_channel(external_rx.clone())
@@ -308,13 +318,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                     .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
             }
         }
-
-        // Allow overflow on the external channel, otherwise sending to it may block.
-        external_rx.set_overflow(true);
-
-        // Allow overflow on the internal channel as well. We don't want to block consensus if we
-        // have a slow receiver
-        internal_rx.set_overflow(true);
 
         // Get the validated state from the initializer or construct an incomplete one from the
         // block header.
@@ -367,6 +370,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 Arc::new(PayloadWithMetadata { payload, metadata }),
             );
         }
+        let high_qc_block_number = initializer.high_qc.data.block_number;
 
         let consensus = Consensus::new(
             validated_state_map,
@@ -391,6 +395,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let consensus = Arc::new(RwLock::new(consensus));
 
         if let Some(epoch) = epoch {
+            tracing::info!(
+                "Triggering catchup for epoch {} and next epoch {}",
+                epoch,
+                epoch + 1
+            );
             // trigger catchup for the current and next epoch if needed
             let _ = membership_coordinator
                 .membership_for_epoch(Some(epoch))
@@ -398,6 +407,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             let _ = membership_coordinator
                 .membership_for_epoch(Some(epoch + 1))
                 .await;
+            // If we already have an epoch root, we can trigger catchup for the epoch
+            // which that root applies to.
+            if let Some(high_qc_block_number) = high_qc_block_number {
+                if is_ge_epoch_root(high_qc_block_number, config.epoch_height) {
+                    let _ = membership_coordinator
+                        .stake_table_for_epoch(Some(epoch + 2))
+                        .await;
+                }
+            }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
                 tracing::error!("Writing DRB result for epoch {}", epoch + 1);

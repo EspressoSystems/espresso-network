@@ -374,7 +374,7 @@ pub struct FakeSolverApiDescription {
 impl Default for TimingData {
     fn default() -> Self {
         Self {
-            next_view_timeout: 4000,
+            next_view_timeout: 6000,
             builder_timeout: Duration::from_millis(500),
             data_request_delay: Duration::from_millis(200),
             secondary_network_delay: Duration::from_millis(1000),
@@ -454,14 +454,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
                     // Increase the duration to get the expected number of successful views.
-                    duration: Duration::new(340, 0),
+                    duration: Duration::from_secs(340),
                 },
             ),
             overall_safety_properties: OverallSafetyPropertiesDescription {
                 ..Default::default()
             },
             timing_data: TimingData {
-                next_view_timeout: 5000,
+                next_view_timeout: 6000,
                 ..TimingData::default()
             },
             view_sync_properties: ViewSyncTaskDescription::Threshold(
@@ -533,8 +533,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
             txn_description: TxnTaskDescription::RoundRobinTimeBased(Duration::from_millis(100)),
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                 TimeBasedCompletionTaskDescription {
-                    // TODO ED Put a configurable time here - 10 seconds for now
-                    duration: Duration::from_millis(10000),
+                    duration: Duration::from_secs(120),
                 },
             ),
             unreliable_network: None,
