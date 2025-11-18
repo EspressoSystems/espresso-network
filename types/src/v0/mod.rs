@@ -21,6 +21,8 @@ mod utils;
 pub use header::Header;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
+// export reward types for staking-ui-service
+pub use impls::reward::{ComputedRewards, RewardDistributor};
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;
 #[allow(unused_imports)]
@@ -201,7 +203,7 @@ pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
-pub use self::impls::{NodeState, RewardDistributor, UpgradeMap, ValidatedState, ValidatorMap};
+pub use self::impls::{NodeState, UpgradeMap, ValidatedState, ValidatorMap};
 pub use crate::{
     v0::impls::{StakeTableHash, StakeTableState},
     v0_1::{
