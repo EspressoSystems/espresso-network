@@ -326,7 +326,6 @@ contract GovernanceHandler is Test {
     uint256 public revokeRoleCalls;
     uint256 public pauseCalls;
     uint256 public unpauseCalls;
-    uint256 public failedCalls;
 
     constructor(StakeTableV2 _proxy, address _initialAdmin) {
         proxy = _proxy;
@@ -344,15 +343,10 @@ contract GovernanceHandler is Test {
         newOwner = _boundAddress(newOwner);
 
         vm.startPrank(currentAdmin);
-
-        try proxy.transferOwnership(newOwner) {
-            currentAdmin = newOwner;
-            _addActor(newOwner);
-            transferOwnershipCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.transferOwnership(newOwner);
+        currentAdmin = newOwner;
+        _addActor(newOwner);
+        transferOwnershipCalls++;
         vm.stopPrank();
     }
 
@@ -361,15 +355,10 @@ contract GovernanceHandler is Test {
         newAdmin = _boundAddress(newAdmin);
 
         vm.startPrank(currentAdmin);
-
-        try proxy.grantRole(proxy.DEFAULT_ADMIN_ROLE(), newAdmin) {
-            currentAdmin = newAdmin;
-            _addActor(newAdmin);
-            grantRoleCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.grantRole(proxy.DEFAULT_ADMIN_ROLE(), newAdmin);
+        currentAdmin = newAdmin;
+        _addActor(newAdmin);
+        grantRoleCalls++;
         vm.stopPrank();
     }
 
@@ -378,35 +367,27 @@ contract GovernanceHandler is Test {
         newPauser = _boundAddress(newPauser);
 
         vm.startPrank(currentAdmin);
-
-        try proxy.grantRole(proxy.PAUSER_ROLE(), newPauser) {
-            _addActor(newPauser);
-            grantRoleCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.grantRole(proxy.PAUSER_ROLE(), newPauser);
+        _addActor(newPauser);
+        grantRoleCalls++;
         vm.stopPrank();
     }
 
     /// @notice Fuzzed action: Revoke PAUSER_ROLE
+    /// @dev Should always succeed when called by admin (even if actor doesn't have role)
     function revokePauserRole(uint256 actorIndexSeed) public {
         if (actors.length == 0) return;
 
         address actor = actors[actorIndexSeed % actors.length];
 
         vm.startPrank(currentAdmin);
-
-        try proxy.revokeRole(proxy.PAUSER_ROLE(), actor) {
-            revokeRoleCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.revokeRole(proxy.PAUSER_ROLE(), actor);
+        revokeRoleCalls++;
         vm.stopPrank();
     }
 
     /// @notice Fuzzed action: Attempt unauthorized transfer
+    /// @dev Should always fail - verifies access control
     function unauthorizedTransferOwnership(uint256 actorIndexSeed, address newOwner) public {
         if (actors.length == 0) return;
 
@@ -417,47 +398,37 @@ contract GovernanceHandler is Test {
         if (actor == currentAdmin) return;
 
         vm.startPrank(actor);
-
-        try proxy.transferOwnership(newOwner) {
-            // Should never succeed
-            revert("Unauthorized transfer succeeded!");
-        } catch {
-            // Expected to fail
-            failedCalls++;
-        }
-
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                actor,
+                proxy.DEFAULT_ADMIN_ROLE()
+            )
+        );
+        proxy.transferOwnership(newOwner);
         vm.stopPrank();
     }
 
     /// @notice Fuzzed action: Transfer ownership to self (tests idempotency)
-    /// @dev This tests the edge case where self-transfer should not break state
+    /// @dev Should always succeed - tests that self-transfer doesn't break state
     function transferOwnershipToSelf() public {
         vm.startPrank(currentAdmin);
-
-        try proxy.transferOwnership(currentAdmin) {
-            transferOwnershipCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.transferOwnership(currentAdmin);
+        transferOwnershipCalls++;
         vm.stopPrank();
     }
 
     /// @notice Fuzzed action: Chain of transfers
+    /// @dev Should always succeed - tests multiple sequential transfers
     function chainOfTransfers(address[] memory newOwners) public {
         vm.startPrank(currentAdmin);
 
         for (uint256 i = 0; i < newOwners.length && i < 5; i++) {
             address newOwner = _boundAddress(newOwners[i]);
-
-            try proxy.transferOwnership(newOwner) {
-                currentAdmin = newOwner;
-                _addActor(newOwner);
-                transferOwnershipCalls++;
-            } catch {
-                failedCalls++;
-                break;
-            }
+            proxy.transferOwnership(newOwner);
+            currentAdmin = newOwner;
+            _addActor(newOwner);
+            transferOwnershipCalls++;
 
             vm.stopPrank();
             vm.startPrank(currentAdmin);
@@ -467,44 +438,38 @@ contract GovernanceHandler is Test {
     }
 
     /// @notice Fuzzed action: Pause contract via pauser
+    /// @dev Only pauses if not already paused (pause() reverts if already paused)
     function pauseContract(uint256 actorIndexSeed) public {
         if (actors.length == 0) return;
 
         address actor = actors[actorIndexSeed % actors.length];
         bytes32 pauserRole = proxy.PAUSER_ROLE();
 
-        // Only try if actor has pauser role
+        // Only try if actor has pauser role and contract is not paused
         if (!proxy.hasRole(pauserRole, actor)) return;
+        if (proxy.paused()) return;
 
         vm.startPrank(actor);
-
-        try proxy.pause() {
-            pauseCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.pause();
+        pauseCalls++;
         vm.stopPrank();
     }
 
     /// @notice Fuzzed action: Unpause contract via pauser
+    /// @dev Only unpauses if currently paused (unpause() reverts if not paused)
     function unpauseContract(uint256 actorIndexSeed) public {
         if (actors.length == 0) return;
 
         address actor = actors[actorIndexSeed % actors.length];
         bytes32 pauserRole = proxy.PAUSER_ROLE();
 
-        // Only try if actor has pauser role
+        // Only try if actor has pauser role and contract is paused
         if (!proxy.hasRole(pauserRole, actor)) return;
+        if (!proxy.paused()) return;
 
         vm.startPrank(actor);
-
-        try proxy.unpause() {
-            unpauseCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.unpause();
+        unpauseCalls++;
         vm.stopPrank();
     }
 
@@ -513,14 +478,9 @@ contract GovernanceHandler is Test {
         newPauser = _boundAddress(newPauser);
 
         vm.startPrank(currentAdmin);
-
-        try proxy.grantRole(proxy.PAUSER_ROLE(), newPauser) {
-            _addActor(newPauser);
-            grantRoleCalls++;
-        } catch {
-            failedCalls++;
-        }
-
+        proxy.grantRole(proxy.PAUSER_ROLE(), newPauser);
+        _addActor(newPauser);
+        grantRoleCalls++;
         vm.stopPrank();
     }
 
@@ -539,15 +499,12 @@ contract GovernanceHandler is Test {
         target = _boundAddress(target);
 
         vm.startPrank(pauser);
-
-        try proxy.grantRole(adminRole, target) {
-            // Should never succeed!
-            revert("SECURITY BREACH: Pauser granted admin role!");
-        } catch {
-            // Expected to fail
-            failedCalls++;
-        }
-
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, pauser, adminRole
+            )
+        );
+        proxy.grantRole(adminRole, target);
         vm.stopPrank();
     }
 
@@ -576,36 +533,5 @@ contract GovernanceHandler is Test {
 
     function getActors() external view returns (address[] memory) {
         return actors;
-    }
-}
-
-/// @title Additional Invariant Tests (Assertion-Based)
-/// @notice Additional invariant checks that can be manually called in tests
-contract StakeTableV2GovernanceInvariantAssertions is Test {
-    /// @notice Check all governance invariants at once
-    function checkAllGovernanceInvariants(StakeTableV2 proxy) internal view {
-        _invariant_ownerHasAdminRole(proxy);
-        _invariant_ownerIsNotZero(proxy);
-        _invariant_adminIsOwner(proxy);
-    }
-
-    function _invariant_ownerHasAdminRole(StakeTableV2 proxy) private view {
-        address currentOwner = proxy.owner();
-        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
-        require(
-            proxy.hasRole(adminRole, currentOwner),
-            "INVARIANT: owner() must have DEFAULT_ADMIN_ROLE"
-        );
-    }
-
-    function _invariant_ownerIsNotZero(StakeTableV2 proxy) private view {
-        require(proxy.owner() != address(0), "INVARIANT: owner() must not be zero");
-    }
-
-    function _invariant_adminIsOwner(StakeTableV2 proxy) private view {
-        // Anyone with DEFAULT_ADMIN_ROLE must be the owner
-        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
-        address currentOwner = proxy.owner();
-        require(proxy.hasRole(adminRole, currentOwner), "INVARIANT: owner must have admin role");
     }
 }
