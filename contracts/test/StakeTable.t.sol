@@ -936,6 +936,21 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         assertEq(st.exitEscrowPeriod(), validEscrowPeriod);
     }
+
+    function test_renounceOwnership_Reverts() public {
+        vm.prank(admin);
+        vm.expectRevert(S.OwnershipCannotBeRenounced.selector);
+        stakeTable.renounceOwnership();
+    }
+
+    function test_renounceOwnership_ByNonOwnerReverts() public {
+        address nonOwner = makeAddr("nonOwner");
+        vm.prank(nonOwner);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
+        );
+        stakeTable.renounceOwnership();
+    }
 }
 
 contract StakeTableV2Test is S {

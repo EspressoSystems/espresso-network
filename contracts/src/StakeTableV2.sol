@@ -237,11 +237,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
     /// Attempted to revoke DEFAULT_ADMIN_ROLE which would break single-admin governance
-    error CannotRevokeDefaultAdmin();
+    error DefaultAdminCannotBeRevoked();
     /// Attempted to renounce DEFAULT_ADMIN_ROLE which would break single-admin governance
-    error CannotRenounceDefaultAdmin();
-    /// Attempted to renounce ownership which would break single-admin governance
-    error CannotRenounceOwnership();
+    error DefaultAdminCannotBeRenounced();
 
     /// No undelegation exists for the given validator and delegator
     error NoUndelegationFound();
@@ -355,7 +353,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
     function revokeRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
-            revert CannotRevokeDefaultAdmin();
+            revert DefaultAdminCannotBeRevoked();
         }
         super.revokeRole(role, account);
     }
@@ -363,14 +361,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
     function renounceRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
-            revert CannotRenounceDefaultAdmin();
+            revert DefaultAdminCannotBeRenounced();
         }
         super.renounceRole(role, account);
-    }
-
-    /// @notice Prevent renouncing ownership to preserve the single-admin invariant.
-    function renounceOwnership() public virtual override {
-        revert CannotRenounceOwnership();
     }
 
     /// @notice Withdraw previously delegated funds after a validator has exited

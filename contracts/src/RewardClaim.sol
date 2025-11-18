@@ -79,9 +79,6 @@ contract RewardClaim is
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
-    /// @notice The proxy updates the implementation address
-    event Upgrade(address implementation);
-
     /// @notice The daily limit is updated
     event DailyLimitUpdated(uint256 oldLimit, uint256 newLimit);
 
@@ -108,6 +105,12 @@ contract RewardClaim is
 
     /// @notice ESP token address is zero during initialization
     error ZeroTokenAddress();
+
+    /// @notice Attempted to renounce DEFAULT_ADMIN_ROLE which would break governance
+    error DefaultAdminCannotBeRenounced();
+
+    /// @notice Attempted to revoke DEFAULT_ADMIN_ROLE which would break governance
+    error DefaultAdminCannotBeRevoked();
 
     constructor() {
         _disableInitializers();
@@ -248,13 +251,34 @@ contract RewardClaim is
         }
     }
 
+    /// @notice only the timelock can authorize an upgrade
     function _authorizeUpgrade(address newImplementation)
         internal
         virtual
         override
         onlyRole(DEFAULT_ADMIN_ROLE)
+    // solhint-disable-next-line no-empty-blocks
     {
-        emit Upgrade(newImplementation);
+        // Only the timelock can authorize upgrades
+        // No additional checks needed beyond the onlyRole modifier
+    }
+
+    /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve governance control
+    /// @dev Override renounceRole() to revert when attempting to renounce DEFAULT_ADMIN_ROLE,
+    /// preventing accidental or malicious admin role renunciation
+    function renounceRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRenounced();
+        }
+        super.renounceRole(role, account);
+    }
+
+    /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    function revokeRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRevoked();
+        }
+        super.revokeRole(role, account);
     }
 
     function _verifyAuthRoot(uint256 lifetimeRewards, bytes calldata authData)

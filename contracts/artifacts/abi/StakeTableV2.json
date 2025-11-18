@@ -1837,21 +1837,6 @@
   },
   {
     "type": "error",
-    "name": "CannotRenounceDefaultAdmin",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "CannotRenounceOwnership",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "CannotRevokeDefaultAdmin",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "CommissionAlreadyInitialized",
     "inputs": [
       {
@@ -1874,6 +1859,16 @@
   {
     "type": "error",
     "name": "CommissionUpdateTooSoon",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DefaultAdminCannotBeRenounced",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DefaultAdminCannotBeRevoked",
     "inputs": []
   },
   {
@@ -2015,6 +2010,11 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
   },
   {
     "type": "error",

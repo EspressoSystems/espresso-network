@@ -470,7 +470,7 @@ contract StakeTableV2GovernanceTest is Test {
 
     function test_RenounceOwnership_Reverts() public {
         vm.startPrank(initialOwner);
-        vm.expectRevert(StakeTableV2.CannotRenounceOwnership.selector);
+        vm.expectRevert(S.OwnershipCannotBeRenounced.selector);
         proxy.renounceOwnership();
         vm.stopPrank();
     }
@@ -479,7 +479,7 @@ contract StakeTableV2GovernanceTest is Test {
         bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
 
         vm.startPrank(initialOwner);
-        vm.expectRevert(StakeTableV2.CannotRevokeDefaultAdmin.selector);
+        vm.expectRevert(StakeTableV2.DefaultAdminCannotBeRevoked.selector);
         proxy.revokeRole(adminRole, initialOwner);
         vm.stopPrank();
     }
@@ -488,7 +488,7 @@ contract StakeTableV2GovernanceTest is Test {
         bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
 
         vm.startPrank(initialOwner);
-        vm.expectRevert(StakeTableV2.CannotRenounceDefaultAdmin.selector);
+        vm.expectRevert(StakeTableV2.DefaultAdminCannotBeRenounced.selector);
         proxy.renounceRole(adminRole, initialOwner);
         vm.stopPrank();
     }
@@ -497,17 +497,17 @@ contract StakeTableV2GovernanceTest is Test {
         bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
 
         vm.startPrank(initialOwner);
-        vm.expectRevert(StakeTableV2.CannotRevokeDefaultAdmin.selector);
+        vm.expectRevert(StakeTableV2.DefaultAdminCannotBeRevoked.selector);
         proxy.revokeRole(adminRole, initialOwner);
         vm.stopPrank();
 
         vm.startPrank(initialOwner);
-        vm.expectRevert(StakeTableV2.CannotRenounceDefaultAdmin.selector);
+        vm.expectRevert(StakeTableV2.DefaultAdminCannotBeRenounced.selector);
         proxy.renounceRole(adminRole, initialOwner);
         vm.stopPrank();
 
         vm.startPrank(initialOwner);
-        vm.expectRevert(StakeTableV2.CannotRenounceOwnership.selector);
+        vm.expectRevert(S.OwnershipCannotBeRenounced.selector);
         proxy.renounceOwnership();
         vm.stopPrank();
     }
@@ -541,7 +541,7 @@ contract StakeTableV2GovernanceTest is Test {
         vm.stopPrank();
 
         vm.startPrank(notAdmin);
-        vm.expectRevert(StakeTableV2.CannotRevokeDefaultAdmin.selector);
+        vm.expectRevert(StakeTableV2.DefaultAdminCannotBeRevoked.selector);
         proxy.revokeRole(adminRole, initialOwner);
         vm.stopPrank();
     }
@@ -555,7 +555,7 @@ contract StakeTableV2GovernanceTest is Test {
         vm.stopPrank();
 
         vm.startPrank(other);
-        vm.expectRevert(StakeTableV2.CannotRenounceDefaultAdmin.selector);
+        vm.expectRevert(StakeTableV2.DefaultAdminCannotBeRenounced.selector);
         proxy.renounceRole(adminRole, other);
         vm.stopPrank();
     }

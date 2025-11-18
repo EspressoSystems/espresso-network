@@ -72,4 +72,65 @@ contract RewardClaimAdminTest is RewardClaimTest {
     function test_SetDailyLimit_MaxPercentageIs5Percent() public view {
         assertEq(rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS(), 500);
     }
+
+    function test_RenounceRole_RevertsForDefaultAdminRole() public {
+        bytes32 adminRole = rewardClaim.DEFAULT_ADMIN_ROLE();
+        vm.prank(owner);
+        vm.expectRevert(RewardClaim.DefaultAdminCannotBeRenounced.selector);
+        rewardClaim.renounceRole(adminRole, owner);
+    }
+
+    function test_RenounceRole_SucceedsForOtherRoles() public {
+        bytes32 pauserRole = rewardClaim.PAUSER_ROLE();
+        address pauser = makeAddr("pauser");
+
+        // Grant pauser role to a new address
+        vm.prank(owner);
+        rewardClaim.grantRole(pauserRole, pauser);
+
+        // Pauser can renounce their own role
+        vm.prank(pauser);
+        rewardClaim.renounceRole(pauserRole, pauser);
+
+        // Verify role was renounced
+        assertFalse(rewardClaim.hasRole(pauserRole, pauser));
+    }
+
+    function test_RenouncePauserRole_ByNonRoleHolderReverts() public {
+        bytes32 pauserRole = rewardClaim.PAUSER_ROLE();
+        address attacker = makeAddr("attacker");
+        // pauser has PAUSER_ROLE (from setup), attacker does not
+        vm.prank(attacker);
+        vm.expectRevert(IAccessControl.AccessControlBadConfirmation.selector);
+        // Try to renounce pauser's role (attacker doesn't have this role)
+        rewardClaim.renounceRole(pauserRole, pauser);
+    }
+
+    function test_RenounceRole_DefaultAdminRoleRevertsEvenForNonOwner() public {
+        bytes32 adminRole = rewardClaim.DEFAULT_ADMIN_ROLE();
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        // Even non-owners get DefaultAdminCannotBeRenounced, not AccessControlUnauthorizedAccount
+        // because the DEFAULT_ADMIN_ROLE check happens before authorization check
+        vm.expectRevert(RewardClaim.DefaultAdminCannotBeRenounced.selector);
+        rewardClaim.renounceRole(adminRole, owner);
+    }
+
+    function test_RevokeRole_RevertsForDefaultAdminRole() public {
+        bytes32 adminRole = rewardClaim.DEFAULT_ADMIN_ROLE();
+        vm.prank(owner);
+        vm.expectRevert(RewardClaim.DefaultAdminCannotBeRevoked.selector);
+        rewardClaim.revokeRole(adminRole, owner);
+    }
+
+    function test_RevokeRole_SucceedsForOtherRoles() public {
+        bytes32 pauserRole = rewardClaim.PAUSER_ROLE();
+        address pauserAddress = makeAddr("pauserAddress");
+        vm.startPrank(owner);
+        rewardClaim.grantRole(pauserRole, pauserAddress);
+        assertTrue(rewardClaim.hasRole(pauserRole, pauserAddress));
+        rewardClaim.revokeRole(pauserRole, pauserAddress);
+        vm.stopPrank();
+        assertFalse(rewardClaim.hasRole(pauserRole, pauserAddress));
+    }
 }

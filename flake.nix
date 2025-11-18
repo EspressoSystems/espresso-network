@@ -68,7 +68,7 @@
       solhintPkg = { buildNpmPackage, fetchFromGitHub }:
         buildNpmPackage rec {
           pname = "solhint";
-          version = "5.05"; # TODO: normally semver, tag screwed up
+          version = "6.0.1";
           src = fetchFromGitHub {
             owner = "protofire";
             repo = pname;
