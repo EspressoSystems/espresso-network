@@ -6,7 +6,7 @@ mod fee_info;
 mod header;
 mod instance_state;
 mod l1;
-mod reward;
+pub mod reward;
 mod stake_table;
 mod state;
 mod transaction;
