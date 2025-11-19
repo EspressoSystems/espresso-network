@@ -27,6 +27,7 @@ pub struct TransferOwnershipParams {
     pub safe_addr: Address,
     pub use_hardware_wallet: bool,
     pub dry_run: bool,
+    pub wait_for_execution: bool,
 }
 
 /// Call the transfer ownership script to transfer ownership of a contract to a new owner
@@ -97,7 +98,7 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
 
     let owner_addr = proxy_instance.owner().call().await?;
 
-    if !params.dry_run && !crate::is_contract(provider, owner_addr).await? {
+    if !params.dry_run && !crate::is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
         anyhow::bail!(
             "Proxy owner is not a contract. Expected: {owner_addr:#x}. Use --dry-run to skip this \
@@ -117,7 +118,10 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
     if !params.dry_run {
         tracing::info!("Transfer Ownership proposal sent to {}", contract);
         tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", params.safe_addr);
-        // IDEA: add a function to wait for the proposal to be executed
+
+        if params.wait_for_execution {
+            wait_for_ownership_transfer(&provider, proxy_addr, params.new_owner, None).await?;
+        }
     } else {
         tracing::info!("Dry run, skipping proposal");
     }
@@ -221,6 +225,69 @@ pub async fn verify_node_js_files() -> Result<()> {
     Ok(())
 }
 
+/// Wait for a multisig upgrade to be executed by polling the implementation address
+///
+/// Polls every `poll_interval_secs` seconds (default 12) without timeout until the implementation address changes
+pub async fn wait_for_upgrade_execution(
+    provider: impl Provider,
+    proxy_addr: Address,
+    expected_impl_addr: Address,
+    poll_interval_secs: Option<u64>,
+) -> Result<()> {
+    use std::{thread::sleep, time::Duration};
+
+    let poll_interval = poll_interval_secs.unwrap_or(12);
+    tracing::info!(
+        "Waiting for multisig upgrade to be executed. Proxy: {proxy_addr:#x}, Expected \
+         implementation: {expected_impl_addr:#x}"
+    );
+    tracing::info!("Polling every {} seconds (no timeout)...", poll_interval);
+
+    loop {
+        let current_impl = crate::read_proxy_impl(&provider, proxy_addr).await?;
+
+        if current_impl == expected_impl_addr {
+            tracing::info!("Upgrade executed! Implementation is now {current_impl:#x}");
+            return Ok(());
+        }
+
+        tracing::info!("Current implementation: {current_impl:#x}, waiting...");
+        sleep(Duration::from_secs(poll_interval));
+    }
+}
+
+/// Wait for ownership transfer to be executed by polling the owner address
+///
+/// Polls every `poll_interval_secs` seconds (default 12) without timeout until the owner address changes
+pub async fn wait_for_ownership_transfer(
+    provider: impl Provider,
+    proxy_addr: Address,
+    expected_owner: Address,
+    poll_interval_secs: Option<u64>,
+) -> Result<()> {
+    use std::{thread::sleep, time::Duration};
+
+    let poll_interval = poll_interval_secs.unwrap_or(12);
+    tracing::info!(
+        "Waiting for ownership transfer to be executed. Proxy: {proxy_addr:#x}, Expected owner: \
+         {expected_owner:#x}"
+    );
+    tracing::info!("Polling every {} seconds (no timeout)...", poll_interval);
+
+    loop {
+        let proxy_instance = OwnableUpgradeable::new(proxy_addr, &provider);
+        let current_owner = proxy_instance.owner().call().await?;
+
+        if current_owner == expected_owner {
+            tracing::info!("Ownership transfer executed! Owner is now {current_owner:#x}");
+            return Ok(());
+        }
+
+        tracing::info!("Current owner: {current_owner:#x}, waiting...");
+        sleep(Duration::from_secs(poll_interval));
+    }
+}
+
 /// Parameters for upgrading LightClient to V2
 pub struct LightClientV2UpgradeParams {
     pub blocks_per_epoch: u64,
@@ -244,6 +311,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     is_mock: bool,
     rpc_url: String,
     dry_run: Option<bool>,
+    wait_for_execution: bool,
 ) -> Result<String> {
     let expected_major_version: u8 = 2;
     let dry_run = dry_run.unwrap_or_else(|| {
@@ -368,8 +436,11 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 "LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
                 owner_addr
             );
+
+        if wait_for_execution {
+            wait_for_upgrade_execution(&provider, proxy_addr, lcv2_addr, None).await?;
+        }
     }
-    // IDEA: add a function to wait for the proposal to be executed
 
     Ok(result)
 }
@@ -390,6 +461,7 @@ pub async fn upgrade_light_client_v3_multisig_owner(
     is_mock: bool,
     rpc_url: String,
     dry_run: Option<bool>,
+    wait_for_execution: bool,
 ) -> Result<String> {
     let expected_major_version: u8 = 3;
     let dry_run = dry_run.unwrap_or_else(|| {
@@ -509,8 +581,11 @@ pub async fn upgrade_light_client_v3_multisig_owner(
                 "LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
                 owner_addr
             );
+
+        if wait_for_execution {
+            wait_for_upgrade_execution(&provider, proxy_addr, lcv3_addr, None).await?;
+        }
     }
-    // IDEA: add a function to wait for the proposal to be executed
 
     Ok(result)
 }
@@ -528,6 +603,7 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     contracts: &mut Contracts,
     rpc_url: String,
     dry_run: Option<bool>,
+    wait_for_execution: bool,
 ) -> Result<String> {
     let dry_run = dry_run.unwrap_or_else(|| {
         tracing::warn!("Dry run not specified, defaulting to false");
@@ -590,6 +666,10 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
                  sign the proposal: https://app.safe.global/transactions/queue?safe={}",
                 owner_addr
             );
+
+        if wait_for_execution {
+            wait_for_upgrade_execution(&provider, proxy_addr, esp_token_v2_addr, None).await?;
+        }
     }
 
     Ok(result)
@@ -611,6 +691,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     multisig_address: Address,
     pauser: Address,
     dry_run: Option<bool>,
+    wait_for_execution: bool,
 ) -> Result<()> {
     tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
     let dry_run = dry_run.unwrap_or(false);
@@ -656,6 +737,10 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     .context("Calling upgrade proxy script failed")?;
 
     tracing::info!("StakeTableProxy upgrade proposal sent");
+
+    if !dry_run && wait_for_execution {
+        wait_for_upgrade_execution(&provider, proxy_addr, stake_table_v2_addr, None).await?;
+    }
 
     Ok(())
 }
