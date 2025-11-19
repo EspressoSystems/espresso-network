@@ -21,7 +21,7 @@ mod common;
 #[rstest::rstest]
 #[case::v1(StakeTableContractVersion::V1)]
 #[case::v2(StakeTableContractVersion::V2)]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn stake_table_versions(#[case] _version: StakeTableContractVersion) {}
 
 const TEST_MNEMONIC: &str = "wool upset allow cheap purity craft hat cute below useful reject door";
@@ -128,6 +128,8 @@ async fn test_cli_register_validator(
                 .arg(system.state_private_key_str()?)
                 .arg("--commission")
                 .arg("12.34")
+                .arg("--metadata-uri")
+                .arg("https://example.com/metadata")
                 .assert()
                 .success()
                 .stdout(str::contains("ValidatorRegistered"));
@@ -140,6 +142,8 @@ async fn test_cli_register_validator(
                 .arg(system.state_private_key_str()?)
                 .arg("--commission")
                 .arg("12.34")
+                .arg("--metadata-uri")
+                .arg("https://example.com/metadata")
                 .assert()
                 .failure()
                 .stderr(str::contains("zero Ethereum balance"));
@@ -486,6 +490,71 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
     Ok(())
 }
 
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_claim_rewards() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    let reward_balance = U256::from(1000000);
+
+    let balance_before = system.balance(system.deployer_address).await?;
+
+    let espresso_url = system.setup_reward_claim_mock(reward_balance).await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("--espresso-url")
+        .arg(espresso_url.to_string())
+        .arg("claim-rewards")
+        .assert()
+        .success()
+        .stdout(str::contains("RewardsClaimed"));
+
+    let balance_after = system.balance(system.deployer_address).await?;
+
+    assert_eq!(balance_after, balance_before + reward_balance,);
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_unclaimed_rewards() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    let reward_balance = U256::from(1000000);
+
+    let espresso_url = system.setup_reward_claim_mock(reward_balance).await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Check unclaimed rewards before claiming
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("--espresso-url")
+        .arg(espresso_url.to_string())
+        .arg("unclaimed-rewards")
+        .assert()
+        .success()
+        .stdout(str::contains("0.000000000001 ESP"));
+
+    // Claim the rewards
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("--espresso-url")
+        .arg(espresso_url.to_string())
+        .arg("claim-rewards")
+        .assert()
+        .success()
+        .stdout(str::contains("RewardsClaimed"));
+
+    // Check unclaimed rewards after claiming (should be 0)
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("--espresso-url")
+        .arg(espresso_url.to_string())
+        .arg("unclaimed-rewards")
+        .assert()
+        .success()
+        .stdout(str::contains("0 ESP"));
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
@@ -626,11 +695,93 @@ async fn test_cli_delegate_ledger() -> Result<()> {
     Ok(())
 }
 
+#[test_log::test(rstest::rstest)]
+#[case::empty("", "relative URL without a base")]
+#[case::too_long(&format!("https://example.com/{}", "a".repeat(2030)), "metadata URI cannot exceed 2048 bytes")]
+#[tokio::test]
+async fn test_cli_register_validator_metadata_uri_validation(
+    #[case] uri: &str,
+    #[case] expected_error: &str,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--metadata-uri")
+        .arg(uri)
+        .assert()
+        .failure()
+        .stderr(str::contains(expected_error));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::empty("", "relative URL without a base")]
+#[case::too_long(&format!("https://example.com/{}", "a".repeat(2030)), "metadata URI cannot exceed 2048 bytes")]
+#[tokio::test]
+async fn test_cli_update_metadata_uri_validation(
+    #[case] uri: &str,
+    #[case] expected_error: &str,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(uri)
+        .assert()
+        .failure()
+        .stderr(str::contains(expected_error));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_metadata_uri() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let updated_uri = "https://example.com/updated-metadata.json";
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(updated_uri)
+        .assert()
+        .success()
+        .stdout(str::contains("MetadataUriUpdated"))
+        .stdout(str::contains(system.deployer_address.to_string()))
+        .stdout(str::contains(updated_uri));
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_all_operations_manual_inspect(
     #[case] version: StakeTableContractVersion,
 ) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
+
+    // Setup reward claim mock early to avoid nonce synchronization issues. The mock setup uses
+    // system.provider which gets out of sync if we do transactions through the CLI.
+    let espresso_url = if matches!(version, StakeTableContractVersion::V2) {
+        let reward_balance = parse_ether("1.234")?;
+        let url = system.setup_reward_claim_mock(reward_balance).await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        Some(url)
+    } else {
+        None
+    };
 
     let output = system
         .cmd(Signer::Mnemonic)
@@ -641,6 +792,8 @@ async fn test_cli_all_operations_manual_inspect(
         .arg(system.state_private_key_str()?)
         .arg("--commission")
         .arg("12.34")
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata")
         .assert()
         .success()
         .get_output()
@@ -770,6 +923,44 @@ async fn test_cli_all_operations_manual_inspect(
         .stdout
         .clone();
     println!("{}", String::from_utf8_lossy(&output));
+
+    if let Some(espresso_url) = espresso_url {
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("--espresso-url")
+            .arg(espresso_url.to_string())
+            .arg("unclaimed-rewards")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("--espresso-url")
+            .arg(espresso_url.to_string())
+            .arg("claim-rewards")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("--espresso-url")
+            .arg(espresso_url.to_string())
+            .arg("claim-rewards")
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+    }
 
     Ok(())
 }
