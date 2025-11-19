@@ -306,8 +306,34 @@ opt-level = 0
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
+
 [profile.test.package.jf-merkle-tree]
 opt-level = 3
+[profile.test.package.jf-merkle-tree-compat]
+opt-level = 3
+[profile.test.package.jf-advz]
+opt-level = 3
+[profile.test.package.jf-commitment]
+opt-level = 3
+[profile.test.package.jf-crhf]
+opt-level = 3
+[profile.test.package.jf-pcs]
+opt-level = 3
+[profile.test.package.jf-plonk]
+opt-level = 3
+[profile.test.package.jf-poseidon2]
+opt-level = 3
+[profile.test.package.jf-prf]
+opt-level = 3
+[profile.test.package.jf-relation]
+opt-level = 3
+[profile.test.package.jf-rescue]
+opt-level = 3
+[profile.test.package.jf-signature]
+opt-level = 3
+[profile.test.package.jf-utils]
+opt-level = 3
+
 [profile.test.package.ark-bls12-377]
 opt-level = 3
 [profile.test.package.ark-bls12-381]
@@ -347,8 +373,6 @@ opt-level = 3
 [profile.test.package.ark-snark]
 opt-level = 3
 [profile.test.package.ark-srs]
-opt-level = 3
-[profile.test.package.ark-stats]
 opt-level = 3
 [profile.test.package.ark-std]
 opt-level = 3
