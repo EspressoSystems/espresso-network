@@ -15,14 +15,17 @@ contract LightClientArbitrumV2Test is Test {
     MockArbSys mockArbsys;
 
     function setUp() public {
-        vm.createSelectFork("https://arb1.arbitrum.io/rpc");
+        try vm.createSelectFork("https://arbitrum-one-rpc.publicnode.com") { }
+        catch {
+            vm.createSelectFork("https://arb1.arbitrum.io/rpc");
+        }
         mockArbsys = new MockArbSys();
         vm.etch(address(100), address(mockArbsys).code); // Replace address(100) with mock
         // implementation
         lc = new LightClientArbitrumV2();
     }
 
-    function testCurrentBlockNumber() public view {
+    function test_Network_CurrentBlockNumber() public view {
         assertNotEq(lc.currentBlockNumber(), block.number);
         assertEq(lc.currentBlockNumber(), ArbSys(address(uint160(100))).arbBlockNumber());
     }
