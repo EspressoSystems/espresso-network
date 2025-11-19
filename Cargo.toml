@@ -308,6 +308,50 @@ opt-level = 0
 opt-level = 3
 [profile.test.package.jf-merkle-tree]
 opt-level = 3
+[profile.test.package.ark-bls12-377]
+opt-level = 3
+[profile.test.package.ark-bls12-381]
+opt-level = 3
+[profile.test.package.ark-bn254]
+opt-level = 3
+[profile.test.package.ark-bw6-761]
+opt-level = 3
+[profile.test.package.ark-crypto-primitives]
+opt-level = 3
+[profile.test.package.ark-crypto-primitives-macros]
+opt-level = 3
+[profile.test.package.ark-ec]
+opt-level = 3
+[profile.test.package.ark-ed-on-bls12-377]
+opt-level = 3
+[profile.test.package.ark-ed-on-bls12-381]
+opt-level = 3
+[profile.test.package.ark-ed-on-bn254]
+opt-level = 3
+[profile.test.package.ark-ff]
+opt-level = 3
+[profile.test.package.ark-ff-asm]
+opt-level = 3
+[profile.test.package.ark-ff-macros]
+opt-level = 3
+[profile.test.package.ark-poly]
+opt-level = 3
+[profile.test.package.ark-poly-commit]
+opt-level = 3
+[profile.test.package.ark-relations]
+opt-level = 3
+[profile.test.package.ark-serialize]
+opt-level = 3
+[profile.test.package.ark-serialize-derive]
+opt-level = 3
+[profile.test.package.ark-snark]
+opt-level = 3
+[profile.test.package.ark-srs]
+opt-level = 3
+[profile.test.package.ark-stats]
+opt-level = 3
+[profile.test.package.ark-std]
+opt-level = 3
 
 # Geared towards building our docker images for local development
 # - Compile quickly
