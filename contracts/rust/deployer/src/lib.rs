@@ -1239,6 +1239,16 @@ pub async fn transfer_ownership(
                 .get_receipt()
                 .await?
         },
+        Contract::RewardClaim | Contract::RewardClaimProxy => {
+            tracing::info!(%target_address, %new_owner, "Transfer RewardClaim ownership");
+            let reward_claim = RewardClaim::new(target_address, &provider);
+            reward_claim
+                .transferOwnership(new_owner)
+                .send()
+                .await?
+                .get_receipt()
+                .await?
+        },
         _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
     };
     let tx_hash = receipt.transaction_hash;

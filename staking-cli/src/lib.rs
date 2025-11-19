@@ -22,11 +22,13 @@ pub mod demo;
 pub mod funding;
 pub mod info;
 pub mod l1;
+pub mod output;
 pub mod parse;
 pub mod receipt;
 pub mod registration;
 pub mod signature;
 
+#[cfg(feature = "testing")]
 pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -49,6 +51,10 @@ pub struct Config {
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
+
+    /// Espresso sequencer API URL for reward claims.
+    #[clap(long, env = "ESPRESSO_URL")]
+    pub espresso_url: Option<Url>,
 
     #[clap(flatten)]
     pub signer: SignerConfig,
@@ -267,6 +273,14 @@ pub enum Commands {
     ClaimValidatorExit {
         #[clap(long)]
         validator_address: Address,
+    },
+    /// Claim staking rewards.
+    ClaimRewards,
+    /// Check unclaimed staking rewards.
+    UnclaimedRewards {
+        /// The address to check.
+        #[clap(long)]
+        address: Option<Address>,
     },
     /// Check ESP token balance.
     TokenBalance {

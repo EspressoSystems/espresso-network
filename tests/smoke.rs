@@ -1,24 +1,24 @@
 use std::time::Instant;
 
+use alloy::primitives::U256;
 use anyhow::Result;
 use futures::StreamExt;
 
-use crate::common::{NativeDemo, TestConfig, TestRequirements};
+use crate::common::{NativeDemo, TestRequirements, TestRuntime};
 
 pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<()> {
     let start = Instant::now();
     dotenvy::dotenv()?;
 
-    let testing = TestConfig::new(requirements.clone()).await?;
+    println!("{:#?}", requirements);
 
-    println!("Waiting on readiness");
-    let _ = testing.readiness().await?;
+    let mut runtime = TestRuntime::from_requirements(requirements.clone()).await?;
 
-    let initial = testing.test_state().await;
+    let initial = runtime.test_state().await;
     println!("Initial State: {initial}");
 
-    let mut sub = testing
-        .espresso
+    let client = client::SequencerClient::new(runtime.config.sequencer_api_url.clone());
+    let mut sub = client
         .subscribe_blocks(initial.block_height.unwrap())
         .await?;
 
@@ -32,7 +32,7 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             Err(_) => panic!("No new blocks after {:?}", requirements.block_timeout),
         };
 
-        let new = testing.test_state().await;
+        let new = runtime.test_state().await;
         println!("New State:{new}");
 
         let num_new_tx = new.txn_count - old.txn_count;
@@ -54,7 +54,6 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             panic!("Balance not conserved");
         }
 
-        // Timeout if tests take too long.
         if start.elapsed() > requirements.global_timeout {
             panic!(
                 "Timeout waiting for block height, transaction count, and light client updates to \
@@ -62,27 +61,40 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             );
         }
 
-        // test that we progress EXPECTED_BLOCK_HEIGHT blocks from where we started
-        if new.block_height.unwrap() < testing.expected_block_height() {
+        if new.block_height.unwrap() < runtime.expected_block_height() {
             println!(
                 "waiting for block height have={} want={}",
                 new.block_height.unwrap(),
-                testing.expected_block_height()
+                runtime.expected_block_height()
             );
             continue;
         }
 
-        if new.txn_count - initial.txn_count < testing.expected_txn_count() {
+        if new.txn_count - initial.txn_count < runtime.expected_txn_count() {
             println!(
                 "waiting for transaction count have={} want={}",
                 new.txn_count - initial.txn_count,
-                testing.expected_txn_count()
+                runtime.expected_txn_count()
             );
             continue;
         }
+
+        if let Some(deadline_height) = requirements.reward_claim_deadline_block_height {
+            println!("Checking reward claims");
+            let new = runtime.test_state().await;
+            if new.block_height.unwrap() >= deadline_height {
+                assert!(new.rewards_claimed > U256::ZERO);
+                println!(
+                    "Rewards claimed: {} at block {}",
+                    new.rewards_claimed,
+                    new.block_height.unwrap()
+                );
+            }
+        }
+
         break;
     }
-    println!("Final State: {}", testing.test_state().await);
+    println!("Final State: {}", runtime.test_state().await);
     Ok(())
 }
 
