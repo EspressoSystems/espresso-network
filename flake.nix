@@ -36,6 +36,10 @@
   inputs.git-hooks.url = "github:cachix/git-hooks.nix";
   inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
 
+  # Pinned echidna version - current nixpkgs version fails to build
+  # See https://hydra.nixos.org/job/nixos/trunk-combined/nixpkgs.echidna.x86_64-linux for build status
+  inputs.echidna-nixpkgs.url = "github:NixOS/nixpkgs/08dacfca559e1d7da38f3cf05f1f45ee9bfd213c";
+
   outputs =
     { self
     , nixpkgs
@@ -45,6 +49,7 @@
     , flake-utils
     , git-hooks
     , solc-bin
+    , echidna-nixpkgs
     , ...
     }:
     flake-utils.lib.eachDefaultSystem (system:
@@ -65,27 +70,12 @@
         export PATH="$CARGO_TARGET_DIR/debug:$PATH"
       '';
 
-      solhintPkg = { buildNpmPackage, fetchFromGitHub }:
-        buildNpmPackage rec {
-          pname = "solhint";
-          version = "5.05"; # TODO: normally semver, tag screwed up
-          src = fetchFromGitHub {
-            owner = "protofire";
-            repo = pname;
-            rev = "refs/tags/v${version}";
-            hash = "sha256-F8x3a9OKOQuhMRq6CHh5cVlOS72h+YGHTxnKKAh6c9A=";
-          };
-          npmDepsHash = "sha256-FKoh5D6sjZwhu1Kp+pedb8q6Bv0YYFBimdulugZ2RT0=";
-          dontNpmBuild = true;
-        };
-
       overlays = [
         (import rust-overlay)
         foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
-          solhint =
-            solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
+          solhint = prev.callPackage ./nix/solhint { };
         })
 
         (final: prev: {
@@ -180,7 +170,7 @@
             solhint = {
               enable = true;
               description = "Solidity linter";
-              entry = "solhint --fix --noPrompt 'contracts/{script,src,test}/**/*.sol'";
+              entry = "solhint 'contracts/{script,src,test}/**/*.sol'";
               types_or = [ "solidity" ];
               pass_filenames = true;
             };
@@ -354,6 +344,7 @@
       devShells.echidna =
         let
           solc = pkgs.solc-bin."0.8.28";
+          echidna-pkgs = import echidna-nixpkgs { inherit system; };
         in
         myShell {
           packages = [
@@ -362,9 +353,9 @@
             solc
 
             # Security analysis tools
-            slither-analyzer
-            echidna
-            python3.pkgs.crytic-compile
+            echidna-pkgs.slither-analyzer
+            echidna-pkgs.echidna
+            echidna-pkgs.python3.pkgs.crytic-compile
           ];
           FOUNDRY_SOLC = "${solc}/bin/solc";
         };
