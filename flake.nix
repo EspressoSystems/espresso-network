@@ -165,7 +165,7 @@
             solhint = {
               enable = true;
               description = "Solidity linter";
-              entry = "solhint --fix --noPrompt 'contracts/{script,src,test}/**/*.sol'";
+              entry = "solhint 'contracts/{script,src,test}/**/*.sol'";
               types_or = [ "solidity" ];
               pass_filenames = true;
             };
