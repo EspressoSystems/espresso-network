@@ -75,6 +75,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     dry_run: bool,
     #[builder(default)]
+    wait_for_multisig_upgrade: bool,
+    #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
     #[builder(default)]
     genesis_st_state: Option<StakeTableStateSol>,
@@ -201,6 +203,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         contracts,
                         self.rpc_url.to_string(),
                         Some(self.dry_run),
+                        self.wait_for_multisig_upgrade,
                     )
                     .await?;
                 } else {
@@ -294,6 +297,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         use_mock,
                         rpc_url.to_string(),
                         Some(dry_run),
+                        self.wait_for_multisig_upgrade,
                     )
                     .await?;
                 } else {
@@ -322,6 +326,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         use_mock,
                         rpc_url.to_string(),
                         Some(dry_run),
+                        self.wait_for_multisig_upgrade,
                     )
                     .await?;
                 } else {
@@ -400,6 +405,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         )?,
                         multisig_pauser,
                         Some(dry_run),
+                        self.wait_for_multisig_upgrade,
                     )
                     .await?;
                 } else {
@@ -731,6 +737,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 safe_addr: multisig,
                 use_hardware_wallet,
                 dry_run,
+                wait_for_execution: self.wait_for_multisig_upgrade,
             },
         )
         .await?;

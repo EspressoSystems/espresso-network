@@ -2276,6 +2276,7 @@ mod tests {
             options.is_mock,
             sepolia_rpc_url.clone(),
             Some(dry_run),
+            false,
         )
         .await?;
         tracing::info!(
@@ -2608,6 +2609,7 @@ mod tests {
             multisig_admin,
             pauser,
             Some(dry_run),
+            false,
         )
         .await?;
 
@@ -2900,6 +2902,7 @@ mod tests {
             &mut contracts,
             sepolia_rpc_url.clone(),
             Some(dry_run),
+            false,
         )
         .await?;
         tracing::info!(
@@ -3184,6 +3187,7 @@ mod tests {
                 safe_addr: multisig_admin,
                 use_hardware_wallet: false,
                 dry_run,
+                wait_for_execution: false,
             },
         )
         .await?;
@@ -3451,6 +3455,123 @@ mod tests {
 
         let version = get_proxy_initialized_version(&l1_client, stake_table_proxy_addr).await?;
         assert_eq!(version, 2, "Reinitialized proxy should return version 2");
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_wait_for_upgrade_execution_with_background_upgrade() -> Result<()> {
+        use tokio::time::sleep;
+
+        use crate::proposals::multisig::wait_for_upgrade_execution;
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let admin = provider.get_accounts().await?[0];
+        let prover = Address::random();
+
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+
+        let proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        let initial_impl = read_proxy_impl(&provider, proxy_addr).await?;
+        tracing::info!("Initial implementation: {initial_impl:#x}");
+
+        let blocks_per_epoch = 10;
+        let epoch_start_block = 22;
+        let pv2_addr = contracts
+            .deploy(
+                Contract::PlonkVerifierV2,
+                PlonkVerifierV2::deploy_builder(&provider),
+            )
+            .await?;
+
+        let target_lcv2_bytecode = LightClientV2::BYTECODE.encode_hex();
+        let lcv2_linked_bytecode = {
+            match target_lcv2_bytecode
+                .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                .count()
+            {
+                0 => return Err(anyhow!("lib placeholder not found")),
+                1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
+                    LIBRARY_PLACEHOLDER_ADDRESS,
+                    &pv2_addr.encode_hex(),
+                    1,
+                ))?,
+                _ => {
+                    return Err(anyhow!(
+                        "more than one lib placeholder found, consider using a different value"
+                    ))
+                },
+            }
+        };
+
+        let lcv2_addr = contracts
+            .deploy(
+                Contract::LightClientV2,
+                LightClientV2::deploy_builder(&provider)
+                    .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
+            )
+            .await?;
+
+        let provider_clone = provider.clone();
+        let proxy_addr_clone = proxy_addr;
+        let lcv2_addr_clone = lcv2_addr;
+
+        let upgrade_task = tokio::spawn(async move {
+            sleep(Duration::from_secs(2)).await;
+            tracing::info!("Background task: performing upgrade now");
+
+            let proxy = LightClient::new(proxy_addr_clone, &provider_clone);
+            let init_data = LightClientV2::new(lcv2_addr_clone, &provider_clone)
+                .initializeV2(blocks_per_epoch, epoch_start_block)
+                .calldata()
+                .to_owned();
+
+            let receipt = proxy
+                .upgradeToAndCall(lcv2_addr_clone, init_data)
+                .send()
+                .await
+                .expect("upgrade failed")
+                .get_receipt()
+                .await
+                .expect("receipt failed");
+
+            tracing::info!(
+                "Background task: upgrade completed with tx {}",
+                receipt.transaction_hash
+            );
+        });
+
+        let poll_interval_secs = Some(1);
+        tracing::info!(
+            "Main task: starting wait_for_upgrade_execution with 1-second poll interval"
+        );
+        wait_for_upgrade_execution(&provider, proxy_addr, lcv2_addr, poll_interval_secs).await?;
+
+        upgrade_task.await?;
+
+        let final_impl = read_proxy_impl(&provider, proxy_addr).await?;
+        tracing::info!("Final implementation: {final_impl:#x}");
+        assert_eq!(
+            final_impl, lcv2_addr,
+            "Implementation should be updated to LCV2"
+        );
+
+        let lc_v2 = LightClientV2::new(proxy_addr, &provider);
+        assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
+        assert_eq!(lc_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
+        assert_eq!(lc_v2.epochStartBlock().call().await?, epoch_start_block);
 
         Ok(())
     }

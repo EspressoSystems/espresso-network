@@ -204,6 +204,10 @@ struct Options {
     #[clap(long, default_value = "false")]
     pub verify_node_js_files: bool,
 
+    /// Wait for multisig upgrade to be executed (polls every 12 seconds with no timeout)
+    #[clap(long, env = "ESPRESSO_WAIT_FOR_MULTISIG_UPGRADE", default_value = "false")]
+    pub wait_for_multisig_upgrade: bool,
+
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
@@ -435,6 +439,7 @@ async fn main() -> anyhow::Result<()> {
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
+        .wait_for_multisig_upgrade(opt.wait_for_multisig_upgrade)
         .rpc_url(opt.rpc_url.clone());
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
