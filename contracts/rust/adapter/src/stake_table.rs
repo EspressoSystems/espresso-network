@@ -263,6 +263,7 @@ mod test {
                 commission: 1000, // 10%
                 blsSig: G1PointSol::from(bls_sig.clone()).into(),
                 schnorrSig: StateSignatureSol::from(schnorr_sig.clone()).into(),
+                metadataUri: "dummy-meta".to_string(),
             };
             assert!(valid_event.authenticate().is_ok());
 

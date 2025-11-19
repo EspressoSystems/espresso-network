@@ -227,8 +227,14 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                 commission,
                 payload,
             } => {
-                register_validator(self.provider(from)?, self.stake_table, commission, *payload)
-                    .await
+                register_validator(
+                    self.provider(from)?,
+                    self.stake_table,
+                    commission,
+                    Url::parse("https://example.com/metadata")?,
+                    *payload,
+                )
+                .await
             },
             StakeTableTx::Approve { from, amount } => {
                 approve(self.provider(from)?, self.token, self.stake_table, amount).await
