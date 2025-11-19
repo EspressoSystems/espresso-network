@@ -1200,47 +1200,24 @@ pub async fn transfer_ownership(
     target_address: Address,
     new_owner: Address,
 ) -> Result<TransactionReceipt> {
-    let receipt = match target_contract {
-        Contract::LightClient | Contract::LightClientProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer LightClient ownership");
-            let lc = LightClient::new(target_address, &provider);
-            lc.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::FeeContract | Contract::FeeContractProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer FeeContract ownership");
-            let fee = FeeContract::new(target_address, &provider);
-            fee.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::EspToken | Contract::EspTokenProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer EspToken ownership");
-            let token = EspToken::new(target_address, &provider);
-            token
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
-            tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
-            let stake_table = StakeTable::new(target_address, &provider);
-            stake_table
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
-    };
+    // Use OwnableUpgradeable interface for all Ownable contracts
+    // This is more generic and maintainable than matching on each contract type
+    let ownable = OwnableUpgradeable::new(target_address, &provider);
+
+    // Verify the contract is actually Ownable by checking if we can read the owner
+    let current_owner = ownable.owner().call().await.context(format!(
+        "Contract at {target_address:#x} does not implement Ownable interface"
+    ))?;
+
+    tracing::info!(%target_contract, %target_address, current_owner = %current_owner, new_owner = %new_owner, "Transferring ownership of {target_contract}");
+
+    let receipt = ownable
+        .transferOwnership(new_owner)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
     let tx_hash = receipt.transaction_hash;
     tracing::info!(%receipt.gas_used, %tx_hash, "ownership transferred");
     Ok(receipt)
