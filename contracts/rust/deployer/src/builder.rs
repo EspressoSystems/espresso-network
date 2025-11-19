@@ -8,7 +8,7 @@ use alloy::{
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use espresso_types::v0_1::L1Client;
-use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
+use hotshot_contract_adapter::sol_types::{LightClientStateSol, RewardClaim, StakeTableStateSol};
 use url::Url;
 
 use crate::{
@@ -404,23 +404,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
                 } else {
-                    // Pick admin from config. StakeTable uses OpsTimelock for faster
-                    // emergency updates since it handles critical staking ops.
-                    let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
-                        if use_timelock_owner {
-                            contracts
-                                .address(Contract::OpsTimelock)
-                                .expect("fail to get OpsTimelock address")
-                        } else {
-                            admin // deployer
-                        }
-                    } else if let Some(multisig) = self.multisig {
-                        multisig
-                    } else {
-                        admin // deployer
-                    };
-
+                    // Always initialize with deployer as admin, then transfer ownership if needed
                     tracing::info!("Upgrading StakeTableV2 with admin: {:?}", admin);
+                    let proxy_addr = contracts
+                        .address(Contract::StakeTableProxy)
+                        .expect("StakeTableProxy address not found");
                     crate::upgrade_stake_table_v2(
                         provider,
                         l1_client,
@@ -430,7 +418,20 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
 
-                    // initializeV2() handles ownership transfer, so no separate call needed
+                    // Transfer ownership to OpsTimelock if use_timelock_owner is set
+                    if let Some(true) = self.use_timelock_owner {
+                        let timelock_addr = contracts
+                            .address(Contract::OpsTimelock)
+                            .expect("fail to get OpsTimelock address");
+                        tracing::info!("Transferring StakeTableV2 ownership to OpsTimelock");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::StakeTableProxy,
+                            proxy_addr,
+                            timelock_addr,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::OpsTimelock => {
@@ -495,33 +496,34 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let deployer_addr = provider.default_signer_address();
                 let pauser = self.multisig_pauser.unwrap_or(deployer_addr);
 
-                // RewardClaim uses SafeExitTimelock (longer delay) since it can mint tokens
-                // and users need time to react to upgrades. Can be paused in emergencies.
-                let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    if use_timelock_owner {
-                        contracts
-                            .address(Contract::SafeExitTimelock)
-                            .expect("fail to get SafeExitTimelock address")
-                    } else {
-                        self.ops_timelock_admin.context(
-                            "SafeExitTimelock contract address must be set when using \
-                             --use-timelock-owner flag",
-                        )?
-                    }
-                } else if let Some(multisig) = self.multisig {
-                    multisig
-                } else {
-                    admin
-                };
-
+                // Always initialize with deployer as admin, then grant role to timelock if needed
                 tracing::info!("Deploying RewardClaimProxy with admin: {:?}", admin);
-                crate::deploy_reward_claim_proxy(
+                let reward_claim_proxy_addr = crate::deploy_reward_claim_proxy(
                     provider, contracts, token_addr, lc_addr, admin, pauser,
                 )
                 .await?;
 
-                // RewardClaim uses AccessControl only (no Ownable). Admin is set in initialize(),
-                // not via separate transfer_ownership() call.
+                // Grant DEFAULT_ADMIN_ROLE to SafeExitTimelock if use_timelock_owner is set
+                if let Some(true) = self.use_timelock_owner {
+                    let timelock_addr = contracts
+                        .address(Contract::SafeExitTimelock)
+                        .expect("fail to get SafeExitTimelock address");
+                    tracing::info!("Granting RewardClaim DEFAULT_ADMIN_ROLE to SafeExitTimelock");
+                    let reward_claim = RewardClaim::new(reward_claim_proxy_addr, &provider);
+                    let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
+                    reward_claim
+                        .grantRole(admin_role, timelock_addr)
+                        .send()
+                        .await?
+                        .get_receipt()
+                        .await?;
+                    reward_claim
+                        .revokeRole(admin_role, admin)
+                        .send()
+                        .await?
+                        .get_receipt()
+                        .await?;
+                }
             },
             _ => {
                 panic!("Deploying {target} not supported.");

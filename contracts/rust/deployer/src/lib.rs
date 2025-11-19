@@ -1248,10 +1248,11 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::RewardClaim | Contract::RewardClaimProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer RewardClaim ownership");
+            tracing::info!(%target_address, %new_owner, "Grant RewardClaim DEFAULT_ADMIN_ROLE");
             let reward_claim = RewardClaim::new(target_address, &provider);
+            let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
             reward_claim
-                .transferOwnership(new_owner)
+                .grantRole(admin_role, new_owner)
                 .send()
                 .await?
                 .get_receipt()
