@@ -266,7 +266,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             bytes memory schnorrSig
         ) = genDummyValidatorKeys(actor);
 
-        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) {
+        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000, "") {
             trackRegisterValidator(actor);
             stats.any.registerValidator.ok++;
         } catch {
@@ -344,7 +344,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         ) = genDummyValidatorKeys(val);
 
         ivm.prank(val);
-        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
+        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000, "");
         trackRegisterValidator(val);
         stats.ok.createValidator.ok++;
 

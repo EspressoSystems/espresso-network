@@ -1048,6 +1048,13 @@ contract StakeTableUpgradeV2Test is Test {
         return stakeTableRegisterTest.tokenGrantRecipient();
     }
 
+    function genClientWallet(address sender, string memory _seed)
+        public
+        returns (BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory)
+    {
+        return stakeTableRegisterTest.genClientWallet(sender, _seed);
+    }
+
     function registerValidatorOnStakeTableV1(
         address _validator,
         string memory _seed,
@@ -1081,11 +1088,13 @@ contract StakeTableUpgradeV2Test is Test {
         bytes memory schnorrSig = new bytes(64);
 
         vm.startPrank(_validator);
-        vm.expectEmit(false, false, false, true, address(_stakeTable));
+        vm.expectEmit();
         emit StakeTableV2.ValidatorRegisteredV2(
-            _validator, blsVK, schnorrVK, _commission, sig, schnorrSig
+            _validator, blsVK, schnorrVK, _commission, sig, schnorrSig, "dummy-meta"
         );
-        _stakeTable.registerValidatorV2(blsVK, schnorrVK, sig, schnorrSig, _commission);
+        _stakeTable.registerValidatorV2(
+            blsVK, schnorrVK, sig, schnorrSig, _commission, "dummy-meta"
+        );
         vm.stopPrank();
     }
 
@@ -1391,7 +1400,7 @@ contract StakeTableUpgradeV2Test is Test {
         bytes memory schnorrSig = new bytes(32);
 
         vm.expectRevert(StakeTableV2.InvalidSchnorrSig.selector);
-        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
         vm.stopPrank();
     }
 
@@ -1411,7 +1420,7 @@ contract StakeTableUpgradeV2Test is Test {
         StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
         bytes memory schnorrSig = new bytes(64);
 
-        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
         vm.stopPrank();
     }
 
@@ -1432,7 +1441,7 @@ contract StakeTableUpgradeV2Test is Test {
         vm.startPrank(validator);
         bytes memory schnorrSig = new bytes(64);
         StakeTableV2 proxyV2 = StakeTableV2(address(proxy));
-        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0);
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
         vm.stopPrank();
 
         // register again with the same schnorr key to get the revert
@@ -1442,7 +1451,7 @@ contract StakeTableUpgradeV2Test is Test {
 
         vm.startPrank(validator2);
         vm.expectRevert(StakeTableV2.SchnorrKeyAlreadyUsed.selector);
-        proxyV2.registerValidatorV2(blsVK2, schnorrVK, blsSig2, schnorrSig, 0);
+        proxyV2.registerValidatorV2(blsVK2, schnorrVK, blsSig2, schnorrSig, 0, "dummy-meta");
         vm.stopPrank();
 
         vm.startPrank(validator);
@@ -2143,7 +2152,7 @@ contract StakeTableUpgradeV2Test is Test {
 
         vm.startPrank(validator2);
         vm.expectRevert(StakeTableV2.SchnorrKeyAlreadyUsed.selector);
-        proxyV2.registerValidatorV2(blsVK3, schnorrVK2, blsSig3, schnorrSig, 0);
+        proxyV2.registerValidatorV2(blsVK3, schnorrVK2, blsSig3, schnorrSig, 0, "dummy-meta");
         vm.stopPrank();
     }
 }
@@ -2853,7 +2862,9 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         address validator = makeAddr("validator");
         vm.startPrank(validator);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
+        proxy.registerValidatorV2(
+            BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0, "dummy-meta"
+        );
         vm.stopPrank();
 
         // unpause and see that the functions are callable
@@ -2885,7 +2896,9 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         proxy.updateConsensusKeysV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "");
 
         vm.expectRevert(S.InvalidSchnorrVK.selector);
-        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
+        proxy.registerValidatorV2(
+            BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0, "dummy-meta"
+        );
 
         vm.stopPrank();
     }
