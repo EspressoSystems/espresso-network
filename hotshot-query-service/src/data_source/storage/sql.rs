@@ -549,6 +549,7 @@ pub struct Pruner {
     minimum_retention_height: Option<u64>,
 }
 
+#[derive(PartialEq)]
 pub enum StorageConnectionType {
     Sequencer,
     Query,
@@ -579,7 +580,7 @@ impl SqlStorage {
         let pruner_cfg = config.pruner_cfg;
 
         // Only reuse the same pool if we're using sqlite
-        if cfg!(feature = "embedded-db") {
+        if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
             // re-use the same pool if present and return early
             if let Some(pool) = config.pool {
                 return Ok(Self {
@@ -589,10 +590,8 @@ impl SqlStorage {
                     pruner_cfg,
                 });
             }
-        } else {
-            if config.pool.is_some() {
-                tracing::error!("reusing existing pool is only supported for embedded-db feature");
-            }
+        } else if config.pool.is_some() {
+            tracing::info!("not reusing existing pool for query connection");
         }
 
         #[cfg(not(feature = "embedded-db"))]
@@ -1858,7 +1857,9 @@ mod test {
         let num_rows = 500;
         let db = TmpDb::init().await;
 
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         for i in 0..num_rows {
             let view = ViewNumber::new(i);

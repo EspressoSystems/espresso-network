@@ -2523,7 +2523,11 @@ mod test {
             BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
             VidCommonQueryData,
         },
-        data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
+        data_source::{
+            sql::Config,
+            storage::{SqlStorage, StorageConnectionType},
+            VersionedDataSource,
+        },
         explorer::TransactionSummariesResponse,
         types::HeightIndexed,
     };
@@ -5091,9 +5095,12 @@ mod test {
         let leaf = leaf_query_data.leaf();
         let to_view = leaf.view_number() + 1;
 
-        let ds = SqlStorage::connect(Config::try_from(&node_0_persistence).unwrap())
-            .await
-            .unwrap();
+        let ds = SqlStorage::connect(
+            Config::try_from(&node_0_persistence).unwrap(),
+            StorageConnectionType::Sequencer,
+        )
+        .await
+        .unwrap();
         let mut tx = ds.write().await?;
 
         let (state, leaf) =

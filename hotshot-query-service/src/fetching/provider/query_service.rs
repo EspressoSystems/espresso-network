@@ -532,7 +532,7 @@ mod test {
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
                 sql::testing::TmpDb,
-                AvailabilityStorage, SqlStorage, UpdateAvailabilityStorage,
+                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
             },
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
         },
@@ -1706,7 +1706,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -1808,7 +1812,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -1970,7 +1978,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2031,7 +2043,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2110,7 +2126,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2211,7 +2231,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2281,7 +2305,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2356,7 +2384,11 @@ mod test {
             MockBase::instance(),
         ));
         let db = TmpDb::init().await;
-        let storage = FailStorage::from(SqlStorage::connect(db.config()).await.unwrap());
+        let storage = FailStorage::from(
+            SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap(),
+        );
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
