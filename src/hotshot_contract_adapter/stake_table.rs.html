@@ -263,51 +263,52 @@
 <a href=#263 id=263 data-nosnippet>263</a>                commission: <span class="number">1000</span>, <span class="comment">// 10%
 <a href=#264 id=264 data-nosnippet>264</a>                </span>blsSig: G1PointSol::from(bls_sig.clone()).into(),
 <a href=#265 id=265 data-nosnippet>265</a>                schnorrSig: StateSignatureSol::from(schnorr_sig.clone()).into(),
-<a href=#266 id=266 data-nosnippet>266</a>            };
-<a href=#267 id=267 data-nosnippet>267</a>            <span class="macro">assert!</span>(valid_event.authenticate().is_ok());
-<a href=#268 id=268 data-nosnippet>268</a>
-<a href=#269 id=269 data-nosnippet>269</a>            <span class="kw">let </span>wrong_bls_sig =
-<a href=#270 id=270 data-nosnippet>270</a>                sign_address_bls(<span class="kw-2">&amp;</span>BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rand::thread_rng()), address);
-<a href=#271 id=271 data-nosnippet>271</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_bls_event = valid_event.clone();
-<a href=#272 id=272 data-nosnippet>272</a>            bad_bls_event.blsSig = G1PointSol::from(wrong_bls_sig).into();
-<a href=#273 id=273 data-nosnippet>273</a>            <span class="macro">assert!</span>(bad_bls_event.authenticate().is_err());
-<a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a>            <span class="kw">let </span>wrong_schnorr_sig = sign_address_schnorr(<span class="kw-2">&amp;</span>StateKeyPair::generate(), address);
-<a href=#276 id=276 data-nosnippet>276</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_schnorr_event = valid_event.clone();
-<a href=#277 id=277 data-nosnippet>277</a>            bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
-<a href=#278 id=278 data-nosnippet>278</a>            <span class="macro">assert!</span>(bad_schnorr_event.authenticate().is_err());
-<a href=#279 id=279 data-nosnippet>279</a>        }
-<a href=#280 id=280 data-nosnippet>280</a>    }
-<a href=#281 id=281 data-nosnippet>281</a>
-<a href=#282 id=282 data-nosnippet>282</a>    <span class="attr">#[test]
-<a href=#283 id=283 data-nosnippet>283</a>    </span><span class="kw">fn </span>test_consensus_keys_updated_event_authentication() {
-<a href=#284 id=284 data-nosnippet>284</a>        <span class="kw">for _ in </span><span class="number">0</span>..<span class="number">10 </span>{
-<a href=#285 id=285 data-nosnippet>285</a>            <span class="kw">let </span>bls_key_pair = BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rand::thread_rng());
-<a href=#286 id=286 data-nosnippet>286</a>            <span class="kw">let </span>schnorr_key_pair = StateKeyPair::generate();
-<a href=#287 id=287 data-nosnippet>287</a>            <span class="kw">let </span>address = Address::random();
-<a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a>            <span class="kw">let </span>bls_sig = sign_address_bls(<span class="kw-2">&amp;</span>bls_key_pair, address);
-<a href=#290 id=290 data-nosnippet>290</a>            <span class="kw">let </span>schnorr_sig = sign_address_schnorr(<span class="kw-2">&amp;</span>schnorr_key_pair, address);
-<a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a>            <span class="kw">let </span>valid_event = ConsensusKeysUpdatedV2 {
-<a href=#293 id=293 data-nosnippet>293</a>                account: address,
-<a href=#294 id=294 data-nosnippet>294</a>                blsVK: bls_key_pair.ver_key().into(),
-<a href=#295 id=295 data-nosnippet>295</a>                schnorrVK: schnorr_key_pair.ver_key().into(),
-<a href=#296 id=296 data-nosnippet>296</a>                blsSig: G1PointSol::from(bls_sig.clone()).into(),
-<a href=#297 id=297 data-nosnippet>297</a>                schnorrSig: StateSignatureSol::from(schnorr_sig.clone()).into(),
-<a href=#298 id=298 data-nosnippet>298</a>            };
-<a href=#299 id=299 data-nosnippet>299</a>            <span class="macro">assert!</span>(valid_event.authenticate().is_ok());
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>            <span class="kw">let </span>wrong_bls_sig =
-<a href=#302 id=302 data-nosnippet>302</a>                sign_address_bls(<span class="kw-2">&amp;</span>BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rand::thread_rng()), address);
-<a href=#303 id=303 data-nosnippet>303</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_bls_event = valid_event.clone();
-<a href=#304 id=304 data-nosnippet>304</a>            bad_bls_event.blsSig = G1PointSol::from(wrong_bls_sig).into();
-<a href=#305 id=305 data-nosnippet>305</a>            <span class="macro">assert!</span>(bad_bls_event.authenticate().is_err());
-<a href=#306 id=306 data-nosnippet>306</a>
-<a href=#307 id=307 data-nosnippet>307</a>            <span class="kw">let </span>wrong_schnorr_sig = sign_address_schnorr(<span class="kw-2">&amp;</span>StateKeyPair::generate(), address);
-<a href=#308 id=308 data-nosnippet>308</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_schnorr_event = valid_event.clone();
-<a href=#309 id=309 data-nosnippet>309</a>            bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
-<a href=#310 id=310 data-nosnippet>310</a>            <span class="macro">assert!</span>(bad_schnorr_event.authenticate().is_err());
-<a href=#311 id=311 data-nosnippet>311</a>        }
-<a href=#312 id=312 data-nosnippet>312</a>    }
-<a href=#313 id=313 data-nosnippet>313</a>}</code></pre></div></section></main></body></html>
+<a href=#266 id=266 data-nosnippet>266</a>                metadataUri: <span class="string">"dummy-meta"</span>.to_string(),
+<a href=#267 id=267 data-nosnippet>267</a>            };
+<a href=#268 id=268 data-nosnippet>268</a>            <span class="macro">assert!</span>(valid_event.authenticate().is_ok());
+<a href=#269 id=269 data-nosnippet>269</a>
+<a href=#270 id=270 data-nosnippet>270</a>            <span class="kw">let </span>wrong_bls_sig =
+<a href=#271 id=271 data-nosnippet>271</a>                sign_address_bls(<span class="kw-2">&amp;</span>BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rand::thread_rng()), address);
+<a href=#272 id=272 data-nosnippet>272</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_bls_event = valid_event.clone();
+<a href=#273 id=273 data-nosnippet>273</a>            bad_bls_event.blsSig = G1PointSol::from(wrong_bls_sig).into();
+<a href=#274 id=274 data-nosnippet>274</a>            <span class="macro">assert!</span>(bad_bls_event.authenticate().is_err());
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a>            <span class="kw">let </span>wrong_schnorr_sig = sign_address_schnorr(<span class="kw-2">&amp;</span>StateKeyPair::generate(), address);
+<a href=#277 id=277 data-nosnippet>277</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_schnorr_event = valid_event.clone();
+<a href=#278 id=278 data-nosnippet>278</a>            bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
+<a href=#279 id=279 data-nosnippet>279</a>            <span class="macro">assert!</span>(bad_schnorr_event.authenticate().is_err());
+<a href=#280 id=280 data-nosnippet>280</a>        }
+<a href=#281 id=281 data-nosnippet>281</a>    }
+<a href=#282 id=282 data-nosnippet>282</a>
+<a href=#283 id=283 data-nosnippet>283</a>    <span class="attr">#[test]
+<a href=#284 id=284 data-nosnippet>284</a>    </span><span class="kw">fn </span>test_consensus_keys_updated_event_authentication() {
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="kw">for _ in </span><span class="number">0</span>..<span class="number">10 </span>{
+<a href=#286 id=286 data-nosnippet>286</a>            <span class="kw">let </span>bls_key_pair = BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rand::thread_rng());
+<a href=#287 id=287 data-nosnippet>287</a>            <span class="kw">let </span>schnorr_key_pair = StateKeyPair::generate();
+<a href=#288 id=288 data-nosnippet>288</a>            <span class="kw">let </span>address = Address::random();
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a>            <span class="kw">let </span>bls_sig = sign_address_bls(<span class="kw-2">&amp;</span>bls_key_pair, address);
+<a href=#291 id=291 data-nosnippet>291</a>            <span class="kw">let </span>schnorr_sig = sign_address_schnorr(<span class="kw-2">&amp;</span>schnorr_key_pair, address);
+<a href=#292 id=292 data-nosnippet>292</a>
+<a href=#293 id=293 data-nosnippet>293</a>            <span class="kw">let </span>valid_event = ConsensusKeysUpdatedV2 {
+<a href=#294 id=294 data-nosnippet>294</a>                account: address,
+<a href=#295 id=295 data-nosnippet>295</a>                blsVK: bls_key_pair.ver_key().into(),
+<a href=#296 id=296 data-nosnippet>296</a>                schnorrVK: schnorr_key_pair.ver_key().into(),
+<a href=#297 id=297 data-nosnippet>297</a>                blsSig: G1PointSol::from(bls_sig.clone()).into(),
+<a href=#298 id=298 data-nosnippet>298</a>                schnorrSig: StateSignatureSol::from(schnorr_sig.clone()).into(),
+<a href=#299 id=299 data-nosnippet>299</a>            };
+<a href=#300 id=300 data-nosnippet>300</a>            <span class="macro">assert!</span>(valid_event.authenticate().is_ok());
+<a href=#301 id=301 data-nosnippet>301</a>
+<a href=#302 id=302 data-nosnippet>302</a>            <span class="kw">let </span>wrong_bls_sig =
+<a href=#303 id=303 data-nosnippet>303</a>                sign_address_bls(<span class="kw-2">&amp;</span>BLSKeyPair::generate(<span class="kw-2">&amp;mut </span>rand::thread_rng()), address);
+<a href=#304 id=304 data-nosnippet>304</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_bls_event = valid_event.clone();
+<a href=#305 id=305 data-nosnippet>305</a>            bad_bls_event.blsSig = G1PointSol::from(wrong_bls_sig).into();
+<a href=#306 id=306 data-nosnippet>306</a>            <span class="macro">assert!</span>(bad_bls_event.authenticate().is_err());
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a>            <span class="kw">let </span>wrong_schnorr_sig = sign_address_schnorr(<span class="kw-2">&amp;</span>StateKeyPair::generate(), address);
+<a href=#309 id=309 data-nosnippet>309</a>            <span class="kw">let </span><span class="kw-2">mut </span>bad_schnorr_event = valid_event.clone();
+<a href=#310 id=310 data-nosnippet>310</a>            bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
+<a href=#311 id=311 data-nosnippet>311</a>            <span class="macro">assert!</span>(bad_schnorr_event.authenticate().is_err());
+<a href=#312 id=312 data-nosnippet>312</a>        }
+<a href=#313 id=313 data-nosnippet>313</a>    }
+<a href=#314 id=314 data-nosnippet>314</a>}</code></pre></div></section></main></body></html>
