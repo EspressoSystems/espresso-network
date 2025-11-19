@@ -36,6 +36,10 @@
   inputs.git-hooks.url = "github:cachix/git-hooks.nix";
   inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
 
+  # Pinned echidna version - current nixpkgs version fails to build
+  # See https://hydra.nixos.org/job/nixos/trunk-combined/nixpkgs.echidna.x86_64-linux for build status
+  inputs.echidna-nixpkgs.url = "github:NixOS/nixpkgs/08dacfca559e1d7da38f3cf05f1f45ee9bfd213c";
+
   outputs =
     { self
     , nixpkgs
@@ -45,6 +49,7 @@
     , flake-utils
     , git-hooks
     , solc-bin
+    , echidna-nixpkgs
     , ...
     }:
     flake-utils.lib.eachDefaultSystem (system:
@@ -339,6 +344,7 @@
       devShells.echidna =
         let
           solc = pkgs.solc-bin."0.8.28";
+          echidna-pkgs = import echidna-nixpkgs { inherit system; };
         in
         myShell {
           packages = [
@@ -347,9 +353,9 @@
             solc
 
             # Security analysis tools
-            slither-analyzer
-            echidna
-            python3.pkgs.crytic-compile
+            echidna-pkgs.slither-analyzer
+            echidna-pkgs.echidna
+            echidna-pkgs.python3.pkgs.crytic-compile
           ];
           FOUNDRY_SOLC = "${solc}/bin/solc";
         };
