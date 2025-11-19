@@ -216,9 +216,16 @@ fn add_custom_migrations(
 pub struct Config {
     #[cfg(feature = "embedded-db")]
     db_opt: SqliteConnectOptions,
+
     #[cfg(not(feature = "embedded-db"))]
     db_opt: PgConnectOptions,
+
     pool_opt: PoolOptions<Db>,
+
+    /// Extra pool_opt to allow separately configuring the connection pool for query service
+    #[cfg(not(feature = "embedded-db"))]
+    pool_opt_query: PoolOptions<Db>,
+
     #[cfg(not(feature = "embedded-db"))]
     schema: String,
     reset: bool,
@@ -275,6 +282,7 @@ impl From<PgConnectOptions> for Config {
         Self {
             db_opt,
             pool_opt: PoolOptions::default(),
+            pool_opt_query: PoolOptions::default(),
             schema: "hotshot".into(),
             reset: false,
             migrations: vec![],
@@ -437,6 +445,12 @@ impl Config {
     /// automatically closed to reduce load on the server.
     pub fn idle_connection_timeout(mut self, timeout: Duration) -> Self {
         self.pool_opt = self.pool_opt.idle_timeout(Some(timeout));
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            self.pool_opt_query = self.pool_opt_query.idle_timeout(Some(timeout));
+        }
+
         self
     }
 
@@ -448,6 +462,12 @@ impl Config {
     /// server implementation.
     pub fn connection_timeout(mut self, timeout: Duration) -> Self {
         self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
+        }
+
         self
     }
 
@@ -461,12 +481,24 @@ impl Config {
         self
     }
 
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn query_min_connections(mut self, min: u32) -> Self {
+        self.pool_opt_query = self.pool_opt_query.min_connections(min);
+        self
+    }
+
     /// Set the maximum number of connections to maintain at any time.
     ///
     /// Once `max` connections are in use simultaneously, further attempts to acquire a connection
     /// (or begin a transaction) will block until one of the existing connections is released.
     pub fn max_connections(mut self, max: u32) -> Self {
         self.pool_opt = self.pool_opt.max_connections(max);
+        self
+    }
+
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn query_max_connections(mut self, max: u32) -> Self {
+        self.pool_opt_query = self.pool_opt_query.max_connections(max);
         self
     }
 
@@ -517,15 +549,33 @@ pub struct Pruner {
     minimum_retention_height: Option<u64>,
 }
 
+pub enum StorageConnectionType {
+    Sequencer,
+    Query,
+}
+
 impl SqlStorage {
     pub fn pool(&self) -> Pool<Db> {
         self.pool.clone()
     }
+
     /// Connect to a remote database.
-    pub async fn connect(mut config: Config) -> Result<Self, Error> {
+    #[allow(unused_variables)]
+    pub async fn connect(
+        mut config: Config,
+        connection_type: StorageConnectionType,
+    ) -> Result<Self, Error> {
         let metrics = PrometheusMetrics::default();
         let pool_metrics = PoolMetrics::new(&*metrics.subgroup("sql".into()));
+
+        #[cfg(feature = "embedded-db")]
         let pool = config.pool_opt.clone();
+        #[cfg(not(feature = "embedded-db"))]
+        let pool = match connection_type {
+            StorageConnectionType::Sequencer => config.pool_opt.clone(),
+            StorageConnectionType::Query => config.pool_opt_query.clone(),
+        };
+
         let pruner_cfg = config.pruner_cfg;
 
         // Only reuse the same pool if we're using sqlite
@@ -1438,7 +1488,7 @@ mod test {
                 if !migrations {
                     cfg = cfg.no_migrations();
                 }
-                let client = SqlStorage::connect(cfg).await?;
+                let client = SqlStorage::connect(cfg, StorageConnectionType::Query).await?;
                 Ok::<_, Error>(client)
             }
         };
@@ -1515,7 +1565,9 @@ mod test {
         let db = TmpDb::init().await;
         let cfg = db.config();
 
-        let mut storage = SqlStorage::connect(cfg).await.unwrap();
+        let mut storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
         let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
@@ -1604,7 +1656,9 @@ mod test {
         let db = TmpDb::init().await;
         let config = db.config();
 
-        let storage = SqlStorage::connect(config).await.unwrap();
+        let storage = SqlStorage::connect(config, StorageConnectionType::Query)
+            .await
+            .unwrap();
         let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
             MockMerkleTree::new(MockMerkleTree::tree_height());
 
@@ -1693,7 +1747,9 @@ mod test {
     async fn test_minimum_retention_pruning() {
         let db = TmpDb::init().await;
 
-        let mut storage = SqlStorage::connect(db.config()).await.unwrap();
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
         let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
@@ -1769,7 +1825,9 @@ mod test {
         let db = TmpDb::init().await;
         let cfg = db.config();
 
-        let storage = SqlStorage::connect(cfg).await.unwrap();
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
         assert!(storage
             .read()
             .await
@@ -1948,7 +2006,9 @@ mod test {
         let db = TmpDb::init().await;
         let config = db.config();
 
-        let storage = SqlStorage::connect(config).await.unwrap();
+        let storage = SqlStorage::connect(config, StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         let mut tx = storage.write().await.unwrap();
 
