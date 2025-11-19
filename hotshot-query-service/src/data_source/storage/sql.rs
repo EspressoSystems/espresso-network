@@ -528,14 +528,21 @@ impl SqlStorage {
         let pool = config.pool_opt.clone();
         let pruner_cfg = config.pruner_cfg;
 
-        // re-use the same pool if present and return early
-        if let Some(pool) = config.pool {
-            return Ok(Self {
-                metrics,
-                pool_metrics,
-                pool,
-                pruner_cfg,
-            });
+        // Only reuse the same pool if we're using sqlite
+        if cfg!(feature = "embedded-db") {
+            // re-use the same pool if present and return early
+            if let Some(pool) = config.pool {
+                return Ok(Self {
+                    metrics,
+                    pool_metrics,
+                    pool,
+                    pruner_cfg,
+                });
+            }
+        } else {
+            if config.pool.is_some() {
+                tracing::error!("reusing existing pool is only supported for embedded-db feature");
+            }
         }
 
         #[cfg(not(feature = "embedded-db"))]
