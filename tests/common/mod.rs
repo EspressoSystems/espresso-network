@@ -81,7 +81,7 @@ impl Default for TestRequirements {
             global_timeout: Duration::from_secs(60),
             // TODO: on the CI we are quite resource constraint and for longer runs we do get a few
             // timeouts which lead to occasional drop in block times.
-            block_timeout: Duration::from_secs(45),
+            block_timeout: Duration::from_secs(60),
             max_consecutive_blocks_without_tx: 10,
             reward_claim_deadline_block_height: None,
         }

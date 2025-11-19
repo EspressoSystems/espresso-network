@@ -159,6 +159,9 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Withdrawal({v:?})"
             )),
+            StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
+            )),
         }
     }
 }
@@ -245,6 +248,10 @@ impl StakeTableState {
         }
     }
 
+    pub fn validators(&self) -> &ValidatorMap {
+        &self.validators
+    }
+
     pub fn into_validators(self) -> ValidatorMap {
         self.validators
     }
@@ -254,7 +261,7 @@ impl StakeTableState {
     ///
     /// This function MUST NOT modify `self` if the event is invalid. All validation
     /// checks must be performed before any state modifications occur.
-    fn apply_event(&mut self, event: StakeTableEvent) -> ApplyEventResult<()> {
+    pub fn apply_event(&mut self, event: StakeTableEvent) -> ApplyEventResult<()> {
         match event {
             StakeTableEvent::Register(ValidatorRegistered {
                 account,
@@ -2549,6 +2556,7 @@ pub mod testing {
                 commission: value.commission,
                 blsSig: value.bls_sig.into(),
                 schnorrSig: value.schnorr_sig.clone(),
+                metadataUri: "dummy-meta".to_string(),
             }
         }
     }

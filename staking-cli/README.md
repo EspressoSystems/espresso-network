@@ -23,6 +23,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
   - [Node operators](#node-operators)
     - [Registering a validator](#registering-a-validator)
     - [Updating your commission](#updating-your-commission)
+    - [Updating your metadata URL](#updating-your-metadata-url)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
 
@@ -67,6 +68,7 @@ Commands:
     account                Print the signer account address
     register-validator     Register to become a validator
     update-commission      Update a validator's commission rate
+    update-metadata-uri    Update a validator's metadata URL
     update-consensus-keys  Update a validators Espresso consensus signing keys
     deregister-validator   Deregister a validator
     approve                Approve stake table contract to move tokens
@@ -243,30 +245,33 @@ This section covers commands for node operators.
 
 ### Registering a validator
 
-1.  Obtain your validator's BLS and state private keys and choose your commission in percent, with 2 decimals.
+1.  Obtain your validator's BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare a metadata URL.
 1.  Use the `register-validator` command to register your validator.
 
-        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99
+        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
 
     To avoid specifying the the keys on the command line they can be set via env vars
 
     ```
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
+    METADATA_URL=https://example.com/validator-metadata.json
     ```
 
     Alternatively, you can use pre-signed signatures:
 
-        staking-cli register-validator --node-signatures signatures.json --commission 4.99
+        staking-cli register-validator --node-signatures signatures.json --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
 
     You can specify the format for parsing node signatures from stdin or files:
 
-        staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99
+        staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
 
 - Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
   register transaction consumes about 300k gas.
 - Each BLS (Espresso) and key can be registered only once.
 - The commission can be updated later using the `update-commission` command, subject to rate limits.
+- The metadata URL can be updated at any time using the `update-metadata-uri` command.
+- The metadata URL must be a valid URL and cannot exceed 2048 bytes.
 - Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
   different account indices (or mnemonics) must be used.
 
@@ -284,6 +289,23 @@ To update your commission:
 The commission value is in percent with up to 2 decimal points: from 0.00 to 100.00.
 
 Note: The minimum time interval and maximum increase are contract parameters that may be adjusted by governance.
+
+### Updating your metadata URL
+
+Validators can update their metadata URL at any time. The metadata URL is used to provide additional
+information about your validator but the official schema is yet to be decided.
+
+To update your metadata URL:
+
+    staking-cli update-metadata-uri --metadata-uri https://example.com/updated-metadata.json
+
+The metadata URL:
+- Must be a valid URL (e.g., starting with `https://`)
+- Cannot be empty
+- Cannot exceed 2048 bytes
+
+Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by
+listening to registration and update events.
 
 ### De-registering your validator
 

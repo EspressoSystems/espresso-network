@@ -331,6 +331,7 @@ impl Clone for StakeTableV2::StakeTableV2Events {
             Self::Upgraded(v) => Self::Upgraded(v.clone()),
             Self::ValidatorExitClaimed(v) => Self::ValidatorExitClaimed(v.clone()),
             Self::Withdrawal(v) => Self::Withdrawal(v.clone()),
+            Self::MetadataUriUpdated(v) => Self::MetadataUriUpdated(v.clone()),
         }
     }
 }
@@ -366,6 +367,7 @@ impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
             Self::Upgraded(v) => write!(f, "Upgraded({v:?})"),
             Self::ValidatorExitClaimed(v) => write!(f, "ValidatorExitClaimed({v:?})"),
             Self::Withdrawal(v) => write!(f, "Withdrawal({v:?})"),
+            Self::MetadataUriUpdated(v) => write!(f, "MetadataUriUpdated({v:?})"),
         }
     }
 }

@@ -208,10 +208,16 @@ impl TestSystem {
             &self.bls_key_pair.clone(),
             &self.state_key_pair.clone(),
         );
-        register_validator(&self.provider, self.stake_table, self.commission, payload)
-            .await?
-            .assert_success()
-            .await?;
+        register_validator(
+            &self.provider,
+            self.stake_table,
+            self.commission,
+            Url::parse("https://example.com/metadata")?,
+            payload,
+        )
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
