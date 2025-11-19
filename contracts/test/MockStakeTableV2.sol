@@ -12,7 +12,8 @@ contract MockStakeTableV2 is StakeTableV2 {
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
         bytes memory schnorrSig,
-        uint16 commission
+        uint16 commission,
+        string memory metadataUri
     ) external override {
         address validator = msg.sender;
 
@@ -31,6 +32,8 @@ contract MockStakeTableV2 is StakeTableV2 {
         commissionTracking[validator] =
             CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
 
-        emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
+        emit ValidatorRegisteredV2(
+            validator, blsVK, schnorrVK, commission, blsSig, schnorrSig, metadataUri
+        );
     }
 }

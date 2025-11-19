@@ -67,6 +67,12 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// `ValidatorExitClaimed`
 /// include the undelegation ID as an indexed parameter for efficient querying and tracking.
 ///
+/// 11. Validators must provide a metadata URI during registration and can update it via
+/// `updateMetadataUri`. The metadata URI is event-sourced only (not stored on-chain for gas
+/// efficiency). The `ValidatorRegisteredV2` event includes the metadata URI, and a new
+/// `MetadataUriUpdated` event is emitted when validators update their URI. Metadata URIs must be
+/// non-empty and cannot exceed 2048 bytes.
+///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
@@ -87,6 +93,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     // === Storage ===
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// @notice Maximum length for metadata URIs (in bytes)
+    uint256 public constant MAX_METADATA_URI_LENGTH = 2048;
 
     /// @notice Minimum time interval between commission increases (in seconds)
     uint256 public minCommissionIncreaseInterval;
@@ -127,7 +136,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         EdOnBN254.EdOnBN254Point schnorrVK,
         uint16 commission,
         BN254.G1Point blsSig,
-        bytes schnorrSig
+        bytes schnorrSig,
+        string metadataUri
     );
 
     /// @notice A validator updates their consensus keys
@@ -201,6 +211,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param unlocksAt The timestamp when delegators can claim their funds
     event ValidatorExitV2(address indexed validator, uint256 unlocksAt);
 
+    /// @notice A validator updated their metadata URI
+    /// @param validator The address of the validator
+    /// @param metadataUri The new metadata URI
+    event MetadataUriUpdated(address indexed validator, string metadataUri);
+
     // === Errors ===
 
     /// The Schnorr signature is invalid (either the wrong length or the wrong key)
@@ -232,6 +247,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// No undelegation exists for the given validator and delegator
     error NoUndelegationFound();
+
+    /// The metadata URI exceeds maximum allowed length
+    error InvalidMetadataUriLength();
 
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
@@ -428,6 +446,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param blsSig The BLS signature that authenticates the BLS VK
     /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
+    /// @param metadataUri The metadata URI for the validator
     /// @dev This function is overridden to add pausable functionality
     /// @dev and to add schnorrSig validation
     function registerValidatorV2(
@@ -435,7 +454,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
         bytes memory schnorrSig,
-        uint16 commission
+        uint16 commission,
+        string memory metadataUri
     ) external virtual whenNotPaused {
         address validator = msg.sender;
 
@@ -457,6 +477,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             revert InvalidCommission();
         }
 
+        uint256 metadataLength = bytes(metadataUri).length;
+        if (metadataLength == 0 || metadataLength > MAX_METADATA_URI_LENGTH) {
+            revert InvalidMetadataUriLength();
+        }
+
         blsKeys[_hashBlsKey(blsVK)] = true;
         schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
@@ -465,7 +490,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         commissionTracking[validator] =
             CommissionTracking({ commission: commission, lastIncreaseTime: 0 });
 
-        emit ValidatorRegisteredV2(validator, blsVK, schnorrVK, commission, blsSig, schnorrSig);
+        emit ValidatorRegisteredV2(
+            validator, blsVK, schnorrVK, commission, blsSig, schnorrSig, metadataUri
+        );
     }
 
     /// @notice Update the consensus keys of a validator
@@ -546,6 +573,28 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         tracking.commission = newCommission;
 
         emit CommissionUpdated(validator, block.timestamp, currentCommission, newCommission);
+    }
+
+    /// @notice Update the metadata URI for a validator
+    /// @param metadataUri The new metadata URI
+    ///
+    /// @dev The metadata URI is NOT stored on-chain. This function is event-sourced only. Off-chain
+    /// indexers must listen to the MetadataUriUpdated event to track the current URI. URIs should
+    /// be kept reasonably short for gas efficiency (max 2048 bytes). Only the validator
+    /// (msg.sender) can update their own metadata URI.
+    ///
+    /// @dev No format validation is performed on the URI - any non-empty string within length
+    /// limits is accepted. Consumers should validate URI format and accessibility off-chain.
+    function updateMetadataUri(string memory metadataUri) external virtual whenNotPaused {
+        address validator = msg.sender;
+        ensureValidatorActive(validator);
+
+        uint256 metadataLength = bytes(metadataUri).length;
+        if (metadataLength == 0 || metadataLength > MAX_METADATA_URI_LENGTH) {
+            revert InvalidMetadataUriLength();
+        }
+
+        emit MetadataUriUpdated(validator, metadataUri);
     }
 
     /// @notice Set the minimum interval between commission updates

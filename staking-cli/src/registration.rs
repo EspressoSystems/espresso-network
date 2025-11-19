@@ -9,6 +9,7 @@ use hotshot_contract_adapter::{
     sol_types::StakeTableV2::{self, StakeTableV2Errors},
     stake_table::StakeTableContractVersion,
 };
+use url::Url;
 
 use crate::{
     parse::Commission,
@@ -19,8 +20,17 @@ pub async fn register_validator(
     provider: impl Provider,
     stake_table_addr: Address,
     commission: Commission,
+    metadata_uri: Url,
     payload: NodeSignatures,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
+    let metadata_uri_str = metadata_uri.as_str();
+    if metadata_uri_str.is_empty() {
+        anyhow::bail!("metadata URI cannot be empty");
+    }
+    if metadata_uri_str.len() > 2048 {
+        anyhow::bail!("metadata URI cannot exceed 2048 bytes");
+    }
+
     tracing::info!(
         "register validator {} with commission {commission}",
         payload.address
@@ -53,6 +63,7 @@ pub async fn register_validator(
                 sol_payload.bls_signature.into(),
                 sol_payload.schnorr_signature.into(),
                 commission.to_evm(),
+                metadata_uri_str.to_string(),
             )
             .send()
             .await
@@ -123,6 +134,27 @@ pub async fn update_commission(
         .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
+pub async fn update_metadata_uri(
+    provider: impl Provider,
+    stake_table_addr: Address,
+    metadata_uri: Url,
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    let metadata_uri_str = metadata_uri.as_str();
+    if metadata_uri_str.is_empty() {
+        anyhow::bail!("metadata URI cannot be empty");
+    }
+    if metadata_uri_str.len() > 2048 {
+        anyhow::bail!("metadata URI cannot exceed 2048 bytes");
+    }
+
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
+    stake_table
+        .updateMetadataUri(metadata_uri_str.to_string())
+        .send()
+        .await
+        .maybe_decode_revert::<StakeTableV2Errors>()
+}
+
 pub async fn fetch_commission(
     provider: impl Provider,
     stake_table_addr: Address,
@@ -173,6 +205,7 @@ mod test {
             &system.provider,
             system.stake_table,
             system.commission,
+            Url::parse("https://example.com/metadata")?,
             payload,
         )
         .await?
@@ -184,6 +217,7 @@ mod test {
             .unwrap();
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
+        assert_eq!(event.metadataUri, "https://example.com/metadata");
 
         assert_eq!(event.blsVK, system.bls_key_pair.ver_key().into());
         assert_eq!(event.schnorrVK, system.state_key_pair.ver_key().into());
@@ -339,6 +373,7 @@ mod test {
                 bls_sig.into(),
                 schnorr_sig_other_key.into(),
                 Commission::try_from("12.34")?.to_evm(),
+                "https://example.com/metadata".to_string(),
             )
             .send()
             .await
@@ -425,6 +460,26 @@ mod test {
         }
 
         println!("Events: {events:?}");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_metadata_uri() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+
+        let new_uri = Url::parse("https://example.com/updated")?;
+        let receipt = update_metadata_uri(&system.provider, system.stake_table, new_uri.clone())
+            .await?
+            .assert_success()
+            .await?;
+
+        let event = receipt
+            .decoded_log::<StakeTableV2::MetadataUriUpdated>()
+            .unwrap();
+        assert_eq!(event.validator, system.deployer_address);
+        assert_eq!(event.metadataUri, new_uri.as_str());
 
         Ok(())
     }
