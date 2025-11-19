@@ -425,7 +425,7 @@ pub async fn main() -> Result<()> {
         },
         Commands::UpdateMetadataUri { metadata_uri } => {
             tracing::info!("Updating validator {account} metadata URI");
-            update_metadata_uri(&provider, stake_table_addr, metadata_uri).await?
+            update_metadata_uri(&provider, stake_table_addr, metadata_uri).await
         },
         Commands::Approve { amount } => {
             approve(&provider, token_addr, stake_table_addr, amount).await
