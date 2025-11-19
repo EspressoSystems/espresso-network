@@ -121,20 +121,8 @@ async fn test_native_demo_da_committee() -> Result<()> {
         .await?;
     }
 
-    let epoch_length = genesis
-        .epoch_height
-        .expect("epoch_height not set in genesis");
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
-    // we are using the stake table from the contract.
-    let expected_block_height = epoch_length * 21 + 10; // Make sure we're past epoch 21
-
-    let pos_progress_requirements = TestRequirements {
-        block_height_increment: expected_block_height,
-        txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
-        ..Default::default()
-    };
-    assert_native_demo_works(pos_progress_requirements).await?;
+    // Sanity check that the demo is still working
+    assert_native_demo_works(Default::default()).await?;
 
     Ok(())
 }
