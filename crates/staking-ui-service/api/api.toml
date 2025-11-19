@@ -40,6 +40,33 @@ The following types are referenced by the endpoint descriptions below.
     "timestamp": integer,
     "number": integer
 }
+```
+
+### `EpochAndBlock`
+
+```json
+{
+    "block": integer,
+    "epoch": integer,
+    "timestamp": integer
+}
+```
+
+### `Bitset`
+
+A set of variable size, represented as a bit string.
+
+```json
+{
+    "order": "bitvec::order::Lsb0" | "bitvec::order::Msb0",
+    "head": {
+        "width": integer,
+        "index": integer
+    },
+    "bits": integer,
+    "data": [integer]
+}
+```
 
 ### `Hex`
 
@@ -118,7 +145,7 @@ Get a snapshot of the full node set as of the indicated L1 block.
 
 This is the full node set as reflected in the stake table contract after L1 block `:hash`. Snapshots
 are available for L1 blocks from the last finalized block up to the latest head (i.e. the same range
-of availability for `/l1/block/:number`.
+of availability for `/l1/block/:number`).
 
 It is important to note that this is _not_ the stake table that is actually in use by consensus.
 Consensus will only use snapshots taken from the L1 origin of the Espresso epoch root, and then the
@@ -211,6 +238,97 @@ Requests for unknown wallet addresses will return `404 Not Found`.
         { "NodeExited": PendingWithdrawal } |
         { "UndelegationWithdrawal": Withdrawal } |
         { "NodeExitWithdrawal": Withdrawal }
+    ]
+}
+```
+"""
+
+[route.active_node_set_snapshot]
+PATH = ["/nodes/active"]
+DOC = """
+Get the latest set of active nodes, with statistics.
+
+This is the active node set that is in use right now, during the current epoch, according to
+Espresso. It contains participation metrics for each active node dating back to the start of the
+current epoch.
+
+### Caching Behavior
+
+This endpoint may be cached, so that it sometimes returns stale data. In this case, clients can
+simply replay recent updates from `/nodes/active/updates` in order to bring their state up to date.
+The indexed version of this endpoint, `/nodes/active/:block`, can be used to access more recent
+snapshots. However, unlike that endpoint, this one will never fail with `404 Not Found` or
+`410 Gone`.
+
+### Returns
+
+```json
+{
+    "espresso_block": EpochAndBlock,
+    "nodes": [
+        {
+            "address": Hex,
+            "voter_participation": float,
+            "leader_participation": float
+        }
+    ]
+}
+```
+"""
+
+[route.active_node_set_snapshot_indexed]
+PATH = ["/nodes/active/:block"]
+":block" = "Integer"
+DOC = """
+Get the set of active nodes, with statistics, as of the requested Espresso block number.
+
+This information is always available for the latest Espresso block. Depending on cache behavior, it
+may also be available for older blocks, but requests for block numbers that are too old will fail 
+with `410 Gone`.
+
+Requests for block numbers in the future will fail with `410 Not Found`.
+
+### Returns
+
+```json
+{
+    "espresso_block": EpochAndBlock,
+    "nodes": [
+        {
+            "address": Hex,
+            "voter_participation": float,
+            "leader_participation": float
+        }
+    ]
+}
+```
+"""
+
+[route.active_node_set_update]
+PATH = ["/nodes/active/updates/:block"]
+":block" = "Integer"
+DOC = """
+Get the update to the active node set, capturing changes from Espresso block `:block`.
+
+This is usually available for all Espresso blocks in the current epoch. Requests for blocks that are
+too old will return `410 Gone`, and requests for blocks in the future will return `404 Not Found`.
+
+### Returns
+
+```json
+{
+    "espresso_block": EpochAndBlock,
+    "diff": [
+        {
+            "NewBlock": {
+                "leader": integer,
+                "failed_leaders": [integer],
+                "voters": Bitset
+            }
+        } |
+        {
+            "NewEpoch": [Hex]
+        }
     ]
 }
 ```

@@ -9,14 +9,21 @@ use std::{
     },
 };
 
-use alloy::primitives::{FixedBytes, map::HashSet};
+use alloy::{
+    network::EthereumWallet,
+    node_bindings::Anvil,
+    primitives::{FixedBytes, map::HashSet},
+    providers::ProviderBuilder,
+};
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
+use espresso_contract_deployer::build_signer;
 use espresso_types::{
-    DrbAndHeaderUpgradeVersion, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
-    ValidatorMap, v0_3::Validator,
+    ChainConfig, DrbAndHeaderUpgradeVersion, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+    ValidatedState, ValidatorMap, traits::PersistenceOptions, v0_3::Validator,
 };
 use futures::{Stream, StreamExt, stream};
+use hotshot_query_service::data_source::{SqlDataSource, sql::testing::TmpDb};
 use hotshot_types::{
     data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
     drb::DrbResult,
@@ -29,11 +36,27 @@ use hotshot_types::{
 };
 use jf_signature::schnorr::VerKey;
 use rand::{RngCore, SeedableRng, rngs::StdRng};
+use sequencer::{
+    api::{
+        self,
+        data_source::testing::TestableSequencerDataSource,
+        sql::DataSource,
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+    },
+    testing::TestConfigBuilder,
+};
+use staking_cli::{
+    DEV_MNEMONIC,
+    demo::{DelegationConfig, StakingTransactions},
+};
 
 use crate::{
     Error, Result,
     error::ensure,
-    input::espresso::{ActiveNode, ActiveNodeSet, EspressoClient, EspressoPersistence},
+    input::{
+        espresso::{ActiveNode, ActiveNodeSet, EspressoClient, EspressoPersistence},
+        l1::testing::ContractDeployment,
+    },
     types::{
         common::{Address, ESPTokenAmount},
         global::{ActiveNodeSetDiff, ActiveNodeSetUpdate},
@@ -53,9 +76,9 @@ pub struct MockEspressoClient {
 }
 
 impl EspressoClient for MockEspressoClient {
-    async fn current_epoch(&self) -> Result<u64> {
+    async fn wait_for_epochs(&self) -> u64 {
         let leaf = &self.leaves[self.leaves.len() - 1].0;
-        Ok(*leaf.epoch(self.epoch_height).unwrap())
+        *leaf.epoch(self.epoch_height).unwrap()
     }
 
     async fn epoch_height(&self) -> Result<u64> {
@@ -291,9 +314,9 @@ impl MemoryStorage {
 }
 
 impl EspressoPersistence for MemoryStorage {
-    async fn active_node_set(&self) -> Result<ActiveNodeSet> {
+    async fn active_node_set(&self) -> Result<Option<ActiveNodeSet>> {
         self.mock_errors()?;
-        self.db.read().await.0.clone().ok_or_else(Error::not_found)
+        Ok(self.db.read().await.0.clone())
     }
 
     async fn lifetime_rewards(&self, account: Address) -> Result<ESPTokenAmount> {
@@ -304,7 +327,7 @@ impl EspressoPersistence for MemoryStorage {
     }
 
     async fn apply_update(
-        &self,
+        &mut self,
         update: ActiveNodeSetUpdate,
         new_rewards: Vec<(Address, ESPTokenAmount)>,
     ) -> Result<()> {
@@ -354,4 +377,64 @@ impl EspressoPersistence for MemoryStorage {
 
         Ok(())
     }
+}
+
+pub const EPOCH_HEIGHT: u64 = 20;
+
+pub async fn start_pos_network(port: u16) -> (TestNetwork<impl PersistenceOptions, 1, V>, TmpDb) {
+    // Deploy PoS contracts.
+    let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+    let rpc_url = anvil.endpoint_url();
+    let deployment = ContractDeployment::deploy(rpc_url.clone())
+        .await
+        .expect("Failed to deploy contracts");
+
+    // Configure proof of stake to start immediately.
+    let test_config = TestConfigBuilder::<1>::default()
+        .epoch_height(EPOCH_HEIGHT)
+        .epoch_start_block(EPOCH_HEIGHT / 2)
+        .anvil_provider(anvil)
+        .build();
+
+    // Set stake table address in consensus config.
+    let chain_config = ChainConfig {
+        stake_table_contract: Some(deployment.stake_table_addr),
+        ..Default::default()
+    };
+    let state = ValidatedState {
+        chain_config: chain_config.into(),
+        ..Default::default()
+    };
+
+    // Register test nodes so they will be able to participate once the epoch changes.
+    let signer = build_signer(DEV_MNEMONIC, 0);
+    let provider = ProviderBuilder::new()
+        .wallet(EthereumWallet::from(signer.clone()))
+        .connect_http(rpc_url.clone());
+    let mut txs = StakingTransactions::create(
+        rpc_url,
+        &provider,
+        deployment.stake_table_addr,
+        test_config.staking_priv_keys(),
+        None,
+        DelegationConfig::MultipleDelegators,
+    )
+    .await
+    .unwrap();
+    txs.apply_all().await.unwrap();
+
+    // Start network.
+    let storage = DataSource::create_storage().await;
+    let persistence = <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+    let options =
+        SqlDataSource::options(&storage, api::Options::with_port(port)).config(Default::default());
+    let config = TestNetworkConfigBuilder::with_num_nodes()
+        .api_config(options.clone())
+        .persistences([persistence.clone()])
+        .network_config(test_config)
+        .states([state])
+        .build();
+    let network = TestNetwork::new(config, V::new()).await;
+
+    (network, storage)
 }

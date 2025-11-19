@@ -54,3 +54,22 @@ CREATE TABLE lifetime_rewards (
     -- Store as string to preserve precision for U256
     amount TEXT NOT NULL
 );
+
+-- Active node set
+-- Stores active nodes with participation metrics
+CREATE TABLE active_node (
+  address   VARCHAR PRIMARY KEY,
+  idx       INT NOT NULL UNIQUE,
+  votes     INT NOT NULL,
+  proposals INT NOT NULL,
+  slots     INT NOT NULL
+);
+
+-- Information about the latest processed Espresso block
+CREATE TABLE espresso_block (
+  -- The primary key row always has the value `1`, making this a singleton table.
+  always_one  INT PRIMARY KEY,
+  number      BIGINT NOT NULL,
+  epoch       BIGINT NOT NULL,
+  `timestamp` BIGINT NOT NULL
+);

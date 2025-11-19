@@ -1,20 +1,29 @@
 //! SQL-based persistent storage
 use crate::{
-    Result,
-    input::l1::{L1BlockSnapshot, L1Persistence, NodeSet, Snapshot, Wallet, Wallets},
+    Error, Result,
+    input::{
+        espresso::{ActiveNode, ActiveNodeSet, EspressoPersistence},
+        l1::{L1BlockSnapshot, L1Persistence, NodeSet, Snapshot, Wallet, Wallets},
+    },
     types::{
-        common::{Address, Delegation, L1BlockId, NodeSetEntry, PendingWithdrawal, Ratio},
-        global::FullNodeSetDiff,
+        common::{
+            Address, Delegation, ESPTokenAmount, EpochAndBlock, L1BlockId, NodeSetEntry,
+            PendingWithdrawal, Ratio,
+        },
+        global::{ActiveNodeSetDiff, ActiveNodeSetUpdate, FullNodeSetDiff},
         wallet::WalletDiff,
     },
 };
 use alloy::primitives::U256;
 use anyhow::Context;
 use clap::Parser;
-use futures::future::try_join_all;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use std::{path::PathBuf, str::FromStr};
-use tracing::instrument;
+use futures::{TryStreamExt, future::try_join_all};
+use sqlx::{
+    ConnectOptions, QueryBuilder,
+    sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions},
+};
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use tracing::{instrument, log::LevelFilter};
 
 /// Options for persistence.
 #[derive(Parser, Clone, Debug)]
@@ -49,7 +58,8 @@ impl Persistence {
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("invalid path"))?,
         )?
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .log_statements(LevelFilter::Debug);
 
         // Create connection pool
         let pool = SqlitePoolOptions::new()
@@ -622,6 +632,310 @@ impl L1Persistence for Persistence {
     }
 }
 
+impl EspressoPersistence for Persistence {
+    async fn active_node_set(&self) -> Result<Option<ActiveNodeSet>> {
+        let mut tx = self.pool.begin().await.context("acquiring connection")?;
+
+        // Load saved Espresso block.
+        let espresso_block = sqlx::query_as(
+            "SELECT number, epoch, timestamp FROM espresso_block
+              WHERE always_one = 1 LIMIT 1",
+        )
+        .fetch_optional(tx.as_mut())
+        .await
+        .context("loading last Espresso block")?;
+        let Some((block, epoch, timestamp)) = espresso_block else {
+            return Ok(None);
+        };
+        let espresso_block = EpochAndBlock {
+            block,
+            epoch,
+            timestamp,
+        };
+
+        // Load active nodes.
+        let nodes = sqlx::query_as::<_, (String, u64, u64, u64)>(
+            "SELECT address, votes, proposals, slots FROM active_node ORDER BY idx",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .context("loading active node set")?;
+        let nodes = nodes
+            .into_iter()
+            .map(|(address, votes, proposals, slots)| {
+                let address = address.parse().context("invalid address")?;
+                let proposals = proposals.try_into().context("proposal count overflow")?;
+                let slots = slots.try_into().context("slot count overflow")?;
+                let votes = votes.try_into().context("vote count overflow")?;
+                anyhow::Ok(ActiveNode {
+                    address,
+                    proposals,
+                    slots,
+                    votes,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok(Some(ActiveNodeSet {
+            espresso_block,
+            nodes,
+        }))
+    }
+
+    async fn lifetime_rewards(&self, account: Address) -> Result<ESPTokenAmount> {
+        let mut tx = self.pool.begin().await.context("acquiring connection")?;
+        let amount_opt = sqlx::query_as::<_, (String,)>(
+            "SELECT amount FROM lifetime_rewards WHERE address = $1",
+        )
+        .bind(account.to_string())
+        .fetch_optional(tx.as_mut())
+        .await
+        .context(format!("fetching lifetime reward amount for {account}"))?;
+        match amount_opt {
+            Some((amount_str,)) => Ok(amount_str.parse().context("invalid amount string")?),
+            None => {
+                // All accounts start at 0, if we don't have another value for this account it has
+                // never accrued any rewards.
+                Ok(ESPTokenAmount::ZERO)
+            }
+        }
+    }
+
+    async fn apply_update(
+        &mut self,
+        update: ActiveNodeSetUpdate,
+        rewards: Vec<(Address, ESPTokenAmount)>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("acquiring connection")?;
+
+        // In rare cases, this update or a later one may have already been processed. This can only
+        // happen outside the control of this program, since we do have an exclusive lock on the
+        // database here. For example, in some cases AWS may briefly run two instances of the
+        // service at the same time, causing each instance to process the same update.
+        //
+        // These updates are not inherently idempotent, since they involve incrementing the
+        // statistics columns. Thus, we must detect this case and avoid applying an update that has
+        // already been applied.
+        //
+        // We are at least in a SQLite write transaction, and two simultaneous write transactions
+        // are prohibited from both committing. So we do not have to worry about races within this
+        // function itself (e.g. we check, the update has not been applied so we proceed, then
+        // another process applies the update, then we duplicate). We are only worried about the
+        // same update being applied twice, _one after another_, by two processes that aren't aware
+        // of each other.
+        let last_block: Option<(u64,)> =
+            sqlx::query_as("SELECT number FROM espresso_block WHERE always_one = 1 LIMIT 1")
+                .fetch_optional(tx.as_mut())
+                .await
+                .context("loading last Espresso block number")?;
+        if let Some((last_block,)) = last_block {
+            if update.espresso_block.block <= last_block {
+                // The update or a later one has already been applied. Although this is not
+                // technically an error, it is exceptional and not expected to happen often, so we
+                // should report it loudly.
+                tracing::error!(
+                    last_block,
+                    ?update.espresso_block,
+                    "update has already been applied; this is OK, but may indicate two instances \
+                    of this service are sharing a database, which is best to be avoided"
+                );
+
+                // We can return `Ok` here because the update is already applied, which means the
+                // work of this function is already done, even if it was done by somebody else. We
+                // want to tell the caller that they are OK to move forward, rather than retrying
+                // this update and hitting the same error again.
+                //
+                // Note that this does rely on determinism of updates; i.e. any two processes
+                // modifying the same database (which _should_ be, at worst, two exact copies of
+                // this same service) will always generate the same update for the same Espresso
+                // block. Otherwise, we might be returning `Ok` here but leaving the database in a
+                // different state than if we had applied the update we were given, if someone else
+                // had applied a different update for the same block. This determinism assumption
+                // should be upheld by the rest of the logic in this service.
+                return Ok(());
+            } else if update.espresso_block.block > last_block + 1 {
+                // Now THIS is a real error. We have skipped an update somehow. This cannot be
+                // caused by two processes running at the same time, and should never be possible
+                // within a single process either. Something has gone quite wrong.
+                //
+                // The exception to this is when the update starts with a `NewEpoch` event, which is
+                // just going to wipe out any state we missed anyways. And it is common to skip a
+                // block for new epochs, as when we start up the service, we always fast forward to
+                // the current epoch regardless of where we left off.
+                if update.diff.is_empty()
+                    || matches!(&update.diff[0], ActiveNodeSetDiff::NewEpoch(_))
+                {
+                    tracing::info!(
+                        last_block,
+                        ?update,
+                        "skipping blocks to fast forward to new epoch"
+                    );
+                } else {
+                    return Err(Error::internal().context(format!(
+                    "an update has been skipped; last_update: {last_block}, current update: {:?}",
+                    update.espresso_block
+                )));
+                }
+            }
+        } else {
+            // We are dealing with an empty database; this is the first transaction ever to write to
+            // the espresso-related tables. Obviously this update has not already been applied, so
+            // we don't have to worry about this case.
+        }
+
+        // Update Espresso block information.
+        sqlx::query(
+            "INSERT INTO espresso_block (always_one, number, epoch, timestamp) 
+                VALUES (1, $1, $2, $3)
+                ON CONFLICT (always_one) DO UPDATE SET
+                    number    = excluded.number,
+                    epoch     = excluded.epoch,
+                    timestamp = excluded.timestamp",
+        )
+        .bind(i64::try_from(update.espresso_block.block).context("Espresso block overflow")?)
+        .bind(i64::try_from(update.espresso_block.epoch).context("Espresso epoch overflow")?)
+        .bind(
+            i64::try_from(update.espresso_block.timestamp)
+                .context("Espresso timestamp overflow")?,
+        )
+        .execute(tx.as_mut())
+        .await
+        .context("updating Espresso block")?;
+
+        // Apply changes to active node set.
+        for diff in update.diff {
+            match diff {
+                ActiveNodeSetDiff::NewEpoch(nodes) => {
+                    let nodes = nodes
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, addr)| {
+                            let i = i64::try_from(i).context("node index overflow")?;
+                            Ok((i, addr.to_string()))
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+
+                    // Remove nodes from previous epoch before inserting new nodes.
+                    sqlx::query("DELETE FROM active_node")
+                        .execute(tx.as_mut())
+                        .await
+                        .context("deleting old active node set")?;
+
+                    QueryBuilder::new(
+                        "INSERT INTO active_node (idx, address, votes, proposals, slots) ",
+                    )
+                    .push_values(nodes, |mut q, (i, address)| {
+                        q.push_bind(i)
+                            .push_bind(address)
+                            .push("0")
+                            .push("0")
+                            .push("0");
+                    })
+                    .build()
+                    .execute(tx.as_mut())
+                    .await
+                    .context("inserting new active node set")?;
+                }
+                ActiveNodeSetDiff::NewBlock {
+                    leader,
+                    failed_leaders,
+                    voters,
+                } => {
+                    let leader = i32::try_from(leader).context("leader index overflow")?;
+                    let voters = voters
+                        .iter_ones()
+                        .map(|i| i32::try_from(i).context("voter index overflow"))
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+
+                    // Increment leader's slot and proposal counts.
+                    sqlx::query(
+                        "UPDATE active_node SET proposals = proposals + 1, slots = slots + 1
+                            WHERE idx = $1",
+                    )
+                    .bind(leader)
+                    .execute(tx.as_mut())
+                    .await
+                    .context("updating leader stats")?;
+
+                    // Update slot counts for leaders who missed a proposal.
+                    if !failed_leaders.is_empty() {
+                        // Count the number of times each node index appears in `failed_leaders`.
+                        let mut increments: HashMap<i32, i32> = HashMap::new();
+                        for index in failed_leaders {
+                            let index =
+                                i32::try_from(index).context("failed leader index overflow")?;
+                            *increments.entry(index).or_default() += 1i32;
+                        }
+                        // Increment the slots count each node that appears in `failed_leaders` by
+                        // the number of times it appears.
+                        QueryBuilder::new(
+                            "UPDATE active_node AS n
+                                SET slots = n.slots + increments.count
+                                FROM (SELECT column1 AS idx, column2 AS count FROM (",
+                        )
+                        .push_values(increments, |mut q, (index, count)| {
+                            q.push_bind(index).push_bind(count);
+                        })
+                        .push(")) AS increments WHERE n.idx = increments.idx")
+                        .build()
+                        .execute(tx.as_mut())
+                        .await
+                        .context("updating failed leader stats")?;
+                    }
+
+                    // Update vote counts for everyone who signed the QC.
+                    if !voters.is_empty() {
+                        QueryBuilder::new("UPDATE active_node SET votes = votes + 1 WHERE idx IN ")
+                            .push_tuples(voters, |mut q, i| {
+                                q.push_bind(i);
+                            })
+                            .build()
+                            .execute(tx.as_mut())
+                            .await
+                            .context("updating voter stats")?;
+                    }
+                }
+            }
+        }
+
+        // Dole out rewards.
+        if !rewards.is_empty() {
+            let current_amounts =
+                QueryBuilder::new("SELECT address, amount FROM lifetime_rewards WHERE address IN ")
+                    .push_tuples(&rewards, |mut q, (addr, _)| {
+                        q.push_bind(addr.to_string());
+                    })
+                    .build_query_as::<(String, String)>()
+                    .fetch(tx.as_mut())
+                    .map_err(anyhow::Error::new)
+                    .and_then(|(addr, amount)| async move {
+                        let addr: Address = addr.parse().context("invalid address")?;
+                        let amount: ESPTokenAmount = amount.parse().context("invalid amount")?;
+                        Ok((addr, amount))
+                    })
+                    .try_collect::<HashMap<Address, ESPTokenAmount>>()
+                    .await
+                    .context("fetching current reward amounts")?;
+            let new_amounts = rewards.into_iter().map(|(addr, amount)| {
+                let new_amount = amount + current_amounts.get(&addr).copied().unwrap_or_default();
+                (addr.to_string(), new_amount.to_string())
+            });
+            QueryBuilder::new("INSERT INTO lifetime_rewards (address, amount) ")
+                .push_values(new_amounts, |mut q, (addr, amount)| {
+                    q.push_bind(addr);
+                    q.push_bind(amount);
+                })
+                .push("ON CONFLICT (address) DO UPDATE SET amount = excluded.amount")
+                .build()
+                .execute(tx.as_mut())
+                .await
+                .context("storing new reward amounts")?;
+        }
+
+        Ok(tx.commit().await?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1113,5 +1427,525 @@ mod tests {
         assert_eq!(wallet3.pending_undelegations.len(), 0);
         // NodeExitWithdrawal completed, so no more pending_exits
         assert_eq!(wallet3.pending_exits.len(), 0);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_new_epoch_from_genesis() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        // Prior to the first update being processed, we have no snapshot.
+        assert_eq!(persistence.active_node_set().await.unwrap(), None);
+
+        // Store an update with an Espresso block and a list of nodes.
+        let espresso_block = EpochAndBlock {
+            block: 100,
+            epoch: 200,
+            timestamp: 300,
+        };
+        let nodes = vec![Address::random(), Address::random()];
+        persistence
+            .apply_update(
+                ActiveNodeSetUpdate {
+                    espresso_block,
+                    diff: vec![ActiveNodeSetDiff::NewEpoch(nodes.clone())],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let snapshot = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(snapshot.espresso_block, espresso_block);
+        assert_eq!(
+            snapshot.nodes,
+            [ActiveNode::new(nodes[0]), ActiveNode::new(nodes[1])]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_new_epoch_nodes_added() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        // Prior to the first update being processed, we have no snapshot.
+        assert_eq!(persistence.active_node_set().await.unwrap(), None);
+
+        // Store an update with an Espresso block and a list of nodes.
+        let mut espresso_block = EpochAndBlock {
+            block: 100,
+            epoch: 200,
+            timestamp: 300,
+        };
+        let nodes = vec![Address::random(), Address::random()];
+        persistence
+            .apply_update(
+                ActiveNodeSetUpdate {
+                    espresso_block,
+                    diff: vec![
+                        ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                        // Populate some statistics. These will become stale in the next epoch and
+                        // we can check that they get cleared.
+                        ActiveNodeSetDiff::NewBlock {
+                            leader: 0,
+                            failed_leaders: vec![],
+                            voters: [true, true].into_iter().collect(),
+                        },
+                    ],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let snapshot = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(snapshot.espresso_block, espresso_block);
+        assert_eq!(snapshot.nodes.len(), nodes.len());
+        for (node, addr) in snapshot.nodes.into_iter().zip(&nodes) {
+            assert_eq!(node.address, *addr);
+            assert_ne!(node.votes, 0);
+        }
+
+        // Start a new epoch, expanding and reordering the list of nodes.
+        let new_nodes = vec![Address::random(), Address::random(), nodes[0], nodes[1]];
+        // On a new epoch event, the block number is allowed to increase by more than one.
+        espresso_block.block += 2;
+        persistence
+            .apply_update(
+                ActiveNodeSetUpdate {
+                    espresso_block,
+                    diff: vec![ActiveNodeSetDiff::NewEpoch(new_nodes.clone())],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let snapshot = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.nodes,
+            new_nodes
+                .iter()
+                .copied()
+                .map(ActiveNode::new)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_new_epoch_nodes_removed() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        // Prior to the first update being processed, we have no snapshot.
+        assert_eq!(persistence.active_node_set().await.unwrap(), None);
+
+        // Store an update with an Espresso block and a list of nodes.
+        let mut espresso_block = EpochAndBlock {
+            block: 100,
+            epoch: 200,
+            timestamp: 300,
+        };
+        let nodes = vec![Address::random(), Address::random()];
+        persistence
+            .apply_update(
+                ActiveNodeSetUpdate {
+                    espresso_block,
+                    diff: vec![
+                        ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                        // Populate some statistics. These will become stale in the next epoch and
+                        // we can check that they get cleared.
+                        ActiveNodeSetDiff::NewBlock {
+                            leader: 0,
+                            failed_leaders: vec![],
+                            voters: [true, true].into_iter().collect(),
+                        },
+                    ],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let snapshot = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(snapshot.espresso_block, espresso_block);
+        assert_eq!(snapshot.nodes.len(), nodes.len());
+        for (node, addr) in snapshot.nodes.into_iter().zip(&nodes) {
+            assert_eq!(node.address, *addr);
+            assert_ne!(node.votes, 0);
+        }
+
+        // Start a new epoch, removing the first node.
+        let new_nodes = vec![nodes[1]];
+        // On a new epoch event, the block number is allowed to increase by more than one.
+        espresso_block.block += 2;
+        persistence
+            .apply_update(
+                ActiveNodeSetUpdate {
+                    espresso_block,
+                    diff: vec![ActiveNodeSetDiff::NewEpoch(new_nodes.clone())],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let snapshot = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.nodes,
+            new_nodes
+                .iter()
+                .copied()
+                .map(ActiveNode::new)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_new_block_stats() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        let nodes = vec![
+            Address::random(),
+            Address::random(),
+            Address::random(),
+            Address::random(),
+        ];
+        let leader = 0;
+        let failed_leaders = vec![1, 2];
+        let voters = [false, false, true, true].into_iter().collect();
+
+        let update = ActiveNodeSetUpdate {
+            espresso_block: EpochAndBlock {
+                epoch: 0,
+                block: 0,
+                timestamp: 0,
+            },
+            diff: vec![
+                ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                ActiveNodeSetDiff::NewBlock {
+                    leader,
+                    failed_leaders,
+                    voters,
+                },
+            ],
+        };
+        persistence
+            .apply_update(update, Default::default())
+            .await
+            .unwrap();
+        let node_set = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(
+            node_set.nodes,
+            [
+                ActiveNode {
+                    address: nodes[0],
+                    votes: 0,
+                    proposals: 1,
+                    slots: 1,
+                },
+                ActiveNode {
+                    address: nodes[1],
+                    votes: 0,
+                    proposals: 0,
+                    slots: 1,
+                },
+                ActiveNode {
+                    address: nodes[2],
+                    votes: 1,
+                    proposals: 0,
+                    slots: 1,
+                },
+                ActiveNode {
+                    address: nodes[3],
+                    votes: 1,
+                    proposals: 0,
+                    slots: 0,
+                }
+            ]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_new_block_no_failed_leaders() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        let nodes = vec![Address::random(), Address::random()];
+        let leader = 0;
+        let voters = [false, true].into_iter().collect();
+
+        let update = ActiveNodeSetUpdate {
+            espresso_block: EpochAndBlock {
+                epoch: 0,
+                block: 0,
+                timestamp: 0,
+            },
+            diff: vec![
+                ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                ActiveNodeSetDiff::NewBlock {
+                    leader,
+                    failed_leaders: vec![],
+                    voters,
+                },
+            ],
+        };
+        persistence
+            .apply_update(update, Default::default())
+            .await
+            .unwrap();
+        let node_set = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(
+            node_set.nodes,
+            [
+                ActiveNode {
+                    address: nodes[0],
+                    votes: 0,
+                    proposals: 1,
+                    slots: 1,
+                },
+                ActiveNode {
+                    address: nodes[1],
+                    votes: 1,
+                    proposals: 0,
+                    slots: 0,
+                },
+            ]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_new_block_duplicate_failed_leaders() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        let nodes = vec![Address::random(), Address::random()];
+        let leader = 0;
+        let failed_leaders = vec![0, 1, 1];
+        let voters = [true, true].into_iter().collect();
+
+        let update = ActiveNodeSetUpdate {
+            espresso_block: EpochAndBlock {
+                epoch: 0,
+                block: 0,
+                timestamp: 0,
+            },
+            diff: vec![
+                ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                ActiveNodeSetDiff::NewBlock {
+                    leader,
+                    failed_leaders,
+                    voters,
+                },
+            ],
+        };
+        persistence
+            .apply_update(update, Default::default())
+            .await
+            .unwrap();
+        let node_set = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(
+            node_set.nodes,
+            [
+                ActiveNode {
+                    address: nodes[0],
+                    votes: 1,
+                    proposals: 1,
+                    slots: 2,
+                },
+                ActiveNode {
+                    address: nodes[1],
+                    votes: 1,
+                    proposals: 0,
+                    slots: 2,
+                },
+            ]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_rewards() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        // Query for unknown account.
+        assert_eq!(
+            persistence
+                .lifetime_rewards(Address::random())
+                .await
+                .unwrap(),
+            ESPTokenAmount::from(0)
+        );
+
+        // Apply two updates: one with a fresh account, and then one with both a fresh account and
+        // an existing account.
+        let accounts = [Address::random(), Address::random()];
+        let reward_updates = [
+            vec![(accounts[0], ESPTokenAmount::from(1))],
+            vec![
+                (accounts[0], ESPTokenAmount::from(2)),
+                (accounts[1], ESPTokenAmount::from(5)),
+            ],
+        ];
+        let mut update = ActiveNodeSetUpdate {
+            espresso_block: EpochAndBlock {
+                epoch: 0,
+                block: 0,
+                timestamp: 0,
+            },
+            diff: vec![],
+        };
+        persistence
+            .apply_update(update.clone(), reward_updates[0].clone())
+            .await
+            .unwrap();
+        update.espresso_block.block += 1;
+        persistence
+            .apply_update(update, reward_updates[1].clone())
+            .await
+            .unwrap();
+        assert_eq!(persistence.lifetime_rewards(accounts[0]).await.unwrap(), 3);
+        assert_eq!(persistence.lifetime_rewards(accounts[1]).await.unwrap(), 5);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_idempotency() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        // Initialize with a set of nodes.
+        let mut espresso_block = EpochAndBlock {
+            block: 100,
+            epoch: 200,
+            timestamp: 300,
+        };
+        let nodes = vec![Address::random()];
+        persistence
+            .apply_update(
+                ActiveNodeSetUpdate {
+                    espresso_block,
+                    diff: vec![ActiveNodeSetDiff::NewEpoch(nodes.clone())],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+
+        // Apply the same update twice, check that the node stats are only incremented once.
+        espresso_block.block += 1;
+        let update = ActiveNodeSetUpdate {
+            espresso_block,
+            diff: vec![ActiveNodeSetDiff::NewBlock {
+                leader: 0,
+                failed_leaders: vec![0],
+                voters: [true].into_iter().collect(),
+            }],
+        };
+        persistence
+            .apply_update(update.clone(), Default::default())
+            .await
+            .unwrap();
+        persistence
+            .apply_update(update, Default::default())
+            .await
+            .unwrap();
+
+        let snapshot = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(snapshot.espresso_block, espresso_block);
+        assert_eq!(
+            snapshot.nodes,
+            [ActiveNode {
+                address: nodes[0],
+                votes: 1,
+                proposals: 1,
+                slots: 2
+            }]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_set_skipped_update() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        // Initialize with a set of nodes.
+        let espresso_block = EpochAndBlock {
+            block: 100,
+            epoch: 200,
+            timestamp: 300,
+        };
+        let nodes = vec![Address::random()];
+        persistence
+            .apply_update(
+                ActiveNodeSetUpdate {
+                    espresso_block,
+                    diff: vec![ActiveNodeSetDiff::NewEpoch(nodes.clone())],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+
+        // Apply an update that skips a block; check that node statistics are not affected.
+        let update = ActiveNodeSetUpdate {
+            espresso_block: EpochAndBlock {
+                block: espresso_block.block + 2,
+                ..espresso_block
+            },
+            diff: vec![ActiveNodeSetDiff::NewBlock {
+                leader: 0,
+                failed_leaders: vec![0],
+                voters: [true].into_iter().collect(),
+            }],
+        };
+        persistence
+            .apply_update(update.clone(), Default::default())
+            .await
+            .unwrap_err();
+
+        let snapshot = persistence.active_node_set().await.unwrap().unwrap();
+        assert_eq!(snapshot.espresso_block, espresso_block);
+        assert_eq!(snapshot.nodes, [ActiveNode::new(nodes[0])]);
     }
 }

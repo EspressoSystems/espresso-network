@@ -847,6 +847,7 @@ impl ContractDeployment {
             &provider,
             self.stake_table_addr,
             validators,
+            None,
             delegation_config,
         )
         .await
@@ -951,6 +952,7 @@ impl BackgroundTaskState {
             &provider,
             self.stake_table_addr,
             vec![(signer.clone(), bls_key.clone(), schnorr_key.clone())],
+            None,
             DelegationConfig::MultipleDelegators,
         )
         .await

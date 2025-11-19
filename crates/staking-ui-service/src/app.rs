@@ -8,28 +8,36 @@ use tide_disco::{Api, App, api::ApiError};
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use crate::{
-    error::{Error, Result, ResultExt},
-    input::l1::{self, L1Persistence},
+    error::{Error, Result, ResultExt, ensure},
+    input::{
+        espresso::{self, EspressoClient, EspressoPersistence},
+        l1::{self, L1Persistence},
+    },
 };
 
 type Version = StaticVersion<0, 1>;
 
 /// HTTP server state.
 #[derive(Clone, Debug)]
-pub struct State<S> {
-    l1: Arc<RwLock<l1::State<S>>>,
+pub struct State<L, E> {
+    l1: Arc<RwLock<L>>,
+    espresso: Arc<RwLock<E>>,
 }
 
-impl<S> State<S> {
+impl<L, E> State<L, E> {
     /// Set up an app with the given state.
-    pub fn new(l1: Arc<RwLock<l1::State<S>>>) -> Self {
-        Self { l1 }
+    pub fn new(l1: Arc<RwLock<L>>, espresso: Arc<RwLock<E>>) -> Self {
+        Self { l1, espresso }
     }
 }
 
-impl<S> State<S>
+type AppState<LS, ES, EC> = State<l1::State<LS>, espresso::State<ES, EC>>;
+
+impl<LS, ES, EC> AppState<LS, ES, EC>
 where
-    S: L1Persistence + Sync + 'static,
+    LS: L1Persistence + Sync + 'static,
+    ES: EspressoPersistence + Send + Sync + 'static,
+    EC: EspressoClient + Send + Sync + 'static,
 {
     /// Run the app.
     ///
@@ -55,9 +63,13 @@ where
     }
 }
 
-fn bind_handlers<S>(api: &mut Api<State<S>, Error, Version>) -> Result<(), ApiError>
+fn bind_handlers<LS, ES, EC>(
+    api: &mut Api<AppState<LS, ES, EC>, Error, Version>,
+) -> Result<(), ApiError>
 where
-    S: L1Persistence + Sync + 'static,
+    LS: L1Persistence + Sync + 'static,
+    ES: EspressoPersistence + Send + Sync + 'static,
+    EC: EspressoClient + Send + Sync + 'static,
 {
     api.at("l1_block_latest", |_, state| {
         async move { Ok(state.l1.read().await.latest_l1_block()) }.boxed()
@@ -118,6 +130,46 @@ where
             state.l1.read().await.wallet_update(address, hash)
         }
         .boxed()
+    })?
+    .at("active_node_set_snapshot", |_, state| {
+        async move { state.espresso.read().await.active_node_set().await }.boxed()
+    })?
+    .at("active_node_set_snapshot_indexed", |req, state| {
+        async move {
+            let block: u64 = req.integer_param("block")?;
+            let espresso = state.espresso.read().await;
+            let latest = espresso.latest_espresso_block();
+            if block < latest {
+                return Err(Error::gone().context(format!(
+                    "request block {block} is too old (earliest available is {latest})"
+                )));
+            } else if block > latest {
+                return Err(Error::not_found().context(format!(
+                    "request block {block} is not yet available (latest available is {latest})"
+                )));
+            }
+
+            let snapshot = espresso.active_node_set().await?;
+            // Sanity check that we got the right snapshot (since we hold a read lock on the
+            // Espresso state between checking the block number and getting the snapshot, this
+            // should always be true).
+            ensure!(
+                snapshot.espresso_block.block == block,
+                Error::internal().context(format!(
+                    "internal inconsistency: snapshot returned for block {} is not for latest block {block}",
+                    snapshot.espresso_block.block
+                ))
+            );
+            Ok(snapshot)
+        }
+        .boxed()
+    })?
+    .at("active_node_set_update", |req, state| {
+        async move {
+            let block = req.integer_param("block")?;
+            state.espresso.read().await.active_node_set_update(block)
+        }
+        .boxed()
     })?;
 
     Ok(())
@@ -129,43 +181,75 @@ mod test {
 
     use crate::{
         input::l1::testing::MemoryStorage,
-        types::{
-            common::Address,
-            wallet::{WalletSnapshot, WalletUpdate},
-        },
+        types::wallet::{WalletSnapshot, WalletUpdate},
     };
-    use hotshot_contract_adapter::sol_types::StakeTableV2::StakeTableV2Events;
+    use alloy::primitives::Address;
+    use futures::future::try_join;
     use portpicker::pick_unused_port;
     use surf_disco::Client;
     use tide_disco::{Error as _, StatusCode};
     use tokio::{task::spawn, time::sleep};
 
     use crate::types::{common::U256, wallet::WalletDiff};
-    use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, Undelegated};
+    use hotshot_contract_adapter::sol_types::StakeTableV2::{
+        Delegated, StakeTableV2Events, Undelegated,
+    };
 
     use crate::{
-        input::l1::{
-            BlockInput, Snapshot,
-            testing::{
-                NoCatchup, VecStream, block_id, block_snapshot, subscribe_until,
-                validator_registered_event,
+        input::{
+            espresso::testing::{MemoryStorage as EspressoStorage, MockEspressoClient},
+            l1::{
+                BlockInput, Snapshot,
+                testing::{
+                    MemoryStorage as L1Storage, NoCatchup, VecStream, block_id, block_snapshot,
+                    subscribe_until, validator_registered_event,
+                },
             },
         },
         types::{
             common::{L1BlockId, NodeSetEntry},
-            global::{FullNodeSetDiff, FullNodeSetSnapshot, FullNodeSetUpdate},
+            global::{
+                ActiveNodeSetDiff, ActiveNodeSetSnapshot, ActiveNodeSetUpdate, FullNodeSetDiff,
+                FullNodeSetSnapshot, FullNodeSetUpdate,
+            },
         },
     };
 
     use super::*;
+
+    /// Generate a trivial Espresso state.
+    ///
+    /// This is useful for testing L1-based APIs, which don't depend on Espresso at all.
+    async fn empty_espresso_state() -> espresso::State<EspressoStorage, MockEspressoClient> {
+        let mut client = MockEspressoClient::new(1).await;
+        // We need just 1 block, to start the epoch.
+        client.push_leaf(0, [true]).await;
+
+        let storage = EspressoStorage::default();
+        espresso::State::new(storage, client).await.unwrap()
+    }
+
+    /// Generate a trivial L1 state.
+    ///
+    /// This is useful for testing Espresso-based APIs, which don't depend on the L1 at all.
+    async fn empty_l1_state() -> l1::State<L1Storage> {
+        l1::State::new(
+            Default::default(),
+            Snapshot::empty(block_snapshot(0)),
+            &NoCatchup,
+        )
+        .await
+        .unwrap()
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_l1_endpoints() {
         let port = pick_unused_port().unwrap();
         let url = format!("http://localhost:{port}").parse().unwrap();
 
-        let l1 = l1::State::<MemoryStorage>::with_l1_block_range(1, 3);
-        let state = State::new(Arc::new(RwLock::new(l1)));
+        let l1 = l1::State::<L1Storage>::with_l1_block_range(1, 3);
+        let espresso = empty_espresso_state().await;
+        let state = State::new(Arc::new(RwLock::new(l1)), Arc::new(RwLock::new(espresso)));
         let task = spawn(state.serve(port));
 
         tracing::info!("waiting for service to become available");
@@ -219,7 +303,7 @@ mod test {
         // Start with an empty state.
         let l1 = Arc::new(RwLock::new(
             l1::State::new(
-                MemoryStorage::default(),
+                L1Storage::default(),
                 Snapshot::empty(block_snapshot(1)),
                 &NoCatchup,
             )
@@ -237,7 +321,7 @@ mod test {
         );
         subscribe_until(&l1, inputs, |l1| l1.latest_l1_block().number == 2).await;
 
-        let state = State::new(l1);
+        let state = State::new(l1, Arc::new(RwLock::new(empty_espresso_state().await)));
         let task = spawn(state.serve(port));
 
         tracing::info!("waiting for service to become available");
@@ -342,7 +426,10 @@ mod test {
 
         subscribe_until(&l1, inputs, |l1| l1.latest_l1_block().number == 3).await;
 
-        let state = State::new(l1.clone());
+        let state = State::new(
+            l1.clone(),
+            Arc::new(RwLock::new(empty_espresso_state().await)),
+        );
         let task = spawn(state.serve(port));
 
         let client = Client::<Error, Version>::new(url);
@@ -446,6 +533,140 @@ mod test {
                 && w.node == validator_address
                 && w.amount == U256::from(400)
         ));
+
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_active_node_endpoints() {
+        let port = pick_unused_port().unwrap();
+        let url = format!("http://localhost:{port}/v0/staking/")
+            .parse()
+            .unwrap();
+
+        let mut espresso = MockEspressoClient::new(2).await;
+        for _ in 0..10 {
+            // Skip a lot of views between each leaf, so that every leader gets charged with some
+            // missed slots, which we can observe in the resulting statistics.
+            espresso.push_leaf(100, [true, false]).await;
+        }
+        let last_leaf = espresso.last_leaf().0.clone();
+        let epoch = espresso.current_epoch();
+        let epoch_height = espresso.epoch_height();
+        let nodes = espresso.stake_table_for_epoch(epoch).await.unwrap();
+
+        let espresso = espresso::State::new(EspressoStorage::default(), espresso)
+            .await
+            .unwrap();
+        // Handle the leaves we gave it.
+        let espresso = Arc::new(RwLock::new(espresso));
+        let update_task = espresso::State::update_task(espresso.clone());
+
+        let l1 = empty_l1_state().await;
+        let state = State::new(Arc::new(RwLock::new(l1)), espresso);
+        let server_task = state.serve(port);
+
+        let task = spawn(try_join(update_task, server_task));
+
+        tracing::info!("waiting for service to become available");
+        sleep(Duration::from_secs(1)).await;
+        let client = Client::<Error, Version>::new(url);
+        client.connect(None).await;
+
+        // Wait until we process the Espresso blocks.
+        let snapshot = loop {
+            let snapshot = client
+                .get::<ActiveNodeSetSnapshot>("nodes/active")
+                .send()
+                .await
+                .unwrap();
+            assert!(snapshot.espresso_block.block <= last_leaf.height());
+            assert_eq!(snapshot.nodes.len(), 2);
+            assert_eq!(snapshot.nodes[0].address, nodes[0].account);
+            assert_eq!(snapshot.nodes[1].address, nodes[1].account);
+
+            if snapshot.espresso_block.block == last_leaf.height() {
+                tracing::info!(?snapshot, "got final active node set");
+                break snapshot;
+            }
+
+            tracing::info!(?snapshot, "waiting for final active node snapshot");
+            sleep(Duration::from_secs(1)).await;
+        };
+
+        // Sanity check the node statistics.
+        assert!(snapshot.nodes[0].leader_participation > 0f32.into());
+        assert!(snapshot.nodes[0].leader_participation < 1f32.into());
+        assert_eq!(snapshot.nodes[0].voter_participation, 1f32.into());
+
+        assert!(snapshot.nodes[1].leader_participation > 0f32.into());
+        assert!(snapshot.nodes[1].leader_participation < 1f32.into());
+        assert_eq!(snapshot.nodes[1].voter_participation, 0f32.into());
+
+        // Check indexed snapshot endpoint.
+        let indexed_snapshot = client
+            .get::<ActiveNodeSetSnapshot>(&format!("nodes/active/{}", last_leaf.height()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(indexed_snapshot, snapshot);
+
+        // Check old and future indexded snapshots.
+        let err = client
+            .get::<ActiveNodeSetSnapshot>(&format!("nodes/active/{}", last_leaf.height() - 1))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::GONE);
+        let err = client
+            .get::<ActiveNodeSetSnapshot>(&format!("nodes/active/{}", last_leaf.height() + 1))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        // We can get the updates for blocks in this epoch.
+        for i in 1..=10 {
+            let block = (epoch - 1) * epoch_height + i;
+            let update = client
+                .get::<ActiveNodeSetUpdate>(&format!("nodes/active/updates/{block}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(update.espresso_block.block, block);
+            assert_eq!(update.espresso_block.epoch, epoch);
+            if i == 1 {
+                assert_eq!(update.diff.len(), 2);
+                assert!(matches!(update.diff[0], ActiveNodeSetDiff::NewEpoch(_)));
+                assert!(matches!(update.diff[1], ActiveNodeSetDiff::NewBlock { .. }));
+            } else {
+                assert_eq!(update.diff.len(), 1);
+                assert!(matches!(update.diff[0], ActiveNodeSetDiff::NewBlock { .. }));
+            }
+        }
+
+        // Updates from the previous epoch are gone.
+        let err = client
+            .get::<ActiveNodeSetUpdate>(&format!(
+                "nodes/active/updates/{}",
+                (epoch - 1) * epoch_height
+            ))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::GONE);
+
+        // Updates from future blocks are not available.
+        let err = client
+            .get::<ActiveNodeSetUpdate>(&format!(
+                "nodes/active/updates/{}",
+                (epoch - 1) * epoch_height + 11
+            ))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
 
         task.abort();
         let _ = task.await;

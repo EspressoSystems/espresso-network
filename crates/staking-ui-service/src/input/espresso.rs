@@ -78,8 +78,9 @@ pub struct State<S, C> {
 
 impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
     pub async fn new(storage: S, espresso: C) -> Result<Self> {
+        let current_epoch = espresso.wait_for_epochs().await;
+
         // Fetch the current epoch state.
-        let current_epoch = espresso.current_epoch().await?;
         let epoch_height = espresso.epoch_height().await?;
         let epoch = EpochState::download(&espresso, epoch_height, current_epoch)
             .await
@@ -88,8 +89,8 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         // Initialize active node storage to the most recent of:
         // * saved active node set
         // * start of current epoch
-        let (latest_espresso_block, latest_espresso_view) = match storage.active_node_set().await {
-            Ok(snapshot) if snapshot.espresso_block.epoch == current_epoch => {
+        let (latest_espresso_block, latest_espresso_view) = match storage.active_node_set().await? {
+            Some(snapshot) if snapshot.espresso_block.epoch == current_epoch => {
                 tracing::info!(
                     ?snapshot,
                     current_epoch,
@@ -107,10 +108,11 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
                     })?;
                 (snapshot.espresso_block.block, leaf.view_number())
             }
-            _ => {
+            snapshot => {
                 tracing::info!(
                     current_epoch,
-                    "missing recent snapshot, will start from beginning of epoch"
+                    ?snapshot,
+                    "stored snapshot is missing or out of date, will start from beginning of epoch"
                 );
 
                 // Set our state to the last block of the previous epoch, so that when we start up,
@@ -133,9 +135,21 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         })
     }
 
+    /// The latest Espresso block number ingested.
+    ///
+    /// This is the same block which the latest [`active_node_set`](Self::active_node_set) snapshot
+    /// corresponds to.
+    pub fn latest_espresso_block(&self) -> u64 {
+        self.latest_espresso_block
+    }
+
     /// Get the active node set as of the latest Espresso block.
     pub async fn active_node_set(&self) -> Result<ActiveNodeSetSnapshot> {
-        let active_nodes = self.storage.active_node_set().await?;
+        let active_nodes = self
+            .storage
+            .active_node_set()
+            .await?
+            .ok_or_else(Error::not_found)?;
         Ok(active_nodes.into_snapshot(self.epoch.start_block(self.epoch_height)))
     }
 
@@ -461,7 +475,7 @@ impl EpochState {
 /// Persistent storage for data derived from Espresso.
 pub trait EspressoPersistence {
     /// Get the latest persisted active node set.
-    fn active_node_set(&self) -> impl Send + Future<Output = Result<ActiveNodeSet>>;
+    fn active_node_set(&self) -> impl Send + Future<Output = Result<Option<ActiveNodeSet>>>;
 
     /// Get the lifetime rewards earned by the requested account.
     fn lifetime_rewards(
@@ -471,7 +485,7 @@ pub trait EspressoPersistence {
 
     /// Apply changes to persistent storage after the given Espresso block.
     fn apply_update(
-        &self,
+        &mut self,
         update: ActiveNodeSetUpdate,
         rewards: Vec<(Address, ESPTokenAmount)>,
     ) -> impl Send + Future<Output = Result<()>>;
@@ -542,8 +556,10 @@ impl ActiveNode {
 
 /// Interface for querying data from Espresso.
 pub trait EspressoClient: Clone {
-    /// Get the number of the epoch that Espresso is currently in.
-    fn current_epoch(&self) -> impl Send + Future<Output = Result<u64>>;
+    /// Wait until epochs begin, in case the service is started before the POS upgrade.
+    ///
+    /// Eventually resolves with the current epoch number.
+    fn wait_for_epochs(&self) -> impl Send + Future<Output = u64>;
 
     /// Get the configured epoch height, in blocks.
     fn epoch_height(&self) -> impl Send + Future<Output = Result<u64>>;
@@ -617,7 +633,7 @@ mod test {
         {
             // Check preloaded state.
             let state = state.read().await;
-            assert_eq!(state.latest_espresso_block, leaf.height() - 1);
+            assert_eq!(state.latest_espresso_block(), leaf.height() - 1);
             assert_eq!(state.latest_espresso_view, leaf.view_number() - 2);
             assert_eq!(state.epoch.number(), epoch);
         }
@@ -633,6 +649,7 @@ mod test {
         let snapshot = state.active_node_set().await.unwrap();
         assert_eq!(snapshot.espresso_block.block, leaf.height());
         assert_eq!(snapshot.nodes.len(), 3);
+        assert_eq!(state.latest_espresso_block(), leaf.height());
 
         tracing::info!(
             leader = state.epoch.leader(leaf.view_number()),
@@ -734,6 +751,7 @@ mod test {
 
         let state = state.read().await;
         let snapshot = state.active_node_set().await.unwrap();
+        assert_eq!(state.latest_espresso_block(), last_leaf.height());
         assert_eq!(snapshot.espresso_block.block, last_leaf.height());
         assert_eq!(snapshot.espresso_block.epoch, 3);
         assert_eq!(

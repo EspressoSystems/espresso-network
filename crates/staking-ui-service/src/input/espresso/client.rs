@@ -8,6 +8,7 @@ use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::utils::epoch_from_block_number;
 use surf_disco::{Client, Url};
 use tokio::time::{sleep, timeout};
+use tracing::instrument;
 use vbs::version::StaticVersion;
 
 use crate::{Error, Result, error::ensure, input::espresso::EspressoClient};
@@ -42,6 +43,7 @@ impl QueryServiceOptions {
 #[derive(Clone, Debug)]
 pub struct QueryServiceClient {
     inner: Client<hotshot_query_service::Error, FormatVersion>,
+    epoch_start_block: u64,
     epoch_height: u64,
     stream_timeout: Duration,
 }
@@ -58,6 +60,7 @@ impl QueryServiceClient {
         Ok(Self {
             inner,
             epoch_height: config.hotshot_config().blocks_per_epoch(),
+            epoch_start_block: config.hotshot_config().epoch_start_block(),
             stream_timeout: opt.stream_timeout,
         })
     }
@@ -120,12 +123,48 @@ impl QueryServiceClient {
 }
 
 impl EspressoClient for QueryServiceClient {
-    async fn current_epoch(&self) -> Result<u64> {
-        let block_height = self.inner.get::<u64>("node/block-height").send().await?;
-        let latest_block = block_height - 1;
+    #[instrument(skip(self))]
+    async fn wait_for_epochs(&self) -> u64 {
+        // Wait until the first real epoch starts, which is 2 epochs after the "epoch" containing
+        // epochs start block.
+        let first_epoch = epoch_from_block_number(self.epoch_start_block, self.epoch_height) + 2;
+        let first_block_in_epoch = (first_epoch - 1) * self.epoch_height + 1;
 
-        tracing::debug!(latest_block, "getting current epoch from latest block");
-        Ok(epoch_from_block_number(latest_block, self.epoch_height))
+        // Check if we are already in a later epoch.
+        let last_block = loop {
+            match self.inner.get::<u64>("node/block-height").send().await {
+                Ok(0) => {
+                    tracing::info!("waiting for Espresso blocks");
+                }
+                Ok(height) => break height - 1,
+                Err(err) => {
+                    tracing::warn!("error getting block height, will retry: {err:#}");
+                }
+            }
+            sleep(Duration::from_secs(1)).await;
+        };
+        if last_block >= first_block_in_epoch {
+            let current_epoch = epoch_from_block_number(last_block, self.epoch_height);
+            tracing::info!(
+                last_block,
+                first_epoch,
+                first_block_in_epoch,
+                current_epoch,
+                "epochs have already started"
+            );
+            return current_epoch;
+        }
+
+        // We have not reached the first block in the first real epoch, wait for it.
+        tracing::info!(
+            last_block,
+            first_epoch,
+            first_block_in_epoch,
+            "waiting for epochs to start"
+        );
+        self.leaves(first_block_in_epoch).next().await;
+
+        first_epoch
     }
 
     async fn epoch_height(&self) -> Result<u64> {
@@ -192,24 +231,16 @@ impl EspressoClient for QueryServiceClient {
 mod test {
     use std::sync::Arc;
 
-    use crate::{
-        Error,
-        input::{
-            espresso::{State, testing::MemoryStorage},
-            l1::testing::ContractDeployment,
-        },
+    use crate::input::espresso::{
+        State,
+        testing::{EPOCH_HEIGHT, MemoryStorage, start_pos_network},
     };
 
     use super::*;
 
-    use alloy::{network::EthereumWallet, node_bindings::Anvil, providers::ProviderBuilder};
     use async_lock::RwLock;
-    use espresso_contract_deployer::build_signer;
-    use espresso_types::{
-        ChainConfig, MaxSupportedVersion, SequencerVersions, ValidatedState,
-        traits::PersistenceOptions,
-    };
-    use hotshot_query_service::data_source::{SqlDataSource, sql::testing::TmpDb};
+    use espresso_types::{MaxSupportedVersion, SequencerVersions, traits::PersistenceOptions};
+    use hotshot_query_service::data_source::SqlDataSource;
     use hotshot_types::{
         data::EpochNumber,
         traits::{
@@ -227,11 +258,7 @@ mod test {
         },
         testing::TestConfigBuilder,
     };
-    use staking_cli::{
-        DEV_MNEMONIC,
-        demo::{DelegationConfig, StakingTransactions},
-    };
-    use surf_disco::{Error as _, StatusCode};
+    use surf_disco::{Error, StatusCode};
     use tokio::task::spawn;
 
     type V = SequencerVersions<MaxSupportedVersion, MaxSupportedVersion>;
@@ -244,68 +271,17 @@ mod test {
         let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
         let client = QueryServiceClient::new(opt).await.unwrap();
 
-        // Check that the client's view of the current epoch remains consistent, and wait for an
-        // epoch change.
-        let first_epoch = *network
-            .server
-            .decided_leaf()
-            .await
-            .epoch(EPOCH_HEIGHT)
-            .unwrap();
-        tracing::info!(first_epoch);
-        let next_epoch = loop {
-            // What epoch does the client think it is?
-            let mut epoch_from_client = client.current_epoch().await.unwrap();
+        // Wait for epochs to start and check that the client returns the correct starting epoch
+        // number.
+        let first_epoch = client.wait_for_epochs().await;
+        assert_eq!(first_epoch, 3);
 
-            // Grab the expected epoch directly from consensus.
-            let leaf = network.server.decided_leaf().await;
-            let epoch = *leaf.epoch(EPOCH_HEIGHT).unwrap();
-
-            if epoch_from_client != epoch {
-                // It's possible for the consensus epoch to run slightly ahead of the client, both
-                // because we sampled it later, and because the client is ultimately reading from
-                // the node's database, and there is a very small delay in data propagating from the
-                // consensus object to the database. If the client is behind, though, it should not
-                // be far behind, and it should catch up very quickly.
-                assert_eq!(epoch_from_client + 1, epoch);
-                // This should only happen if we have just now changed epochs.
-                assert_eq!(
-                    leaf.height() % EPOCH_HEIGHT,
-                    1,
-                    "client is behind consensus, but we didn't just enter a new epoch at height {}",
-                    leaf.height()
-                );
-                tracing::info!(
-                    epoch_from_client,
-                    epoch,
-                    "client is 1 epoch behind consensus, waiting for it to catch up"
-                );
-                sleep(Duration::from_secs(2)).await;
-                epoch_from_client = client.current_epoch().await.unwrap();
-            }
-
-            tracing::info!(
-                epoch,
-                epoch_from_client,
-                "comparing epoch from client vs epoch from last decided leaf {}",
-                leaf.height()
-            );
-            assert_eq!(epoch_from_client, epoch);
-
-            if epoch > first_epoch {
-                tracing::info!(height = leaf.height(), epoch, first_epoch, "changed epoch");
-                break epoch;
-            }
-
-            tracing::info!(
-                epoch,
-                height = leaf.block_header().height(),
-                view = ?leaf.view_number(),
-                "waiting for epoch change"
-            );
-            sleep(Duration::from_secs(1)).await;
-        };
-        tracing::info!(next_epoch);
+        // Wait for the next epoch to start and check that `wait_for_epochs` then returns the
+        // _current_ epoch number.
+        let next_epoch = first_epoch + 1;
+        let next_epoch_first_block = (next_epoch - 1) * EPOCH_HEIGHT + 1;
+        client.leaves(next_epoch_first_block).next().await;
+        assert_eq!(client.wait_for_epochs().await, next_epoch);
 
         // Check stake table.
         for epoch in first_epoch..=next_epoch {
@@ -555,110 +531,5 @@ mod test {
             .await
             .active_validators(&epoch)
             .unwrap()
-    }
-
-    const EPOCH_HEIGHT: u64 = 20;
-
-    async fn start_pos_network(port: u16) -> (TestNetwork<impl PersistenceOptions, 1, V>, TmpDb) {
-        // Deploy PoS contracts.
-        let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-        let rpc_url = anvil.endpoint_url();
-        let deployment = ContractDeployment::deploy(rpc_url.clone())
-            .await
-            .expect("Failed to deploy contracts");
-
-        // Configure proof of stake to start immediately.
-        let test_config = TestConfigBuilder::<1>::default()
-            .epoch_height(EPOCH_HEIGHT)
-            .anvil_provider(anvil)
-            .build();
-
-        // Set stake table address in consensus config.
-        let chain_config = ChainConfig {
-            stake_table_contract: Some(deployment.stake_table_addr),
-            ..Default::default()
-        };
-        let state = ValidatedState {
-            chain_config: chain_config.into(),
-            ..Default::default()
-        };
-
-        // Register test nodes so they will be able to participate once the epoch changes.
-        let signer = build_signer(DEV_MNEMONIC, 0);
-        let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(signer.clone()))
-            .connect_http(rpc_url.clone());
-        let mut txs = StakingTransactions::create(
-            rpc_url,
-            &provider,
-            deployment.stake_table_addr,
-            test_config.staking_priv_keys(),
-            DelegationConfig::MultipleDelegators,
-        )
-        .await
-        .unwrap();
-        txs.apply_all().await.unwrap();
-
-        // Start network.
-        let storage = DataSource::create_storage().await;
-        let persistence =
-            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
-        let options =
-            SqlDataSource::options(&storage, Options::with_port(port)).config(Default::default());
-        let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(options.clone())
-            .persistences([persistence.clone()])
-            .network_config(test_config)
-            .states([state])
-            .build();
-        let network = TestNetwork::new(config, V::new()).await;
-
-        // Wait for the first epoch with dynamic stake table.
-        loop {
-            let leaf = network.server.decided_leaf().await;
-            let epoch = leaf.epoch(EPOCH_HEIGHT).unwrap();
-            let stake_table = get_stake_table(&network, epoch).await;
-
-            if !stake_table.is_empty() {
-                tracing::info!(?epoch, "reached dynamic stake table");
-
-                // Wait for API to catch up with internal state.
-                let client = surf_disco::Client::<Error, FormatVersion>::new(
-                    format!("http://localhost:{port}").parse().unwrap(),
-                );
-                loop {
-                    let block_height = client.get::<u64>("node/block-height").send().await.unwrap();
-                    if block_height > leaf.height() {
-                        tracing::info!(
-                            ?epoch,
-                            block_height,
-                            leaf.height = leaf.height(),
-                            "API caught up to leaf with epochs"
-                        );
-                        break;
-                    }
-
-                    tracing::info!(
-                        ?epoch,
-                        block_height,
-                        leaf.height = leaf.height(),
-                        "waiting for API to catch up to leaf with epochs"
-                    );
-                    sleep(Duration::from_secs(1)).await;
-                }
-
-                break;
-            }
-
-            tracing::info!(
-                ?epoch,
-                height = leaf.block_header().height(),
-                view = ?leaf.view_number(),
-                "waiting for epoch change"
-            );
-            sleep(Duration::from_secs(1)).await;
-        }
-
-        (network, storage)
     }
 }

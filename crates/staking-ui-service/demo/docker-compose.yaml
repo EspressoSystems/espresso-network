@@ -1,13 +1,25 @@
 services:
   l1:
-    image: ghcr.io/espressosystems/geth-l1-staging:main
-    command: --dev --dev.period=1
+    image: ghcr.io/foundry-rs/foundry:stable
+    environment:
+      ANVIL_IP_ADDR: "0.0.0.0"
+    working_dir: /anvil
     ports:
-      - $ESPRESSO_SEQUENCER_L1_PORT:8545
-      - $ESPRESSO_SEQUENCER_L1_WS_PORT:8546
+      - "$ESPRESSO_SEQUENCER_L1_PORT:8545"
+      - "$ESPRESSO_SEQUENCER_L1_WS_PORT:8545"
+    # Run anvil with fast block time _and_ fast finalization time. This lets us drive Espresso
+    # epochs (which rely on the L1 finalized block) really fast, in turn.
+    command: [ anvil --block-time 1 --slots-in-an-epoch 3 ]
+    healthcheck:
+      test: cast block-number
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
 
   espresso-dev-node:
-    image: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:20250826
+    image: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:latest
     ports:
       - "$ESPRESSO_SEQUENCER_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
       - "$ESPRESSO_BUILDER_PORT:$ESPRESSO_BUILDER_PORT"
@@ -47,6 +59,7 @@ services:
       - ESPRESSO_STAKING_SERVICE_L1_WS=ws://l1:$ESPRESSO_SEQUENCER_L1_WS_PORT
       - ESPRESSO_STAKING_SERVICE_STAKE_TABLE_ADDRESS
       - ESPRESSO_STAKING_SERVICE_REWARD_CONTRACT_ADDRESS
+      - ESPRESSO_STAKING_SERVICE_ESPRESSO_URL=http://espresso-dev-node:$ESPRESSO_SEQUENCER_API_PORT/v1
       - RUST_LOG
       - RUST_LOG_FORMAT
     depends_on:

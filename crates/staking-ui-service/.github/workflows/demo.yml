@@ -45,6 +45,7 @@ jobs:
             --reward-contract-address 0x0000000000000000000000000000000000000000 \
             --http-providers http://localhost:8545 \
             --l1-ws-provider ws://localhost:8546 \
+            --espresso-url http://localhost:24000/v1 \
             2>&1 >/tmp/demo-log.txt &
 
       - name: Smoketest
