@@ -921,6 +921,8 @@ pub async fn get_leader_and_fetch_missing_rewards(
         .leader(view, Some(epoch))
         .context(format!("leader for epoch {epoch:?} not found"))?;
 
+    tracing::debug!("Selected leader: {leader} for view {view} and epoch {epoch}");
+
     let validator = membership
         .get_validator_config(&epoch, leader)
         .context("validator not found")?;
