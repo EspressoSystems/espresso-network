@@ -28,6 +28,7 @@ flag `--all-features` when building the sequencer binary target.
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
+    console_subscriber::init();
     // If we compiled with the embedded-db feature **and** are running it now
     // something is wrong.
     #[cfg(feature = "embedded-db")]
