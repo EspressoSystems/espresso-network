@@ -147,6 +147,8 @@ serde-inline-default = "0.2"
 serde_bytes = { version = "0.11" }
 sha2 = "0.10"
 tokio = { version = "1", default-features = false, features = [
+    "full",
+    "tracing",
     "rt-multi-thread",
     "macros",
     "parking_lot",
