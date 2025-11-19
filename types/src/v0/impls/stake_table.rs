@@ -245,6 +245,10 @@ impl StakeTableState {
         }
     }
 
+    pub fn validators(&self) -> &ValidatorMap {
+        &self.validators
+    }
+
     pub fn into_validators(self) -> ValidatorMap {
         self.validators
     }
@@ -254,7 +258,7 @@ impl StakeTableState {
     ///
     /// This function MUST NOT modify `self` if the event is invalid. All validation
     /// checks must be performed before any state modifications occur.
-    fn apply_event(&mut self, event: StakeTableEvent) -> ApplyEventResult<()> {
+    pub fn apply_event(&mut self, event: StakeTableEvent) -> ApplyEventResult<()> {
         match event {
             StakeTableEvent::Register(ValidatorRegistered {
                 account,
