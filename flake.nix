@@ -65,27 +65,12 @@
         export PATH="$CARGO_TARGET_DIR/debug:$PATH"
       '';
 
-      solhintPkg = { buildNpmPackage, fetchFromGitHub }:
-        buildNpmPackage rec {
-          pname = "solhint";
-          version = "5.05"; # TODO: normally semver, tag screwed up
-          src = fetchFromGitHub {
-            owner = "protofire";
-            repo = pname;
-            rev = "refs/tags/v${version}";
-            hash = "sha256-F8x3a9OKOQuhMRq6CHh5cVlOS72h+YGHTxnKKAh6c9A=";
-          };
-          npmDepsHash = "sha256-FKoh5D6sjZwhu1Kp+pedb8q6Bv0YYFBimdulugZ2RT0=";
-          dontNpmBuild = true;
-        };
-
       overlays = [
         (import rust-overlay)
         foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
-          solhint =
-            solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
+          solhint = prev.callPackage ./nix/solhint { };
         })
 
         (final: prev: {
