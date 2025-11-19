@@ -3,7 +3,7 @@ use crate::{
     Error, Result,
     input::{
         espresso::{ActiveNode, ActiveNodeSet, EspressoPersistence},
-        l1::{L1BlockSnapshot, L1Persistence, NodeSet, Snapshot, Wallet, Wallets},
+        l1::{L1BlockSnapshot, L1Persistence, NodeSet, Snapshot, Update, Wallet, Wallets},
     },
     types::{
         common::{
@@ -562,7 +562,7 @@ impl L1Persistence for Persistence {
         self.load_finalized_snapshot().await
     }
 
-    async fn save_genesis(&self, snapshot: Snapshot) -> Result<()> {
+    async fn save_genesis(&mut self, snapshot: Snapshot) -> Result<()> {
         tracing::info!(block = ?snapshot.block, "saving genesis L1 block");
 
         let mut tx = self.pool.begin().await?;
@@ -584,50 +584,91 @@ impl L1Persistence for Persistence {
         Ok(())
     }
 
-    #[instrument(skip(self, node_set_diff, wallets_diff))]
-    async fn apply_events(
-        &self,
-        block: L1BlockSnapshot,
-        node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
-        wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
-    ) -> Result<()> {
-        tracing::debug!(block_number = block.number(), "applying events to database");
-
-        // Collect iterators to ensure Send safety
-        let node_set_diff: Vec<_> = node_set_diff.into_iter().collect();
-        let wallets_diff: Vec<_> = wallets_diff.into_iter().collect();
-
+    #[instrument(skip(self, updates))]
+    async fn apply_updates(&mut self, updates: Vec<Update>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        for update in updates {
+            // In rare cases, this update or a later one may have already been processed. This can
+            // only happen outside the control of this program, since we do have an exclusive lock
+            // on the database here. For example, in some cases AWS may briefly run two instances of
+            // the service at the same time, causing each instance to process the same update.
+            //
+            // These updates are not inherently idempotent, since some updates involve incrementing
+            // amounts, and others (like node exits) cause an error if applied twice. Thus, we must
+            // detect this case and avoid applying an update that has already been applied.
+            //
+            // We are at least in a SQLite write transaction, and two simultaneous write
+            // transactions are prohibited from both committing. So we do not have to worry about
+            // races within this function itself (e.g. we check, the update has not been applied so
+            // we proceed, then another process applies the update, then we duplicate). We are only
+            // worried about the same update being applied twice, _one after another_, by two
+            // processes that aren't aware of each other.
+            let (last_block,) = sqlx::query_as("SELECT number FROM l1_block LIMIT 1")
+                .fetch_one(tx.as_mut())
+                .await
+                .context("loading last L1 block number")?;
+            if update.block.number() <= last_block {
+                // The update or a later one has already been applied. Although this is not
+                // technically an error, it is exceptional and not expected to happen often, so we
+                // should report it loudly.
+                tracing::error!(
+                    last_block,
+                    ?update.block,
+                    "update has already been applied; this is OK, but may indicate two instances \
+                    of this service are sharing a database, which is best to be avoided"
+                );
 
-        // Update L1 block info
-        sqlx::query(
-            "UPDATE l1_block SET
+                // We can continue here without erroring because the update is already applied,
+                // which means the work we were trying to do here is already done, even if it was
+                // done by somebody else.
+                //
+                // Note that this does rely on determinism of updates; i.e. any two processes
+                // modifying the same database (which _should_ be, at worst, two exact copies of
+                // this same service) will always generate the same updates for the same sequence of
+                // L1 blocks. Otherwise, we might be leaving the database in a different state than
+                // if we had applied the update we were given, if someone else had applied a
+                // different update for the same block. This determinism assumption should be upheld
+                // by the rest of the logic in this service.
+                continue;
+            }
+
+            tracing::debug!(
+                block_number = update.block.number(),
+                "applying events to database"
+            );
+
+            // Update L1 block info
+            sqlx::query(
+                "UPDATE l1_block SET
                  hash = $1,
                  number = $2,
                  parent_hash = $3,
                  timestamp = $4,
                  exit_escrow_period = $5",
-        )
-        .bind(block.hash().to_string())
-        .bind(block.number() as i64)
-        .bind(block.parent().to_string())
-        .bind(block.timestamp() as i64)
-        .bind(block.exit_escrow_period as i64)
-        .execute(&mut *tx)
-        .await?;
+            )
+            .bind(update.block.hash().to_string())
+            .bind(update.block.number() as i64)
+            .bind(update.block.parent().to_string())
+            .bind(update.block.timestamp() as i64)
+            .bind(update.block.exit_escrow_period as i64)
+            .execute(&mut *tx)
+            .await?;
 
-        // Apply node set diffs
-        for diff in node_set_diff {
-            self.apply_node_set_diff(&mut tx, &diff).await?;
-        }
+            // Apply node set diffs
+            for diff in update.node_set_diffs {
+                self.apply_node_set_diff(&mut tx, &diff).await?;
+            }
 
-        // Apply wallet diffs
-        for (address, diff) in wallets_diff {
-            self.apply_wallet_diff(&mut tx, address, &diff).await?;
+            // Apply wallet diffs
+            for (address, diffs) in update.wallet_diffs {
+                for diff in diffs {
+                    self.apply_wallet_diff(&mut tx, address, &diff).await?;
+                }
+            }
+            tracing::debug!("events applied successfully");
         }
 
         tx.commit().await?;
-        tracing::debug!("events applied successfully");
         Ok(())
     }
 }
@@ -942,10 +983,11 @@ mod tests {
     use crate::input::l1::testing::{block_snapshot, make_node};
     use crate::types::common::{NodeExit, PendingWithdrawal, Withdrawal};
     use crate::types::global::FullNodeSetDiff;
+    use im::ordmap;
     use tempfile::TempDir;
 
     /// Tests the complete persistence lifecycle
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_snapshot_save_apply_load() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
@@ -955,7 +997,7 @@ mod tests {
             max_connections: 5,
         };
 
-        let persistence = Persistence::new(&options).await.unwrap();
+        let mut persistence = Persistence::new(&options).await.unwrap();
 
         let node1 = make_node(1);
         let node2 = make_node(2);
@@ -966,7 +1008,7 @@ mod tests {
         let delegator2 = Address::random();
         let delegator3 = Address::random();
 
-        let genesis_snapshot = Snapshot::empty(block_snapshot(100));
+        let genesis_snapshot = Snapshot::empty(block_snapshot(0));
         persistence
             .save_genesis(genesis_snapshot.clone())
             .await
@@ -977,7 +1019,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(snapshot.block.number(), 100);
+        assert_eq!(snapshot.block.number(), 0);
         assert_eq!(snapshot.node_set.len(), 0);
         assert_eq!(snapshot.wallets.len(), 0);
 
@@ -989,100 +1031,88 @@ mod tests {
             FullNodeSetDiff::NodeUpdate(node4.clone()),
         ];
 
-        let initial_wallet_diffs = vec![
-            // Delegator1 delegates to node1
+        let initial_wallet_diffs = [
             (
                 delegator1,
-                WalletDiff::DelegatedToNode(Delegation {
-                    delegator: delegator1,
-                    node: node1.address,
-                    amount: U256::from(6000000u64), // Initial amount before undelegation
-                }),
+                vec![
+                    // Delegator1 delegates to node1
+                    WalletDiff::DelegatedToNode(Delegation {
+                        delegator: delegator1,
+                        node: node1.address,
+                        amount: U256::from(6000000u64), // Initial amount before undelegation
+                    }),
+                    // Delegator1 undelegates from node1
+                    WalletDiff::UndelegatedFromNode(PendingWithdrawal {
+                        delegator: delegator1,
+                        node: node1.address,
+                        amount: U256::from(1000000u64),
+                        available_time: 800,
+                    }),
+                    // Delegator1 withdraws the undelegation and then claims rewards
+                    WalletDiff::UndelegationWithdrawal(Withdrawal {
+                        delegator: delegator1,
+                        node: node1.address,
+                        amount: U256::from(1000000u64),
+                    }),
+                    // Delegator1 claims rewards
+                    WalletDiff::ClaimedRewards(U256::from(500)),
+                    // Delegator1 delegates to node2
+                    WalletDiff::DelegatedToNode(Delegation {
+                        delegator: delegator1,
+                        node: node2.address,
+                        amount: U256::from(3000000u64),
+                    }),
+                ],
             ),
-            // Delegator1 undelegates from node1
-            (
-                delegator1,
-                WalletDiff::UndelegatedFromNode(PendingWithdrawal {
-                    delegator: delegator1,
-                    node: node1.address,
-                    amount: U256::from(1000000u64),
-                    available_time: 800,
-                }),
-            ),
-            // Delegator1 withdraws the undelegation and then claims rewards
-            (
-                delegator1,
-                WalletDiff::UndelegationWithdrawal(Withdrawal {
-                    delegator: delegator1,
-                    node: node1.address,
-                    amount: U256::from(1000000u64),
-                }),
-            ),
-            // Delegator1 claims rewards
-            (delegator1, WalletDiff::ClaimedRewards(U256::from(500))),
-            // Delegator1 delegates to node2
-            (
-                delegator1,
-                WalletDiff::DelegatedToNode(Delegation {
-                    delegator: delegator1,
-                    node: node2.address,
-                    amount: U256::from(3000000u64),
-                }),
-            ),
-            // Delegator2 delegates to node1
             (
                 delegator2,
-                WalletDiff::DelegatedToNode(Delegation {
-                    delegator: delegator2,
-                    node: node1.address,
-                    amount: U256::from(1000000u64),
-                }),
-            ),
-            // Delegator2 undelegates from node1
-            (
-                delegator2,
-                WalletDiff::UndelegatedFromNode(PendingWithdrawal {
-                    delegator: delegator2,
-                    node: node1.address,
-                    amount: U256::from(500000u64),
-                    available_time: 900,
-                }),
-            ),
-            // Delegator2 delegates to node2
-            (
-                delegator2,
-                WalletDiff::DelegatedToNode(Delegation {
-                    delegator: delegator2,
-                    node: node2.address,
-                    amount: U256::from(10000000u64),
-                }),
-            ),
-            // Delegator2 delegates to node3
-            (
-                delegator2,
-                WalletDiff::DelegatedToNode(Delegation {
-                    delegator: delegator2,
-                    node: node3.address,
-                    amount: U256::from(2000000u64),
-                }),
+                vec![
+                    // Delegator2 delegates to node1
+                    WalletDiff::DelegatedToNode(Delegation {
+                        delegator: delegator2,
+                        node: node1.address,
+                        amount: U256::from(1000000u64),
+                    }),
+                    // Delegator2 undelegates from node1
+                    WalletDiff::UndelegatedFromNode(PendingWithdrawal {
+                        delegator: delegator2,
+                        node: node1.address,
+                        amount: U256::from(500000u64),
+                        available_time: 900,
+                    }),
+                    // Delegator2 delegates to node2
+                    WalletDiff::DelegatedToNode(Delegation {
+                        delegator: delegator2,
+                        node: node2.address,
+                        amount: U256::from(10000000u64),
+                    }),
+                    // Delegator2 delegates to node3
+                    WalletDiff::DelegatedToNode(Delegation {
+                        delegator: delegator2,
+                        node: node3.address,
+                        amount: U256::from(2000000u64),
+                    }),
+                ],
             ),
             // Delegator3 delegates to node4
             (
                 delegator3,
-                WalletDiff::DelegatedToNode(Delegation {
+                vec![WalletDiff::DelegatedToNode(Delegation {
                     delegator: delegator3,
                     node: node4.address,
                     amount: U256::from(8000000u64),
-                }),
+                })],
             ),
-        ];
+        ]
+        .into_iter()
+        .collect();
 
         persistence
-            .apply_events(
-                block_snapshot(100),
-                initial_node_set_diffs,
-                initial_wallet_diffs,
-            )
+            .apply_updates(vec![Update {
+                block: block_snapshot(100),
+                node_set_diffs: initial_node_set_diffs,
+                wallet_diffs: initial_wallet_diffs,
+            }])
             .await
             .unwrap();
 
@@ -1122,19 +1152,25 @@ mod tests {
             exit_time: 1500,
         })];
 
-        let node_exit_wallet_diffs = vec![(
+        let node_exit_wallet_diffs = [(
             delegator3,
-            WalletDiff::NodeExited(PendingWithdrawal {
+            vec![WalletDiff::NodeExited(PendingWithdrawal {
                 delegator: delegator3,
                 node: node4.address,
                 amount: U256::from(8000000u64),
                 available_time: 1500,
-            }),
-        )];
+            })],
+        )]
+        .into_iter()
+        .collect();
 
         // Apply node4 exit in block 101
         persistence
-            .apply_events(block_snapshot(101), node_exit_diffs, node_exit_wallet_diffs)
+            .apply_updates(vec![Update {
+                block: block_snapshot(101),
+                node_set_diffs: node_exit_diffs,
+                wallet_diffs: node_exit_wallet_diffs,
+            }])
             .await
             .unwrap();
 
@@ -1235,76 +1271,79 @@ mod tests {
             }),
         ];
 
-        let wallet_diffs = vec![
-            // Delegator1 undelegates 1M from node1
+        let wallet_diffs = [
             (
                 delegator1,
-                WalletDiff::UndelegatedFromNode(PendingWithdrawal {
-                    delegator: delegator1,
-                    node: node1.address,
-                    amount: U256::from(1000000u64),
-                    available_time: 1100,
-                }),
+                vec![
+                    // Delegator1 undelegates 1M from node1
+                    WalletDiff::UndelegatedFromNode(PendingWithdrawal {
+                        delegator: delegator1,
+                        node: node1.address,
+                        amount: U256::from(1000000u64),
+                        available_time: 1100,
+                    }),
+                    // Node2 exits
+                    // delegator1's delegation moves to pending_exits
+                    WalletDiff::NodeExited(PendingWithdrawal {
+                        delegator: delegator1,
+                        node: node2.address,
+                        amount: U256::from(3000000u64),
+                        available_time: 1200,
+                    }),
+                    // Delegator1 claims  rewards
+                    WalletDiff::ClaimedRewards(U256::from(1500)),
+                ],
             ),
-            // Node2 exits
-            // delegator1's delegation moves to pending_exits
-            (
-                delegator1,
-                WalletDiff::NodeExited(PendingWithdrawal {
-                    delegator: delegator1,
-                    node: node2.address,
-                    amount: U256::from(3000000u64),
-                    available_time: 1200,
-                }),
-            ),
-            // Node2 exits
-            //  delegator2 delegation moves to pending_exits
-            (
-                delegator2,
-                WalletDiff::NodeExited(PendingWithdrawal {
-                    delegator: delegator2,
-                    node: node2.address,
-                    amount: U256::from(10000000u64),
-                    available_time: 1200,
-                }),
-            ),
-            // Delegator2 completes withdrawal of undelegation from block 100
             (
                 delegator2,
-                WalletDiff::UndelegationWithdrawal(Withdrawal {
-                    delegator: delegator2,
-                    node: node1.address,
-                    amount: U256::from(500000u64),
-                }),
+                vec![
+                    // Node2 exits
+                    //  delegator2 delegation moves to pending_exits
+                    WalletDiff::NodeExited(PendingWithdrawal {
+                        delegator: delegator2,
+                        node: node2.address,
+                        amount: U256::from(10000000u64),
+                        available_time: 1200,
+                    }),
+                    // Delegator2 completes withdrawal of undelegation from block 100
+                    WalletDiff::UndelegationWithdrawal(Withdrawal {
+                        delegator: delegator2,
+                        node: node1.address,
+                        amount: U256::from(500000u64),
+                    }),
+                    // Delegator2 claims rewards
+                    WalletDiff::ClaimedRewards(U256::from(750)),
+                ],
             ),
-            // Delegator3 withdrawal from exited node4
             (
                 delegator3,
-                WalletDiff::NodeExitWithdrawal(Withdrawal {
-                    delegator: delegator3,
-                    node: node4.address,
-                    amount: U256::from(8000000u64),
-                }),
+                vec![
+                    // Delegator3 withdrawal from exited node4
+                    WalletDiff::NodeExitWithdrawal(Withdrawal {
+                        delegator: delegator3,
+                        node: node4.address,
+                        amount: U256::from(8000000u64),
+                    }),
+                    // Delegator3 delegates to new node5
+                    WalletDiff::DelegatedToNode(Delegation {
+                        delegator: delegator3,
+                        node: node5.address,
+                        amount: U256::from(15000000u64),
+                    }),
+                ],
             ),
-            // Delegator1 claims  rewards
-            (delegator1, WalletDiff::ClaimedRewards(U256::from(1500))),
-            // Delegator2 claims rewards
-            (delegator2, WalletDiff::ClaimedRewards(U256::from(750))),
-            // Delegator3 delegates to new node5
-            (
-                delegator3,
-                WalletDiff::DelegatedToNode(Delegation {
-                    delegator: delegator3,
-                    node: node5.address,
-                    amount: U256::from(15000000u64),
-                }),
-            ),
-        ];
+        ]
+        .into_iter()
+        .collect();
 
         let updated_block = block_snapshot(102);
 
         persistence
-            .apply_events(updated_block, node_set_diffs, wallet_diffs)
+            .apply_updates(vec![Update {
+                block: updated_block,
+                node_set_diffs,
+                wallet_diffs,
+            }])
             .await
             .unwrap();
 
@@ -1947,5 +1986,103 @@ mod tests {
         let snapshot = persistence.active_node_set().await.unwrap().unwrap();
         assert_eq!(snapshot.espresso_block, espresso_block);
         assert_eq!(snapshot.nodes, [ActiveNode::new(nodes[0])]);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_l1_idempotency() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        // Initialize with a couple nodes.
+        persistence
+            .save_genesis(Snapshot::empty(block_snapshot(0)))
+            .await
+            .unwrap();
+        let nodes = [make_node(0), make_node(1)];
+        persistence
+            .apply_updates(vec![Update {
+                block: block_snapshot(1),
+                node_set_diffs: nodes
+                    .iter()
+                    .cloned()
+                    .map(FullNodeSetDiff::NodeUpdate)
+                    .collect(),
+                wallet_diffs: Default::default(),
+            }])
+            .await
+            .unwrap();
+
+        // Create an update which is not inherently idempotent.
+        //
+        // The same node cannot exit twice in a row.
+        let node_set_diff = FullNodeSetDiff::NodeExit(NodeExit {
+            address: nodes[1].address,
+            exit_time: 1_000_000,
+        });
+        // Delegating increases the stake given to a node each time, so is not idempotent.
+        let wallet = Address::random();
+        let delegation = Delegation {
+            delegator: wallet,
+            node: nodes[0].address,
+            amount: ESPTokenAmount::ONE,
+        };
+        let wallet_diff = WalletDiff::DelegatedToNode(delegation);
+        let update = Update {
+            block: block_snapshot(2),
+            node_set_diffs: vec![node_set_diff],
+            wallet_diffs: [(wallet, vec![wallet_diff])].into_iter().collect(),
+        };
+        persistence
+            .apply_updates(vec![update.clone()])
+            .await
+            .unwrap();
+
+        // Apply the same event again, _plus a new one_. The first event, which was already applied,
+        // should have no effect, but the new event should.
+        let new_node = make_node(2);
+        let new_delegation = Delegation {
+            delegator: wallet,
+            node: new_node.address,
+            amount: ESPTokenAmount::ONE,
+        };
+        persistence
+            .apply_updates(vec![
+                update,
+                Update {
+                    block: block_snapshot(3),
+                    node_set_diffs: vec![FullNodeSetDiff::NodeUpdate(new_node.clone())],
+                    wallet_diffs: [(wallet, vec![WalletDiff::DelegatedToNode(new_delegation)])]
+                        .into_iter()
+                        .collect(),
+                },
+            ])
+            .await
+            .unwrap();
+
+        let snapshot = persistence
+            .load_finalized_snapshot()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.block, block_snapshot(3));
+        assert_eq!(
+            *snapshot.node_set,
+            ordmap! {
+                nodes[0].address => nodes[0].clone(),
+                new_node.address => new_node.clone()
+            }
+        );
+        assert_eq!(
+            snapshot.wallets[&wallet].nodes,
+            ordmap! {
+                nodes[0].address => delegation,
+                new_node.address => new_delegation
+            }
+        );
     }
 }

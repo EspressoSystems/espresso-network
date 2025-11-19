@@ -11,6 +11,7 @@ testing = [
     "espresso-types/testing",
     "hotshot-state-prover",
     "jf-signature",
+    "pretty_assertions",
     "rand",
     "sequencer",
     "staking-cli",
@@ -59,6 +60,7 @@ hotshot-state-prover = { git = "https://github.com/EspressoSystems/espresso-netw
 jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.4.0", features = [
     "std",
 ], optional = true }
+pretty_assertions = { version = "1", optional = true }
 rand = { version = "0.8", optional = true }
 sequencer = { git = "https://github.com/EspressoSystems/espresso-network.git", features = [
     "embedded-db",
@@ -71,7 +73,6 @@ staking-cli = { git = "https://github.com/EspressoSystems/espresso-network.git",
 staking-ui-service = { path = ".", features = ["testing"] }
 
 portpicker = "0.1"
-pretty_assertions = "1"
 tempfile = "3"
 test-log = { version = "0.2", features = [
     "color",

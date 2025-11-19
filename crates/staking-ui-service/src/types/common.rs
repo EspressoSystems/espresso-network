@@ -66,7 +66,7 @@ pub struct L1BlockInfo {
 }
 
 /// Minimal information needed to identify an L1 block and check for reorgs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct L1BlockId {
     /// The block number.
     pub number: u64,

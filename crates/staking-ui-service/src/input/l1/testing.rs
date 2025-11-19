@@ -43,6 +43,7 @@ use hotshot_types::{
     traits::signature_key::{SignatureKey, StateSignatureKey},
 };
 use jf_signature::{SignatureScheme, schnorr::SchnorrSignatureScheme};
+use pretty_assertions::assert_eq;
 use rand::{CryptoRng, Rng, RngCore, SeedableRng, rngs::StdRng, seq::IteratorRandom};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tide_disco::{Error as _, StatusCode, Url};
@@ -61,27 +62,26 @@ impl L1Persistence for MemoryStorage {
         Ok(self.snapshot.read().await.clone())
     }
 
-    async fn save_genesis(&self, snapshot: Snapshot) -> Result<()> {
+    async fn save_genesis(&mut self, snapshot: Snapshot) -> Result<()> {
         *self.snapshot.write().await = Some(snapshot);
         Ok(())
     }
 
-    async fn apply_events(
-        &self,
-        block: L1BlockSnapshot,
-        node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
-        wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
-    ) -> Result<()> {
+    async fn apply_updates(&mut self, updates: Vec<Update>) -> Result<()> {
         let mut lock = self.snapshot.write().await;
         let snapshot = lock.get_or_insert(Snapshot::empty(block_snapshot(0)));
 
-        for diff in node_set_diff {
-            snapshot.node_set.apply(&diff);
+        for update in updates {
+            for diff in update.node_set_diffs {
+                snapshot.node_set.apply(&diff);
+            }
+            for (address, diffs) in update.wallet_diffs {
+                for diff in diffs {
+                    snapshot.wallets.apply(address, &diff);
+                }
+            }
+            snapshot.block = update.block;
         }
-        for (address, diff) in wallets_diff {
-            snapshot.wallets.apply(address, &diff);
-        }
-        snapshot.block = block;
         Ok(())
     }
 }
@@ -98,19 +98,14 @@ impl L1Persistence for FailStorage {
         ))
     }
 
-    async fn save_genesis(&self, _snapshot: Snapshot) -> Result<()> {
+    async fn save_genesis(&mut self, _snapshot: Snapshot) -> Result<()> {
         Err(Error::catch_all(
             StatusCode::INTERNAL_SERVER_ERROR,
             "FailStorage".into(),
         ))
     }
 
-    async fn apply_events(
-        &self,
-        _block: L1BlockSnapshot,
-        _node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
-        _wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
-    ) -> Result<()> {
+    async fn apply_updates(&mut self, _updates: Vec<Update>) -> Result<()> {
         Err(Error::catch_all(
             StatusCode::INTERNAL_SERVER_ERROR,
             "FailStorage".into(),
@@ -206,15 +201,18 @@ impl ResettableStream for VecStream {
 pub struct NoCatchup;
 
 impl L1Catchup for NoCatchup {
-    async fn fast_forward(&self, _from: u64) -> Result<Vec<(L1BlockId, Timestamp, Vec<L1Event>)>> {
-        Ok(vec![])
+    async fn fast_forward(
+        &self,
+        _from: u64,
+    ) -> Result<BTreeMap<L1BlockId, (Timestamp, Vec<L1Event>)>> {
+        Ok(Default::default())
     }
 }
 
 /// [`L1Catchup`] implementation which supplies a predefined event sequence.
 #[derive(Clone, Debug)]
 pub struct CatchupFromEvents {
-    events: Vec<(L1BlockId, Timestamp, Vec<L1Event>)>,
+    events: BTreeMap<L1BlockId, (Timestamp, Vec<L1Event>)>,
 }
 
 impl CatchupFromEvents {
@@ -222,19 +220,22 @@ impl CatchupFromEvents {
         Self {
             events: blocks
                 .into_iter()
-                .map(|input| (input.block, input.timestamp, input.events))
+                .map(|input| (input.block, (input.timestamp, input.events)))
                 .collect(),
         }
     }
 }
 
 impl L1Catchup for CatchupFromEvents {
-    async fn fast_forward(&self, from: u64) -> Result<Vec<(L1BlockId, Timestamp, Vec<L1Event>)>> {
+    async fn fast_forward(
+        &self,
+        from: u64,
+    ) -> Result<BTreeMap<L1BlockId, (Timestamp, Vec<L1Event>)>> {
         Ok(self
             .events
-            .iter()
+            .clone()
+            .into_iter()
             .skip_while(|(id, ..)| id.number <= from)
-            .cloned()
             .collect())
     }
 }
@@ -544,7 +545,14 @@ pub fn validator_registered_event(mut rng: impl RngCore + CryptoRng) -> Validato
     let mut address_bytes = FixedBytes::<32>::default();
     rng.fill_bytes(address_bytes.as_mut_slice());
     let account = Address::from_word(address_bytes);
+    validator_registered_event_with_account(rng, account)
+}
 
+/// Generate a valid [`ValidatorRegisteredV2`] event with the given [`Address`].
+pub fn validator_registered_event_with_account(
+    mut rng: impl RngCore + CryptoRng,
+    account: Address,
+) -> ValidatorRegisteredV2 {
     let index = rng.next_u64();
     let (bls_vk, bls_sk) = PubKey::generated_from_seed_indexed(Default::default(), index);
     let (schnorr_vk, schnorr_sk) =
@@ -1261,6 +1269,120 @@ impl Drop for BackgroundStakeTableOps {
     fn drop(&mut self) {
         if let Some(handle) = self.task_handle.take() {
             handle.abort();
+        }
+    }
+}
+
+pub fn assert_events_eq(l: &L1Event, r: &L1Event) {
+    // Workaround for events not implementing [`PartialEq`].
+    match (l, r) {
+        (L1Event::StakeTable(l), L1Event::StakeTable(r)) => match (l.as_ref(), r.as_ref()) {
+            (
+                StakeTableV2Events::ValidatorRegistered(l),
+                StakeTableV2Events::ValidatorRegistered(r),
+            ) => {
+                assert_eq!(l.account, r.account);
+                assert_eq!(l.blsVk, r.blsVk);
+                assert_eq!(l.schnorrVk, r.schnorrVk);
+                assert_eq!(l.commission, r.commission);
+            }
+            (
+                StakeTableV2Events::ValidatorRegisteredV2(l),
+                StakeTableV2Events::ValidatorRegisteredV2(r),
+            ) => {
+                assert_eq!(l.account, r.account);
+                assert_eq!(l.blsVK, r.blsVK);
+                assert_eq!(l.schnorrVK, r.schnorrVK);
+                assert_eq!(l.commission, r.commission);
+            }
+            (StakeTableV2Events::ValidatorExit(l), StakeTableV2Events::ValidatorExit(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::Delegated(l), StakeTableV2Events::Delegated(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::Undelegated(l), StakeTableV2Events::Undelegated(r)) => {
+                assert_eq!(l, r);
+            }
+            (
+                StakeTableV2Events::ConsensusKeysUpdated(l),
+                StakeTableV2Events::ConsensusKeysUpdated(r),
+            ) => {
+                assert_eq!(l.account, r.account);
+                assert_eq!(l.blsVK, r.blsVK);
+                assert_eq!(l.schnorrVK, r.schnorrVK);
+            }
+            (
+                StakeTableV2Events::ConsensusKeysUpdatedV2(l),
+                StakeTableV2Events::ConsensusKeysUpdatedV2(r),
+            ) => {
+                assert_eq!(l.account, r.account);
+                assert_eq!(l.blsVK, r.blsVK);
+                assert_eq!(l.schnorrVK, r.schnorrVK);
+            }
+            (
+                StakeTableV2Events::CommissionUpdated(l),
+                StakeTableV2Events::CommissionUpdated(r),
+            ) => {
+                assert_eq!(l, r);
+            }
+            (
+                StakeTableV2Events::ExitEscrowPeriodUpdated(l),
+                StakeTableV2Events::ExitEscrowPeriodUpdated(r),
+            ) => {
+                assert_eq!(l, r);
+            }
+            (
+                StakeTableV2Events::MaxCommissionIncreaseUpdated(l),
+                StakeTableV2Events::MaxCommissionIncreaseUpdated(r),
+            ) => {
+                assert_eq!(l, r);
+            }
+            (
+                StakeTableV2Events::MinCommissionUpdateIntervalUpdated(l),
+                StakeTableV2Events::MinCommissionUpdateIntervalUpdated(r),
+            ) => {
+                assert_eq!(l, r);
+            }
+            (
+                StakeTableV2Events::OwnershipTransferred(l),
+                StakeTableV2Events::OwnershipTransferred(r),
+            ) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::Paused(l), StakeTableV2Events::Paused(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::Unpaused(l), StakeTableV2Events::Unpaused(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::Initialized(l), StakeTableV2Events::Initialized(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::RoleAdminChanged(l), StakeTableV2Events::RoleAdminChanged(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::RoleGranted(l), StakeTableV2Events::RoleGranted(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::RoleRevoked(l), StakeTableV2Events::RoleRevoked(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::Upgraded(l), StakeTableV2Events::Upgraded(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::Withdrawal(l), StakeTableV2Events::Withdrawal(r)) => {
+                assert_eq!(l, r);
+            }
+            (l, r) => {
+                panic!("mismatched stake table events:\n{l:#?}\n{r:#?}",);
+            }
+        },
+        (L1Event::Reward(l), L1Event::Reward(r)) => {
+            assert_eq!(l, r);
+        }
+        (l, r) => {
+            panic!("Reward event mismatched with stake table event:\n{l:#?}\n{r:#?}");
         }
     }
 }

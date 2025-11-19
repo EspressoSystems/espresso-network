@@ -67,7 +67,7 @@ impl<S: L1Persistence> State<S> {
     ///
     /// Previously saved state will be loaded from `storage` if possible. If there is no previous
     /// state in storage, the given genesis state will be used.
-    pub async fn new(storage: S, genesis: Snapshot, catchup: &impl L1Catchup) -> Result<Self> {
+    pub async fn new(mut storage: S, genesis: Snapshot, catchup: &impl L1Catchup) -> Result<Self> {
         let mut state = match storage.finalized_snapshot().await? {
             Some(snapshot) => {
                 tracing::info!(?snapshot.block, "starting from saved snapshot");
@@ -87,25 +87,14 @@ impl<S: L1Persistence> State<S> {
             .await
             .map_err(|err| err.context("catching up to L1"))?;
         if !catchup_inputs.is_empty() {
-            let mut node_set_diff = vec![];
-            let mut wallets_diff = vec![];
-
-            for (id, timestamp, events) in catchup_inputs {
-                let (input_node_set_diff, input_wallets_diff) = state.apply(id, timestamp, &events);
-
-                // Break wallets diff into individual (address, diff) pairs.
-                let input_wallets_diff =
-                    input_wallets_diff.into_iter().flat_map(|(address, diffs)| {
-                        diffs.into_iter().map(move |diff| (address, diff))
-                    });
-
-                node_set_diff.extend(input_node_set_diff);
-                wallets_diff.extend(input_wallets_diff);
+            let mut updates = vec![];
+            for (id, (timestamp, events)) in catchup_inputs {
+                updates.push(state.apply(id, timestamp, &events));
             }
 
             // Persist updates.
             storage
-                .apply_events(state.block, node_set_diff, wallets_diff)
+                .apply_updates(updates)
                 .await
                 .map_err(|err| err.context("saving events from catchup"))?;
         }
@@ -370,8 +359,7 @@ impl<S: L1Persistence> State<S> {
         tracing::info!(finalized, "new finalized block");
 
         // Collect events up to the new finalized block, to write to persistent storage.
-        let mut nodes_set_diff = vec![];
-        let mut wallets_diff = vec![];
+        let mut updates = vec![];
         for block in &self.blocks[1..] {
             if block.block().number() > finalized {
                 break;
@@ -380,16 +368,14 @@ impl<S: L1Persistence> State<S> {
             // We have an invaraint that the update fields of any unfinalized block are not
             // [`None`]. Since we are explicitly skipping the finalized block
             // (`&self.blocks[1..]` above) we can safely unwrap here.
-            nodes_set_diff.extend(block.node_set_update.clone().unwrap());
-            for (address, diffs) in block.wallets_update.as_ref().unwrap() {
-                wallets_diff.extend(diffs.iter().map(|diff| (*address, diff.clone())));
-            }
+            updates.push(Update {
+                block: block.block(),
+                node_set_diffs: block.node_set_update.clone().unwrap(),
+                wallet_diffs: block.wallets_update.clone().unwrap(),
+            });
         }
 
-        let finalized_info = self.block(finalized)?;
-        self.storage
-            .apply_events(finalized_info.block(), nodes_set_diff, wallets_diff)
-            .await?;
+        self.storage.apply_updates(updates).await?;
         self.garbage_collect(finalized);
         Ok(())
     }
@@ -446,12 +432,11 @@ impl BlockData {
         // Cloning entire state in order to apply updates and get the new state. This is cheap
         // thanks to the magic of immutable data structures.
         let mut state = self.state.clone();
-        let (node_set_update, wallets_update) =
-            state.apply(input.block, input.timestamp, &input.events);
+        let update = state.apply(input.block, input.timestamp, &input.events);
         Self {
             state,
-            node_set_update: Some(node_set_update),
-            wallets_update: Some(wallets_update),
+            node_set_update: Some(update.node_set_diffs),
+            wallets_update: Some(update.wallet_diffs),
         }
     }
 
@@ -539,10 +524,10 @@ impl Snapshot {
         id: L1BlockId,
         timestamp: Timestamp,
         events: impl IntoIterator<Item = &'a L1Event>,
-    ) -> (Vec<FullNodeSetDiff>, BTreeMap<Address, Vec<WalletDiff>>) {
+    ) -> Update {
         // Keep track of changes we apply.
-        let mut node_set_update = vec![];
-        let mut wallets_update = BTreeMap::<Address, Vec<WalletDiff>>::default();
+        let mut node_set_diffs = vec![];
+        let mut wallet_diffs = BTreeMap::<Address, Vec<WalletDiff>>::default();
 
         // Update the L1 block information.
         self.block = L1BlockSnapshot {
@@ -558,15 +543,19 @@ impl Snapshot {
             let (nodes_diff, wallets_diff) = self.handle_event(timestamp, event);
             for diff in nodes_diff {
                 self.node_set.apply(&diff);
-                node_set_update.push(diff);
+                node_set_diffs.push(diff);
             }
             for (address, diff) in wallets_diff {
                 self.wallets.apply(address, &diff);
-                wallets_update.entry(address).or_default().push(diff);
+                wallet_diffs.entry(address).or_default().push(diff);
             }
         }
 
-        (node_set_update, wallets_update)
+        Update {
+            block: self.block,
+            node_set_diffs,
+            wallet_diffs,
+        }
     }
 
     /// Handle a single L1 event from a given L1 block.
@@ -825,6 +814,17 @@ impl Snapshot {
             },
         }
     }
+}
+
+/// An update to a [`Snapshot`] resulting from a [`BlockInput`].
+#[derive(Clone, Debug)]
+pub struct Update {
+    /// The L1 block snapshot after applying the input.
+    pub block: L1BlockSnapshot,
+    /// Changes to the full node set as a result of this input.
+    pub node_set_diffs: Vec<FullNodeSetDiff>,
+    /// Changes to wallet state as a result of this input.
+    pub wallet_diffs: BTreeMap<Address, Vec<WalletDiff>>,
 }
 
 /// The state of every wallet.
@@ -1101,11 +1101,17 @@ pub trait L1Catchup {
     /// the new finalized block (inclusive). But there will be no input corresponding to L1 blocks
     /// which do not have events.
     ///
-    /// If `from` is already up to date, returns an empty list.
+    /// The result is grouped and ordered by block number, so that there is a single input for each
+    /// block that has events, containing all events for that block. This ensures that the
+    /// [`Update`]s generated by [`apply`](Snapshot::apply)ing these inputs will be identical to the
+    /// [`Update`]s generated by streaming and applying new inputs, block by block, except excluding
+    /// blocks with no diffs.
+    ///
+    /// If `from` is already up to date, returns an empty set.
     fn fast_forward(
         &self,
         from: u64,
-    ) -> impl Send + Future<Output = Result<Vec<(L1BlockId, Timestamp, Vec<L1Event>)>>>;
+    ) -> impl Send + Future<Output = Result<BTreeMap<L1BlockId, (Timestamp, Vec<L1Event>)>>>;
 }
 
 /// Persistent storage for the L1 data.
@@ -1113,16 +1119,11 @@ pub trait L1Persistence: Send {
     /// Fetch the latest persisted snapshot.
     fn finalized_snapshot(&self) -> impl Send + Future<Output = Result<Option<Snapshot>>>;
 
-    /// Apply changes to persistent storage up to the specified L1 block.
-    fn apply_events(
-        &self,
-        block: L1BlockSnapshot,
-        node_set_diff: impl IntoIterator<Item = FullNodeSetDiff> + Send,
-        wallets_diff: impl IntoIterator<Item = (Address, WalletDiff)> + Send,
-    ) -> impl Send + Future<Output = Result<()>>;
+    /// Apply changes to persistent storage.
+    fn apply_updates(&mut self, updates: Vec<Update>) -> impl Send + Future<Output = Result<()>>;
 
     /// Save an initial snapshot to a previously empty database.
-    fn save_genesis(&self, snapshot: Snapshot) -> impl Send + Future<Output = Result<()>>;
+    fn save_genesis(&mut self, snapshot: Snapshot) -> impl Send + Future<Output = Result<()>>;
 }
 
 #[cfg(test)]

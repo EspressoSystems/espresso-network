@@ -452,8 +452,8 @@ async fn try_get_events_from_header(
         reward_contract_address,
     )
     .await?
-    .into_iter()
-    .map(|(_, _, event)| event)
+    .into_values()
+    .flat_map(|(_, events)| events)
     .collect();
     Ok((events, header.clone()))
 }
@@ -1085,19 +1085,21 @@ mod tests {
         // Apply events from range query to a fresh state
         let mut state = StakeTableState::new();
 
-        for (_, _, event) in events {
-            let L1Event::StakeTable(st_event) = event else {
-                panic!("got unexpected non-stake table event");
-            };
-            let event = st_event.as_ref().clone().try_into().unwrap();
-            let result = state.apply_event(event);
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    println!("Expected error: {err:?}");
-                }
-                Err(err) => {
-                    panic!("Critical err: {err:?}");
+        for (_, events) in events.into_values() {
+            for event in events {
+                let L1Event::StakeTable(st_event) = event else {
+                    panic!("got unexpected non-stake table event");
+                };
+                let event = st_event.as_ref().clone().try_into().unwrap();
+                let result = state.apply_event(event);
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        println!("Expected error: {err:?}");
+                    }
+                    Err(err) => {
+                        panic!("Critical err: {err:?}");
+                    }
                 }
             }
         }

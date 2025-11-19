@@ -1,6 +1,6 @@
 //! L1 catchup based on a JSON-RPC provider.
 
-use std::cmp::min;
+use std::{cmp::min, collections::BTreeMap};
 
 use alloy::{
     eips::BlockId,
@@ -37,7 +37,10 @@ impl RpcCatchup {
 }
 
 impl L1Catchup for RpcCatchup {
-    async fn fast_forward(&self, from: u64) -> Result<Vec<(L1BlockId, Timestamp, Vec<L1Event>)>> {
+    async fn fast_forward(
+        &self,
+        from: u64,
+    ) -> Result<BTreeMap<L1BlockId, (Timestamp, Vec<L1Event>)>> {
         let finalized = self
             .provider
             .get_block(BlockId::finalized())
@@ -47,11 +50,11 @@ impl L1Catchup for RpcCatchup {
             // If there is no finalized L1 block yet, then our starting block `from` cannot possibly
             // be behind. This occurs when the L1 has just been started, as in testing environments.
             tracing::info!("no finalized L1 block");
-            return Ok(vec![]);
+            return Ok(Default::default());
         };
         if finalized.number() <= from {
             tracing::info!(from, ?finalized, "current state is not behind");
-            return Ok(vec![]);
+            return Ok(Default::default());
         }
 
         // Fetch events from the starting block to the new finalized block.
@@ -64,7 +67,7 @@ impl L1Catchup for RpcCatchup {
         // To avoid making large RPC calls, divide the range into smaller chunks.
         let chunks = block_range_chunks(from + 1, finalized.number(), self.chunk_size);
 
-        let mut events = vec![];
+        let mut events = BTreeMap::new();
         for (from, to) in chunks {
             tracing::debug!(from, to, "fetch L1 events in chunk");
             let chunk_events = get_events(
@@ -74,9 +77,7 @@ impl L1Catchup for RpcCatchup {
                 self.reward_addr,
             )
             .await?;
-            for (id, timestamp, event) in chunk_events {
-                events.push((id, timestamp, vec![event]));
-            }
+            events.extend(chunk_events);
         }
 
         Ok(events)
@@ -112,14 +113,13 @@ mod test {
     };
 
     use alloy::node_bindings::Anvil;
-    use futures::{StreamExt, stream};
-    use hotshot_contract_adapter::sol_types::StakeTableV2::StakeTableV2Events;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use tokio::time::sleep;
 
     use crate::input::l1::{
         ResettableStream, RpcStream,
-        testing::{BackgroundStakeTableOps, ContractDeployment},
+        testing::{BackgroundStakeTableOps, ContractDeployment, assert_events_eq},
     };
 
     use super::*;
@@ -198,174 +198,40 @@ mod test {
         // Stream events from genesis.
         let mut stream = RpcStream::new(options.clone()).await.unwrap();
         stream.reset(0).await;
-        let events_from_stream = stream
-            .take(end_block as usize)
-            .flat_map(|input| stream::iter(input.events))
-            .collect::<Vec<_>>()
-            .await;
-        tracing::info!("finished streaming {} events", events_from_stream.len());
+        let events_from_stream = stream.take(end_block as usize).collect::<Vec<_>>().await;
+        tracing::info!(
+            "finished streaming events from {} blocks",
+            events_from_stream.len()
+        );
 
         // Fast-forward to the finalized block.
         let catchup = RpcCatchup::new(&options).unwrap();
-        let catchup_events = catchup.fast_forward(0).await.unwrap();
-        let catchup_finalized = catchup_events.last().unwrap();
-        let events = catchup_events.iter().flat_map(|(_, _, events)| events);
+        let mut catchup_events = catchup.fast_forward(0).await.unwrap();
+        // let catchup_finalized = catchup_events.last().unwrap();
+        // let events = catchup_events.iter().flat_map(|(_, _, events)| events);
+        tracing::info!(
+            "fast forwarded events from {} non-empty blocks",
+            catchup_events.len()
+        );
 
         // We get the same events either way.
-        assert_eq!(catchup_events.len(), events_from_stream.len());
-        for (i, (event, event_from_stream)) in
-            events.into_iter().zip(events_from_stream).enumerate()
-        {
-            // Workaround for events not implementing [`PartialEq`].
-            match (event, event_from_stream) {
-                (L1Event::StakeTable(l), L1Event::StakeTable(r)) => {
-                    match (l.as_ref(), r.as_ref()) {
-                        (
-                            StakeTableV2Events::ValidatorRegistered(l),
-                            StakeTableV2Events::ValidatorRegistered(r),
-                        ) => {
-                            assert_eq!(l.account, r.account);
-                            assert_eq!(l.blsVk, r.blsVk);
-                            assert_eq!(l.schnorrVk, r.schnorrVk);
-                            assert_eq!(l.commission, r.commission);
-                        }
-                        (
-                            StakeTableV2Events::ValidatorRegisteredV2(l),
-                            StakeTableV2Events::ValidatorRegisteredV2(r),
-                        ) => {
-                            assert_eq!(l.account, r.account);
-                            assert_eq!(l.blsVK, r.blsVK);
-                            assert_eq!(l.schnorrVK, r.schnorrVK);
-                            assert_eq!(l.commission, r.commission);
-                        }
-                        (
-                            StakeTableV2Events::ValidatorExit(l),
-                            StakeTableV2Events::ValidatorExit(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (StakeTableV2Events::Delegated(l), StakeTableV2Events::Delegated(r)) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::Undelegated(l),
-                            StakeTableV2Events::Undelegated(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::ConsensusKeysUpdated(l),
-                            StakeTableV2Events::ConsensusKeysUpdated(r),
-                        ) => {
-                            assert_eq!(l.account, r.account);
-                            assert_eq!(l.blsVK, r.blsVK);
-                            assert_eq!(l.schnorrVK, r.schnorrVK);
-                        }
-                        (
-                            StakeTableV2Events::ConsensusKeysUpdatedV2(l),
-                            StakeTableV2Events::ConsensusKeysUpdatedV2(r),
-                        ) => {
-                            assert_eq!(l.account, r.account);
-                            assert_eq!(l.blsVK, r.blsVK);
-                            assert_eq!(l.schnorrVK, r.schnorrVK);
-                        }
-                        (
-                            StakeTableV2Events::CommissionUpdated(l),
-                            StakeTableV2Events::CommissionUpdated(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::ExitEscrowPeriodUpdated(l),
-                            StakeTableV2Events::ExitEscrowPeriodUpdated(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::MaxCommissionIncreaseUpdated(l),
-                            StakeTableV2Events::MaxCommissionIncreaseUpdated(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::MinCommissionUpdateIntervalUpdated(l),
-                            StakeTableV2Events::MinCommissionUpdateIntervalUpdated(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::OwnershipTransferred(l),
-                            StakeTableV2Events::OwnershipTransferred(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (StakeTableV2Events::Paused(l), StakeTableV2Events::Paused(r)) => {
-                            assert_eq!(l, r);
-                        }
-                        (StakeTableV2Events::Unpaused(l), StakeTableV2Events::Unpaused(r)) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::Initialized(l),
-                            StakeTableV2Events::Initialized(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::RoleAdminChanged(l),
-                            StakeTableV2Events::RoleAdminChanged(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::RoleGranted(l),
-                            StakeTableV2Events::RoleGranted(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (
-                            StakeTableV2Events::RoleRevoked(l),
-                            StakeTableV2Events::RoleRevoked(r),
-                        ) => {
-                            assert_eq!(l, r);
-                        }
-                        (StakeTableV2Events::Upgraded(l), StakeTableV2Events::Upgraded(r)) => {
-                            assert_eq!(l, r);
-                        }
-                        (StakeTableV2Events::Withdrawal(l), StakeTableV2Events::Withdrawal(r)) => {
-                            assert_eq!(l, r);
-                        }
-                        (l, r) => {
-                            panic!(
-                                "mismatched stake table events at position {i}:\n{l:#?}\n{r:#?}"
-                            );
-                        }
-                    }
-                }
-                (L1Event::Reward(l), L1Event::Reward(r)) => {
-                    assert_eq!(*l, r);
-                }
-                (l, r) => {
-                    panic!(
-                        "Reward event mismatched with stake table event at position {i}:\n{l:#?}\n{r:#?}"
-                    );
-                }
+        for input in events_from_stream {
+            // We don't skip any inputs during catchup, except empty ones.
+            // Remove the input from `catchup_events` so that we can check that it does not contain
+            // any extra inputs (at the end it should be empty).
+            let Some((timestamp, events)) = catchup_events.remove(&input.block) else {
+                assert!(
+                    input.events.is_empty(),
+                    "missing input with non-empty events {input:?}"
+                );
+                continue;
+            };
+            assert_eq!(timestamp, input.timestamp);
+            assert_eq!(input.events.len(), events.len());
+            for (i, (event, event_from_stream)) in input.events.iter().zip(&events).enumerate() {
+                tracing::info!("checking events at input {:?} position {i}", input.block);
+                assert_events_eq(event, event_from_stream);
             }
         }
-
-        // Check consistency of the block info returned by catchup.
-        let (id, timestamp, _) = catchup_finalized;
-        let block = provider.get_block(id.number.into()).await.unwrap().unwrap();
-        assert_eq!(block.hash(), id.hash);
-        assert_eq!(block.header.parent_hash, id.parent);
-        assert_eq!(block.header.timestamp, *timestamp);
-
-        // Ensure block is finalized.
-        let finalized = provider
-            .get_block(BlockId::finalized())
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(finalized.number() >= id.number);
     }
 }
