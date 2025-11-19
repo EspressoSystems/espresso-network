@@ -30,6 +30,7 @@ use staking_cli::{
     info::{display_stake_table, fetch_token_address, stake_table_info},
     registration::{
         deregister_validator, register_validator, update_commission, update_consensus_keys,
+        update_metadata_uri,
     },
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     Commands, Config, ValidSignerConfig,
@@ -136,11 +137,12 @@ fn decode_and_display_logs(logs: &[Log]) {
                 )),
                 StakeTableV2Events::ValidatorRegisteredV2(e) => output_success(format!(
                     "event: ValidatorRegisteredV2 {{ account: {}, blsVK: {}, schnorrVK: {}, \
-                     commission: {} }}",
+                     commission: {}, metadataUri: {} }}",
                     e.account,
                     BLSPubKey::from(e.blsVK),
                     StateVerKey::from(e.schnorrVK),
-                    e.commission
+                    e.commission,
+                    e.metadataUri
                 )),
                 StakeTableV2Events::Delegated(e) => output_success(format!("event: {e:?}")),
                 StakeTableV2Events::Undelegated(e) => output_success(format!("event: {e:?}")),
@@ -160,6 +162,10 @@ fn decode_and_display_logs(logs: &[Log]) {
                     StateVerKey::from(e.schnorrVK)
                 )),
                 StakeTableV2Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV2Events::MetadataUriUpdated(e) => output_success(format!(
+                    "event: MetadataUriUpdated {{ validator: {}, metadataUri: {} }}",
+                    e.validator, e.metadataUri
+                )),
                 StakeTableV2Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
                 StakeTableV2Events::WithdrawalClaimed(e) => output_success(format!("event: {e:?}")),
                 StakeTableV2Events::ValidatorExitClaimed(e) => {
@@ -379,10 +385,18 @@ pub async fn main() -> Result<()> {
         Commands::RegisterValidator {
             signature_args,
             commission,
+            metadata_uri,
         } => {
             let input = NodeSignatureInput::try_from((signature_args, &wallet))?;
             let payload = NodeSignatures::try_from((input, &wallet))?;
-            register_validator(&provider, stake_table_addr, commission, payload).await?
+            register_validator(
+                &provider,
+                stake_table_addr,
+                commission,
+                metadata_uri,
+                payload,
+            )
+            .await?
         },
         Commands::UpdateConsensusKeys { signature_args } => {
             tracing::info!("Updating validator {account} with new keys");
@@ -397,6 +411,10 @@ pub async fn main() -> Result<()> {
         Commands::UpdateCommission { new_commission } => {
             tracing::info!("Updating validator {account} commission to {new_commission}");
             update_commission(&provider, stake_table_addr, new_commission).await?
+        },
+        Commands::UpdateMetadataUri { metadata_uri } => {
+            tracing::info!("Updating validator {account} metadata URI");
+            update_metadata_uri(&provider, stake_table_addr, metadata_uri).await?
         },
         Commands::Approve { amount } => {
             approve(&provider, token_addr, stake_table_addr, amount).await?
