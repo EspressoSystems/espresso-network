@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Unlicensed
 pragma solidity ^0.8.0;
 
+/* solhint-disable func-name-mixedcase, no-empty-blocks */
+
 import "forge-std/Test.sol";
 import { LightClientArbitrumV2, ArbSys } from "../src/LightClientArbitrumV2.sol";
 
