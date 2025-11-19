@@ -45,6 +45,9 @@ build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}
     cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
 
+demo-native-fee *args: (build "test" "--no-default-features --features fee")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 
@@ -118,6 +121,45 @@ test-all:
 
 test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
+
+# Run process-compose integration tests with minimal features
+# Examples: just test-demo pos-base, just test-demo drb-header-base
+test-demo test_name:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	case "{{test_name}}" in
+		base)
+			features="--no-default-features --features fee"
+			test="test_native_demo_base"
+			;;
+		pos-upgrade)
+			features="--no-default-features --features fee,pos"
+			test="test_native_demo_pos_upgrade"
+			;;
+		pos-base)
+			features="--no-default-features --features pos"
+			test="test_native_demo_pos_base"
+			;;
+		fee-to-drb-header-upgrade)
+			features="--no-default-features --features fee,drb-and-header"
+			test="test_native_demo_fee_to_drb_header_upgrade"
+			;;
+		drb-header-upgrade)
+			features="--no-default-features --features pos,drb-and-header"
+			test="test_native_demo_drb_header_upgrade"
+			;;
+		drb-header-base)
+			features="--no-default-features --features drb-and-header"
+			test="test_native_demo_drb_header_base"
+			;;
+		*)
+			echo "Unknown test: {{test_name}}"
+			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade"
+			exit 1
+			;;
+	esac
+	just build test "$features"
+	cargo nextest run -p tests $features --nocapture --profile integration -E "test(/$test\$/)"
 
 check-features *args:
     cargo hack check --each-feature {{args}}
