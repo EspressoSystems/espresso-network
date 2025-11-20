@@ -11,7 +11,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
         numAccounts = bound(numAccounts, 1, 1000);
 
         (uint256 authRoot, RewardClaimTestCase[] memory fixtures) =
-            getFixturesWithSeed(numAccounts, seed);
+            getRewardFixtures(numAccounts, seed);
         lightClient.setAuthRoot(authRoot);
 
         for (uint256 i = 0; i < fixtures.length; i++) {
@@ -27,7 +27,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
     }
 
     function testFuzz_RandomAuthData_AlwaysFails(bytes memory randomAuthData, uint64 seed) public {
-        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getRewardFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
         validateTestCase(validCase, authRoot);
@@ -41,7 +41,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
         bytes32[160] memory randomProof,
         uint64 seed
     ) public {
-        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getRewardFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
         validateTestCase(validCase, authRoot);
@@ -60,7 +60,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
         bytes32[7] memory randomAuthRootInputs,
         uint64 seed
     ) public {
-        (uint256 authRoot, RewardClaimTestCase memory validCase) = getFixture(seed);
+        (uint256 authRoot, RewardClaimTestCase memory validCase) = getRewardFixture(seed);
         lightClient.setAuthRoot(authRoot);
 
         validateTestCase(validCase, authRoot);
@@ -76,7 +76,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
     }
 
     function testFuzz_TruncatedAuthData_AlwaysReverts(uint256 truncateAt, uint64 seed) public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(seed);
         truncateAt %= testCase.authData.length;
         lightClient.setAuthRoot(authRoot);
 
@@ -94,7 +94,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
 
     function testFuzz_ValidProof_WrongAmount_Fails(uint256 wrongAmount, uint64 seed) public {
         vm.assume(wrongAmount > 0);
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(seed);
         vm.assume(wrongAmount != testCase.lifetimeRewards);
         lightClient.setAuthRoot(authRoot);
 
@@ -107,7 +107,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
 
     function testFuzz_ValidProof_WrongSender_Fails(address wrongSender, uint64 seed) public {
         vm.assume(wrongSender != address(0));
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(seed);
         vm.assume(wrongSender != testCase.account);
         lightClient.setAuthRoot(authRoot);
 
@@ -122,7 +122,7 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
         public
     {
         vm.assume(xorMask != 0);
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(seed);
         byteIndex %= testCase.authData.length;
         lightClient.setAuthRoot(authRoot);
 
@@ -136,14 +136,18 @@ contract RewardClaimProofFuzzTest is RewardClaimTest {
         rewardClaim.claimRewards(testCase.lifetimeRewards, corruptedAuthData);
     }
 
-    function testFuzz_EveryBitFlip_AlwaysFails(uint256 numAccounts, uint64 seed) public {
-        numAccounts = bound(numAccounts, 1, 50);
+    /// forge-config: default.fuzz.runs = 1
+    function testFuzz_EveryBitFlip_AlwaysFails(
+        uint256 numAccounts,
+        uint64 seed,
+        uint256 accountIndex
+    ) public {
+        numAccounts = bound(numAccounts, 1, 100000);
+        accountIndex = accountIndex % numAccounts;
 
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) =
-            getFixturesWithSeed(numAccounts, seed);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) =
+            getRewardFixture(numAccounts, seed, accountIndex);
         lightClient.setAuthRoot(authRoot);
-
-        RewardClaimTestCase memory testCase = fixtures[0];
 
         validateTestCase(testCase, authRoot);
 

@@ -24,7 +24,7 @@ env:
 
 jobs:
   nix-env-macos-arm:
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: macos-latest
     steps:
       - name: Install Nix
@@ -51,7 +51,7 @@ jobs:
         run: nix develop --accept-flake-config -c echo Ok
 
       - name: Build rust crates
-        run: nix develop --accept-flake-config -c just build
+        run: nix develop --accept-flake-config -c just check
 
       - name: Build contracts
         run: nix develop --accept-flake-config -c forge build

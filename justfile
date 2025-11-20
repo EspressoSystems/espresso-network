@@ -41,9 +41,17 @@ clippy *args:
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
+check *args:
+    # postgres
+    cargo check {{args}}
+    # embedded-db
+    cargo check --workspace {{args}}
+
 build profile="dev" features="":
+    # postgres
     cargo build --profile {{profile}} {{features}}
-    cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
+    # embedded-db 
+    cargo build --profile {{profile}} --workspace {{features}}
 
 demo-native-fee *args: (build "test" "--no-default-features --features fee")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
