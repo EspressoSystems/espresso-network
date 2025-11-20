@@ -133,4 +133,29 @@ contract RewardClaimAdminTest is RewardClaimTest {
         vm.stopPrank();
         assertFalse(rewardClaim.hasRole(pauserRole, pauserAddress));
     }
+
+    function test_GrantRole_DefaultAdminRole_TransfersAdmin() public {
+        bytes32 adminRole = rewardClaim.DEFAULT_ADMIN_ROLE();
+        address newAdmin = makeAddr("newAdmin");
+
+        vm.startPrank(owner);
+        vm.expectEmit(true, true, true, true, address(rewardClaim));
+        emit IAccessControl.RoleGranted(adminRole, newAdmin, owner);
+        vm.expectEmit(true, true, true, true, address(rewardClaim));
+        emit IAccessControl.RoleRevoked(adminRole, owner, owner);
+        rewardClaim.grantRole(adminRole, newAdmin);
+        vm.stopPrank();
+
+        assertTrue(rewardClaim.hasRole(adminRole, newAdmin), "new admin should hold role");
+        assertFalse(rewardClaim.hasRole(adminRole, owner), "old admin should lose role");
+    }
+
+    function test_GrantRole_DefaultAdminRole_SelfGrantNoOp() public {
+        bytes32 adminRole = rewardClaim.DEFAULT_ADMIN_ROLE();
+
+        vm.prank(owner);
+        rewardClaim.grantRole(adminRole, owner);
+
+        assertTrue(rewardClaim.hasRole(adminRole, owner), "owner should still have role");
+    }
 }

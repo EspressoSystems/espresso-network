@@ -79,6 +79,10 @@ contract RewardClaim is
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
+    /// @notice Current admin address with DEFAULT_ADMIN_ROLE
+    /// @dev Tracks the single admin to enforce single-admin invariant
+    address private _currentAdmin;
+
     /// @notice The daily limit is updated
     event DailyLimitUpdated(uint256 oldLimit, uint256 newLimit);
 
@@ -147,6 +151,7 @@ contract RewardClaim is
         __ReentrancyGuard_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _currentAdmin = _admin;
         _grantRole(PAUSER_ROLE, _pauser);
 
         espToken = EspTokenV2(_espToken);
@@ -261,6 +266,30 @@ contract RewardClaim is
     {
         // Only the timelock can authorize upgrades
         // No additional checks needed beyond the onlyRole modifier
+    }
+
+    /// @notice Override grantRole to enforce single-admin invariant for DEFAULT_ADMIN_ROLE
+    /// @dev When granting DEFAULT_ADMIN_ROLE, automatically revokes it from the current admin.
+    /// This ensures only one address has DEFAULT_ADMIN_ROLE at any time, atomically.
+    function grantRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            address oldAdmin = _currentAdmin;
+
+            // Handle self-grant: OpenZeppelin allows it, so we do too. It's a no-op.
+            if (oldAdmin == account) {
+                super.grantRole(role, account);
+                return;
+            }
+
+            // Grant role to new admin first, then revoke from old admin.
+            super.grantRole(role, account);
+            _currentAdmin = account;
+            if (oldAdmin != address(0)) {
+                _revokeRole(DEFAULT_ADMIN_ROLE, oldAdmin);
+            }
+        } else {
+            super.grantRole(role, account);
+        }
     }
 
     /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve governance control
