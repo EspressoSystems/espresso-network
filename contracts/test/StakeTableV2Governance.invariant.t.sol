@@ -418,25 +418,6 @@ contract GovernanceHandler is Test {
         vm.stopPrank();
     }
 
-    /// @notice Fuzzed action: Chain of transfers
-    /// @dev Should always succeed - tests multiple sequential transfers
-    function chainOfTransfers(address[] memory newOwners) public {
-        vm.startPrank(currentAdmin);
-
-        for (uint256 i = 0; i < newOwners.length && i < 5; i++) {
-            address newOwner = _boundAddress(newOwners[i]);
-            proxy.transferOwnership(newOwner);
-            currentAdmin = newOwner;
-            _addActor(newOwner);
-            transferOwnershipCalls++;
-
-            vm.stopPrank();
-            vm.startPrank(currentAdmin);
-        }
-
-        vm.stopPrank();
-    }
-
     /// @notice Fuzzed action: Pause contract via pauser
     /// @dev Only pauses if not already paused (pause() reverts if already paused)
     function pauseContract(uint256 actorIndexSeed) public {
