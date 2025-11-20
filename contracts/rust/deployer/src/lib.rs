@@ -2284,7 +2284,7 @@ mod tests {
             },
             options.is_mock,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
@@ -2620,7 +2620,7 @@ mod tests {
                 rpc_url: sepolia_rpc_url,
                 multisig_address: multisig_admin,
                 pauser,
-                dry_run: Some(dry_run),
+                dry_run,
             },
         )
         .await?;
@@ -2913,7 +2913,7 @@ mod tests {
             &provider,
             &mut contracts,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
