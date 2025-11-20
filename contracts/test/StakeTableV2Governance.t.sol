@@ -94,6 +94,8 @@ contract StakeTableV2GovernanceTest is Test {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, originalV1Owner, adminRole
             )
         );
+        vm.expectEmit(true, true, true, true, address(proxy));
+        emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
         proxy.updateExitEscrowPeriod(200 seconds);
         vm.stopPrank();
 
