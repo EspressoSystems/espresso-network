@@ -396,10 +396,11 @@ pub async fn main() -> Result<()> {
         Commands::RegisterValidator {
             signature_args,
             commission,
-            metadata_uri,
+            metadata_uri_args,
         } => {
             let input = NodeSignatureInput::try_from((signature_args, &wallet))?;
             let payload = NodeSignatures::try_from((input, &wallet))?;
+            let metadata_uri = metadata_uri_args.try_into()?;
             register_validator(
                 &provider,
                 stake_table_addr,
@@ -423,8 +424,9 @@ pub async fn main() -> Result<()> {
             tracing::info!("Updating validator {account} commission to {new_commission}");
             update_commission(&provider, stake_table_addr, new_commission).await
         },
-        Commands::UpdateMetadataUri { metadata_uri } => {
+        Commands::UpdateMetadataUri { metadata_uri_args } => {
             tracing::info!("Updating validator {account} metadata URI");
+            let metadata_uri = metadata_uri_args.try_into()?;
             update_metadata_uri(&provider, stake_table_addr, metadata_uri).await
         },
         Commands::Approve { amount } => {

@@ -30,6 +30,7 @@ use crate::{
     delegation::{approve, delegate},
     funding::{send_esp, send_eth},
     info::fetch_token_address,
+    metadata::MetadataUri,
     parse::{parse_bls_priv_key, parse_state_priv_key, Commission, ParseCommissionError},
     receipt::ReceiptExt as _,
     registration::register_validator,
@@ -227,11 +228,13 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                 commission,
                 payload,
             } => {
+                let metadata_uri =
+                    MetadataUri::try_from(Url::parse("https://example.com/metadata")?)?;
                 register_validator(
                     self.provider(from)?,
                     self.stake_table,
                     commission,
-                    Url::parse("https://example.com/metadata")?,
+                    metadata_uri,
                     *payload,
                 )
                 .await

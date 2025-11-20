@@ -5,12 +5,13 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
 pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
+use metadata::MetadataUri;
 use parse::Commission;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ pub mod demo;
 pub mod funding;
 pub mod info;
 pub mod l1;
+pub mod metadata;
 pub mod output;
 pub mod parse;
 pub mod receipt;
@@ -145,6 +147,32 @@ impl ValidSignerConfig {
     }
 }
 
+#[derive(ClapArgs, Debug, Clone)]
+#[group(required = true, multiple = false)]
+pub struct MetadataUriArgs {
+    #[clap(long, env = "METADATA_URI")]
+    metadata_uri: Option<String>,
+
+    #[clap(long)]
+    no_metadata_uri: bool,
+}
+
+impl TryFrom<MetadataUriArgs> for MetadataUri {
+    type Error = anyhow::Error;
+
+    fn try_from(args: MetadataUriArgs) -> Result<Self> {
+        if args.no_metadata_uri {
+            Ok(MetadataUri::empty())
+        } else if let Some(uri_str) = args.metadata_uri {
+            let url =
+                Url::parse(&uri_str).map_err(|e| anyhow::anyhow!("invalid metadata URI: {}", e))?;
+            Ok(MetadataUri::try_from(url)?)
+        } else {
+            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
+        }
+    }
+}
+
 impl Default for Commands {
     fn default() -> Self {
         Commands::StakeTable {
@@ -220,9 +248,8 @@ pub enum Commands {
         #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
         commission: Commission,
 
-        /// Metadata URL for the validator (max 2048 bytes)
-        #[clap(long, env = "METADATA_URI", value_parser = parse::validate_metadata_uri)]
-        metadata_uri: Url,
+        #[clap(flatten)]
+        metadata_uri_args: MetadataUriArgs,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -239,9 +266,8 @@ pub enum Commands {
     },
     /// Update validator metadata URL.
     UpdateMetadataUri {
-        /// The new metadata URL to set (max 2048 bytes)
-        #[clap(long, env = "METADATA_URI", value_parser = parse::validate_metadata_uri)]
-        metadata_uri: Url,
+        #[clap(flatten)]
+        metadata_uri_args: MetadataUriArgs,
     },
     /// Approve stake table contract to move tokens
     Approve {

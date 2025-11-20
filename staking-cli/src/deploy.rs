@@ -42,6 +42,7 @@ use warp::Filter;
 use crate::{
     delegation::{approve, delegate, undelegate},
     funding::{send_esp, send_eth},
+    metadata::MetadataUri,
     parse::Commission,
     receipt::ReceiptExt as _,
     registration::{deregister_validator, fetch_commission, register_validator},
@@ -208,11 +209,12 @@ impl TestSystem {
             &self.bls_key_pair.clone(),
             &self.state_key_pair.clone(),
         );
+        let metadata_uri = MetadataUri::try_from(Url::parse("https://example.com/metadata")?)?;
         register_validator(
             &self.provider,
             self.stake_table,
             self.commission,
-            Url::parse("https://example.com/metadata")?,
+            metadata_uri,
             payload,
         )
         .await?
