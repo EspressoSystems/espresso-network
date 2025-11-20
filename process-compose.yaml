@@ -27,7 +27,7 @@ processes:
   # Cheating a bit here but since we don't usually have to debug go-ethereum
   # it's using the docker compose service which is a bit easier.
   demo-l1-network:
-    command: docker compose up demo-l1-network --force-recreate --renew-anon-volumes
+    command: docker compose up --force-recreate --renew-anon-volumes demo-l1-network
     readiness_probe:
       exec:
         command: >-
@@ -485,7 +485,7 @@ processes:
   # Could do local (SQLite) discovery, but removes some of the spirit
   # from the local demo.
   keydb:
-    command: docker run --rm -p 0.0.0.0:6379:6379 eqalpha/keydb --requirepass changeme!
+    command: docker compose up --no-deps --force-recreate --renew-anon-volumes keydb
     readiness_probe:
       exec:
         command: nc -zv localhost 6379
@@ -496,7 +496,7 @@ processes:
 
   # The CDN system's main entry point; where users contact first.
   marshal_0:
-    command: cdn-marshal -d "redis://:changeme!@localhost:6379" -b ${ESPRESSO_CDN_SERVER_PORT} -m 127.0.0.1:9093
+    command: cdn-marshal -d "redis://:changemeplease!!@localhost:6379" -b ${ESPRESSO_CDN_SERVER_PORT} -m 127.0.0.1:9093
     depends_on:
       keydb:
         condition: process_healthy
@@ -512,7 +512,7 @@ processes:
 
   # A broker is the main message-routing unit of the CDN
   broker_0:
-    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091
+    command: cdn-broker -d "redis://:changemeplease!!@localhost:6379" -m 127.0.0.1:9091
     depends_on:
       keydb:
         condition: process_healthy
@@ -532,7 +532,7 @@ processes:
     command:
       cdn-broker --public-bind-endpoint 0.0.0.0:1740 --public-advertise-endpoint local_ip:1740
       --private-bind-endpoint 0.0.0.0:1741 --private-advertise-endpoint local_ip:1741 -d
-      "redis://:changeme!@localhost:6379" -m 127.0.0.1:9092
+      "redis://:changemeplease!!@localhost:6379" -m 127.0.0.1:9092
     depends_on:
       keydb:
         condition: process_healthy
@@ -547,7 +547,7 @@ processes:
     availability: *run-forever
 
   cdn-whitelist:
-    command: cdn-whitelist -d redis://:changeme!@localhost:6379 -o http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
+    command: cdn-whitelist -d redis://:changemeplease!!@localhost:6379 -o http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
     namespace: setup
     depends_on:
       orchestrator:
@@ -637,12 +637,7 @@ processes:
     availability: *run-forever
 
   sequencer-db-0:
-    command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_SEQUENCER0_DB_PORT}:5432 postgres
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=root
-      - POSTGRES_DB=sequencer
+    command: docker compose up --no-deps --force-recreate --renew-anon-volumes sequencer-db-0
     readiness_probe:
       exec:
         command: pg_isready -h localhost -p ${ESPRESSO_SEQUENCER0_DB_PORT}
@@ -656,12 +651,7 @@ processes:
     availability: *run-forever
 
   sequencer-db-1:
-    command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_SEQUENCER1_DB_PORT}:5432 postgres 
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=root
-      - POSTGRES_DB=sequencer
+    command: docker compose up --no-deps --force-recreate --renew-anon-volumes sequencer-db-1
     readiness_probe:
       exec:
         command: pg_isready -h localhost -p ${ESPRESSO_SEQUENCER1_DB_PORT}
@@ -675,9 +665,7 @@ processes:
     availability: *run-forever
 
   block-explorer:
-    command:
-      docker run --rm -p ${ESPRESSO_BLOCK_EXPLORER_PORT}:3000 -e QUERY_SERVICE_URI -e NODE_VALIDATOR_URI
-      ghcr.io/espressosystems/espresso-block-explorer:main
+    command: docker compose up --no-deps --force-recreate --renew-anon-volumes block-explorer
     depends_on:
       sequencer1:
         condition: process_healthy
