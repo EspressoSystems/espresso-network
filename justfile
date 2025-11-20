@@ -63,6 +63,9 @@ demo-native-drb-header *args: (build "test" "--no-default-features --features dr
 demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features --features fee,drb-and-header")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-da-committees *args: (build "test" "--no-default-features --features da-upgrade")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
@@ -152,9 +155,13 @@ test-demo test_name:
 			features="--no-default-features --features drb-and-header"
 			test="test_native_demo_drb_header_base"
 			;;
+		da-committees)
+			features="--no-default-features --features da-upgrade"
+			test="test_native_demo_drb_header_base"
+			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade"
+			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees"
 			exit 1
 			;;
 	esac

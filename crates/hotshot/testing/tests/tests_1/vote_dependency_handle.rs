@@ -77,7 +77,7 @@ async fn test_vote_dependency_handle() {
         ];
 
         let (event_sender, mut event_receiver) = broadcast(1024);
-        let (_, cancel_receiver) = broadcast(1);
+        let (_sender, cancel_receiver) = broadcast(1);
         let view_number = ViewNumber::new(node_id);
 
         let vote_dependency_handle_state =

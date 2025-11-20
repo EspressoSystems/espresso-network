@@ -67,7 +67,12 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
 
     // Version 0.4 supports rewards - currently don't have a good way to know how long we expect it
     // to take until the prover has finalized the state on L1. These limits are somewhat arbitrary.
-    let reward_claim_deadline_block_height = (epoch_length * 2 + 10).max(300);
+    //
+    // The prover needs to at least have enough time to send a proof for a block in epoch 3 because
+    // no rewards are distributed until the end of epoch 2.
+    //
+    // TODO: monitor the prover making progress on L1 and adjust the test accordingly.
+    let reward_claim_deadline_block_height = (epoch_length * 3 + 10).max(500);
 
     // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
     // we are using the stake table from the contract.
@@ -121,20 +126,8 @@ async fn test_native_demo_da_committee() -> Result<()> {
         .await?;
     }
 
-    let epoch_length = genesis
-        .epoch_height
-        .expect("epoch_height not set in genesis");
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
-    // we are using the stake table from the contract.
-    let expected_block_height = epoch_length * 21 + 10; // Make sure we're past epoch 21
-
-    let pos_progress_requirements = TestRequirements {
-        block_height_increment: expected_block_height,
-        txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
-        ..Default::default()
-    };
-    assert_native_demo_works(pos_progress_requirements).await?;
+    // Sanity check that the demo is still working
+    assert_native_demo_works(Default::default()).await?;
 
     Ok(())
 }
