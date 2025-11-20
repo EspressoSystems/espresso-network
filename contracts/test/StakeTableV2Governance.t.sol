@@ -24,10 +24,6 @@ contract StakeTableV2GovernanceTest is Test {
     address public originalV1Owner;
     address public pauser;
 
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender);
-    event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender);
-
     function setUp() public {
         baseTest = new StakeTableUpgradeV2Test();
         baseTest.setUp();
@@ -116,13 +112,13 @@ contract StakeTableV2GovernanceTest is Test {
         vm.startPrank(initialOwner);
 
         vm.expectEmit(true, true, true, true, address(proxy));
-        emit RoleGranted(adminRole, newOwner, initialOwner);
+        emit IAccessControl.RoleGranted(adminRole, newOwner, initialOwner);
 
         vm.expectEmit(true, true, false, true, address(proxy));
-        emit OwnershipTransferred(initialOwner, newOwner);
+        emit OwnableUpgradeable.OwnershipTransferred(initialOwner, newOwner);
 
         vm.expectEmit(true, true, true, true, address(proxy));
-        emit RoleRevoked(adminRole, initialOwner, initialOwner);
+        emit IAccessControl.RoleRevoked(adminRole, initialOwner, initialOwner);
 
         proxy.transferOwnership(newOwner);
 
@@ -144,7 +140,7 @@ contract StakeTableV2GovernanceTest is Test {
         vm.startPrank(initialOwner);
 
         vm.expectEmit(true, true, false, true, address(proxy));
-        emit OwnershipTransferred(initialOwner, initialOwner);
+        emit OwnableUpgradeable.OwnershipTransferred(initialOwner, initialOwner);
 
         proxy.transferOwnership(initialOwner);
 
@@ -240,7 +236,7 @@ contract StakeTableV2GovernanceTest is Test {
         vm.startPrank(initialOwner);
 
         vm.expectEmit(true, true, true, true, address(proxy));
-        emit RoleGranted(pauserRole, newPauser, initialOwner);
+        emit IAccessControl.RoleGranted(pauserRole, newPauser, initialOwner);
 
         proxy.grantRole(pauserRole, newPauser);
 
@@ -257,13 +253,13 @@ contract StakeTableV2GovernanceTest is Test {
         vm.startPrank(initialOwner);
 
         vm.expectEmit(true, true, true, true, address(proxy));
-        emit RoleGranted(adminRole, newAdmin, initialOwner);
+        emit IAccessControl.RoleGranted(adminRole, newAdmin, initialOwner);
 
         vm.expectEmit(true, true, false, true, address(proxy));
-        emit OwnershipTransferred(initialOwner, newAdmin);
+        emit OwnableUpgradeable.OwnershipTransferred(initialOwner, newAdmin);
 
         vm.expectEmit(true, true, true, true, address(proxy));
-        emit RoleRevoked(adminRole, initialOwner, initialOwner);
+        emit IAccessControl.RoleRevoked(adminRole, initialOwner, initialOwner);
 
         proxy.grantRole(adminRole, newAdmin);
 
