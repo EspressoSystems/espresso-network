@@ -70,10 +70,10 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             continue;
         }
 
-        if new.txn_count - initial.txn_count < runtime.expected_txn_count() {
+        if new.txn_count < runtime.expected_txn_count() {
             println!(
                 "waiting for transaction count have={} want={}",
-                new.txn_count - initial.txn_count,
+                new.txn_count,
                 runtime.expected_txn_count()
             );
             continue;
