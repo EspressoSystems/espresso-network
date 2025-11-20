@@ -185,13 +185,21 @@ mod test {
     use std::time::Duration;
 
     use alloy::node_bindings::Anvil;
+    use espresso_types::{FeeVersion, SequencerVersions};
+    use hotshot_query_service::data_source::SqlDataSource;
     use portpicker::pick_unused_port;
+    use sequencer::api;
+    use sequencer::api::data_source::testing::TestableSequencerDataSource;
+    use sequencer::api::sql::DataSource;
+    use sequencer::api::test_helpers::{TestNetwork, TestNetworkConfigBuilder};
+    use sequencer::testing::TestConfigBuilder;
     use staking_ui_service::input::espresso::testing::start_pos_network;
     use staking_ui_service::types::common::L1BlockId;
     use staking_ui_service::types::global::ActiveNodeSetSnapshot;
     use staking_ui_service::{Error, input::l1::testing::ContractDeployment};
     use surf_disco::Client;
     use tempfile::tempdir;
+    use tide_disco::{Error as _, StatusCode};
     use tokio::{task::spawn, time::sleep};
     use vbs::version::StaticVersion;
 
@@ -201,19 +209,14 @@ mod test {
     async fn e2e_smoke_test() {
         let port = pick_unused_port().unwrap();
         let tmp = tempdir().unwrap();
-        let anvil = Anvil::new().block_time(1).spawn();
-        let l1_http = anvil.endpoint_url();
-        let l1_ws = anvil.ws_endpoint_url();
-        let deployment = ContractDeployment::deploy(l1_http.clone()).await.unwrap();
-
         let espresso_port = pick_unused_port().unwrap();
-        let (mut network, _storage) = start_pos_network(espresso_port).await;
+        let (mut network, deployment, _storage) = start_pos_network(espresso_port).await;
         let espresso_url = format!("http://localhost:{espresso_port}").parse().unwrap();
 
         let opt = Options {
             l1_options: L1ClientOptions {
-                http_providers: vec![l1_http],
-                l1_ws_provider: Some(vec![l1_ws]),
+                http_providers: vec![deployment.rpc_url],
+                l1_ws_provider: None,
                 stake_table_address: deployment.stake_table_addr,
                 reward_contract_address: deployment.reward_claim_addr,
                 ..Default::default()
@@ -241,10 +244,25 @@ mod test {
 
         // Check that L1 blocks and Espresso blocks are increasing.
         let initial_l1_block: L1BlockId = client.get("l1/block/latest").send().await.unwrap();
-        let active_node_set: ActiveNodeSetSnapshot =
-            client.get("nodes/active").send().await.unwrap();
-        assert_eq!(active_node_set.nodes.len(), network.peers.len() + 1);
-        let initial_espresso_block = active_node_set.espresso_block;
+        // Espresso API may take a moment to become available.
+        let initial_espresso_block = loop {
+            let active_node_set: ActiveNodeSetSnapshot =
+                match client.get("nodes/active").send().await {
+                    Ok(set) => set,
+                    Err(err) => {
+                        assert_eq!(
+                            err.status(),
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "unexpected error from Espresso API: {err:#}"
+                        );
+                        tracing::info!("waiting for Espresso API to become available");
+                        sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+            assert_eq!(active_node_set.nodes.len(), network.peers.len() + 1);
+            break active_node_set.espresso_block;
+        };
         tracing::info!(
             ?initial_l1_block,
             ?initial_espresso_block,
@@ -279,6 +297,99 @@ mod test {
             }
             tracing::info!("waiting for Espresso block to increase");
         }
+
+        task.abort();
+        let _ = task.await;
+
+        network.stop_consensus().await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_startup_before_pos() {
+        // Start L1 and deploy contracts.
+        let anvil = Anvil::new()
+            .block_time(1)
+            .args(["--slots-in-an-epoch", "0"])
+            .spawn();
+        let rpc_url = anvil.endpoint_url();
+        let deployment = ContractDeployment::deploy(rpc_url.clone())
+            .await
+            .expect("Failed to deploy contracts");
+
+        // Start Espresso on pre-POS version.
+        let espresso_port = pick_unused_port().unwrap();
+        let test_config = TestConfigBuilder::<1>::default()
+            .anvil_provider(anvil)
+            .build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let options = SqlDataSource::options(&storage, api::Options::with_port(espresso_port))
+            .config(Default::default());
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(options.clone())
+            .persistences([persistence.clone()])
+            .network_config(test_config)
+            .build();
+        let mut network =
+            TestNetwork::new(config, SequencerVersions::<FeeVersion, FeeVersion>::new()).await;
+
+        // Start staking service.
+        let port = pick_unused_port().unwrap();
+        let tmp = tempdir().unwrap();
+        let opt = Options {
+            l1_options: L1ClientOptions {
+                http_providers: vec![deployment.rpc_url],
+                l1_ws_provider: None,
+                stake_table_address: deployment.stake_table_addr,
+                reward_contract_address: deployment.reward_claim_addr,
+                ..Default::default()
+            },
+            espresso_options: QueryServiceOptions::new(
+                format!("http://localhost:{espresso_port}").parse().unwrap(),
+            ),
+            port,
+            persistence: sql::PersistenceOptions {
+                path: tmp.path().join("temp.db"),
+                max_connections: 5,
+            },
+            log_format: Some(LogFormat::Json),
+        };
+
+        let task = spawn(async move {
+            opt.run().await.unwrap();
+        });
+
+        let client: Client<Error, StaticVersion<0, 1>> = Client::new(
+            format!("http://localhost:{port}/v0/staking/")
+                .parse()
+                .unwrap(),
+        );
+        sleep(Duration::from_secs(1)).await;
+        client.connect(None).await;
+
+        // We should be able to use the L1-based part of the API even though the Espresso-based part
+        // isn't ready yet.
+        let initial_l1_block: L1BlockId = client.get("l1/block/latest").send().await.unwrap();
+        tracing::info!(?initial_l1_block, "client connected");
+        // Wait for L1 block to increase.
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let l1_block: L1BlockId = client.get("l1/block/latest").send().await.unwrap();
+            if l1_block.number > initial_l1_block.number {
+                tracing::info!(?initial_l1_block, ?l1_block, "L1 block increased");
+                break;
+            }
+            tracing::info!("waiting for L1 block to increase");
+        }
+
+        // The Espresso API should not be ready yet.
+        let err = client
+            .get::<ActiveNodeSetSnapshot>("nodes/active")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         task.abort();
         let _ = task.await;

@@ -18,6 +18,14 @@ impl Error {
         }
     }
 
+    /// An error indicating the service or some submodule is not yet ready to be used.
+    pub fn not_initialized() -> Self {
+        Self {
+            message: "initializing, try again later".into(),
+            status: StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+
     /// Stock error message for when a requested object is not found and not known to have ever
     /// existed.
     ///

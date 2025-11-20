@@ -138,7 +138,7 @@ where
         async move {
             let block: u64 = req.integer_param("block")?;
             let espresso = state.espresso.read().await;
-            let latest = espresso.latest_espresso_block();
+            let latest = espresso.latest_espresso_block()?;
             if block < latest {
                 return Err(Error::gone().context(format!(
                     "request block {block} is too old (earliest available is {latest})"

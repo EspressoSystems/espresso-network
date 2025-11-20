@@ -7,7 +7,7 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_lock::{RwLock, RwLockUpgradableReadGuard};
+use async_lock::{RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
 use derivative::Derivative;
 use espresso_types::{Leaf2, PubKey, ValidatorMap};
@@ -52,22 +52,16 @@ pub struct State<S, C> {
     /// the current epoch, but only within the first epoch after service startup.
     updates: Vec<ActiveNodeSetUpdate>,
 
-    /// The latest Espresso block number.
+    /// The latest Espresso block.
     ///
     /// This always corresponds to the snapshot saved in persistent storage. It can be used to find
-    /// the offset of other Espresso blocks in `updates`. If `updates` is not empty, then
-    /// `updates.last().espresso_block.block == latest_espresso_block`, and the offset of other
-    /// blocks can be determined relative to that.
-    latest_espresso_block: u64,
-
-    /// The view number of the `latest_espresso_block`.
-    latest_espresso_view: ViewNumber,
+    /// the offset of other Espresso blocks in `updates`. If `last_block` is not [`None`], then
+    /// `updates.last().espresso_block.block == last_block.number`, and the offset of other blocks
+    /// can be determined relative to that.
+    last_block: Option<BlockState>,
 
     /// The number of blocks in an epoch.
     epoch_height: u64,
-
-    /// Information about the current epoch.
-    epoch: Arc<EpochState>,
 
     /// Persistent storage handle.
     storage: S,
@@ -78,60 +72,13 @@ pub struct State<S, C> {
 
 impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
     pub async fn new(storage: S, espresso: C) -> Result<Self> {
-        let current_epoch = espresso.wait_for_epochs().await;
-
-        // Fetch the current epoch state.
         let epoch_height = espresso.epoch_height().await?;
-        let epoch = EpochState::download(&espresso, epoch_height, current_epoch)
-            .await
-            .map_err(|err| err.context(format!("fetching current epoch {current_epoch}")))?;
-
-        // Initialize active node storage to the most recent of:
-        // * saved active node set
-        // * start of current epoch
-        let (latest_espresso_block, latest_espresso_view) = match storage.active_node_set().await? {
-            Some(snapshot) if snapshot.espresso_block.epoch == current_epoch => {
-                tracing::info!(
-                    ?snapshot,
-                    current_epoch,
-                    "saved snapshot is from latest epoch, restoring state"
-                );
-                // Fetch the view number for this block.
-                let leaf = espresso
-                    .leaf(snapshot.espresso_block.block)
-                    .await
-                    .map_err(|err| {
-                        err.context(format!(
-                            "fetching snapshotted leaf {}",
-                            snapshot.espresso_block.block
-                        ))
-                    })?;
-                (snapshot.espresso_block.block, leaf.view_number())
-            }
-            snapshot => {
-                tracing::info!(
-                    current_epoch,
-                    ?snapshot,
-                    "stored snapshot is missing or out of date, will start from beginning of epoch"
-                );
-
-                // Set our state to the last block of the previous epoch, so that when we start up,
-                // the first block we process is the first block of this epoch.
-                let leaf = espresso.leaf(epoch.start_block(epoch_height) - 1).await?;
-                // TODO fetch the reward balance of every account as of the start of this epoch, so
-                // we can initialize our lifetime rewards storage.
-                (leaf.height(), leaf.view_number())
-            }
-        };
-
         Ok(Self {
-            latest_espresso_block,
-            latest_espresso_view,
-            epoch_height,
-            epoch: Arc::new(epoch),
+            last_block: None,
             updates: vec![],
             espresso,
             storage,
+            epoch_height,
         })
     }
 
@@ -139,33 +86,35 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
     ///
     /// This is the same block which the latest [`active_node_set`](Self::active_node_set) snapshot
     /// corresponds to.
-    pub fn latest_espresso_block(&self) -> u64 {
-        self.latest_espresso_block
+    pub fn latest_espresso_block(&self) -> Result<u64> {
+        Ok(self.last_block()?.number)
     }
 
     /// Get the active node set as of the latest Espresso block.
     pub async fn active_node_set(&self) -> Result<ActiveNodeSetSnapshot> {
+        let epoch = &self.last_block()?.epoch;
         let active_nodes = self
             .storage
             .active_node_set()
             .await?
             .ok_or_else(Error::not_found)?;
-        Ok(active_nodes.into_snapshot(self.epoch.start_block(self.epoch_height)))
+        Ok(active_nodes.into_snapshot(epoch.start_block(self.epoch_height)))
     }
 
     /// Get the changes to the active node set that occurred in the requested Espresso block.
     pub fn active_node_set_update(&self, block: u64) -> Result<ActiveNodeSetUpdate> {
+        let last_block = self.last_block()?;
         ensure!(
-            block <= self.latest_espresso_block,
+            block <= last_block.number,
             Error::not_found().context(format!(
                 "Espresso block {block} is not available; latest available block is {}",
-                self.latest_espresso_block
+                last_block.number
             ))
         );
 
         // Find the offset of the requested `block` in our list of `updates` (from the back of the
-        // list, where `latest_espresso_block` lives).
-        let offset = (self.latest_espresso_block - block) as usize;
+        // list, where `last_block` lives).
+        let offset = (last_block.number - block) as usize;
         ensure!(
             offset < self.updates.len(),
             Error::gone().context(format!(
@@ -173,7 +122,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
                 self.updates
                     .first()
                     .map(|update| update.espresso_block.block)
-                    .unwrap_or(self.latest_espresso_block)
+                    .unwrap_or(last_block.number)
             ))
         );
 
@@ -183,13 +132,22 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
     /// Get the total amount of rewards ever earned by `account`, as of the requested Espresso
     /// block.
     pub async fn lifetime_rewards(&self, account: Address, block: u64) -> Result<ESPTokenAmount> {
-        ensure!(
-            block == self.latest_espresso_block,
-            Error::not_found().context(format!(
-                "lifetime rewards are only available for the latest Espresso block {}",
-                self.latest_espresso_block
-            ))
-        );
+        let last_block = self.last_block()?;
+
+        // Make sure the requested block is the one we have a state snapshot for.
+        if block > last_block.number {
+            return Err(Error::not_found().context(format!(
+                "Espresso block {block} is not available; latest available block is {}",
+                last_block.number
+            )));
+        }
+        if block < last_block.number {
+            return Err(Error::gone().context(format!(
+                "rewards for Espresso block {block} are not available; earliest available block is {}",
+                last_block.number
+            )));
+        }
+
         self.storage.lifetime_rewards(account).await
     }
 
@@ -199,22 +157,47 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
     /// as a background task.
     #[instrument(skip(state))]
     pub async fn update_task(state: Arc<RwLock<Self>>) -> Result<()> {
-        let (espresso, next_block) = {
-            let state = state.read().await;
-            (state.espresso.clone(), state.latest_espresso_block + 1)
+        // Retry until we initialize successfully.
+        let next_block = loop {
+            match Self::update_task_initial_block(&state).await {
+                Ok(block) => break block,
+                Err(err) => {
+                    tracing::error!("error finding initial Espresso block: {err:#}");
+                    sleep(Duration::from_secs(1)).await;
+                }
+            }
         };
+        let espresso = { state.read().await.espresso.clone() };
         let mut leaves = espresso.leaves(next_block);
         while let Some((leaf, voters)) = leaves.next().await {
-            // Retry on any errors until we have successfully handled this leaf.
+            let state = state.upgradable_read().await;
+
+            // Calculate the effects of this new leaf, retrying on errors.
+            let (block, update, rewards) = loop {
+                match state.leaf_effects(&leaf, &voters).await {
+                    Ok(effects) => break effects,
+                    Err(err) => {
+                        tracing::error!(?leaf, ?voters, "error computing leaf effects: {err:#}");
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            };
+
+            // Apply effects to state, retying on errors.
+            let mut state_read = state;
             loop {
-                let state = state.upgradable_read().await;
-                if let Err(err) = Self::handle_leaf(state, &leaf, &voters).await {
-                    tracing::error!(?leaf, ?voters, "error processing leaf: {err}");
+                let mut state = RwLockUpgradableReadGuard::upgrade(state_read).await;
+                if let Err(err) = state
+                    .apply_effects(block.clone(), update.clone(), rewards.clone())
+                    .await
+                {
+                    tracing::error!(?leaf, ?voters, "error applying leaf effects: {err}");
                 } else {
                     break;
                 }
 
-                // Back off before retrying.
+                // Release exclusive lock and back off before retrying.
+                state_read = RwLockWriteGuard::downgrade_to_upgradable(state);
                 sleep(Duration::from_secs(1)).await;
             }
         }
@@ -222,32 +205,87 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         Err(Error::internal().context("Espresso block stream ended unexpectedly"))
     }
 
-    #[instrument(skip(state))]
-    async fn handle_leaf(
-        state: RwLockUpgradableReadGuard<'_, Self>,
+    async fn update_task_initial_block(state: &RwLock<Self>) -> Result<u64> {
+        let (espresso, snapshot, epoch_height) = {
+            let state = state.read().await;
+            (
+                state.espresso.clone(),
+                state.storage.active_node_set().await?,
+                state.epoch_height,
+            )
+        };
+        let current_epoch = espresso.wait_for_epochs().await;
+
+        // Initialize to the most recent of:
+        // * saved active node set
+        // * start of current epoch
+        let next_espresso_block = match snapshot {
+            Some(snapshot) if snapshot.espresso_block.epoch == current_epoch => {
+                tracing::info!(
+                    ?snapshot,
+                    current_epoch,
+                    "saved snapshot is from latest epoch, restoring state"
+                );
+                snapshot.espresso_block.block + 1
+            }
+            snapshot => {
+                tracing::info!(
+                    current_epoch,
+                    ?snapshot,
+                    "stored snapshot is missing or out of date, will start from beginning of epoch"
+                );
+
+                // TODO fetch the reward balance of every account as of the start of this epoch, so
+                // we can initialize our lifetime rewards storage.
+
+                // Set our state to the first block of this epoch.
+                epoch_start_block(current_epoch, epoch_height)
+            }
+        };
+
+        Ok(next_espresso_block)
+    }
+
+    /// Interpret a new Espresso leaf.
+    ///
+    /// Returns the corresponding block state along with changes to the active node set and reward
+    /// accounts.
+    #[instrument(skip(self))]
+    async fn leaf_effects(
+        &self,
         leaf: &Leaf2,
         voters: &BitVec,
-    ) -> Result<()> {
+    ) -> Result<(BlockState, ActiveNodeSetUpdate, RewardDistribution)> {
         tracing::debug!("received Espresso input");
-
         let height = leaf.height();
-        let current_epoch = epoch_from_block_number(height, state.epoch_height);
+        let current_epoch = epoch_from_block_number(height, self.epoch_height);
         let mut diff = vec![];
 
-        // Handle epoch change.
-        let new_epoch = height % state.epoch_height == 1;
-        let epoch = if new_epoch {
-            // This is the first block in a new epoch, switch over.
-            tracing::info!(current_epoch, "starting new epoch");
-            let next = Arc::new(
-                EpochState::download(&state.espresso, state.epoch_height, current_epoch)
+        // Get the previous block state. We don't need the entire block state (which might be
+        // missing if this is the first leaf we're processing after startup) but we need at least:
+        // * the previous view number, to account for failed views
+        // * the previous [`EpochState`], if we have it, so we can avoid unnecessarily downloading
+        //   it again
+        let (prev_view, prev_epoch) = match &self.last_block {
+            Some(prev) => (prev.view, Some(prev.epoch.clone())),
+            None => {
+                // Fetch the view number of the parent leaf.
+                let parent =
+                    self.espresso.leaf(height - 1).await.map_err(|err| {
+                        err.context(format!("fetching parent leaf {}", height - 1))
+                    })?;
+                (parent.view_number().u64(), None)
+            }
+        };
+
+        // Download epoch state if necessary.
+        let epoch = match prev_epoch {
+            Some(epoch) if epoch.number() == current_epoch => epoch,
+            _ => Arc::new(
+                EpochState::download(&self.espresso, self.epoch_height, current_epoch)
                     .await
                     .map_err(|err| err.context(format!("fetching next epoch {current_epoch}")))?,
-            );
-            diff.push(ActiveNodeSetDiff::NewEpoch(next.active_nodes().collect()));
-            next
-        } else {
-            state.epoch.clone()
+            ),
         };
 
         // Sanity check we are interpreting this leaf using the correct epoch.
@@ -260,12 +298,19 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
             ))
         );
 
+        // Emit an event for the first block in the epoch.
+        let new_epoch = height % self.epoch_height == 1;
+        if new_epoch {
+            tracing::info!(current_epoch, "starting new epoch");
+            diff.push(ActiveNodeSetDiff::NewEpoch(epoch.active_nodes().collect()));
+        }
+
         // Update leader and voter statistics.
         let leader = epoch.leader(leaf.view_number());
         // Find the leaders of any views between the previous block and this one, which must have
         // failed their view.
         let mut failed_leaders = vec![];
-        for view in (state.latest_espresso_view.u64() + 1)..leaf.view_number().u64() {
+        for view in (prev_view + 1)..leaf.view_number().u64() {
             let leader = epoch.leader(ViewNumber::new(view));
             failed_leaders.push(leader);
         }
@@ -287,13 +332,39 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         // Compute reward distribution for this block.
         let rewards = epoch.reward_distribution(leader);
 
-        // Update state with the results of this block.
-        let mut state = RwLockUpgradableReadGuard::upgrade(state).await;
-        // Update storage first. This will succeed for fail atomically. We can then update the
+        let block = BlockState {
+            number: height,
+            view: leaf.view_number().u64(),
+            epoch,
+        };
+        Ok((block, update, rewards))
+    }
+
+    /// Update the [`State`] by applying changes returned from [`leaf_effects`](Self::leaf_effects).
+    #[instrument(skip(self))]
+    async fn apply_effects(
+        &mut self,
+        block: BlockState,
+        update: ActiveNodeSetUpdate,
+        rewards: RewardDistribution,
+    ) -> Result<()> {
+        // Determine if the epoch is changing; if so we will garbage collect.
+        let new_epoch = match &self.last_block {
+            Some(last_block) if last_block.epoch.number != block.epoch.number => {
+                tracing::debug!(
+                    last_block.epoch.number,
+                    block.epoch.number,
+                    "epoch changed, GC will run"
+                );
+                true
+            }
+            _ => false,
+        };
+
+        // Update storage first. This will succeed or fail atomically. We can then update the
         // in-memory state to match; since we hold an exclusive lock on the state, no one will see
         // the in-memory state before the update has been completed.
-        state
-            .storage
+        self.storage
             .apply_update(update.clone(), rewards)
             .await
             .map_err(|err| err.context("updating storage"))?;
@@ -301,24 +372,43 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         // object in place. We must not fail after this point, or we may drop the write lock while
         // the state is in a partially modified state. All the validation performed up to this point
         // should be sufficient to ensure that we will not fail after this.
-        state.updates.push(update);
-        state.latest_espresso_block = leaf.height();
-        state.latest_espresso_view = leaf.view_number();
-        state.epoch = epoch;
         if new_epoch {
-            state.garbage_collect();
+            self.garbage_collect(block.epoch.number);
         }
+        self.updates.push(update);
+        self.last_block = Some(block);
 
         Ok(())
+    }
+
+    /// Get the latest Espresso block.
+    ///
+    /// Returns a `503 Service Unavailable` error if the Espresso block has not yet been initialized
+    /// by the update task.
+    fn last_block(&self) -> Result<&BlockState> {
+        self.last_block.as_ref().ok_or_else(Error::not_initialized)
     }
 
     /// Garbage collect in-memory updates.
     ///
     /// Drops all updates which are not from the current epoch.
-    fn garbage_collect(&mut self) {
+    fn garbage_collect(&mut self, epoch: u64) {
         self.updates
-            .retain(|update| update.espresso_block.epoch >= self.epoch.number());
+            .retain(|update| update.espresso_block.epoch >= epoch);
     }
+}
+
+/// State that changes every block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BlockState {
+    /// The block number.
+    number: u64,
+
+    /// The view number of the block.
+    view: u64,
+
+    /// The epoch this block belongs to.
+    epoch: Arc<EpochState>,
 }
 
 /// Stake table related data that remains static for an entire epoch.
@@ -442,7 +532,7 @@ impl EpochState {
     }
 
     /// Compute rewards to distribute to each account for a given block.
-    fn reward_distribution(&self, _leader: usize) -> Vec<(Address, ESPTokenAmount)> {
+    fn reward_distribution(&self, _leader: usize) -> RewardDistribution {
         // TODO: actually compute rewards
         vec![]
     }
@@ -454,7 +544,7 @@ impl EpochState {
 
     /// The block number of the first block in this epoch.
     fn start_block(&self, epoch_height: u64) -> u64 {
-        (self.number - 1) * epoch_height + 1
+        epoch_start_block(self.number, epoch_height)
     }
 
     /// The epoch number.
@@ -472,6 +562,13 @@ impl EpochState {
     }
 }
 
+fn epoch_start_block(epoch: u64, epoch_height: u64) -> u64 {
+    (epoch - 1) * epoch_height + 1
+}
+
+/// List of accounts receiving rewards and the amounts they are receiving.
+pub type RewardDistribution = Vec<(Address, ESPTokenAmount)>;
+
 /// Persistent storage for data derived from Espresso.
 pub trait EspressoPersistence {
     /// Get the latest persisted active node set.
@@ -487,7 +584,7 @@ pub trait EspressoPersistence {
     fn apply_update(
         &mut self,
         update: ActiveNodeSetUpdate,
-        rewards: Vec<(Address, ESPTokenAmount)>,
+        rewards: RewardDistribution,
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
@@ -586,6 +683,7 @@ mod test {
     use super::*;
 
     use alloy::transports::http::reqwest::StatusCode;
+    use async_lock::Semaphore;
     use testing::MemoryStorage;
     use tide_disco::Error;
     use tokio::task::spawn;
@@ -630,16 +728,9 @@ mod test {
         let signers = signers.clone();
 
         let state = RwLock::new(State::new(storage, espresso).await.unwrap());
-        {
-            // Check preloaded state.
-            let state = state.read().await;
-            assert_eq!(state.latest_espresso_block(), leaf.height() - 1);
-            assert_eq!(state.latest_espresso_view, leaf.view_number() - 2);
-            assert_eq!(state.epoch.number(), epoch);
-        }
 
         // Process the next leaf.
-        State::handle_leaf(state.upgradable_read().await, &leaf, &signers)
+        handle_leaf(state.upgradable_read().await, &leaf, &signers)
             .await
             .unwrap();
 
@@ -649,11 +740,12 @@ mod test {
         let snapshot = state.active_node_set().await.unwrap();
         assert_eq!(snapshot.espresso_block.block, leaf.height());
         assert_eq!(snapshot.nodes.len(), 3);
-        assert_eq!(state.latest_espresso_block(), leaf.height());
+        assert_eq!(state.latest_espresso_block().unwrap(), leaf.height());
 
+        let epoch = &state.last_block().unwrap().epoch;
         tracing::info!(
-            leader = state.epoch.leader(leaf.view_number()),
-            failed_leader = state.epoch.leader(leaf.view_number() - 1),
+            leader = epoch.leader(leaf.view_number()),
+            failed_leader = epoch.leader(leaf.view_number() - 1),
             "checking leaders"
         );
         // We don't know exactly what the leader participation rate should be, because it depends on
@@ -661,9 +753,9 @@ mod test {
         // randomness, you can have the same leader twice in a row). But we know that the _average_
         // participation of the failed and successful leader should be 1/2.
         assert_eq!(
-            f32::from(snapshot.nodes[state.epoch.leader(leaf.view_number())].leader_participation)
+            f32::from(snapshot.nodes[epoch.leader(leaf.view_number())].leader_participation)
                 + f32::from(
-                    snapshot.nodes[state.epoch.leader(leaf.view_number() - 1)].leader_participation
+                    snapshot.nodes[epoch.leader(leaf.view_number() - 1)].leader_participation
                 ),
             1f32
         );
@@ -689,8 +781,8 @@ mod test {
                     timestamp: leaf.block_header().timestamp_millis()
                 },
                 diff: vec![ActiveNodeSetDiff::NewBlock {
-                    leader: state.epoch.leader(leaf.view_number()),
-                    failed_leaders: vec![state.epoch.leader(leaf.view_number() - 1)],
+                    leader: epoch.leader(leaf.view_number()),
+                    failed_leaders: vec![epoch.leader(leaf.view_number() - 1)],
                     voters: signers,
                 }]
             }
@@ -744,14 +836,14 @@ mod test {
         );
 
         for (leaf, signers) in leaves {
-            State::handle_leaf(state.upgradable_read().await, &leaf, &signers)
+            handle_leaf(state.upgradable_read().await, &leaf, &signers)
                 .await
                 .unwrap();
         }
 
         let state = state.read().await;
         let snapshot = state.active_node_set().await.unwrap();
-        assert_eq!(state.latest_espresso_block(), last_leaf.height());
+        assert_eq!(state.latest_espresso_block().unwrap(), last_leaf.height());
         assert_eq!(snapshot.espresso_block.block, last_leaf.height());
         assert_eq!(snapshot.espresso_block.epoch, 3);
         assert_eq!(
@@ -768,13 +860,11 @@ mod test {
         assert_eq!(snapshot.nodes[2].voter_participation, 1f32.into());
 
         // Epoch state has been updated.
+        let epoch = &state.last_block().unwrap().epoch;
+        assert_eq!(epoch.number(), *last_leaf.epoch(epoch_height).unwrap());
         assert_eq!(
-            state.epoch.number(),
-            *last_leaf.epoch(epoch_height).unwrap()
-        );
-        assert_eq!(
-            state.epoch.committee.drb_result(),
-            fake_drb_result(state.epoch.number())
+            epoch.committee.drb_result(),
+            fake_drb_result(epoch.number())
         );
 
         // Only events from the new epoch are retained.
@@ -789,7 +879,7 @@ mod test {
                 diff: vec![
                     ActiveNodeSetDiff::NewEpoch(stake_table),
                     ActiveNodeSetDiff::NewBlock {
-                        leader: state.epoch.leader(last_leaf.view_number()),
+                        leader: epoch.leader(last_leaf.view_number()),
                         failed_leaders: vec![],
                         voters: last_signers,
                     }
@@ -904,12 +994,58 @@ mod test {
             assert_eq!(
                 update.diff,
                 vec![ActiveNodeSetDiff::NewBlock {
-                    leader: state.epoch.leader(leaf.view_number()),
+                    leader: state.last_block().unwrap().epoch.leader(leaf.view_number()),
                     failed_leaders: vec![],
                     voters,
                 }]
             )
         }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_rewards() {
+        let mut espresso = MockEspressoClient::new(3).await;
+        let (leaf, signers) = espresso.push_leaf(0, [true, true, true]).await;
+        let (leaf, signers) = (leaf.clone(), signers.clone());
+
+        let state = RwLock::new(
+            State::new(MemoryStorage::default(), espresso)
+                .await
+                .unwrap(),
+        );
+        handle_leaf(state.upgradable_read().await, &leaf, &signers)
+            .await
+            .unwrap();
+        let state = state.into_inner();
+
+        // Check empty account.
+        assert_eq!(
+            state
+                .lifetime_rewards(Address::random(), leaf.height())
+                .await
+                .unwrap(),
+            ESPTokenAmount::ZERO
+        );
+
+        // Check old block.
+        assert_eq!(
+            state
+                .lifetime_rewards(Address::random(), leaf.height() - 1)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::GONE
+        );
+
+        // Check new block.
+        assert_eq!(
+            state
+                .lifetime_rewards(Address::random(), leaf.height() + 1)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
     }
 
     async fn test_handle_leaf_failure_helper(
@@ -927,36 +1063,31 @@ mod test {
 
         setup_failure(&mut state);
         let state = RwLock::new(state);
-        State::handle_leaf(state.upgradable_read().await, &leaf, &signers)
+        let err = handle_leaf(state.upgradable_read().await, &leaf, &signers)
             .await
             .unwrap_err();
+        tracing::info!("task failed successfully: {err:#}");
 
         // The failed update did not change anything. [`State`] does not implement [`Eq`] (in
         // particular, comparing [`MemoryStorage`] is an async operation and does not use the [`Eq`]
         // trait) so we compare field by field. This pattern match ensures we remember every field.
         let State {
             updates: pre_updates,
-            latest_espresso_block: pre_latest_espresso_block,
-            latest_espresso_view: pre_latest_espresso_view,
+            last_block: pre_last_block,
             epoch_height: pre_epoch_height,
-            epoch: pre_epoch,
             storage: _,
             espresso: _,
         } = pre_state;
         let State {
             updates,
-            latest_espresso_block,
-            latest_espresso_view,
+            last_block,
             epoch_height,
-            epoch,
             storage,
             espresso: _,
         } = state.into_inner();
         assert_eq!(pre_updates, updates);
-        assert_eq!(pre_latest_espresso_block, latest_espresso_block);
-        assert_eq!(pre_latest_espresso_view, latest_espresso_view);
+        assert_eq!(pre_last_block, last_block);
         assert_eq!(pre_epoch_height, epoch_height);
-        assert_eq!(epoch, pre_epoch);
         assert_eq!(pre_storage, storage.cmp_key().await);
     }
 
@@ -979,10 +1110,166 @@ mod test {
     async fn test_handle_leaf_failure_fetch_transition_leaf() {
         test_handle_leaf_failure_helper(|state| {
             state.espresso.delete_leaf(transition_block_for_epoch(
-                state.epoch.number - 1,
+                state.espresso.current_epoch() - 1,
                 state.epoch_height,
             ))
         })
         .await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_epochs() {
+        let mut espresso = MockEspressoClient::new(3).await;
+        let leaf = espresso.push_leaf(0, [true, true, true]).await.0;
+        let leaf = leaf.clone();
+        let espresso = WaitForEpochsClient::new(espresso);
+
+        let state = Arc::new(RwLock::new(
+            State::new(MemoryStorage::default(), espresso.clone())
+                .await
+                .unwrap(),
+        ));
+        let task = spawn(State::update_task(state.clone()));
+
+        // Prior to epochs being enabled, the APIs are not available.
+        sleep(Duration::from_secs(1)).await;
+        {
+            let state = state.read().await;
+            assert_eq!(
+                state.latest_espresso_block().unwrap_err().status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+            assert_eq!(
+                state.active_node_set().await.unwrap_err().status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+            assert_eq!(
+                state
+                    .active_node_set_update(leaf.height())
+                    .unwrap_err()
+                    .status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+            assert_eq!(
+                state
+                    .lifetime_rewards(Address::random(), leaf.height())
+                    .await
+                    .unwrap_err()
+                    .status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+
+        // After enabling epochs, we begin processing Espresso blocks and populating state.
+        espresso.start_epochs();
+        loop {
+            let state = state.read().await;
+            let last_block = state.latest_espresso_block();
+            if let Ok(block) = last_block
+                && block == leaf.height()
+            {
+                break;
+            }
+            tracing::info!(
+                leaf.height = leaf.height(),
+                ?last_block,
+                "waiting for state to catch up"
+            );
+            sleep(Duration::from_secs(1)).await;
+        }
+
+        // Now all the APIs are usable.
+        {
+            let state = state.read().await;
+            assert_eq!(
+                state.active_node_set().await.unwrap().espresso_block.block,
+                leaf.height()
+            );
+            assert_eq!(
+                state
+                    .active_node_set_update(leaf.height())
+                    .unwrap()
+                    .espresso_block
+                    .block,
+                leaf.height()
+            );
+            assert_eq!(
+                state
+                    .lifetime_rewards(Address::random(), leaf.height())
+                    .await
+                    .unwrap(),
+                ESPTokenAmount::ZERO
+            );
+        }
+
+        task.abort();
+        task.await.ok();
+    }
+
+    /// A client wrapper which does not start epochs until signalled.
+    #[derive(Clone, Debug)]
+    struct WaitForEpochsClient<C> {
+        inner: Arc<C>,
+        wait_for_epochs: Arc<Semaphore>,
+    }
+
+    impl<C> WaitForEpochsClient<C> {
+        fn new(inner: C) -> Self {
+            Self {
+                inner: Arc::new(inner),
+                // Start with a limit of 0 in the semaphore, so `wait_for_epochs` will block until
+                // signalled.
+                wait_for_epochs: Arc::new(Semaphore::new(0)),
+            }
+        }
+
+        fn start_epochs(&self) {
+            // Increase the semaphore limit so waiters in `wait_for_epochs` will be able to acquire
+            // it.
+            self.wait_for_epochs.add_permits(1);
+        }
+    }
+
+    impl<C> EspressoClient for WaitForEpochsClient<C>
+    where
+        C: EspressoClient + Send + Sync,
+    {
+        async fn wait_for_epochs(&self) -> u64 {
+            // Wait until the semaphore is signalled.
+            {
+                self.wait_for_epochs.acquire().await;
+            }
+            self.inner.wait_for_epochs().await
+        }
+
+        async fn epoch_height(&self) -> Result<u64> {
+            self.inner.epoch_height().await
+        }
+
+        async fn leaf(&self, height: u64) -> Result<Leaf2> {
+            self.inner.leaf(height).await
+        }
+
+        async fn stake_table_for_epoch(&self, epoch: u64) -> Result<ValidatorMap> {
+            self.inner.stake_table_for_epoch(epoch).await
+        }
+
+        fn leaves(&self, from: u64) -> impl Send + Unpin + Stream<Item = (Leaf2, BitVec)> {
+            self.inner.leaves(from)
+        }
+    }
+
+    async fn handle_leaf<S, C>(
+        state: RwLockUpgradableReadGuard<'_, State<S, C>>,
+        leaf: &Leaf2,
+        signers: &BitVec,
+    ) -> Result<()>
+    where
+        S: EspressoPersistence,
+        C: EspressoClient,
+    {
+        let (block, update, rewards) = state.leaf_effects(leaf, signers).await?;
+        let mut state = RwLockUpgradableReadGuard::upgrade(state).await;
+        state.apply_effects(block, update, rewards).await
     }
 }
