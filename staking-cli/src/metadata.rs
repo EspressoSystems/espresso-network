@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use anyhow::{bail, Result};
 use url::Url;
@@ -23,6 +23,15 @@ impl TryFrom<Url> for MetadataUri {
     }
 }
 
+impl FromStr for MetadataUri {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let url = Url::parse(s)?;
+        MetadataUri::try_from(url)
+    }
+}
+
 impl fmt::Display for MetadataUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
@@ -44,8 +53,7 @@ mod test {
 
     #[test]
     fn test_valid_metadata_uri() -> Result<()> {
-        let url = Url::parse("https://example.com/metadata")?;
-        let uri = MetadataUri::try_from(url)?;
+        let uri: MetadataUri = "https://example.com/metadata".parse()?;
         assert_eq!(uri.to_string(), "https://example.com/metadata");
         Ok(())
     }
@@ -53,17 +61,17 @@ mod test {
     #[test]
     fn test_metadata_uri_max_length() -> Result<()> {
         let long_path = "a".repeat(2000);
-        let url = Url::parse(&format!("https://example.com/{}", long_path))?;
-        let uri = MetadataUri::try_from(url.clone())?;
-        assert_eq!(uri.to_string(), url.as_str());
+        let url_str = format!("https://example.com/{}", long_path);
+        let uri: MetadataUri = url_str.parse()?;
+        assert_eq!(uri.to_string(), url_str);
         Ok(())
     }
 
     #[test]
     fn test_metadata_uri_too_long() {
         let long_path = "a".repeat(2100);
-        let url = Url::parse(&format!("https://example.com/{}", long_path)).unwrap();
-        let result = MetadataUri::try_from(url);
+        let url_str = format!("https://example.com/{}", long_path);
+        let result = url_str.parse::<MetadataUri>();
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

@@ -164,9 +164,7 @@ impl TryFrom<MetadataUriArgs> for MetadataUri {
         if args.no_metadata_uri {
             Ok(MetadataUri::empty())
         } else if let Some(uri_str) = args.metadata_uri {
-            let url =
-                Url::parse(&uri_str).map_err(|e| anyhow::anyhow!("invalid metadata URI: {}", e))?;
-            Ok(MetadataUri::try_from(url)?)
+            uri_str.parse()
         } else {
             bail!("Either --metadata-uri or --no-metadata-uri must be provided")
         }

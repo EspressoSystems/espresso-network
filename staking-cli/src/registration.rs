@@ -171,7 +171,6 @@ mod test {
     };
     use rand::{rngs::StdRng, SeedableRng as _};
     use rstest::rstest;
-    use url::Url;
 
     use super::*;
     use crate::{deploy::TestSystem, receipt::ReceiptExt};
@@ -186,7 +185,7 @@ mod test {
             &system.state_key_pair,
         );
 
-        let metadata_uri = MetadataUri::try_from(Url::parse("https://example.com/metadata")?)?;
+        let metadata_uri = "https://example.com/metadata".parse()?;
         let receipt = register_validator(
             &system.provider,
             system.stake_table,
@@ -455,7 +454,7 @@ mod test {
         let system = TestSystem::deploy().await?;
         system.register_validator().await?;
 
-        let new_uri = MetadataUri::try_from(Url::parse("https://example.com/updated")?)?;
+        let new_uri: MetadataUri = "https://example.com/updated".parse()?;
         let receipt = update_metadata_uri(&system.provider, system.stake_table, new_uri.clone())
             .await?
             .assert_success()
