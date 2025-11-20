@@ -15,14 +15,21 @@ use crate::types::common::NodeSetEntry;
 use alloy::{
     network::EthereumWallet,
     primitives::{Address, FixedBytes, U256, keccak256},
-    providers::{ProviderBuilder, WalletProvider, ext::AnvilApi},
+    providers::{
+        Identity, ProviderBuilder, WalletProvider,
+        ext::AnvilApi,
+        fillers::{
+            BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+            SimpleNonceManager, WalletFiller,
+        },
+    },
     rpc::types::TransactionReceipt,
     signers::local::PrivateKeySigner,
     sol_types::SolValue,
 };
 use async_lock::RwLockReadGuard;
 use espresso_contract_deployer::{
-    Contract, Contracts, HttpProviderWithWallet, build_signer, builder::DeployerArgsBuilder,
+    Contract, Contracts, build_signer, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table,
 };
 use hotshot_contract_adapter::{
@@ -896,15 +903,29 @@ pub struct BackgroundStakeTableOps {
     task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
+type SimpleNonceProvider = FillProvider<
+    JoinFill<
+        JoinFill<
+            JoinFill<
+                Identity,
+                JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+            >,
+            NonceFiller<SimpleNonceManager>,
+        >,
+        WalletFiller<EthereumWallet>,
+    >,
+    alloy::providers::RootProvider,
+>;
+
 struct DelegatorInfo {
     address: Address,
-    provider: HttpProviderWithWallet,
+    provider: SimpleNonceProvider,
 }
 
 struct ValidatorInfo {
     index: u64,
     address: Address,
-    provider: HttpProviderWithWallet,
+    provider: SimpleNonceProvider,
     delegators: Vec<DelegatorInfo>,
 }
 
@@ -915,7 +936,7 @@ struct BackgroundTaskState {
     registered_validators: Vec<ValidatorInfo>,
     pending_undelegations: HashSet<(Address, Address)>,
     pending_exits: HashSet<(Address, Address)>,
-    delegator_providers: HashMap<Address, HttpProviderWithWallet>,
+    delegator_providers: HashMap<Address, SimpleNonceProvider>,
     rng: StdRng,
 }
 
@@ -945,8 +966,9 @@ impl BackgroundTaskState {
     }
 
     async fn register_validator(&mut self) {
+        tracing::debug!("register validator");
         let seed = [self.validator_index as u8; 32];
-        let signer = build_signer(DEV_MNEMONIC, self.validator_index as u32);
+        let signer = PrivateKeySigner::random();
         let bls_key = BLSKeyPair::generate(&mut StdRng::from_seed(seed));
         let schnorr_key = StateKeyPair::generate_from_seed_indexed(seed, self.validator_index);
 
@@ -955,6 +977,7 @@ impl BackgroundTaskState {
             .wallet(EthereumWallet::from(deployer.clone()))
             .connect_http(self.rpc_url.clone());
 
+        tracing::debug!(signer = %signer.address(), "register");
         match StakingTransactions::create(
             self.rpc_url.clone(),
             &provider,
@@ -974,6 +997,10 @@ impl BackgroundTaskState {
                     .filter(|d| d.validator == signer.address())
                     .filter_map(|d| {
                         let provider = staking_txns.provider(d.from)?.clone();
+                        let provider = ProviderBuilder::new()
+                            .with_simple_nonce_management()
+                            .wallet(provider.wallet().clone())
+                            .connect_http(self.rpc_url.clone());
                         Some(DelegatorInfo {
                             address: d.from,
                             provider,
@@ -994,10 +1021,14 @@ impl BackgroundTaskState {
                                 .insert(delegator_info.address, delegator_info.provider.clone());
                         }
 
+                        let provider = ProviderBuilder::new()
+                            .with_simple_nonce_management()
+                            .wallet(validator_provider.wallet().clone())
+                            .connect_http(self.rpc_url.clone());
                         self.registered_validators.push(ValidatorInfo {
                             index: self.validator_index,
                             address: signer.address(),
-                            provider: validator_provider,
+                            provider,
                             delegators: delegator_infos,
                         });
                     }
@@ -1030,6 +1061,7 @@ impl BackgroundTaskState {
         if self.registered_validators.is_empty() {
             return;
         }
+        tracing::debug!("update consensus keys");
 
         let idx = self.rng.gen_range(0..self.registered_validators.len());
         let validator = &self.registered_validators[idx];
@@ -1044,6 +1076,7 @@ impl BackgroundTaskState {
         let schnorr_sig: StateSignatureSol =
             sign_address_schnorr(&new_schnorr_key, validator.address).into();
 
+        tracing::debug!(signer = %validator.provider.default_signer_address(), "update keys");
         match StakeTableV2::new(self.stake_table_addr, &validator.provider)
             .updateConsensusKeysV2(
                 new_bls_key.ver_key().into(),
@@ -1076,6 +1109,7 @@ impl BackgroundTaskState {
         if self.registered_validators.is_empty() {
             return;
         }
+        tracing::debug!("undelegate");
 
         let val_idx = self.rng.gen_range(0..self.registered_validators.len());
         let validator = &self.registered_validators[val_idx];
@@ -1103,6 +1137,10 @@ impl BackgroundTaskState {
         {
             let undelegate_amount = delegated_amount / U256::from(2);
 
+            tracing::debug!(
+                signer = %delegator.provider.default_signer_address(),
+                "undelegate"
+            );
             match StakeTableV2::new(self.stake_table_addr, &delegator.provider)
                 .undelegate(validator.address, undelegate_amount)
                 .send()
@@ -1136,10 +1174,12 @@ impl BackgroundTaskState {
         if self.registered_validators.is_empty() {
             return;
         }
+        tracing::debug!("deregister validator");
 
         let idx = self.rng.gen_range(0..self.registered_validators.len());
         let validator = &self.registered_validators[idx];
 
+        tracing::debug!(signer = %validator.provider.default_signer_address(), "deregister");
         match StakeTableV2::new(self.stake_table_addr, &validator.provider)
             .deregisterValidator()
             .send()
@@ -1175,6 +1215,7 @@ impl BackgroundTaskState {
         if total_pending == 0 {
             return;
         }
+        tracing::debug!("withdraw");
 
         let idx = self.rng.gen_range(0..total_pending);
         let (key, is_exit) = if idx < self.pending_undelegations.len() {
@@ -1193,6 +1234,7 @@ impl BackgroundTaskState {
         let (validator_addr, delegator_addr) = key;
 
         if let Some(provider) = self.delegator_providers.get(&delegator_addr) {
+            tracing::debug!(signer = %provider.default_signer_address(), "withdraw");
             let result = if is_exit {
                 StakeTableV2::new(self.stake_table_addr, &provider)
                     .claimValidatorExit(validator_addr)
