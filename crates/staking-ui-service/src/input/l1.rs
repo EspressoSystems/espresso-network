@@ -218,7 +218,7 @@ impl<S: L1Persistence> State<S> {
             offset < self.blocks.len(),
             Error::not_found().context(format!(
                 "requested L1 block {number}; latest available is {}",
-                finalized + (offset as u64)
+                finalized + (self.blocks.len() as u64 - 1)
             ))
         );
 
