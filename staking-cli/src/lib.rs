@@ -153,7 +153,7 @@ pub struct MetadataUriArgs {
     #[clap(long, env = "METADATA_URI")]
     metadata_uri: Option<String>,
 
-    #[clap(long)]
+    #[clap(long, env = "NO_METADATA_URI")]
     no_metadata_uri: bool,
 }
 
