@@ -4598,24 +4598,27 @@ mod test {
 
         let network = TestNetwork::new(config, PosVersionV4::new()).await;
 
-        // Wait for the peer 0 (node 0) to advance past 6 epochs
+        // Wait for the peer 0 (node 0) to advance past 4 epochs
         let mut events = network.peers[0].event_stream().await;
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
-                if height > EPOCH_HEIGHT * 6 {
+                if height > EPOCH_HEIGHT * 4 {
                     break;
                 }
             }
         }
 
+        drop(network);
         let membership = NodeState::mock().coordinator.membership().clone();
 
         let p = persistence_options[1].clone().create().await.unwrap();
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(membership, 10, Arc::new(p));
 
-        for epoch_num in 1..=5 {
+        // we don't have first two epochs in storage
+        // because the first real epoch is 3
+        for epoch_num in 3..=5 {
             let epoch = EpochNumber::new(epoch_num);
 
             tracing::info!("Verifying epoch {epoch_num} is loaded from storage");
