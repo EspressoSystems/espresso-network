@@ -597,13 +597,12 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
 
     /// Wraps the same named Membership trait fn
     async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<Leaf2<TYPES>> {
-        let Some(epoch) = self.epoch else {
+        if self.epoch.is_none() {
             anyhow::bail!("Cannot get root for None epoch");
         };
         <TYPES::Membership as Membership<TYPES>>::get_epoch_root(
             self.coordinator.membership.clone(),
             block_height,
-            epoch,
         )
         .await
     }

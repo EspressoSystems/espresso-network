@@ -1582,7 +1582,6 @@ impl EpochCommittees {
                 let leaf = Self::get_epoch_root(
                     membership.clone(),
                     root_block_in_epoch(root_epoch, epoch_height),
-                    root_epoch,
                 )
                 .await
                 .with_context(|| format!("Failed to get epoch root for root_epoch={root_epoch}"))?;
@@ -2328,9 +2327,12 @@ impl Membership<SeqTypes> for EpochCommittees {
     async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
         block_height: u64,
-        epoch: Epoch,
     ) -> anyhow::Result<Leaf2> {
         let membership_reader = membership.read().await;
+        let epoch = EpochNumber::new(epoch_from_block_number(
+            block_height,
+            membership_reader.epoch_height,
+        ));
         let peers = membership_reader.fetcher.peers.clone();
         let stake_table = membership_reader.stake_table(Some(epoch)).clone();
         let success_threshold = membership_reader.success_threshold(Some(epoch));
