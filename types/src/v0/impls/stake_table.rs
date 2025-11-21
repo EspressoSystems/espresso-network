@@ -1582,7 +1582,7 @@ impl EpochCommittees {
                 let leaf = Self::get_epoch_root(
                     membership.clone(),
                     root_block_in_epoch(root_epoch, epoch_height),
-                    current_epoch,
+                    root_epoch,
                 )
                 .await
                 .with_context(|| format!("Failed to get epoch root for root_epoch={root_epoch}"))?;
