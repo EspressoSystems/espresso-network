@@ -2529,7 +2529,6 @@ mod test {
     };
     use hotshot_types::{
         data::EpochNumber,
-        drb::DrbResult,
         epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         traits::{
