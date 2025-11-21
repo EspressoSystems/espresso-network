@@ -594,9 +594,6 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                 DataMessage::SubmitTransaction(transaction, _) => {
                     let mut hasher = DefaultHasher::new();
                     transaction.hash(&mut hasher);
-                    if self.transactions_cache.put(hasher.finish(), ()).is_some() {
-                        return;
-                    }
                     broadcast_event(
                         Arc::new(HotShotEvent::TransactionsRecv(vec![transaction])),
                         &self.internal_event_stream,
