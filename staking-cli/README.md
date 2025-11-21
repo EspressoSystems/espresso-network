@@ -266,12 +266,16 @@ This section covers commands for node operators.
 
         staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
 
+    To register without a metadata URL (leaving it empty):
+
+        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --no-metadata-uri
+
 - Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
   register transaction consumes about 300k gas.
 - Each BLS (Espresso) and key can be registered only once.
 - The commission can be updated later using the `update-commission` command, subject to rate limits.
 - The metadata URL can be updated at any time using the `update-metadata-uri` command.
-- The metadata URL must be a valid URL and cannot exceed 2048 bytes.
+- The metadata URL must be a valid URL (unless using --no-metadata-uri flag) and cannot exceed 2048 bytes.
 - Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
   different account indices (or mnemonics) must be used.
 
@@ -299,9 +303,13 @@ To update your metadata URL:
 
     staking-cli update-metadata-uri --metadata-uri https://example.com/updated-metadata.json
 
+To clear your metadata URL (set it to empty):
+
+    staking-cli update-metadata-uri --no-metadata-uri
+
 The metadata URL:
-- Must be a valid URL (e.g., starting with `https://`)
-- Cannot be empty
+- Must be a valid URL (e.g., starting with `https://`) unless using --no-metadata-uri flag
+- Can be empty when using --no-metadata-uri flag
 - Cannot exceed 2048 bytes
 
 Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by
