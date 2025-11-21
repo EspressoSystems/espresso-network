@@ -4,7 +4,7 @@ genesis_version = "0.4"
 epoch_height = 3000
 drb_difficulty = 5000000000
 drb_upgrade_difficulty = 5000000000
-epoch_start_block = 1
+epoch_start_block = 297100
 
 [[da_committees]]
 start_version = "0.5"
@@ -53,8 +53,8 @@ number = 0
 [[upgrade]]
 start_voting_view = 0
 stop_voting_view = 999999999
-start_proposing_view = 334000
-stop_proposing_view = 335000
+start_proposing_view = 298000
+stop_proposing_view = 299000
 
 version = "0.5"
 
