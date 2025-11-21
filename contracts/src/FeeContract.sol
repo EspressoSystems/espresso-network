@@ -34,6 +34,7 @@ contract FeeContract is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     error DepositTooSmall();
     error FunctionDoesNotExist();
     error NoFunctionCalled();
+    error OwnershipCannotBeRenounced();
 
     /// @notice store user balances in a mapping
     mapping(address user => uint256 amount) public balances;
@@ -84,6 +85,13 @@ contract FeeContract is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice only the owner can authorize an upgrade
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
         emit Upgrade(newImplementation);
+    }
+
+    /// @notice Cannot renounce ownership
+    /// @dev Override renounceOwnership() to revert, preventing accidental or malicious ownership
+    /// renunciation
+    function renounceOwnership() public virtual override onlyOwner {
+        revert OwnershipCannotBeRenounced();
     }
 
     /// @notice Use this to get the implementation contract version

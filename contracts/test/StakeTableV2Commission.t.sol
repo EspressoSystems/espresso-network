@@ -13,6 +13,7 @@ import { PausableUpgradeable } from
     "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { StakeTable as S } from "../src/StakeTable.sol";
 
 contract StakeTableV2CommissionTest is Test {
@@ -182,25 +183,31 @@ contract StakeTableV2CommissionTest is Test {
         vm.stopPrank();
     }
 
-    function test_SetMinCommissionUpdateInterval_RevertWhenNotOwner() public {
+    function test_SetMinCommissionUpdateInterval_RevertWhenNotAdmin() public {
         address notAdmin = makeAddr("notAdmin");
         uint256 newInterval = 14 days;
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
 
         vm.startPrank(notAdmin);
         vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
+            )
         );
         proxy.setMinCommissionUpdateInterval(newInterval);
         vm.stopPrank();
     }
 
-    function test_SetMaxCommissionIncrease_RevertWhenNotOwner() public {
+    function test_SetMaxCommissionIncrease_RevertWhenNotAdmin() public {
         address notAdmin = makeAddr("notAdmin");
         uint16 newMaxIncrease = 1000;
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
 
         vm.startPrank(notAdmin);
         vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
+            )
         );
         proxy.setMaxCommissionIncrease(newMaxIncrease);
         vm.stopPrank();

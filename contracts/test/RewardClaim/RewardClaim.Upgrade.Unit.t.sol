@@ -5,24 +5,26 @@
 pragma solidity ^0.8.28;
 
 import "./RewardClaim.t.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract RewardClaimUpgradeTest is RewardClaimTest {
-    function test_Upgrade_OnlyOwner() public {
+    function test_Upgrade_OnlyAdmin() public {
         address newImpl = address(new RewardClaim());
 
         vm.prank(owner);
         rewardClaim.upgradeToAndCall(newImpl, "");
     }
 
-    function test_Upgrade_RevertsNonOwner() public {
+    function test_Upgrade_RevertsNonAdmin() public {
         address newImpl = address(new RewardClaim());
         address attacker = makeAddr("attacker");
+        bytes32 adminRole = rewardClaim.DEFAULT_ADMIN_ROLE();
 
         vm.prank(attacker);
         vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, attacker)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, attacker, adminRole
+            )
         );
         rewardClaim.upgradeToAndCall(newImpl, "");
     }

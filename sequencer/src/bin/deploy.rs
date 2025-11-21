@@ -96,7 +96,7 @@ struct Options {
     )]
     multisig_address: Option<Address>,
 
-    /// Address for the multisig wallet that will be the pauser
+    /// Address for the multisig wallet that will be a pauser
     ///
     /// The multisig pauser can pause functions in contracts that have the `whenNotPaused` modifier
     #[clap(
