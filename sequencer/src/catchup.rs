@@ -416,7 +416,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                     .context(format!("response missing reward account {account}"))?;
                 proof.verify(&reward_merkle_tree_root).context(format!(
                     "invalid proof for v2 reward account {account}, root: \
-                     {reward_merkle_tree_root}"
+                     {reward_merkle_tree_root} height {height} view {view}"
                 ))?;
                 proofs.push(proof);
             }
@@ -454,7 +454,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                     .context(format!("response missing reward account {account}"))?;
                 proof.verify(&reward_merkle_tree_root).context(format!(
                     "invalid proof for v1 reward account {account}, root: \
-                     {reward_merkle_tree_root}"
+                     {reward_merkle_tree_root} height {height} view {view}"
                 ))?;
                 proofs.push(proof);
             }
