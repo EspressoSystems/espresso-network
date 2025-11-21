@@ -275,25 +275,20 @@ contract RewardClaim is
     /// @notice Override grantRole to enforce single-admin invariant for DEFAULT_ADMIN_ROLE
     /// @dev When granting DEFAULT_ADMIN_ROLE, automatically revokes it from the current admin.
     /// This ensures only one address has DEFAULT_ADMIN_ROLE at any time, atomically.
+    /// This is intentionally not pausable for emergency governance access.
     /// @inheritdoc AccessControlUpgradeable
     function grantRole(bytes32 role, address account) public virtual override {
+        super.grantRole(role, account);
         if (role == DEFAULT_ADMIN_ROLE) {
             address oldAdmin = _currentAdmin;
-
-            // Handle self-grant: OpenZeppelin allows it, so we do too. It's a no-op.
             if (oldAdmin == account) {
-                super.grantRole(role, account);
                 return;
             }
-
-            // Grant role to new admin first, then revoke from old admin.
-            super.grantRole(role, account);
             _currentAdmin = account;
+            // revoke role from old admin so that there is always one admin
             if (oldAdmin != address(0)) {
                 _revokeRole(DEFAULT_ADMIN_ROLE, oldAdmin);
             }
-        } else {
-            super.grantRole(role, account);
         }
     }
 
@@ -301,11 +296,11 @@ contract RewardClaim is
     /// @notice Override renounceRole() to revert when attempting to renounce DEFAULT_ADMIN_ROLE,
     /// preventing accidental or malicious admin role renunciation
     /// @inheritdoc AccessControlUpgradeable
-    function renounceRole(bytes32 role, address account) public virtual override {
+    function renounceRole(bytes32 role, address callerConfirmation) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             revert DefaultAdminCannotBeRenounced();
         }
-        super.renounceRole(role, account);
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.

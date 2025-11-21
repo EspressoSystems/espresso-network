@@ -1502,7 +1502,7 @@ interface StakeTableV2 {
     function registerValidator(BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory, uint16) external pure;
     function registerValidatorV2(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK, BN254.G1Point memory blsSig, bytes memory schnorrSig, uint16 commission, string memory metadataUri) external;
     function renounceOwnership() external;
-    function renounceRole(bytes32 role, address account) external;
+    function renounceRole(bytes32 role, address callerConfirmation) external;
     function revokeRole(bytes32 role, address account) external;
     function schnorrKeys(bytes32 schnorrKey) external view returns (bool used);
     function setMaxCommissionIncrease(uint16 newMaxIncrease) external;
@@ -2228,7 +2228,7 @@ interface StakeTableV2 {
         "internalType": "bytes32"
       },
       {
-        "name": "account",
+        "name": "callerConfirmation",
         "type": "address",
         "internalType": "address"
       }
@@ -15555,7 +15555,7 @@ function renounceOwnership() external;
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `renounceRole(bytes32,address)` and selector `0x36568abe`.
 ```solidity
-function renounceRole(bytes32 role, address account) external;
+function renounceRole(bytes32 role, address callerConfirmation) external;
 ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -15563,7 +15563,7 @@ function renounceRole(bytes32 role, address account) external;
         #[allow(missing_docs)]
         pub role: alloy::sol_types::private::FixedBytes<32>,
         #[allow(missing_docs)]
-        pub account: alloy::sol_types::private::Address,
+        pub callerConfirmation: alloy::sol_types::private::Address,
     }
     ///Container type for the return parameters of the [`renounceRole(bytes32,address)`](renounceRoleCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
@@ -15603,7 +15603,7 @@ function renounceRole(bytes32 role, address account) external;
             #[doc(hidden)]
             impl ::core::convert::From<renounceRoleCall> for UnderlyingRustTuple<'_> {
                 fn from(value: renounceRoleCall) -> Self {
-                    (value.role, value.account)
+                    (value.role, value.callerConfirmation)
                 }
             }
             #[automatically_derived]
@@ -15612,7 +15612,7 @@ function renounceRole(bytes32 role, address account) external;
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self {
                         role: tuple.0,
-                        account: tuple.1,
+                        callerConfirmation: tuple.1,
                     }
                 }
             }
@@ -15684,7 +15684,7 @@ function renounceRole(bytes32 role, address account) external;
                         32,
                     > as alloy_sol_types::SolType>::tokenize(&self.role),
                     <alloy::sol_types::sol_data::Address as alloy_sol_types::SolType>::tokenize(
-                        &self.account,
+                        &self.callerConfirmation,
                     ),
                 )
             }
@@ -23384,9 +23384,14 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         pub fn renounceRole(
             &self,
             role: alloy::sol_types::private::FixedBytes<32>,
-            account: alloy::sol_types::private::Address,
+            callerConfirmation: alloy::sol_types::private::Address,
         ) -> alloy_contract::SolCallBuilder<&P, renounceRoleCall, N> {
-            self.call_builder(&renounceRoleCall { role, account })
+            self.call_builder(
+                &renounceRoleCall {
+                    role,
+                    callerConfirmation,
+                },
+            )
         }
         ///Creates a new call builder for the [`revokeRole`] function.
         pub fn revokeRole(

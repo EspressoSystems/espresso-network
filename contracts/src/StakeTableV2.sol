@@ -351,6 +351,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// super.transferOwnership() which requires onlyOwner.
     /// This ensures that only the current admin (who holds both ownership and DEFAULT_ADMIN_ROLE)
     /// can transfer ownership.
+    /// This is intentionally not pausable for emergency governance access.
     /// @inheritdoc OwnableUpgradeable
     function transferOwnership(address newOwner)
         public
@@ -364,7 +365,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         address oldOwner = owner();
 
         // Handle self-transfer: OpenZeppelin's transferOwnership allows it (no-op but emits event).
-        // We follow the same pattern. Self-revocation in grantRole is also a no-op, so we skip it
+        // We follow the same pattern. Self-granting in grantRole is also a no-op, so we skip it
         // here.
         if (oldOwner == newOwner) {
             super.transferOwnership(newOwner);
@@ -381,6 +382,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first,
     /// which handles both role grant and ownership transfer atomically.
+    /// This is intentionally not pausable for emergency governance access.
     /// @inheritdoc AccessControlUpgradeable
     function grantRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
@@ -401,11 +403,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
     /// @inheritdoc AccessControlUpgradeable
-    function renounceRole(bytes32 role, address account) public virtual override {
+    function renounceRole(bytes32 role, address callerConfirmation) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             revert DefaultAdminCannotBeRenounced();
         }
-        super.renounceRole(role, account);
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @notice Withdraw previously delegated funds after a validator has exited
