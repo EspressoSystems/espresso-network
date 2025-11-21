@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
@@ -28,9 +28,10 @@ use hotshot_types::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
-        storage::Storage,
+        storage::{EpochStateStorage, Storage},
     },
     vote::HasViewNumber,
 };
@@ -174,6 +175,8 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
 
 #[async_trait]
 impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
+    type StakeTableMetadata = ();
+
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append VID proposal to storage");
@@ -426,12 +429,50 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
 
         Ok(())
     }
+}
+
+#[async_trait]
+impl<TYPES: NodeType> EpochStateStorage<TYPES> for TestStorage<TYPES> {
+    async fn load_epoch_root(&self, epoch: TYPES::Epoch) -> Result<Option<TYPES::BlockHeader>> {
+        let inner = self.inner.read().await;
+        Ok(inner.epoch_roots.get(&epoch).cloned())
+    }
+
+    async fn load_stake_table(
+        &self,
+        _epoch: TYPES::Epoch,
+    ) -> Result<Option<(HSStakeTable<TYPES>, Box<dyn std::any::Any + Send + Sync>)>> {
+        Ok(None)
+    }
+
+    async fn load_drb_result(&self, epoch: TYPES::Epoch) -> Result<DrbResult> {
+        match self.load_drb_input(*epoch).await {
+            Ok(drb_input) => {
+                ensure!(drb_input.iteration == drb_input.difficulty_level);
+                Ok(drb_input.value)
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()> {
+        let mut inner = self.inner.write().await;
+        inner.drb_inputs.insert(drb_input.epoch, drb_input);
+        Ok(())
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> Result<DrbInput> {
+        let inner = self.inner.read().await;
+        inner
+            .drb_inputs
+            .get(&epoch)
+            .cloned()
+            .ok_or_else(|| anyhow!("DRB input not found for epoch {}", epoch))
+    }
 
     async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()> {
         let mut inner = self.inner.write().await;
-
         inner.drb_results.insert(epoch, drb_result);
-
         Ok(())
     }
 
@@ -441,26 +482,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         block_header: TYPES::BlockHeader,
     ) -> Result<()> {
         let mut inner = self.inner.write().await;
-
         inner.epoch_roots.insert(epoch, block_header);
-
         Ok(())
-    }
-
-    async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()> {
-        let mut inner = self.inner.write().await;
-
-        inner.drb_inputs.insert(drb_input.epoch, drb_input);
-
-        Ok(())
-    }
-
-    async fn load_drb_input(&self, epoch: u64) -> Result<DrbInput> {
-        let inner = self.inner.read().await;
-
-        match inner.drb_inputs.get(&epoch) {
-            Some(drb_input) => Ok(drb_input.clone()),
-            None => Err(anyhow!("Missing DrbInput for epoch {}", epoch)),
-        }
     }
 }

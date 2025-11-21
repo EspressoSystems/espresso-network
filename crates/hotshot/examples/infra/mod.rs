@@ -401,7 +401,7 @@ pub trait RunDa<
             state_sk,
             config.node_index,
             config.config,
-            EpochMembershipCoordinator::new(membership, epoch_height, &storage.clone()),
+            EpochMembershipCoordinator::new(membership, epoch_height, storage.clone()),
             network,
             initializer,
             ConsensusMetricsValue::default(),

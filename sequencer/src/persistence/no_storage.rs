@@ -5,7 +5,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EpochState, EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
     Leaf2, NetworkConfig, PubKey, StakeTableHash, ValidatorMap,
 };
@@ -309,10 +309,7 @@ impl SequencerPersistence for NoStorage {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_epoch_state(&self, _epoch: EpochNumber) -> anyhow::Result<Option<EpochState>> {
         Ok(None)
     }
 
@@ -320,7 +317,7 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(
+    async fn store_epoch_state(
         &self,
         _epoch: EpochNumber,
         _stake: ValidatorMap,

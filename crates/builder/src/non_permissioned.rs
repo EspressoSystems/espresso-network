@@ -72,7 +72,7 @@ pub fn build_instance_state<V: Versions>(
             genesis.epoch_height.unwrap_or_default(),
         ))),
         genesis.epoch_height.unwrap_or_default(),
-        &Arc::new(sequencer::persistence::no_storage::NoStorage),
+        Arc::new(sequencer::persistence::no_storage::NoStorage),
     );
 
     NodeState::new(

@@ -15,7 +15,7 @@ use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EpochState, EventsPersistenceRead, MembershipPersistence},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
@@ -83,10 +83,7 @@ impl NodeState {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_epoch_state(&self, _epoch: EpochNumber) -> anyhow::Result<Option<EpochState>> {
         Ok(None)
     }
 
@@ -94,7 +91,7 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn store_stake(
+    async fn store_epoch_state(
         &self,
         _epoch: EpochNumber,
         _stake: ValidatorMap,
@@ -194,7 +191,7 @@ impl NodeState {
         )));
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, storage.clone());
         Self::new(
             0,
             chain_config,
@@ -225,7 +222,7 @@ impl NodeState {
             0,
         )));
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, storage.clone());
 
         Self::new(
             0,
@@ -256,7 +253,7 @@ impl NodeState {
         )));
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, storage.clone());
         Self::new(
             0,
             ChainConfig::default(),
@@ -350,7 +347,7 @@ impl Default for NodeState {
             0,
         )));
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, storage.clone());
 
         Self::new(
             1u64,
