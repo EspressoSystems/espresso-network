@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;

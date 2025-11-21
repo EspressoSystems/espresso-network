@@ -6,7 +6,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{DefaultHasher, Hash},
     sync::Arc,
 };
 
