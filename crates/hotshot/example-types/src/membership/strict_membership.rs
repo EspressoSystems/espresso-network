@@ -13,7 +13,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::{epoch_from_block_number, transition_block_for_epoch},
+    utils::{root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
 };
 
@@ -284,13 +284,13 @@ impl<
 
     async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
-        block_height: u64,
-        _epoch: TYPES::Epoch,
+        epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
-        let epoch = epoch_from_block_number(block_height, membership_reader.epoch_height);
 
-        let stake_table = membership_reader.inner.stake_table(Some(epoch));
+        let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
+
+        let stake_table = membership_reader.inner.stake_table(Some(*epoch));
         let fetcher = membership_reader.fetcher.clone();
 
         drop(membership_reader);
