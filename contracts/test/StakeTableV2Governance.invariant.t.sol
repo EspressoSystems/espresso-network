@@ -260,18 +260,13 @@ contract GovernanceHandler is Test {
         vm.stopPrank();
     }
 
-    /// @notice Fuzzed action: Revoke PAUSER_ROLE
-    /// @dev Should always succeed when called by admin (even if actor doesn't have role)
-    function revokePauserRole(uint256 actorIndexSeed) public {
-        if (actors.length == 0) return;
-
-        address actor = actors[actorIndexSeed % actors.length];
-
+    /// @notice Handler action: Revoke PAUSER_ROLE
+    /// @dev Should always succeed when called by admin
+    function revokePauserRole() public {
+        if (currentPauser == address(0)) return;
         vm.startPrank(currentAdmin);
-        proxy.revokeRole(proxy.PAUSER_ROLE(), actor);
-        if (currentPauser == actor) {
-            currentPauser = address(0);
-        }
+        proxy.revokeRole(proxy.PAUSER_ROLE(), currentPauser);
+        currentPauser = address(0);
         revokeRoleCalls++;
         vm.stopPrank();
     }
@@ -299,8 +294,7 @@ contract GovernanceHandler is Test {
         vm.stopPrank();
     }
 
-    /// @notice Fuzzed action: Transfer ownership to self (tests idempotency)
-    /// @dev Should always succeed - tests that self-transfer doesn't break state
+    /// @notice Handler action: Transfer ownership to self (tests idempotency)
     function transferOwnershipToSelf() public {
         vm.startPrank(currentAdmin);
         proxy.transferOwnership(currentAdmin);
@@ -308,37 +302,33 @@ contract GovernanceHandler is Test {
         vm.stopPrank();
     }
 
-    /// @notice Fuzzed action: Pause contract via pauser
-    /// @dev Only pauses if not already paused (pause() reverts if already paused)
-    function pauseContract(uint256 actorIndexSeed) public {
-        if (actors.length == 0) return;
-
-        address actor = actors[actorIndexSeed % actors.length];
+    /// @notice Handler action: Pause contract via current pauser
+    /// @dev Only pauses if not already paused
+    function pauseContract() public {
+        address pauser = currentPauser;
+        if (pauser == address(0)) return;
         bytes32 pauserRole = proxy.PAUSER_ROLE();
 
-        // Only try if actor has pauser role and contract is not paused
-        if (!proxy.hasRole(pauserRole, actor)) return;
+        if (!proxy.hasRole(pauserRole, pauser)) return;
         if (proxy.paused()) return;
 
-        vm.startPrank(actor);
+        vm.startPrank(pauser);
         proxy.pause();
         pauseCalls++;
         vm.stopPrank();
     }
 
-    /// @notice Fuzzed action: Unpause contract via pauser
-    /// @dev Only unpauses if currently paused (unpause() reverts if not paused)
-    function unpauseContract(uint256 actorIndexSeed) public {
-        if (actors.length == 0) return;
-
-        address actor = actors[actorIndexSeed % actors.length];
+    /// @notice Handler action: Unpause contract via current pauser
+    /// @dev Only unpauses if currently paused
+    function unpauseContract() public {
+        address pauser = currentPauser;
+        if (pauser == address(0)) return;
         bytes32 pauserRole = proxy.PAUSER_ROLE();
 
-        // Only try if actor has pauser role and contract is paused
-        if (!proxy.hasRole(pauserRole, actor)) return;
+        if (!proxy.hasRole(pauserRole, pauser)) return;
         if (!proxy.paused()) return;
 
-        vm.startPrank(actor);
+        vm.startPrank(pauser);
         proxy.unpause();
         unpauseCalls++;
         vm.stopPrank();
