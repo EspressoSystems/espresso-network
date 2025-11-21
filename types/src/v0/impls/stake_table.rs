@@ -40,6 +40,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
+        block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
@@ -2169,16 +2170,25 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// It also calculates and stores the block reward based on header version.
     async fn add_epoch_root(
         membership: Arc<RwLock<Self>>,
-        epoch: Epoch,
         block_header: Header,
     ) -> anyhow::Result<()> {
+        let membership_reader = membership.read().await;
+
+        let epoch = Epoch::new(
+            epoch_from_block_number(block_header.block_number(), membership_reader.epoch_height)
+                + 2,
+        );
+
         tracing::info!(
             ?epoch,
             "adding epoch root. height={:?}",
-            block_header.height()
+            block_header.block_number()
         );
 
-        let fetcher = { membership.read().await.fetcher.clone() };
+        let fetcher = membership_reader.fetcher.clone();
+
+        drop(membership_reader);
+
         let version = block_header.version();
         // Update the chain config if the block header contains a newer one.
         fetcher.update_chain_config(&block_header).await?;
