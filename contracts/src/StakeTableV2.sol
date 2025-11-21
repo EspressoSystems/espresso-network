@@ -303,6 +303,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         // preventing governance drift.
         address previousOwner = owner();
         if (admin != previousOwner) {
+            // Use internal method since we've already granted DEFAULT_ADMIN_ROLE above.
+            // The public transferOwnership requires this role and would redundantly grant it again.
             _transferOwnership(admin);
         }
 
@@ -344,8 +346,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
-    /// @notice Grants the role to new owner and revokes from old owner.
-    /// @notice Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
+    /// Grants the role to new owner and revokes from old owner.
+    /// Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
     /// super.transferOwnership() which requires onlyOwner.
     /// This ensures that only the current admin (who holds both ownership and DEFAULT_ADMIN_ROLE)
     /// can transfer ownership.
@@ -361,9 +363,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
         address oldOwner = owner();
 
-        // Handle self-transfer: OpenZeppelin allows it, so we do too. Just emit the event.
-        // In super.grantRole, self-revocation is allowed but it's a no-op and doesn't change the
-        // role so we don't call it here
+        // Handle self-transfer: OpenZeppelin's transferOwnership allows it (no-op but emits event).
+        // We follow the same pattern. Self-revocation in grantRole is also a no-op, so we skip it
+        // here.
         if (oldOwner == newOwner) {
             super.transferOwnership(newOwner);
             return;
@@ -377,7 +379,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         _revokeRole(DEFAULT_ADMIN_ROLE, oldOwner);
     }
 
-    /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first.
+    /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first,
+    /// which handles both role grant and ownership transfer atomically.
     /// @inheritdoc AccessControlUpgradeable
     function grantRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
@@ -810,7 +813,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
     }
 
-    // deprecate previous registration function
     /// @notice Deprecate previous registration function
     /// @dev This function is overridden to revert with a DeprecatedFunction error
     /// @dev users must call registerValidatorV2 instead
@@ -843,7 +845,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         virtual
         override
         onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        newImplementation; // Silence empty block warning
-    }
+    // solhint-disable-next-line no-empty-blocks
+    { }
 }
