@@ -51,7 +51,7 @@ build profile="dev" features="":
     # postgres
     cargo build --profile {{profile}} {{features}}
     # embedded-db 
-    cargo build --profile {{profile}} --workspace {{features}}
+    cargo build --profile {{profile}} -p sequencer-sqlite -p espresso-dev-node {{features}}
 
 demo-native-fee *args: (build "test" "--no-default-features --features fee")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
