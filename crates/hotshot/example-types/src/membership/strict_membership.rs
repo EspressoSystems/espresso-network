@@ -284,26 +284,10 @@ impl<
 
     async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
-        block_height: u64,
         _epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
-
-        let full_stake_table = membership_reader.inner.full_stake_table();
-        let fetcher = membership_reader.fetcher.clone();
-
         drop(membership_reader);
-
-        for node in full_stake_table {
-            if let Ok(leaf) = fetcher
-                .read()
-                .await
-                .fetch_leaf(block_height, node.signature_key)
-                .await
-            {
-                return Ok(leaf);
-            }
-        }
 
         anyhow::bail!("Failed to fetch epoch root from any peer");
     }

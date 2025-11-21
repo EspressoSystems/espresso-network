@@ -1457,7 +1457,6 @@ impl EpochCommittees {
         coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<RewardAmount> {
         let membership_read = coordinator.membership().read().await;
-        let epoch_height = membership_read.epoch_height;
         let fixed_block_reward = membership_read.fixed_block_reward;
 
         let committee = membership_read
@@ -1494,13 +1493,11 @@ impl EpochCommittees {
                 tracing::info!(?root_epoch, "catchup epoch root header");
 
                 let membership = coordinator.membership();
-                let leaf = Self::get_epoch_root(
-                    membership.clone(),
-                    root_block_in_epoch(root_epoch, epoch_height),
-                    current_epoch,
-                )
-                .await
-                .with_context(|| format!("Failed to get epoch root for root_epoch={root_epoch}"))?;
+                let leaf = Self::get_epoch_root(membership.clone(), EpochNumber::new(root_epoch))
+                    .await
+                    .with_context(|| {
+                        format!("Failed to get epoch root for root_epoch={root_epoch}")
+                    })?;
                 leaf.block_header().clone()
             },
         };
@@ -2240,12 +2237,9 @@ impl Membership<SeqTypes> for EpochCommittees {
         Ok(self.randomized_committees.contains_key(&epoch))
     }
 
-    async fn get_epoch_root(
-        membership: Arc<RwLock<Self>>,
-        block_height: u64,
-        epoch: Epoch,
-    ) -> anyhow::Result<Leaf2> {
+    async fn get_epoch_root(membership: Arc<RwLock<Self>>, epoch: Epoch) -> anyhow::Result<Leaf2> {
         let membership_reader = membership.read().await;
+        let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
         let peers = membership_reader.fetcher.peers.clone();
         let stake_table = membership_reader.stake_table(Some(epoch)).clone();
         let success_threshold = membership_reader.success_threshold(Some(epoch));

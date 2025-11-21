@@ -218,7 +218,6 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// at the given block height
     fn get_epoch_root(
         _membership: Arc<RwLock<Self>>,
-        _block_height: u64,
         _epoch: TYPES::Epoch,
     ) -> impl std::future::Future<Output = anyhow::Result<Leaf2<TYPES>>> + Send;
 
@@ -255,16 +254,4 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     }
 
     fn add_da_committee(&mut self, _first_epoch: u64, _da_committee: Vec<PeerConfig<TYPES>>);
-}
-
-pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(
-    membership: Arc<RwLock<impl Membership<TYPES> + 'static>>,
-    epoch: TYPES::Epoch,
-    block_header: TYPES::BlockHeader,
-) {
-    tokio::spawn(async move {
-        if let Err(e) = Membership::<TYPES>::add_epoch_root(membership, epoch, block_header).await {
-            tracing::error!("Failed to add epoch root for epoch {epoch}: {e}");
-        }
-    });
 }

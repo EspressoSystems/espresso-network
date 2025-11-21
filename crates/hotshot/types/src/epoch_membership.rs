@@ -25,7 +25,6 @@ use crate::{
             Storage, StoreDrbProgressFn, StoreDrbResultFn,
         },
     },
-    utils::root_block_in_epoch,
     PeerConfig,
 };
 
@@ -450,10 +449,7 @@ where
 
         // Get the epoch root headers and update our membership with them, finally sync them
         // Verification of the root is handled in get_epoch_root_and_drb
-        let Ok(root_leaf) = root_membership
-            .get_epoch_root(root_block_in_epoch(*root_epoch, self.epoch_height))
-            .await
-        else {
+        let Ok(root_leaf) = root_membership.get_epoch_root().await else {
             return Err(anytrace::error!(
                 "get epoch root leaf failed for epoch {root_epoch:?}"
             ));
@@ -593,13 +589,12 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<Leaf2<TYPES>> {
+    async fn get_epoch_root(&self) -> anyhow::Result<Leaf2<TYPES>> {
         let Some(epoch) = self.epoch else {
             anyhow::bail!("Cannot get root for None epoch");
         };
         <TYPES::Membership as Membership<TYPES>>::get_epoch_root(
             self.coordinator.membership.clone(),
-            block_height,
             epoch,
         )
         .await
