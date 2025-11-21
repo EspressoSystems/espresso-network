@@ -191,7 +191,6 @@ pub async fn add_network_message_test_task<
         internal_event_stream: internal_event_stream.clone(),
         external_event_stream: external_event_stream.clone(),
         public_key,
-        transactions_cache: lru::LruCache::new(NonZeroUsize::new(100_000).unwrap()),
         upgrade_lock: upgrade_lock.clone(),
         id,
     };

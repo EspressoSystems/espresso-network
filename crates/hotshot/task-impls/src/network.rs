@@ -55,9 +55,6 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
     /// This nodes public key
     pub public_key: TYPES::SignatureKey,
 
-    /// Transaction Cache to ignore previously seen transactions
-    pub transactions_cache: lru::LruCache<u64, ()>,
-
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 
