@@ -33,8 +33,9 @@ use crate::{
 };
 
 /// This trait is used by EpochMembershipCoordinator to load
-/// to load the stake tables before triggering catchup
-/// we are not using `Storage` trait directly because that one is not object safe
+/// stake tables, DRB results, and epoch state before triggering catchup.
+/// We are not using `Storage` trait directly because that one is not object safe.
+/// It also has methods to store DRB inputs and result
 #[async_trait]
 pub trait EpochStateStorage<TYPES: NodeType>: Send + Sync {
     /// Load an epoch block header
