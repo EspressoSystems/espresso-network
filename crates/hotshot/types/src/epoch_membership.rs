@@ -464,7 +464,7 @@ where
 
         Membership::add_epoch_root(
             Arc::clone(&self.membership),
-            epoch,
+            root_epoch,
             root_leaf.block_header().clone(),
         )
         .await
