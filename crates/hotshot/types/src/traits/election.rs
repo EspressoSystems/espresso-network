@@ -218,7 +218,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// at the given block height
     fn get_epoch_root(
         _membership: Arc<RwLock<Self>>,
-        _block_height: u64,
+        _epoch: TYPES::Epoch,
     ) -> impl std::future::Future<Output = anyhow::Result<Leaf2<TYPES>>> + Send;
 
     /// Gets the DRB result for the given epoch
