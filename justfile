@@ -45,7 +45,7 @@ check *args:
     # postgres
     cargo check {{args}}
     # embedded-db
-    cargo check --workspace {{args}}
+    cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
 
 build profile="dev" features="":
     # postgres
