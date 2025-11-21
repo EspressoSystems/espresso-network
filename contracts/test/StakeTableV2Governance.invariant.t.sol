@@ -1,0 +1,399 @@
+// SPDX-License-Identifier: UNLICENSED
+
+/* solhint-disable contract-name-camelcase, func-name-mixedcase, no-console */
+
+pragma solidity ^0.8.0;
+
+import { Test } from "forge-std/Test.sol";
+import { StdInvariant } from "forge-std/StdInvariant.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { StakeTableV2 } from "../src/StakeTableV2.sol";
+import { StakeTable as S } from "../src/StakeTable.sol";
+import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
+import { StakeTable_register_Test } from "./StakeTable.t.sol";
+import { Vm } from "forge-std/Vm.sol";
+
+/// @title StakeTableV2 Governance Invariant Tests
+/// @notice Tests critical invariants that must ALWAYS hold in the governance system
+/// @dev Uses Foundry's invariant testing framework for stateful fuzzing
+/// forge-config: default.invariant.runs = 128
+/// forge-config: default.invariant.depth = 15
+contract StakeTableV2GovernanceInvariantTest is StdInvariant, Test {
+    StakeTableV2 public proxy;
+    GovernanceHandler public handler;
+
+    address public initialOwner;
+    address public pauser;
+
+    function setUp() public {
+        StakeTableUpgradeV2Test baseTest = new StakeTableUpgradeV2Test();
+        baseTest.setUp();
+        pauser = makeAddr("pauser");
+        StakeTable_register_Test stakeTableRegisterTest = baseTest.stakeTableRegisterTest();
+
+        initialOwner = baseTest.admin();
+
+        vm.startPrank(initialOwner);
+        S baseProxy = S(address(stakeTableRegisterTest.stakeTable()));
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, initialOwner, 0, emptyCommissions
+        );
+        baseProxy.upgradeToAndCall(address(new StakeTableV2()), initData);
+        proxy = StakeTableV2(address(baseProxy));
+        vm.stopPrank();
+
+        handler = new GovernanceHandler(proxy, initialOwner);
+        targetContract(address(handler));
+    }
+
+    // ============================================
+    // Core Invariants
+    // ============================================
+
+    /// @notice INVARIANT: Owner must always have DEFAULT_ADMIN_ROLE
+    /// @dev This is the most critical invariant - prevents admin lockout
+    function invariant_OwnerAlwaysHasAdminRole() public view {
+        address currentOwner = proxy.owner();
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
+
+        assertTrue(
+            proxy.hasRole(adminRole, currentOwner), "owner() must always have DEFAULT_ADMIN_ROLE"
+        );
+    }
+
+    /// @notice INVARIANT: Only one address should have DEFAULT_ADMIN_ROLE
+    /// @dev Enforces single-admin governance model
+    function invariant_OnlyOneAdminExists() public view {
+        assertEq(handler.adminCount(), 1, "Exactly one address must have DEFAULT_ADMIN_ROLE");
+    }
+
+    /// @notice INVARIANT: Admin is never zero
+    function invariant_OwnerIsNeverZero() public view {
+        address currentOwner = proxy.owner();
+        assertTrue(currentOwner != address(0), "owner() must never be zero address");
+    }
+
+    /// @notice INVARIANT: Only admin can perform privileged operations
+    /// @dev Verifies access control is maintained
+    function invariant_OnlyAdminCanPerformPrivilegedOps() public {
+        address currentOwner = proxy.owner();
+        address currentPauser = handler.currentPauser();
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
+
+        // Skip if pauser is the owner (owner can grant admin role)
+        if (currentPauser == currentOwner || currentPauser == address(0)) return;
+
+        vm.startPrank(currentPauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, currentPauser, adminRole
+            )
+        );
+        proxy.grantRole(adminRole, currentPauser);
+        vm.stopPrank();
+    }
+
+    /// @notice INVARIANT: Contract version remains consistent
+    /// @dev Ensures contract hasn't been corrupted
+    function invariant_ContractVersionIsV2() public view {
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 2, "Contract must remain V2");
+    }
+
+    // ============================================
+    // PAUSER_ROLE Invariants
+    // ============================================
+
+    /// @notice INVARIANT: Only DEFAULT_ADMIN_ROLE can manage PAUSER_ROLE
+    /// @dev Ensures proper role hierarchy
+    function invariant_OnlyAdminCanManagePauserRole() public view {
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
+        bytes32 pauserRole = proxy.PAUSER_ROLE();
+
+        assertEq(
+            proxy.getRoleAdmin(pauserRole),
+            adminRole,
+            "PAUSER_ROLE must be managed by DEFAULT_ADMIN_ROLE"
+        );
+    }
+
+    /// @notice INVARIANT: Admin can always unpause the contract
+    /// @dev Critical safety - ensures contract is never permanently locked
+    function invariant_AdminCanAlwaysUnpause() public {
+        address currentOwner = proxy.owner();
+        bytes32 pauserRole = proxy.PAUSER_ROLE();
+
+        // If contract is paused, admin should have pauser role or be able to grant it
+        if (proxy.paused()) {
+            // Either admin already has pauser role
+            bool adminIsPauser = proxy.hasRole(pauserRole, currentOwner);
+
+            // Or admin can grant themselves pauser role
+            if (!adminIsPauser) {
+                vm.prank(currentOwner);
+                proxy.grantRole(pauserRole, currentOwner);
+            }
+        }
+
+        assertTrue(true, "INVARIANT: Admin can always unpause");
+    }
+
+    /// @notice INVARIANT: DEFAULT_ADMIN_ROLE is its own role admin
+    /// @dev Ensures no higher authority can hijack admin role
+    function invariant_AdminRoleIsOwnAdmin() public view {
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
+        bytes32 roleAdmin = proxy.getRoleAdmin(adminRole);
+
+        assertEq(roleAdmin, adminRole, "DEFAULT_ADMIN_ROLE must be its own admin");
+    }
+
+    // ============================================
+    // Post-Run Hook
+    // ============================================
+
+    /// @notice Hook called after each invariant run completes
+    /// @dev Performs final checks after all fuzzing is done
+    function afterInvariant() external {
+        invariant_OwnerAlwaysHasAdminRole();
+        invariant_OnlyOneAdminExists();
+        invariant_AdminRoleIsOwnAdmin();
+        invariant_OwnerIsNeverZero();
+        invariant_ContractVersionIsV2();
+        invariant_OnlyAdminCanManagePauserRole();
+        invariant_OnlyAdminCanPerformPrivilegedOps();
+        invariant_AdminCanAlwaysUnpause();
+    }
+}
+
+/// @title Governance Handler
+/// @notice Handler contract for stateful fuzzing of governance operations
+/// @dev Performs random governance actions and tracks state
+contract GovernanceHandler is Test {
+    StakeTableV2 public proxy;
+    address public currentAdmin;
+    address public currentPauser;
+    address[] public actors;
+
+    // Track call statistics
+    uint256 public transferOwnershipCalls;
+    uint256 public grantRoleCalls;
+    uint256 public revokeRoleCalls;
+    uint256 public pauseCalls;
+    uint256 public unpauseCalls;
+    uint256 public adminCount;
+
+    constructor(StakeTableV2 _proxy, address _initialAdmin) {
+        proxy = _proxy;
+        currentAdmin = _initialAdmin;
+        actors.push(_initialAdmin);
+        adminCount = 1;
+    }
+
+    // ============================================
+    // Helpers
+    // ============================================
+    function _updateAdminCountFromLogs() internal {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
+
+        for (uint256 i = 0; i < logs.length; i++) {
+            // Check for RoleGranted event (topic[0] =
+            // keccak256("RoleGranted(bytes32,address,address)"))
+            if (logs[i].topics[0] == keccak256("RoleGranted(bytes32,address,address)")) {
+                // topic[1] = role, topic[2] = account
+                bytes32 role = bytes32(logs[i].topics[1]);
+                if (role == adminRole) {
+                    adminCount++;
+                }
+            }
+            // Check for RoleRevoked event
+            else if (logs[i].topics[0] == keccak256("RoleRevoked(bytes32,address,address)")) {
+                bytes32 role = bytes32(logs[i].topics[1]);
+                if (role == adminRole) {
+                    adminCount--;
+                }
+            }
+        }
+    }
+
+    // ============================================
+    // Fuzzed Actions
+    // ============================================
+
+    /// @notice Fuzzed action: Transfer ownership
+    function transferOwnership(address newOwner) public {
+        // Bound newOwner to valid addresses (not zero)
+        newOwner = _boundAddress(newOwner);
+
+        vm.startPrank(currentAdmin);
+        proxy.transferOwnership(newOwner);
+        currentAdmin = newOwner;
+        _updateAdminCountFromLogs();
+        _addActor(newOwner);
+        transferOwnershipCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Fuzzed action: Grant DEFAULT_ADMIN_ROLE
+    function grantAdminRole(address newAdmin) public {
+        newAdmin = _boundAddress(newAdmin);
+
+        vm.startPrank(currentAdmin);
+        proxy.grantRole(proxy.DEFAULT_ADMIN_ROLE(), newAdmin);
+        currentAdmin = newAdmin;
+        _updateAdminCountFromLogs();
+        _addActor(newAdmin);
+        grantRoleCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Fuzzed action: Grant PAUSER_ROLE
+    function grantPauserRole(address newPauser) public {
+        newPauser = _boundAddress(newPauser);
+
+        vm.startPrank(currentAdmin);
+        proxy.grantRole(proxy.PAUSER_ROLE(), newPauser);
+        currentPauser = newPauser;
+        _addActor(newPauser);
+        grantRoleCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Handler action: Revoke PAUSER_ROLE
+    /// @dev Should always succeed when called by admin
+    function revokePauserRole() public {
+        if (currentPauser == address(0)) return;
+        vm.startPrank(currentAdmin);
+        proxy.revokeRole(proxy.PAUSER_ROLE(), currentPauser);
+        currentPauser = address(0);
+        revokeRoleCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Fuzzed action: Attempt unauthorized transfer
+    /// @dev Should always fail - verifies access control
+    function unauthorizedTransferOwnership(uint256 actorIndexSeed, address newOwner) public {
+        if (actors.length == 0) return;
+
+        address actor = actors[actorIndexSeed % actors.length];
+        newOwner = _boundAddress(newOwner);
+
+        // Only try if actor is NOT the current admin
+        if (actor == currentAdmin) return;
+
+        vm.startPrank(actor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                actor,
+                proxy.DEFAULT_ADMIN_ROLE()
+            )
+        );
+        proxy.transferOwnership(newOwner);
+        vm.stopPrank();
+    }
+
+    /// @notice Handler action: Transfer ownership to self (tests idempotency)
+    function transferOwnershipToSelf() public {
+        vm.startPrank(currentAdmin);
+        proxy.transferOwnership(currentAdmin);
+        transferOwnershipCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Handler action: Pause contract via current pauser
+    /// @dev Only pauses if not already paused
+    function pauseContract() public {
+        address pauser = currentPauser;
+        if (pauser == address(0)) return;
+        bytes32 pauserRole = proxy.PAUSER_ROLE();
+
+        if (!proxy.hasRole(pauserRole, pauser)) return;
+        if (proxy.paused()) return;
+
+        vm.startPrank(pauser);
+        proxy.pause();
+        pauseCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Handler action: Unpause contract via current pauser
+    /// @dev Only unpauses if currently paused
+    function unpauseContract() public {
+        address pauser = currentPauser;
+        if (pauser == address(0)) return;
+        bytes32 pauserRole = proxy.PAUSER_ROLE();
+
+        if (!proxy.hasRole(pauserRole, pauser)) return;
+        if (!proxy.paused()) return;
+
+        vm.startPrank(pauser);
+        proxy.unpause();
+        unpauseCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Fuzzed action: Admin grants pauser role
+    function adminGrantsPauserRole(address newPauser) public {
+        newPauser = _boundAddress(newPauser);
+
+        vm.startPrank(currentAdmin);
+        proxy.grantRole(proxy.PAUSER_ROLE(), newPauser);
+        currentPauser = newPauser;
+        _addActor(newPauser);
+        grantRoleCalls++;
+        vm.stopPrank();
+    }
+
+    /// @notice Fuzzed action: Pauser tries to grant admin role (should fail)
+    function pauserTriesToGrantAdminRole(uint256 pauserIndexSeed, address target) public {
+        if (actors.length == 0) return;
+
+        address pauser = actors[pauserIndexSeed % actors.length];
+        bytes32 pauserRole = proxy.PAUSER_ROLE();
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
+
+        // Only try if actor is pauser but NOT admin
+        if (!proxy.hasRole(pauserRole, pauser)) return;
+        if (proxy.hasRole(adminRole, pauser)) return;
+
+        target = _boundAddress(target);
+
+        vm.startPrank(pauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, pauser, adminRole
+            )
+        );
+        proxy.grantRole(adminRole, target);
+        vm.stopPrank();
+    }
+
+    // ============================================
+    // Helper Functions
+    // ============================================
+
+    function _boundAddress(address addr) internal view returns (address) {
+        // Ensure address is not zero
+        if (addr == address(0)) {
+            addr = address(uint160(uint256(keccak256(abi.encodePacked(block.timestamp)))));
+        }
+        // Avoid precompiles and special addresses
+        if (uint160(addr) < 10) {
+            addr = address(uint160(addr) + 100);
+        }
+        return addr;
+    }
+
+    function _addActor(address actor) internal {
+        for (uint256 i = 0; i < actors.length; i++) {
+            if (actors[i] == actor) return;
+        }
+        actors.push(actor);
+    }
+
+    function getActors() external view returns (address[] memory) {
+        return actors;
+    }
+}

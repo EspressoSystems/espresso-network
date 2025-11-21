@@ -5,6 +5,8 @@ import { PausableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { AccessControlUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
@@ -77,6 +79,13 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
+///
+/// Governance: This contract enforces a single-admin model. `owner()` and
+/// `DEFAULT_ADMIN_ROLE` always reference the same address and can only be
+/// changed via `transferOwnership()` (directly or through
+/// `grantRole(DEFAULT_ADMIN_ROLE, ...)`, which delegates to the transfer). Any
+/// attempt to revoke or renounce the default admin role, or to renounce
+/// ownership, reverts. This removes governance drift.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
     // === Types ===
 
@@ -246,6 +255,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
+    /// Attempted to revoke DEFAULT_ADMIN_ROLE which would break single-admin governance
+    error DefaultAdminCannotBeRevoked();
+    /// Attempted to renounce DEFAULT_ADMIN_ROLE which would break single-admin governance
+    error DefaultAdminCannotBeRenounced();
 
     /// No undelegation exists for the given validator and delegator
     error NoUndelegationFound();
@@ -261,8 +274,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Reinitialize the contract
     ///
-    /// @param admin The address to be granted the default admin role
     /// @param pauser The address to be granted the pauser role
+    /// @param admin The address to be granted the default admin role and ownership.
+    /// This should be a timelock contract address, multisig, or another governance address.
     /// @param initialActiveStake The initial active stake in the contract
     /// @param initialCommissions commissions of validators
     ///
@@ -271,17 +285,30 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// this must be called with the current commissions of pre-existing
     /// validators read from L1 events.
     ///
-    /// @dev This function is overridden to add pauser and admin roles
+    /// @dev Sets up roles and transfers ownership to admin. The deployer picks the admin
+    /// address (timelock, multisig, etc.) based on config.
     function initializeV2(
         address pauser,
         address admin,
         uint256 initialActiveStake,
         InitialCommission[] calldata initialCommissions
     ) public onlyOwner reinitializer(2) {
+        require(admin != address(0), ZeroAddress());
+        require(pauser != address(0), ZeroAddress());
         __AccessControl_init();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, pauser);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+
+        // Transfer ownership to admin if it's not the current owner
+        // This ensures owner() and DEFAULT_ADMIN_ROLE remain synchronized
+        // preventing governance drift.
+        address previousOwner = owner();
+        if (admin != previousOwner) {
+            // Use internal method since we've already granted DEFAULT_ADMIN_ROLE above.
+            // The public transferOwnership requires this role and would redundantly grant it again.
+            _transferOwnership(admin);
+        }
 
         // Default values found to be reasonable in internal discussion, may be
         // adjusted before release and updated after release.
@@ -318,6 +345,71 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function is only callable by the PAUSER_ROLE
     function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
+    }
+
+    /// @notice Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
+    /// Grants the role to new owner and revokes from old owner.
+    /// Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
+    /// super.transferOwnership() which requires onlyOwner.
+    /// This ensures that only the current admin (who holds both ownership and DEFAULT_ADMIN_ROLE)
+    /// can transfer ownership.
+    /// This is intentionally not pausable for emergency governance access.
+    /// @inheritdoc OwnableUpgradeable
+    function transferOwnership(address newOwner)
+        public
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (newOwner == address(0)) {
+            revert OwnableInvalidOwner(address(0));
+        }
+        address oldOwner = owner();
+
+        // Handle self-transfer: OpenZeppelin's transferOwnership allows it (no-op but emits event).
+        // We follow the same pattern. Self-granting in grantRole is also a no-op, so we skip it
+        // here.
+        if (oldOwner == newOwner) {
+            super.transferOwnership(newOwner);
+            return;
+        }
+
+        // Grant role first, then transfer ownership, then revoke from old owner.
+        // This order ensures newOwner has the role before becoming owner, maintaining the
+        // invariant, only one admin/owner at a time.
+        super.grantRole(DEFAULT_ADMIN_ROLE, newOwner);
+        super.transferOwnership(newOwner);
+        _revokeRole(DEFAULT_ADMIN_ROLE, oldOwner);
+    }
+
+    /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first,
+    /// which handles both role grant and ownership transfer atomically.
+    /// This is intentionally not pausable for emergency governance access.
+    /// @inheritdoc AccessControlUpgradeable
+    function grantRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            transferOwnership(account);
+            return;
+        }
+        super.grantRole(role, account);
+    }
+
+    /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
+    function revokeRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRevoked();
+        }
+        super.revokeRole(role, account);
+    }
+
+    /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
+    function renounceRole(bytes32 role, address callerConfirmation) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRenounced();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @notice Withdraw previously delegated funds after a validator has exited
@@ -596,7 +688,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Set the minimum interval between commission updates
     /// @param newInterval The new minimum interval in seconds
-    function setMinCommissionUpdateInterval(uint256 newInterval) external virtual onlyOwner {
+    function setMinCommissionUpdateInterval(uint256 newInterval)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         require(newInterval > 0 && newInterval <= 365 days, InvalidRateLimitParameters());
         minCommissionIncreaseInterval = newInterval;
         emit MinCommissionUpdateIntervalUpdated(newInterval);
@@ -604,7 +700,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Set the maximum commission increase allowed per update
     /// @param newMaxIncrease The new maximum increase in basis points (e.g., 500 = 5%)
-    function setMaxCommissionIncrease(uint16 newMaxIncrease) external virtual onlyOwner {
+    function setMaxCommissionIncrease(uint16 newMaxIncrease)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         require(newMaxIncrease > 0 && newMaxIncrease <= 10000, InvalidRateLimitParameters());
         maxCommissionIncrease = newMaxIncrease;
         emit MaxCommissionIncreaseUpdated(newMaxIncrease);
@@ -663,7 +763,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function ensures that the exit escrow period is within the valid range
     /// @dev This function is not pausable so that governance can perform emergency updates in the
     /// presence of system
-    function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external virtual onlyOwner {
+    function updateExitEscrowPeriod(uint64 newExitEscrowPeriod)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
             // block
         uint64 maxExitEscrowPeriod = 86400 * 14; // 14 days
@@ -718,7 +822,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
     }
 
-    // deprecate previous registration function
     /// @notice Deprecate previous registration function
     /// @dev This function is overridden to revert with a DeprecatedFunction error
     /// @dev users must call registerValidatorV2 instead
@@ -741,4 +844,16 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     ) external pure override {
         revert DeprecatedFunction();
     }
+
+    /// @notice Authorize an upgrade to a new implementation
+    /// @param newImplementation The address of the new implementation
+    /// @dev This function is overridden to use AccessControl instead of Ownable
+    /// Only addresses with DEFAULT_ADMIN_ROLE can authorize upgrades
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    // solhint-disable-next-line no-empty-blocks
+    { }
 }

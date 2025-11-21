@@ -42,7 +42,8 @@ contract RewardClaimHandler is RewardClaimTest {
         currentDay = block.timestamp / 1 days;
         initialSupply = espToken.totalSupply();
 
-        vm.prank(rewardClaim.owner());
+        // Use owner from test setup (has DEFAULT_ADMIN_ROLE)
+        vm.prank(owner);
         rewardClaim.setDailyLimit(300); // 3%
     }
 
@@ -155,7 +156,8 @@ contract RewardClaimHandler is RewardClaimTest {
             return;
         }
 
-        vm.prank(rewardClaim.owner());
+        // Use owner from test setup (has DEFAULT_ADMIN_ROLE)
+        vm.prank(owner);
         rewardClaim.setDailyLimit(basisPoints);
         stats.updateDailyLimit.ok++;
     }

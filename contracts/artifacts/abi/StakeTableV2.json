@@ -1932,6 +1932,16 @@
   },
   {
     "type": "error",
+    "name": "DefaultAdminCannotBeRenounced",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DefaultAdminCannotBeRevoked",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "DeprecatedFunction",
     "inputs": []
   },
@@ -2074,6 +2084,11 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
   },
   {
     "type": "error",
