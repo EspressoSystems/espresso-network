@@ -22,6 +22,10 @@ import "./interfaces/IRewardClaim.sol";
 /// This contract uses ONLY AccessControlUpgradeable.
 /// - DEFAULT_ADMIN_ROLE: Can upgrade contract, manage roles, update daily limits
 /// - PAUSER_ROLE: Can pause/unpause user facing methods in the contract during emergencies
+/// Governance: This contract enforces a single-admin model. `_currentAdmin` and
+/// `DEFAULT_ADMIN_ROLE` always reference the same address and can only be changed via
+/// `grantRole(DEFAULT_ADMIN_ROLE, ...)`. Any attempt to revoke or renounce the default admin role
+/// reverts so that there is always a single admin.
 contract RewardClaim is
     IRewardClaim,
     Initializable,
