@@ -561,7 +561,7 @@ where
             EpochMembershipCoordinator::new(
                 Arc::new(RwLock::new(memberships)),
                 epoch_height,
-                &storage.clone(),
+                storage.clone(),
             ),
             network,
             initializer,
@@ -602,7 +602,7 @@ where
             state_private_key,
             node_id,
             config,
-            EpochMembershipCoordinator::new(memberships, epoch_height, &storage.clone()),
+            EpochMembershipCoordinator::new(memberships, epoch_height, storage.clone()),
             network,
             initializer,
             ConsensusMetricsValue::default(),

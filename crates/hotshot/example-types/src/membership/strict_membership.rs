@@ -80,6 +80,7 @@ impl<
 {
     type Error = anyhow::Error;
     type StakeTableHash = NoStakeTableHash;
+    type StakeTableMetadata = ();
     type Storage = TestStorage<TYPES>;
 
     fn new<I: NodeImplementation<TYPES>>(
@@ -367,5 +368,15 @@ impl<
     fn add_da_committee(&mut self, first_epoch: u64, committee: Vec<PeerConfig<TYPES>>) {
         self.inner
             .add_da_committee(first_epoch, committee.into_iter().map(Into::into).collect());
+    }
+
+    fn insert_epoch_state(
+        &mut self,
+        epoch: TYPES::Epoch,
+        _stake_table: HSStakeTable<TYPES>,
+        _epoch_root: Option<TYPES::BlockHeader>,
+        _metadata: Self::StakeTableMetadata,
+    ) {
+        self.epochs.insert(epoch);
     }
 }
