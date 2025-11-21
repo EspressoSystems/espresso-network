@@ -96,7 +96,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// A user tries to register a validator with the same address
     error ValidatorAlreadyRegistered();
 
-    //// A validator is not active.
+    /// A validator is not active.
     error ValidatorInactive();
 
     /// A validator has already exited.
