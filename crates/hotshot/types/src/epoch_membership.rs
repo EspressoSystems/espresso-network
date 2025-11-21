@@ -238,6 +238,8 @@ where
             if let Some((stake_table, metadata)) =
                 self.storage.load_stake_table(epoch).await.wrap()?
             {
+                tracing::debug!("inserting stake table for {epoch} from storage");
+
                 let metadata: <TYPES::Membership as Membership<TYPES>>::StakeTableMetadata =
                     *metadata.downcast().unwrap();
                 self.membership.write().await.insert_epoch_state(
@@ -252,6 +254,8 @@ where
         // Load DRB result if we need it and don't have it
         if need_randomized && !has_randomized {
             if let Ok(drb_result) = self.storage.load_drb_result(epoch).await {
+                tracing::debug!("inserting DRB result for {epoch} from storage");
+
                 self.membership
                     .write()
                     .await

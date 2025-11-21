@@ -2398,7 +2398,7 @@ impl MembershipPersistence for Persistence {
             .fetch_optional(
                 query(
                     "SELECT stake, block_reward, stake_table_hash, drb_result, block_header FROM \
-                     epoch_drb_and_root WHERE epoch = $1",
+                     epoch_drb_and_root WHERE epoch = $1 AND stake is NOT NULL",
                 )
                 .bind(epoch.u64() as i64),
             )
@@ -2406,12 +2406,13 @@ impl MembershipPersistence for Persistence {
 
         result
             .map(|row| {
-                let stake_table_bytes: Vec<u8> = row.get("stake");
-                let reward_bytes: Option<Vec<u8>> = row.get("block_reward");
-                let stake_table_hash_bytes: Option<Vec<u8>> = row.get("stake_table_hash");
+                let stake_table_bytes: Vec<u8> = row.try_get("stake")?;
+                let reward_bytes: Option<Vec<u8>> = row.try_get("block_reward")?;
+                let stake_table_hash_bytes: Option<Vec<u8>> = row.try_get("stake_table_hash")?;
                 let drb_result_bytes: Option<Vec<u8>> = row.try_get("drb_result").unwrap_or(None);
                 let block_header_bytes: Option<Vec<u8>> =
                     row.try_get("block_header").unwrap_or(None);
+
                 let stake_table = bincode::deserialize(&stake_table_bytes)
                     .context("deserializing stake table")?;
                 let reward: Option<RewardAmount> = reward_bytes
