@@ -293,7 +293,6 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
                 let start = Instant::now();
                 if let Err(e) = Membership::add_epoch_root(
                     Arc::clone(membership_clone.membership()),
-                    next_epoch_number,
                     decided_block_header,
                 )
                 .await
