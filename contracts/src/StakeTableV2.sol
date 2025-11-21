@@ -5,6 +5,8 @@ import { PausableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { AccessControlUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
@@ -342,11 +344,12 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
-    /// @dev Grants the role to new owner and revokes from old owner.
-    /// @dev Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
+    /// @notice Grants the role to new owner and revokes from old owner.
+    /// @notice Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
     /// super.transferOwnership() which requires onlyOwner.
     /// This ensures that only the current admin (who holds both ownership and DEFAULT_ADMIN_ROLE)
     /// can transfer ownership.
+    /// @inheritdoc OwnableUpgradeable
     function transferOwnership(address newOwner)
         public
         virtual
@@ -375,6 +378,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first.
+    /// @inheritdoc AccessControlUpgradeable
     function grantRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             transferOwnership(account);
@@ -384,6 +388,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
     function revokeRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             revert DefaultAdminCannotBeRevoked();
@@ -392,6 +397,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
     function renounceRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             revert DefaultAdminCannotBeRenounced();

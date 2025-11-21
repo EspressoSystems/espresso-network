@@ -275,6 +275,7 @@ contract RewardClaim is
     /// @notice Override grantRole to enforce single-admin invariant for DEFAULT_ADMIN_ROLE
     /// @dev When granting DEFAULT_ADMIN_ROLE, automatically revokes it from the current admin.
     /// This ensures only one address has DEFAULT_ADMIN_ROLE at any time, atomically.
+    /// @inheritdoc AccessControlUpgradeable
     function grantRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             address oldAdmin = _currentAdmin;
@@ -297,8 +298,9 @@ contract RewardClaim is
     }
 
     /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve governance control
-    /// @dev Override renounceRole() to revert when attempting to renounce DEFAULT_ADMIN_ROLE,
+    /// @notice Override renounceRole() to revert when attempting to renounce DEFAULT_ADMIN_ROLE,
     /// preventing accidental or malicious admin role renunciation
+    /// @inheritdoc AccessControlUpgradeable
     function renounceRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             revert DefaultAdminCannotBeRenounced();
@@ -307,6 +309,7 @@ contract RewardClaim is
     }
 
     /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
     function revokeRole(bytes32 role, address account) public virtual override {
         if (role == DEFAULT_ADMIN_ROLE) {
             revert DefaultAdminCannotBeRevoked();
