@@ -1208,60 +1208,71 @@ pub async fn transfer_ownership(
     target_address: Address,
     new_owner: Address,
 ) -> Result<TransactionReceipt> {
-    let receipt = match target_contract {
-        Contract::LightClient | Contract::LightClientProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer LightClient ownership");
-            let lc = LightClient::new(target_address, &provider);
-            lc.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::FeeContract | Contract::FeeContractProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer FeeContract ownership");
-            let fee = FeeContract::new(target_address, &provider);
-            fee.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::EspToken | Contract::EspTokenProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer EspToken ownership");
-            let token = EspToken::new(target_address, &provider);
-            token
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
-            tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
-            let stake_table = StakeTable::new(target_address, &provider);
-            stake_table
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::RewardClaim | Contract::RewardClaimProxy => {
-            tracing::info!(%target_address, %new_owner, "Grant RewardClaim DEFAULT_ADMIN_ROLE");
-            let reward_claim = RewardClaim::new(target_address, &provider);
-            let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
-            reward_claim
-                .grantRole(admin_role, new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
-    };
+    // Use OwnableUpgradeable interface for all Ownable contracts
+    // This is more generic and maintainable than matching on each contract type
+    let ownable = OwnableUpgradeable::new(target_address, &provider);
+
+    // Verify the contract is actually Ownable by checking if we can read the owner
+    let current_owner = ownable.owner().call().await.context(format!(
+        "Contract at {target_address:#x} does not implement Ownable interface"
+    ))?;
+
+    tracing::info!(%target_contract, %target_address, current_owner = %current_owner, new_owner = %new_owner, "Transferring ownership of {target_contract}");
+
+    let receipt = ownable
+        .transferOwnership(new_owner)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
     let tx_hash = receipt.transaction_hash;
     tracing::info!(%receipt.gas_used, %tx_hash, "ownership transferred");
+    Ok(receipt)
+}
+
+/// Grant DEFAULT_ADMIN_ROLE to a new admin for AccessControl-based contracts
+/// This handles contracts like RewardClaim that use AccessControl instead of Ownable
+/// TODO: create a function for pauser roles
+pub async fn grant_admin_role(
+    provider: impl Provider,
+    target_contract: Contract,
+    target_address: Address,
+    new_admin: Address,
+) -> Result<TransactionReceipt> {
+    // Use AccessControlUpgradeable interface
+    let access_control = AccessControlUpgradeable::new(target_address, &provider);
+
+    // Verify the contract is actually AccessControl by checking if we can read roles
+    let admin_role = access_control
+        .DEFAULT_ADMIN_ROLE()
+        .call()
+        .await
+        .context(format!(
+            "Contract at {target_address:#x} does not implement AccessControl interface"
+        ))?;
+
+    // Check if new_admin already has the role (for logging purposes)
+    let already_has_role = access_control.hasRole(admin_role, new_admin).call().await?;
+
+    tracing::info!(
+        %target_contract,
+        %target_address,
+        new_admin = %new_admin,
+        already_has_role = %already_has_role,
+        "Granting DEFAULT_ADMIN_ROLE for {target_contract}"
+    );
+
+    // For RewardClaim, grantRole handles the revoke of the previous admin internally
+    let receipt = access_control
+        .grantRole(admin_role, new_admin)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    let tx_hash = receipt.transaction_hash;
+    tracing::info!(%receipt.gas_used, %tx_hash, "admin role granted");
     Ok(receipt)
 }
 
@@ -3465,6 +3476,117 @@ mod tests {
 
         let version = get_proxy_initialized_version(&l1_client, stake_table_proxy_addr).await?;
         assert_eq!(version, 2, "Reinitialized proxy should return version 2");
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_grant_admin_role_reward_claim() -> Result<()> {
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+
+        let mut contracts = Contracts::new();
+        let deployer = l1_client.get_accounts().await?[0];
+        let new_admin = Address::random();
+
+        // Deploy RewardClaim
+        let esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            deployer,
+            deployer,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            esp_token_addr,
+            lc_addr,
+            deployer,
+            deployer, // pauser
+        )
+        .await?;
+
+        // Verify initial admin
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(reward_claim.hasRole(admin_role, deployer).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, new_admin).call().await?);
+
+        // Grant admin role
+        let receipt = grant_admin_role(
+            &provider,
+            Contract::RewardClaimProxy,
+            reward_claim_addr,
+            new_admin,
+        )
+        .await?;
+
+        assert!(receipt.inner.is_success());
+
+        // Verify new admin has role and old admin doesn't
+        assert!(reward_claim.hasRole(admin_role, new_admin).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, deployer).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_transfer_ownership_from_eoa_reward_claim_routes_to_grant_role() -> Result<()> {
+        let (anvil, provider, l1_client) = ProviderBuilder::new().connect_anvil_with_l1_client()?;
+
+        let mut contracts = Contracts::new();
+        let deployer = l1_client.get_accounts().await?[0];
+        let new_admin = Address::random();
+
+        // Deploy RewardClaim
+        let esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            deployer,
+            deployer,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            esp_token_addr,
+            lc_addr,
+            deployer,
+            deployer, // pauser
+        )
+        .await?;
+
+        // Verify initial admin
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(reward_claim.hasRole(admin_role, deployer).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, new_admin).call().await?);
+
+        use builder::DeployerArgsBuilder;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .transfer_ownership_from_eoa(true)
+            .target_contract("rewardclaim".to_string())
+            .transfer_ownership_new_owner(new_admin);
+        let args = args_builder.build()?;
+
+        args.transfer_ownership_from_eoa(&mut contracts).await?;
+
+        // Verify new admin has role and old admin doesn't
+        assert!(reward_claim.hasRole(admin_role, new_admin).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, deployer).call().await?);
 
         Ok(())
     }

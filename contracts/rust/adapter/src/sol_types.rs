@@ -23,6 +23,7 @@ use alloy::sol;
 /// - structs should be exported and renamed with `xxSol` suffix to avoid confusion with other rust types
 ///   - see module doc for more explanation on types duplication issue in alloy
 pub use crate::bindings::{
+    access_control_upgradeable::AccessControlUpgradeable,
     erc1967_proxy::ERC1967Proxy,
     esp_token::EspToken,
     esp_token_v2::EspTokenV2,
