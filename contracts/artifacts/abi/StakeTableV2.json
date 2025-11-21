@@ -1072,6 +1072,19 @@
   },
   {
     "type": "function",
+    "name": "validateMetadataUri",
+    "inputs": [
+      {
+        "name": "metadataUri",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
     "name": "validatorExits",
     "inputs": [
       {

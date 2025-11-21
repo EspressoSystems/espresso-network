@@ -65,22 +65,12 @@ contract StakeTableMetadataUriTest is Test {
         registerValidatorWithMetadataUri(validator, "123", commission, metadataUri);
     }
 
-    function test_RegisterValidator_WithEmptyMetadataUri_Reverts() public {
+    function test_RegisterValidator_WithEmptyMetadataUri() public {
         address validator = makeAddr("validator");
         string memory metadataUri = "";
         uint16 commission = 500;
 
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = stakeTableUpgradeTest.genClientWallet(validator, "123");
-        bytes memory schnorrSig = new bytes(64);
-
-        vm.startPrank(validator);
-        vm.expectRevert(StakeTableV2.InvalidMetadataUriLength.selector);
-        proxy.registerValidatorV2(blsVK, schnorrVK, sig, schnorrSig, commission, metadataUri);
-        vm.stopPrank();
+        registerValidatorWithMetadataUri(validator, "123", commission, metadataUri);
     }
 
     function test_UpdateMetadataUri_Success() public {
@@ -97,14 +87,15 @@ contract StakeTableMetadataUriTest is Test {
         vm.stopPrank();
     }
 
-    function test_UpdateMetadataUri_ToEmptyString_Reverts() public {
+    function test_UpdateMetadataUri_ToEmptyString() public {
         address validator = makeAddr("validator");
         string memory initialUri = "dummy-meta";
 
         registerValidatorWithMetadataUri(validator, "123", 500, initialUri);
 
         vm.startPrank(validator);
-        vm.expectRevert(StakeTableV2.InvalidMetadataUriLength.selector);
+        vm.expectEmit();
+        emit StakeTableV2.MetadataUriUpdated(validator, "");
         proxy.updateMetadataUri("");
         vm.stopPrank();
     }
@@ -210,5 +201,24 @@ contract StakeTableMetadataUriTest is Test {
         vm.expectRevert(StakeTableV2.InvalidMetadataUriLength.selector);
         proxy.updateMetadataUri(tooLongUri);
         vm.stopPrank();
+    }
+
+    function test_ValidateMetadataUri_ValidUri_Success() public view {
+        proxy.validateMetadataUri("https://example.com/metadata");
+    }
+
+    function test_ValidateMetadataUri_EmptyUri_Success() public view {
+        proxy.validateMetadataUri("");
+    }
+
+    function test_ValidateMetadataUri_TooLongUri_Reverts() public {
+        string memory tooLongUri = new string(2049);
+        vm.expectRevert(StakeTableV2.InvalidMetadataUriLength.selector);
+        proxy.validateMetadataUri(tooLongUri);
+    }
+
+    function test_ValidateMetadataUri_MaxLengthUri_Success() public view {
+        string memory maxLengthUri = new string(2048);
+        proxy.validateMetadataUri(maxLengthUri);
     }
 }

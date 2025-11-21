@@ -40,6 +40,8 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// - `deregisterValidator(...)`
 /// - `registerValidatorV2(...)`
 /// - `updateConsensusKeysV2(...)`
+/// - `updateCommission(...)`
+/// - `updateMetadataUri(...)`
 /// When paused, these functions revert with a standard pausable error, `EnforcedPause()`.
 /// Only the PAUSER_ROLE can pause/unpause the contract.
 ///
@@ -72,8 +74,8 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// 11. Validators must provide a metadata URI during registration and can update it via
 /// `updateMetadataUri`. The metadata URI is event-sourced only (not stored on-chain for gas
 /// efficiency). The `ValidatorRegisteredV2` event includes the metadata URI, and a new
-/// `MetadataUriUpdated` event is emitted when validators update their URI. Metadata URIs must be
-/// non-empty and cannot exceed 2048 bytes.
+/// `MetadataUriUpdated` event is emitted when validators update their URI. Metadata URIs can be
+/// empty and cannot exceed 2048 bytes.
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
@@ -569,10 +571,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             revert InvalidCommission();
         }
 
-        uint256 metadataLength = bytes(metadataUri).length;
-        if (metadataLength == 0 || metadataLength > MAX_METADATA_URI_LENGTH) {
-            revert InvalidMetadataUriLength();
-        }
+        validateMetadataUri(metadataUri);
 
         blsKeys[_hashBlsKey(blsVK)] = true;
         schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
@@ -670,21 +669,19 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Update the metadata URI for a validator
     /// @param metadataUri The new metadata URI
     ///
-    /// @dev The metadata URI is NOT stored on-chain. This function is event-sourced only. Off-chain
-    /// indexers must listen to the MetadataUriUpdated event to track the current URI. URIs should
-    /// be kept reasonably short for gas efficiency (max 2048 bytes). Only the validator
-    /// (msg.sender) can update their own metadata URI.
+    /// @dev The metadata URI is NOT stored on-chain. Off-chain indexers must listen to the
+    /// MetadataUriUpdated event to track the current URI. URIs should be kept reasonably short for
+    /// gas efficiency (max 2048 bytes). Only the validator (msg.sender) can update their own
+    /// metadata URI.
     ///
-    /// @dev No format validation is performed on the URI - any non-empty string within length
-    /// limits is accepted. Consumers should validate URI format and accessibility off-chain.
+    /// @dev No format validation is performed on the URI - any string within length limits
+    /// (including empty string) is accepted. Consumers should validate URI format and accessibility
+    /// off-chain.
     function updateMetadataUri(string memory metadataUri) external virtual whenNotPaused {
         address validator = msg.sender;
         ensureValidatorActive(validator);
 
-        uint256 metadataLength = bytes(metadataUri).length;
-        if (metadataLength == 0 || metadataLength > MAX_METADATA_URI_LENGTH) {
-            revert InvalidMetadataUriLength();
-        }
+        validateMetadataUri(metadataUri);
 
         emit MetadataUriUpdated(validator, metadataUri);
     }
@@ -749,6 +746,16 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         );
 
         activeStake = initialActiveStake;
+    }
+
+    /// @notice Validate metadata URI length
+    /// @param metadataUri The metadata URI to validate
+    /// @dev Public view function to allow external validation before transaction submission
+    function validateMetadataUri(string memory metadataUri) public pure {
+        uint256 metadataLength = bytes(metadataUri).length;
+        if (metadataLength > MAX_METADATA_URI_LENGTH) {
+            revert InvalidMetadataUriLength();
+        }
     }
 
     /// @notice Update the exit escrow period
