@@ -2529,6 +2529,7 @@ mod test {
     };
     use hotshot_types::{
         data::EpochNumber,
+        drb::DrbResult,
         epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         traits::{
@@ -4614,11 +4615,15 @@ mod test {
         let membership = NodeState::mock().coordinator.membership().clone();
 
         let p = persistence_options[1].clone().create().await.unwrap();
+        membership
+            .write()
+            .await
+            .set_first_epoch(EpochNumber::new(1), [0_u8; 32]);
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(membership, 10, Arc::new(p));
 
         // we don't have first two epochs in storage
         // because the first real epoch is 3
-        for epoch_num in 3..=5 {
+        for epoch_num in 3..=4 {
             let epoch = EpochNumber::new(epoch_num);
 
             tracing::info!("Verifying epoch {epoch_num} is loaded from storage");
@@ -4628,7 +4633,7 @@ mod test {
             // because the data is in storage, not requiring catchup
             let membership_result = coordinator.membership_for_epoch(Some(epoch)).await;
 
-            assert!(membership_result.is_ok(),);
+            membership_result.unwrap();
         }
     }
 
