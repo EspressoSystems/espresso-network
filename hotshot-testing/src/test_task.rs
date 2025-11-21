@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use async_broadcast::{Receiver, Sender};
@@ -168,7 +168,6 @@ pub async fn add_network_message_test_task<
         internal_event_stream: internal_event_stream.clone(),
         external_event_stream: external_event_stream.clone(),
         public_key,
-        transactions_cache: lru::LruCache::new(NonZeroUsize::new(100_000).unwrap()),
         upgrade_lock: upgrade_lock.clone(),
     };
 
