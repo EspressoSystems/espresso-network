@@ -865,7 +865,7 @@ pub async fn distribute_block_reward(
         instance_state.fixed_block_reward().await?
     };
 
-    // If we just upgraded to V4 from any version we should pre-poplute the merkle tree
+    // If we just upgraded to V4 from any version we should pre-populate the merkle tree
     // with accounts from the stake table, giving each address 0 initial balance
     if version >= DrbAndHeaderUpgradeVersion::version()
         && parent_header.version() < DrbAndHeaderUpgradeVersion::version()
