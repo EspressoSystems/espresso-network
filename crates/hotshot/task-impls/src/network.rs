@@ -6,7 +6,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{DefaultHasher, Hash},
     sync::Arc,
 };
 
@@ -54,9 +54,6 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
 
     /// This nodes public key
     pub public_key: TYPES::SignatureKey,
-
-    /// Transaction Cache to ignore previously seen transactions
-    pub transactions_cache: lru::LruCache<u64, ()>,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -597,9 +594,6 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                 DataMessage::SubmitTransaction(transaction, _) => {
                     let mut hasher = DefaultHasher::new();
                     transaction.hash(&mut hasher);
-                    if self.transactions_cache.put(hasher.finish(), ()).is_some() {
-                        return;
-                    }
                     broadcast_event(
                         Arc::new(HotShotEvent::TransactionsRecv(vec![transaction])),
                         &self.internal_event_stream,
