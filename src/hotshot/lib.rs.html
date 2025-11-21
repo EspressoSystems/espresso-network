@@ -1300,7 +1300,7 @@
 <a href=#1300 id=1300 data-nosnippet>1300</a>    sorted_epoch_info.sort_by_key(|info| info.epoch);
 <a href=#1301 id=1301 data-nosnippet>1301</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>sorted_epoch_info {
 <a href=#1302 id=1302 data-nosnippet>1302</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(block_header) = <span class="kw-2">&amp;</span>epoch_info.block_header {
-<a href=#1303 id=1303 data-nosnippet>1303</a>            <span class="macro">tracing::info!</span>(<span class="string">"Calling add_epoch_root for epoch {}"</span>, epoch_info.epoch);
+<a href=#1303 id=1303 data-nosnippet>1303</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Calling add_epoch_root for epoch {}"</span>, epoch_info.epoch);
 <a href=#1304 id=1304 data-nosnippet>1304</a>
 <a href=#1305 id=1305 data-nosnippet>1305</a>            Membership::add_epoch_root(
 <a href=#1306 id=1306 data-nosnippet>1306</a>                Arc::clone(membership),
@@ -1319,7 +1319,7 @@
 <a href=#1319 id=1319 data-nosnippet>1319</a>    }
 <a href=#1320 id=1320 data-nosnippet>1320</a>
 <a href=#1321 id=1321 data-nosnippet>1321</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>start_epoch_info {
-<a href=#1322 id=1322 data-nosnippet>1322</a>        <span class="macro">tracing::info!</span>(<span class="string">"Calling add_drb_result for epoch {}"</span>, epoch_info.epoch);
+<a href=#1322 id=1322 data-nosnippet>1322</a>        <span class="macro">tracing::warn!</span>(<span class="string">"Calling add_drb_result for epoch {}"</span>, epoch_info.epoch);
 <a href=#1323 id=1323 data-nosnippet>1323</a>        membership
 <a href=#1324 id=1324 data-nosnippet>1324</a>            .write()
 <a href=#1325 id=1325 data-nosnippet>1325</a>            .<span class="kw">await
