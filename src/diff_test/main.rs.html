@@ -617,156 +617,174 @@
 <a href=#617 id=617 data-nosnippet>617</a>            );
 <a href=#618 id=618 data-nosnippet>618</a>        },
 <a href=#619 id=619 data-nosnippet>619</a>        Action::GenRewardFixture =&gt; {
-<a href=#620 id=620 data-nosnippet>620</a>            <span class="kw">if </span>cli.args.len() != <span class="number">2 </span>{
-<a href=#621 id=621 data-nosnippet>621</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=numAccounts, arg2=seed"</span>);
+<a href=#620 id=620 data-nosnippet>620</a>            <span class="kw">if </span>cli.args.len() &lt; <span class="number">2 </span>|| cli.args.len() &gt; <span class="number">3 </span>{
+<a href=#621 id=621 data-nosnippet>621</a>                <span class="macro">panic!</span>(<span class="string">"Should provide arg1=numAccounts, arg2=seed, arg3(opt)=accountIndex"</span>);
 <a href=#622 id=622 data-nosnippet>622</a>            }
 <a href=#623 id=623 data-nosnippet>623</a>
 <a href=#624 id=624 data-nosnippet>624</a>            <span class="kw">let </span>num_accounts = cli.args[<span class="number">0</span>].parse::&lt;usize&gt;().unwrap();
 <a href=#625 id=625 data-nosnippet>625</a>            <span class="kw">let </span>seed = cli.args[<span class="number">1</span>].parse::&lt;u64&gt;().unwrap();
-<a href=#626 id=626 data-nosnippet>626</a>
-<a href=#627 id=627 data-nosnippet>627</a>            <span class="kw">let </span><span class="kw-2">mut </span>tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-<a href=#628 id=628 data-nosnippet>628</a>            <span class="kw">let </span><span class="kw-2">mut </span>rng = StdRng::seed_from_u64(seed);
-<a href=#629 id=629 data-nosnippet>629</a>
-<a href=#630 id=630 data-nosnippet>630</a>            <span class="kw">let </span>accounts: Vec&lt;Address&gt; = (<span class="number">0</span>..num_accounts)
-<a href=#631 id=631 data-nosnippet>631</a>                .map(|<span class="kw">_</span>| {
-<a href=#632 id=632 data-nosnippet>632</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes = [<span class="number">0u8</span>; <span class="number">20</span>];
-<a href=#633 id=633 data-nosnippet>633</a>                    rng.fill(<span class="kw-2">&amp;mut </span>bytes);
-<a href=#634 id=634 data-nosnippet>634</a>                    Address::from(bytes)
-<a href=#635 id=635 data-nosnippet>635</a>                })
-<a href=#636 id=636 data-nosnippet>636</a>                .collect();
-<a href=#637 id=637 data-nosnippet>637</a>
-<a href=#638 id=638 data-nosnippet>638</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>account <span class="kw">in </span><span class="kw-2">&amp;</span>accounts {
-<a href=#639 id=639 data-nosnippet>639</a>                <span class="kw">let </span>reward_account = RewardAccountV2::from(account);
-<a href=#640 id=640 data-nosnippet>640</a>                <span class="kw">let </span>reward_amount = RewardAmount::from(rng.gen::&lt;u64&gt;());
-<a href=#641 id=641 data-nosnippet>641</a>                tree.update(reward_account, reward_amount).unwrap();
-<a href=#642 id=642 data-nosnippet>642</a>            }
-<a href=#643 id=643 data-nosnippet>643</a>
-<a href=#644 id=644 data-nosnippet>644</a>            <span class="kw">let </span>commitment = tree.commitment();
-<a href=#645 id=645 data-nosnippet>645</a>            <span class="kw">let </span>reward_commitment: B256 = commitment.digest().into();
-<a href=#646 id=646 data-nosnippet>646</a>            <span class="kw">let </span>auth_root_fields: [B256; <span class="number">8</span>] = [
-<a href=#647 id=647 data-nosnippet>647</a>                reward_commitment,
-<a href=#648 id=648 data-nosnippet>648</a>                B256::ZERO,
-<a href=#649 id=649 data-nosnippet>649</a>                B256::ZERO,
-<a href=#650 id=650 data-nosnippet>650</a>                B256::ZERO,
-<a href=#651 id=651 data-nosnippet>651</a>                B256::ZERO,
-<a href=#652 id=652 data-nosnippet>652</a>                B256::ZERO,
-<a href=#653 id=653 data-nosnippet>653</a>                B256::ZERO,
-<a href=#654 id=654 data-nosnippet>654</a>                B256::ZERO,
-<a href=#655 id=655 data-nosnippet>655</a>            ];
-<a href=#656 id=656 data-nosnippet>656</a>            <span class="kw">let </span>auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
-<a href=#657 id=657 data-nosnippet>657</a>            <span class="kw">let </span>auth_root_u256: U256 = auth_root.into();
-<a href=#658 id=658 data-nosnippet>658</a>
-<a href=#659 id=659 data-nosnippet>659</a>            <span class="kw">let </span><span class="kw-2">mut </span>fixtures: Vec&lt;(Address, U256, Bytes)&gt; = Vec::new();
-<a href=#660 id=660 data-nosnippet>660</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>account <span class="kw">in </span><span class="kw-2">&amp;</span>accounts {
-<a href=#661 id=661 data-nosnippet>661</a>                <span class="kw">let </span>proof = RewardAccountProofV2::prove(<span class="kw-2">&amp;</span>tree, account).unwrap();
-<a href=#662 id=662 data-nosnippet>662</a>                <span class="kw">let </span>query_data: RewardAccountQueryDataV2 = proof.into();
-<a href=#663 id=663 data-nosnippet>663</a>                <span class="kw">let </span>claim_input = query_data.to_reward_claim_input().unwrap();
-<a href=#664 id=664 data-nosnippet>664</a>                fixtures.push((
-<a href=#665 id=665 data-nosnippet>665</a>                    account,
-<a href=#666 id=666 data-nosnippet>666</a>                    claim_input.lifetime_rewards,
-<a href=#667 id=667 data-nosnippet>667</a>                    claim_input.auth_data.into(),
-<a href=#668 id=668 data-nosnippet>668</a>                ));
-<a href=#669 id=669 data-nosnippet>669</a>            }
+<a href=#626 id=626 data-nosnippet>626</a>            <span class="kw">let </span>account_index = <span class="kw">if </span>cli.args.len() == <span class="number">3 </span>{
+<a href=#627 id=627 data-nosnippet>627</a>                <span class="kw">let </span>idx = cli.args[<span class="number">2</span>].parse::&lt;usize&gt;().unwrap();
+<a href=#628 id=628 data-nosnippet>628</a>                <span class="kw">if </span>idx &gt;= num_accounts {
+<a href=#629 id=629 data-nosnippet>629</a>                    <span class="macro">panic!</span>(
+<a href=#630 id=630 data-nosnippet>630</a>                        <span class="string">"Account index {idx} out of range (max {})"</span>,
+<a href=#631 id=631 data-nosnippet>631</a>                        num_accounts - <span class="number">1
+<a href=#632 id=632 data-nosnippet>632</a>                    </span>);
+<a href=#633 id=633 data-nosnippet>633</a>                }
+<a href=#634 id=634 data-nosnippet>634</a>                <span class="prelude-val">Some</span>(idx)
+<a href=#635 id=635 data-nosnippet>635</a>            } <span class="kw">else </span>{
+<a href=#636 id=636 data-nosnippet>636</a>                <span class="prelude-val">None
+<a href=#637 id=637 data-nosnippet>637</a>            </span>};
+<a href=#638 id=638 data-nosnippet>638</a>
+<a href=#639 id=639 data-nosnippet>639</a>            <span class="kw">let </span><span class="kw-2">mut </span>tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+<a href=#640 id=640 data-nosnippet>640</a>            <span class="kw">let </span><span class="kw-2">mut </span>rng = StdRng::seed_from_u64(seed);
+<a href=#641 id=641 data-nosnippet>641</a>
+<a href=#642 id=642 data-nosnippet>642</a>            <span class="kw">let </span>accounts: Vec&lt;Address&gt; = (<span class="number">0</span>..num_accounts)
+<a href=#643 id=643 data-nosnippet>643</a>                .map(|<span class="kw">_</span>| {
+<a href=#644 id=644 data-nosnippet>644</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes = [<span class="number">0u8</span>; <span class="number">20</span>];
+<a href=#645 id=645 data-nosnippet>645</a>                    rng.fill(<span class="kw-2">&amp;mut </span>bytes);
+<a href=#646 id=646 data-nosnippet>646</a>                    Address::from(bytes)
+<a href=#647 id=647 data-nosnippet>647</a>                })
+<a href=#648 id=648 data-nosnippet>648</a>                .collect();
+<a href=#649 id=649 data-nosnippet>649</a>
+<a href=#650 id=650 data-nosnippet>650</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>account <span class="kw">in </span><span class="kw-2">&amp;</span>accounts {
+<a href=#651 id=651 data-nosnippet>651</a>                <span class="kw">let </span>reward_account = RewardAccountV2::from(account);
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="kw">let </span>reward_amount = RewardAmount::from(rng.gen::&lt;u64&gt;());
+<a href=#653 id=653 data-nosnippet>653</a>                tree.update(reward_account, reward_amount).unwrap();
+<a href=#654 id=654 data-nosnippet>654</a>            }
+<a href=#655 id=655 data-nosnippet>655</a>
+<a href=#656 id=656 data-nosnippet>656</a>            <span class="kw">let </span>commitment = tree.commitment();
+<a href=#657 id=657 data-nosnippet>657</a>            <span class="kw">let </span>reward_commitment: B256 = commitment.digest().into();
+<a href=#658 id=658 data-nosnippet>658</a>            <span class="kw">let </span>auth_root_fields: [B256; <span class="number">8</span>] = [
+<a href=#659 id=659 data-nosnippet>659</a>                reward_commitment,
+<a href=#660 id=660 data-nosnippet>660</a>                B256::ZERO,
+<a href=#661 id=661 data-nosnippet>661</a>                B256::ZERO,
+<a href=#662 id=662 data-nosnippet>662</a>                B256::ZERO,
+<a href=#663 id=663 data-nosnippet>663</a>                B256::ZERO,
+<a href=#664 id=664 data-nosnippet>664</a>                B256::ZERO,
+<a href=#665 id=665 data-nosnippet>665</a>                B256::ZERO,
+<a href=#666 id=666 data-nosnippet>666</a>                B256::ZERO,
+<a href=#667 id=667 data-nosnippet>667</a>            ];
+<a href=#668 id=668 data-nosnippet>668</a>            <span class="kw">let </span>auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+<a href=#669 id=669 data-nosnippet>669</a>            <span class="kw">let </span>auth_root_u256: U256 = auth_root.into();
 <a href=#670 id=670 data-nosnippet>670</a>
-<a href=#671 id=671 data-nosnippet>671</a>            <span class="kw">let </span>res = (auth_root_u256, fixtures);
-<a href=#672 id=672 data-nosnippet>672</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
-<a href=#673 id=673 data-nosnippet>673</a>        },
-<a href=#674 id=674 data-nosnippet>674</a>        Action::EvolveRewardState =&gt; {
-<a href=#675 id=675 data-nosnippet>675</a>            <span class="kw">if </span>cli.args.len() != <span class="number">6 </span>{
-<a href=#676 id=676 data-nosnippet>676</a>                <span class="macro">panic!</span>(
-<a href=#677 id=677 data-nosnippet>677</a>                    <span class="string">"Should provide arg1=currentState, arg2=seed, arg3=numAccountsToAdd, \
-<a href=#678 id=678 data-nosnippet>678</a>                     arg4=numAccountsToUpdate, arg5=maxRewardIncrement, arg6=numFixtures"
-<a href=#679 id=679 data-nosnippet>679</a>                </span>);
-<a href=#680 id=680 data-nosnippet>680</a>            }
-<a href=#681 id=681 data-nosnippet>681</a>
-<a href=#682 id=682 data-nosnippet>682</a>            <span class="kw">let </span>state_vec =
-<a href=#683 id=683 data-nosnippet>683</a>                &lt;Vec&lt;(Address, U256)&gt;&gt;::abi_decode(<span class="kw-2">&amp;</span>hex::decode(<span class="kw-2">&amp;</span>cli.args[<span class="number">0</span>]).unwrap()).unwrap();
-<a href=#684 id=684 data-nosnippet>684</a>            <span class="kw">let </span>seed = cli.args[<span class="number">1</span>].parse::&lt;u64&gt;().unwrap();
-<a href=#685 id=685 data-nosnippet>685</a>            <span class="kw">let </span>num_add = cli.args[<span class="number">2</span>].parse::&lt;usize&gt;().unwrap();
-<a href=#686 id=686 data-nosnippet>686</a>            <span class="kw">let </span>num_update = cli.args[<span class="number">3</span>].parse::&lt;usize&gt;().unwrap();
-<a href=#687 id=687 data-nosnippet>687</a>            <span class="kw">let </span>max_reward_increment = cli.args[<span class="number">4</span>].parse::&lt;U256&gt;().unwrap();
-<a href=#688 id=688 data-nosnippet>688</a>            <span class="kw">let </span>num_fixtures = cli.args[<span class="number">5</span>].parse::&lt;usize&gt;().unwrap();
-<a href=#689 id=689 data-nosnippet>689</a>
-<a href=#690 id=690 data-nosnippet>690</a>            <span class="kw">let </span><span class="kw-2">mut </span>rng = StdRng::seed_from_u64(seed);
-<a href=#691 id=691 data-nosnippet>691</a>            <span class="kw">let </span><span class="kw-2">mut </span>state: HashMap&lt;Address, U256&gt; = state_vec.into_iter().collect();
-<a href=#692 id=692 data-nosnippet>692</a>
-<a href=#693 id=693 data-nosnippet>693</a>            <span class="comment">// Randomly select existing accounts to update
-<a href=#694 id=694 data-nosnippet>694</a>            </span><span class="kw">let </span>existing_accounts: Vec&lt;Address&gt; = state.keys().copied().collect();
-<a href=#695 id=695 data-nosnippet>695</a>            <span class="kw">let </span>num_to_update = num_update.min(existing_accounts.len());
-<a href=#696 id=696 data-nosnippet>696</a>            <span class="kw">let </span>accounts_to_update: Vec&lt;Address&gt; = existing_accounts
-<a href=#697 id=697 data-nosnippet>697</a>                .choose_multiple(<span class="kw-2">&amp;mut </span>rng, num_to_update)
-<a href=#698 id=698 data-nosnippet>698</a>                .copied()
-<a href=#699 id=699 data-nosnippet>699</a>                .collect();
-<a href=#700 id=700 data-nosnippet>700</a>
-<a href=#701 id=701 data-nosnippet>701</a>            <span class="comment">// Update existing accounts
-<a href=#702 id=702 data-nosnippet>702</a>            </span><span class="kw">for </span>account <span class="kw">in </span>accounts_to_update {
-<a href=#703 id=703 data-nosnippet>703</a>                <span class="kw">let </span>amount = <span class="kw">if </span>max_reward_increment &gt; U256::ZERO {
-<a href=#704 id=704 data-nosnippet>704</a>                    (U256::random_with(<span class="kw-2">&amp;mut </span>rng) % max_reward_increment) + U256::from(<span class="number">1</span>)
-<a href=#705 id=705 data-nosnippet>705</a>                } <span class="kw">else </span>{
-<a href=#706 id=706 data-nosnippet>706</a>                    U256::from(<span class="number">1</span>)
-<a href=#707 id=707 data-nosnippet>707</a>                };
-<a href=#708 id=708 data-nosnippet>708</a>                <span class="kw-2">*</span>state.get_mut(<span class="kw-2">&amp;</span>account).unwrap() += amount;
-<a href=#709 id=709 data-nosnippet>709</a>            }
+<a href=#671 id=671 data-nosnippet>671</a>            <span class="kw">let </span>fixture_accounts = <span class="kw">if let </span><span class="prelude-val">Some</span>(idx) = account_index {
+<a href=#672 id=672 data-nosnippet>672</a>                <span class="macro">vec!</span>[accounts[idx]]
+<a href=#673 id=673 data-nosnippet>673</a>            } <span class="kw">else </span>{
+<a href=#674 id=674 data-nosnippet>674</a>                accounts
+<a href=#675 id=675 data-nosnippet>675</a>            };
+<a href=#676 id=676 data-nosnippet>676</a>
+<a href=#677 id=677 data-nosnippet>677</a>            <span class="kw">let </span><span class="kw-2">mut </span>fixtures: Vec&lt;(Address, U256, Bytes)&gt; = Vec::new();
+<a href=#678 id=678 data-nosnippet>678</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>account <span class="kw">in </span><span class="kw-2">&amp;</span>fixture_accounts {
+<a href=#679 id=679 data-nosnippet>679</a>                <span class="kw">let </span>proof = RewardAccountProofV2::prove(<span class="kw-2">&amp;</span>tree, account).unwrap();
+<a href=#680 id=680 data-nosnippet>680</a>                <span class="kw">let </span>query_data: RewardAccountQueryDataV2 = proof.into();
+<a href=#681 id=681 data-nosnippet>681</a>                <span class="kw">let </span>claim_input = query_data.to_reward_claim_input().unwrap();
+<a href=#682 id=682 data-nosnippet>682</a>                fixtures.push((
+<a href=#683 id=683 data-nosnippet>683</a>                    account,
+<a href=#684 id=684 data-nosnippet>684</a>                    claim_input.lifetime_rewards,
+<a href=#685 id=685 data-nosnippet>685</a>                    claim_input.auth_data.into(),
+<a href=#686 id=686 data-nosnippet>686</a>                ));
+<a href=#687 id=687 data-nosnippet>687</a>            }
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a>            <span class="kw">let </span>res = (auth_root_u256, fixtures);
+<a href=#690 id=690 data-nosnippet>690</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
+<a href=#691 id=691 data-nosnippet>691</a>        },
+<a href=#692 id=692 data-nosnippet>692</a>        Action::EvolveRewardState =&gt; {
+<a href=#693 id=693 data-nosnippet>693</a>            <span class="kw">if </span>cli.args.len() != <span class="number">6 </span>{
+<a href=#694 id=694 data-nosnippet>694</a>                <span class="macro">panic!</span>(
+<a href=#695 id=695 data-nosnippet>695</a>                    <span class="string">"Should provide arg1=currentState, arg2=seed, arg3=numAccountsToAdd, \
+<a href=#696 id=696 data-nosnippet>696</a>                     arg4=numAccountsToUpdate, arg5=maxRewardIncrement, arg6=numFixtures"
+<a href=#697 id=697 data-nosnippet>697</a>                </span>);
+<a href=#698 id=698 data-nosnippet>698</a>            }
+<a href=#699 id=699 data-nosnippet>699</a>
+<a href=#700 id=700 data-nosnippet>700</a>            <span class="kw">let </span>state_vec =
+<a href=#701 id=701 data-nosnippet>701</a>                &lt;Vec&lt;(Address, U256)&gt;&gt;::abi_decode(<span class="kw-2">&amp;</span>hex::decode(<span class="kw-2">&amp;</span>cli.args[<span class="number">0</span>]).unwrap()).unwrap();
+<a href=#702 id=702 data-nosnippet>702</a>            <span class="kw">let </span>seed = cli.args[<span class="number">1</span>].parse::&lt;u64&gt;().unwrap();
+<a href=#703 id=703 data-nosnippet>703</a>            <span class="kw">let </span>num_add = cli.args[<span class="number">2</span>].parse::&lt;usize&gt;().unwrap();
+<a href=#704 id=704 data-nosnippet>704</a>            <span class="kw">let </span>num_update = cli.args[<span class="number">3</span>].parse::&lt;usize&gt;().unwrap();
+<a href=#705 id=705 data-nosnippet>705</a>            <span class="kw">let </span>max_reward_increment = cli.args[<span class="number">4</span>].parse::&lt;U256&gt;().unwrap();
+<a href=#706 id=706 data-nosnippet>706</a>            <span class="kw">let </span>num_fixtures = cli.args[<span class="number">5</span>].parse::&lt;usize&gt;().unwrap();
+<a href=#707 id=707 data-nosnippet>707</a>
+<a href=#708 id=708 data-nosnippet>708</a>            <span class="kw">let </span><span class="kw-2">mut </span>rng = StdRng::seed_from_u64(seed);
+<a href=#709 id=709 data-nosnippet>709</a>            <span class="kw">let </span><span class="kw-2">mut </span>state: HashMap&lt;Address, U256&gt; = state_vec.into_iter().collect();
 <a href=#710 id=710 data-nosnippet>710</a>
-<a href=#711 id=711 data-nosnippet>711</a>            <span class="comment">// Add new accounts
-<a href=#712 id=712 data-nosnippet>712</a>            </span><span class="kw">for _ in </span><span class="number">0</span>..num_add {
-<a href=#713 id=713 data-nosnippet>713</a>                <span class="kw">let </span>account = Address::random_with(<span class="kw-2">&amp;mut </span>rng);
-<a href=#714 id=714 data-nosnippet>714</a>                <span class="kw">let </span>amount = <span class="kw">if </span>max_reward_increment &gt; U256::ZERO {
-<a href=#715 id=715 data-nosnippet>715</a>                    (U256::random_with(<span class="kw-2">&amp;mut </span>rng) % max_reward_increment) + U256::from(<span class="number">1</span>)
-<a href=#716 id=716 data-nosnippet>716</a>                } <span class="kw">else </span>{
-<a href=#717 id=717 data-nosnippet>717</a>                    U256::from(<span class="number">1</span>)
-<a href=#718 id=718 data-nosnippet>718</a>                };
-<a href=#719 id=719 data-nosnippet>719</a>                state.insert(account, amount);
-<a href=#720 id=720 data-nosnippet>720</a>            }
-<a href=#721 id=721 data-nosnippet>721</a>
-<a href=#722 id=722 data-nosnippet>722</a>            <span class="comment">// Build tree from final state
-<a href=#723 id=723 data-nosnippet>723</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-<a href=#724 id=724 data-nosnippet>724</a>            <span class="kw">for </span>(account, lifetime_rewards) <span class="kw">in </span><span class="kw-2">&amp;</span>state {
-<a href=#725 id=725 data-nosnippet>725</a>                <span class="kw">let </span>reward_account = RewardAccountV2::from(<span class="kw-2">*</span>account);
-<a href=#726 id=726 data-nosnippet>726</a>                tree.update(reward_account, RewardAmount(<span class="kw-2">*</span>lifetime_rewards))
-<a href=#727 id=727 data-nosnippet>727</a>                    .unwrap();
-<a href=#728 id=728 data-nosnippet>728</a>            }
-<a href=#729 id=729 data-nosnippet>729</a>
-<a href=#730 id=730 data-nosnippet>730</a>            <span class="kw">let </span>commitment = tree.commitment();
-<a href=#731 id=731 data-nosnippet>731</a>            <span class="kw">let </span>reward_commitment: B256 = commitment.digest().into();
-<a href=#732 id=732 data-nosnippet>732</a>            <span class="kw">let </span>auth_root_fields: [B256; <span class="number">8</span>] = [
-<a href=#733 id=733 data-nosnippet>733</a>                reward_commitment,
-<a href=#734 id=734 data-nosnippet>734</a>                B256::ZERO,
-<a href=#735 id=735 data-nosnippet>735</a>                B256::ZERO,
-<a href=#736 id=736 data-nosnippet>736</a>                B256::ZERO,
-<a href=#737 id=737 data-nosnippet>737</a>                B256::ZERO,
-<a href=#738 id=738 data-nosnippet>738</a>                B256::ZERO,
-<a href=#739 id=739 data-nosnippet>739</a>                B256::ZERO,
-<a href=#740 id=740 data-nosnippet>740</a>                B256::ZERO,
-<a href=#741 id=741 data-nosnippet>741</a>            ];
-<a href=#742 id=742 data-nosnippet>742</a>            <span class="kw">let </span>auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
-<a href=#743 id=743 data-nosnippet>743</a>            <span class="kw">let </span>auth_root_u256: U256 = auth_root.into();
-<a href=#744 id=744 data-nosnippet>744</a>
-<a href=#745 id=745 data-nosnippet>745</a>            <span class="comment">// Generate fixtures for a random subset of accounts
-<a href=#746 id=746 data-nosnippet>746</a>            </span><span class="kw">let </span>all_accounts: Vec&lt;Address&gt; = state.keys().copied().collect();
-<a href=#747 id=747 data-nosnippet>747</a>            <span class="kw">let </span>num_fixtures_bounded = num_fixtures.min(all_accounts.len());
-<a href=#748 id=748 data-nosnippet>748</a>            <span class="kw">let </span>selected_accounts: Vec&lt;Address&gt; = all_accounts
-<a href=#749 id=749 data-nosnippet>749</a>                .choose_multiple(<span class="kw-2">&amp;mut </span>rng, num_fixtures_bounded)
-<a href=#750 id=750 data-nosnippet>750</a>                .copied()
-<a href=#751 id=751 data-nosnippet>751</a>                .collect();
-<a href=#752 id=752 data-nosnippet>752</a>
-<a href=#753 id=753 data-nosnippet>753</a>            <span class="kw">let </span>fixtures: Vec&lt;(Address, U256, Bytes)&gt; = selected_accounts
-<a href=#754 id=754 data-nosnippet>754</a>                .iter()
-<a href=#755 id=755 data-nosnippet>755</a>                .map(|account| {
-<a href=#756 id=756 data-nosnippet>756</a>                    <span class="kw">let </span>proof = RewardAccountProofV2::prove(<span class="kw-2">&amp;</span>tree, <span class="kw-2">*</span>account).unwrap();
-<a href=#757 id=757 data-nosnippet>757</a>                    <span class="kw">let </span>query_data: RewardAccountQueryDataV2 = proof.into();
-<a href=#758 id=758 data-nosnippet>758</a>                    <span class="kw">let </span>claim_input = query_data.to_reward_claim_input().unwrap();
-<a href=#759 id=759 data-nosnippet>759</a>                    (
-<a href=#760 id=760 data-nosnippet>760</a>                        <span class="kw-2">*</span>account,
-<a href=#761 id=761 data-nosnippet>761</a>                        claim_input.lifetime_rewards,
-<a href=#762 id=762 data-nosnippet>762</a>                        claim_input.auth_data.into(),
-<a href=#763 id=763 data-nosnippet>763</a>                    )
-<a href=#764 id=764 data-nosnippet>764</a>                })
-<a href=#765 id=765 data-nosnippet>765</a>                .collect();
-<a href=#766 id=766 data-nosnippet>766</a>
-<a href=#767 id=767 data-nosnippet>767</a>            <span class="kw">let </span>state_vec: Vec&lt;(Address, U256)&gt; = state.into_iter().collect();
-<a href=#768 id=768 data-nosnippet>768</a>            <span class="kw">let </span>res = (auth_root_u256, state_vec, fixtures);
-<a href=#769 id=769 data-nosnippet>769</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
-<a href=#770 id=770 data-nosnippet>770</a>        },
-<a href=#771 id=771 data-nosnippet>771</a>    };
-<a href=#772 id=772 data-nosnippet>772</a>}</code></pre></div></section></main></body></html>
+<a href=#711 id=711 data-nosnippet>711</a>            <span class="comment">// Randomly select existing accounts to update
+<a href=#712 id=712 data-nosnippet>712</a>            </span><span class="kw">let </span>existing_accounts: Vec&lt;Address&gt; = state.keys().copied().collect();
+<a href=#713 id=713 data-nosnippet>713</a>            <span class="kw">let </span>num_to_update = num_update.min(existing_accounts.len());
+<a href=#714 id=714 data-nosnippet>714</a>            <span class="kw">let </span>accounts_to_update: Vec&lt;Address&gt; = existing_accounts
+<a href=#715 id=715 data-nosnippet>715</a>                .choose_multiple(<span class="kw-2">&amp;mut </span>rng, num_to_update)
+<a href=#716 id=716 data-nosnippet>716</a>                .copied()
+<a href=#717 id=717 data-nosnippet>717</a>                .collect();
+<a href=#718 id=718 data-nosnippet>718</a>
+<a href=#719 id=719 data-nosnippet>719</a>            <span class="comment">// Update existing accounts
+<a href=#720 id=720 data-nosnippet>720</a>            </span><span class="kw">for </span>account <span class="kw">in </span>accounts_to_update {
+<a href=#721 id=721 data-nosnippet>721</a>                <span class="kw">let </span>amount = <span class="kw">if </span>max_reward_increment &gt; U256::ZERO {
+<a href=#722 id=722 data-nosnippet>722</a>                    (U256::random_with(<span class="kw-2">&amp;mut </span>rng) % max_reward_increment) + U256::from(<span class="number">1</span>)
+<a href=#723 id=723 data-nosnippet>723</a>                } <span class="kw">else </span>{
+<a href=#724 id=724 data-nosnippet>724</a>                    U256::from(<span class="number">1</span>)
+<a href=#725 id=725 data-nosnippet>725</a>                };
+<a href=#726 id=726 data-nosnippet>726</a>                <span class="kw-2">*</span>state.get_mut(<span class="kw-2">&amp;</span>account).unwrap() += amount;
+<a href=#727 id=727 data-nosnippet>727</a>            }
+<a href=#728 id=728 data-nosnippet>728</a>
+<a href=#729 id=729 data-nosnippet>729</a>            <span class="comment">// Add new accounts
+<a href=#730 id=730 data-nosnippet>730</a>            </span><span class="kw">for _ in </span><span class="number">0</span>..num_add {
+<a href=#731 id=731 data-nosnippet>731</a>                <span class="kw">let </span>account = Address::random_with(<span class="kw-2">&amp;mut </span>rng);
+<a href=#732 id=732 data-nosnippet>732</a>                <span class="kw">let </span>amount = <span class="kw">if </span>max_reward_increment &gt; U256::ZERO {
+<a href=#733 id=733 data-nosnippet>733</a>                    (U256::random_with(<span class="kw-2">&amp;mut </span>rng) % max_reward_increment) + U256::from(<span class="number">1</span>)
+<a href=#734 id=734 data-nosnippet>734</a>                } <span class="kw">else </span>{
+<a href=#735 id=735 data-nosnippet>735</a>                    U256::from(<span class="number">1</span>)
+<a href=#736 id=736 data-nosnippet>736</a>                };
+<a href=#737 id=737 data-nosnippet>737</a>                state.insert(account, amount);
+<a href=#738 id=738 data-nosnippet>738</a>            }
+<a href=#739 id=739 data-nosnippet>739</a>
+<a href=#740 id=740 data-nosnippet>740</a>            <span class="comment">// Build tree from final state
+<a href=#741 id=741 data-nosnippet>741</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+<a href=#742 id=742 data-nosnippet>742</a>            <span class="kw">for </span>(account, lifetime_rewards) <span class="kw">in </span><span class="kw-2">&amp;</span>state {
+<a href=#743 id=743 data-nosnippet>743</a>                <span class="kw">let </span>reward_account = RewardAccountV2::from(<span class="kw-2">*</span>account);
+<a href=#744 id=744 data-nosnippet>744</a>                tree.update(reward_account, RewardAmount(<span class="kw-2">*</span>lifetime_rewards))
+<a href=#745 id=745 data-nosnippet>745</a>                    .unwrap();
+<a href=#746 id=746 data-nosnippet>746</a>            }
+<a href=#747 id=747 data-nosnippet>747</a>
+<a href=#748 id=748 data-nosnippet>748</a>            <span class="kw">let </span>commitment = tree.commitment();
+<a href=#749 id=749 data-nosnippet>749</a>            <span class="kw">let </span>reward_commitment: B256 = commitment.digest().into();
+<a href=#750 id=750 data-nosnippet>750</a>            <span class="kw">let </span>auth_root_fields: [B256; <span class="number">8</span>] = [
+<a href=#751 id=751 data-nosnippet>751</a>                reward_commitment,
+<a href=#752 id=752 data-nosnippet>752</a>                B256::ZERO,
+<a href=#753 id=753 data-nosnippet>753</a>                B256::ZERO,
+<a href=#754 id=754 data-nosnippet>754</a>                B256::ZERO,
+<a href=#755 id=755 data-nosnippet>755</a>                B256::ZERO,
+<a href=#756 id=756 data-nosnippet>756</a>                B256::ZERO,
+<a href=#757 id=757 data-nosnippet>757</a>                B256::ZERO,
+<a href=#758 id=758 data-nosnippet>758</a>                B256::ZERO,
+<a href=#759 id=759 data-nosnippet>759</a>            ];
+<a href=#760 id=760 data-nosnippet>760</a>            <span class="kw">let </span>auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+<a href=#761 id=761 data-nosnippet>761</a>            <span class="kw">let </span>auth_root_u256: U256 = auth_root.into();
+<a href=#762 id=762 data-nosnippet>762</a>
+<a href=#763 id=763 data-nosnippet>763</a>            <span class="comment">// Generate fixtures for a random subset of accounts
+<a href=#764 id=764 data-nosnippet>764</a>            </span><span class="kw">let </span>all_accounts: Vec&lt;Address&gt; = state.keys().copied().collect();
+<a href=#765 id=765 data-nosnippet>765</a>            <span class="kw">let </span>num_fixtures_bounded = num_fixtures.min(all_accounts.len());
+<a href=#766 id=766 data-nosnippet>766</a>            <span class="kw">let </span>selected_accounts: Vec&lt;Address&gt; = all_accounts
+<a href=#767 id=767 data-nosnippet>767</a>                .choose_multiple(<span class="kw-2">&amp;mut </span>rng, num_fixtures_bounded)
+<a href=#768 id=768 data-nosnippet>768</a>                .copied()
+<a href=#769 id=769 data-nosnippet>769</a>                .collect();
+<a href=#770 id=770 data-nosnippet>770</a>
+<a href=#771 id=771 data-nosnippet>771</a>            <span class="kw">let </span>fixtures: Vec&lt;(Address, U256, Bytes)&gt; = selected_accounts
+<a href=#772 id=772 data-nosnippet>772</a>                .iter()
+<a href=#773 id=773 data-nosnippet>773</a>                .map(|account| {
+<a href=#774 id=774 data-nosnippet>774</a>                    <span class="kw">let </span>proof = RewardAccountProofV2::prove(<span class="kw-2">&amp;</span>tree, <span class="kw-2">*</span>account).unwrap();
+<a href=#775 id=775 data-nosnippet>775</a>                    <span class="kw">let </span>query_data: RewardAccountQueryDataV2 = proof.into();
+<a href=#776 id=776 data-nosnippet>776</a>                    <span class="kw">let </span>claim_input = query_data.to_reward_claim_input().unwrap();
+<a href=#777 id=777 data-nosnippet>777</a>                    (
+<a href=#778 id=778 data-nosnippet>778</a>                        <span class="kw-2">*</span>account,
+<a href=#779 id=779 data-nosnippet>779</a>                        claim_input.lifetime_rewards,
+<a href=#780 id=780 data-nosnippet>780</a>                        claim_input.auth_data.into(),
+<a href=#781 id=781 data-nosnippet>781</a>                    )
+<a href=#782 id=782 data-nosnippet>782</a>                })
+<a href=#783 id=783 data-nosnippet>783</a>                .collect();
+<a href=#784 id=784 data-nosnippet>784</a>
+<a href=#785 id=785 data-nosnippet>785</a>            <span class="kw">let </span>state_vec: Vec&lt;(Address, U256)&gt; = state.into_iter().collect();
+<a href=#786 id=786 data-nosnippet>786</a>            <span class="kw">let </span>res = (auth_root_u256, state_vec, fixtures);
+<a href=#787 id=787 data-nosnippet>787</a>            <span class="macro">println!</span>(<span class="string">"{}"</span>, res.abi_encode_params().encode_hex());
+<a href=#788 id=788 data-nosnippet>788</a>        },
+<a href=#789 id=789 data-nosnippet>789</a>    };
+<a href=#790 id=790 data-nosnippet>790</a>}</code></pre></div></section></main></body></html>
