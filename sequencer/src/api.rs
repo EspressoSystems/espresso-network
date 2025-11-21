@@ -30,7 +30,7 @@ use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
 use hotshot_query_service::{
-    availability::VidCommonQueryData, data_source::ExtensibleDataSource, VidCommon,
+    availability::VidCommonQueryData, data_source::ExtensibleDataSource, merklized_state, VidCommon,
 };
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
@@ -51,6 +51,7 @@ use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
 use request_response::RequestType;
+use tide_disco::StatusCode;
 use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
@@ -1148,14 +1149,58 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AccountProofError {
+    #[error(
+        "View mismatch at height {height}: expected {expected:?}, got {actual:?}. The block for \
+         height {height} is already finalized"
+    )]
+    ViewMismatch {
+        height: u64,
+        expected: ViewNumber,
+        actual: ViewNumber,
+    },
+    #[error("{0}")]
+    LeafNotFound(String),
+    #[error("{0}")]
+    AccountNotFound(String),
+    #[error("failed to fetch merkle path")]
+    QueryError(#[source] hotshot_query_service::QueryError),
+    #[error("database error")]
+    DatabaseError(#[source] anyhow::Error),
+    #[error("{0}")]
+    InvalidProof(String),
+}
+
+impl From<AccountProofError> for merklized_state::Error {
+    fn from(err: AccountProofError) -> Self {
+        let status = match &err {
+            AccountProofError::ViewMismatch { .. } => StatusCode::BAD_REQUEST,
+            AccountProofError::LeafNotFound(_) | AccountProofError::AccountNotFound(_) => {
+                StatusCode::NOT_FOUND
+            },
+            AccountProofError::QueryError(e) => e.status(),
+            AccountProofError::DatabaseError(_) | AccountProofError::InvalidProof(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            },
+        };
+        merklized_state::Error::Custom {
+            message: err.to_string(),
+            status,
+        }
+    }
+}
+
 pub(crate) trait RewardAccountProofDataSource: Sync {
     fn load_v1_reward_account_proof(
         &self,
         _height: u64,
         _account: RewardAccountV1,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
+    ) -> impl Send + Future<Output = Result<RewardAccountQueryDataV1, AccountProofError>> {
         async {
-            bail!("reward merklized state is not supported for this data source");
+            Err(AccountProofError::DatabaseError(anyhow::anyhow!(
+                "reward merklized state is not supported for this data source"
+            )))
         }
     }
 
@@ -1163,9 +1208,11 @@ pub(crate) trait RewardAccountProofDataSource: Sync {
         &self,
         _height: u64,
         _account: RewardAccountV2,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+    ) -> impl Send + Future<Output = Result<RewardAccountQueryDataV2, AccountProofError>> {
         async {
-            bail!("reward merklized state is not supported for this data source");
+            Err(AccountProofError::DatabaseError(anyhow::anyhow!(
+                "reward merklized state is not supported for this data source"
+            )))
         }
     }
 }
@@ -1182,7 +1229,7 @@ where
         &self,
         height: u64,
         account: RewardAccountV1,
-    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+    ) -> Result<RewardAccountQueryDataV1, AccountProofError> {
         self.inner()
             .load_v1_reward_account_proof(height, account)
             .await
@@ -1192,7 +1239,7 @@ where
         &self,
         height: u64,
         account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+    ) -> Result<RewardAccountQueryDataV2, AccountProofError> {
         self.inner()
             .load_v2_reward_account_proof(height, account)
             .await
