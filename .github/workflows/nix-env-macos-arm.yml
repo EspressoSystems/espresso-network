@@ -50,7 +50,7 @@ jobs:
       - name: Activate nix env
         run: nix develop --accept-flake-config -c echo Ok
 
-      - name: Build rust crates
+      - name: Check rust crates
         run: nix develop --accept-flake-config -c just check
 
       - name: Build contracts
