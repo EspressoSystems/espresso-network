@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["DEV_MNEMONIC"],"enum":["Commands","ValidSignerConfig"],"mod":["claim","delegation","demo","funding","info","l1","output","parse","receipt","registration","signature"],"struct":["Config","SignerConfig"]};
+window.SIDEBAR_ITEMS = {"constant":["DEV_MNEMONIC"],"enum":["Commands","ValidSignerConfig"],"mod":["claim","delegation","demo","funding","info","l1","metadata","output","parse","receipt","registration","signature"],"struct":["Config","MetadataUriArgs","SignerConfig"]};
