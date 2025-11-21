@@ -45,7 +45,9 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
+    utils::{
+        epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
+    },
     PeerConfig,
 };
 use humantime::format_duration;
@@ -2172,18 +2174,25 @@ impl Membership<SeqTypes> for EpochCommittees {
         membership: Arc<RwLock<Self>>,
         block_header: Header,
     ) -> anyhow::Result<()> {
+        let block_number = block_header.block_number();
+
         let membership_reader = membership.read().await;
+        let epoch_height = membership_reader.epoch_height;
 
-        let epoch = Epoch::new(
-            epoch_from_block_number(block_header.block_number(), membership_reader.epoch_height)
-                + 2,
-        );
+        let epoch =
+            Epoch::new(epoch_from_block_number(block_number, membership_reader.epoch_height) + 2);
 
-        tracing::info!(
-            ?epoch,
-            "adding epoch root. height={:?}",
-            block_header.block_number()
-        );
+        tracing::info!(?epoch, "adding epoch root. height={:?}", block_number);
+
+        if !is_epoch_root(block_number, epoch_height) {
+            tracing::error!(
+                "`add_epoch_root` was called with a block header that was not the root block for \
+                 an epoch. This should never happen. Header:\n\n{block_header:?}"
+            );
+            bail!(
+                "Failed to add epoch root: block {block_number:?} is not a root block for an epoch"
+            );
+        }
 
         let fetcher = membership_reader.fetcher.clone();
 
