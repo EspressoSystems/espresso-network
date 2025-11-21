@@ -40,6 +40,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     type Storage;
 
     type StakeTableHash: Committable;
+    type StakeTableMetadata: Clone + Send + Sync + Default + 'static;
 
     /// Create a committee
     fn new<I: NodeImplementation<TYPES>>(
@@ -255,6 +256,16 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     }
 
     fn add_da_committee(&mut self, _first_epoch: u64, _da_committee: Vec<PeerConfig<TYPES>>);
+
+    /// Insert epoch membership state
+    fn insert_epoch_state(
+        &mut self,
+        _epoch: TYPES::Epoch,
+        _stake_table: HSStakeTable<TYPES>,
+        _epoch_root: Option<TYPES::BlockHeader>,
+        _metadata: Self::StakeTableMetadata,
+    ) {
+    }
 }
 
 pub fn membership_spawn_add_epoch_root<TYPES: NodeType>(

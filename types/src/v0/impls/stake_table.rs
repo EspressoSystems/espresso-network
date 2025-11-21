@@ -79,6 +79,12 @@ pub type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
 
 pub type StakeTableHash = Commitment<StakeTableState>;
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StakeTableMetadata {
+    pub block_reward: Option<RewardAmount>,
+    pub stake_table_hash: Option<StakeTableHash>,
+}
+
 /// The result of applying a stake table event:
 /// - `Ok(Ok(()))`: success
 /// - `Ok(Err(...))`: expected error
@@ -1897,7 +1903,7 @@ impl EpochCommittees {
         }
     }
 
-    pub async fn reload_stake(&mut self, limit: u64) {
+    pub async fn reload_epoch_state(&mut self, limit: u64) {
         match self.fetcher.fetch_fixed_block_reward().await {
             Ok(block_reward) => {
                 tracing::info!("Fetched block reward: {block_reward}");
@@ -1930,8 +1936,14 @@ impl EpochCommittees {
             },
         };
 
-        for (epoch, (stake_table, block_reward), stake_table_hash) in loaded_stake {
-            self.insert_committee(epoch, stake_table, block_reward, stake_table_hash, None);
+        for (epoch, stake_table, metadata) in loaded_stake {
+            self.insert_committee(
+                epoch,
+                stake_table,
+                metadata.block_reward,
+                metadata.stake_table_hash,
+                None,
+            );
         }
     }
 
@@ -2013,6 +2025,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
     type Storage = ();
     type StakeTableHash = StakeTableState;
+    type StakeTableMetadata = StakeTableMetadata;
 
     // DO NOT USE. Dummy constructor to comply w/ trait.
     fn new<I: NodeImplementation<SeqTypes>>(
@@ -2278,7 +2291,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let persistence_lock = fetcher.persistence.lock().await;
         if let Err(e) = persistence_lock
-            .store_stake(epoch, active_validators, block_reward, stake_table_hash)
+            .store_epoch_state(epoch, active_validators, block_reward, stake_table_hash)
             .await
         {
             tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing stake table");
@@ -2457,6 +2470,42 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         self.da_committees.insert(first_epoch, da_committee);
+    }
+
+    fn insert_epoch_state(
+        &mut self,
+        epoch: Epoch,
+        stake_table: HSStakeTable<SeqTypes>,
+        epoch_root: Option<Header>,
+        metadata: Self::StakeTableMetadata,
+    ) {
+        let stake_entries: Vec<_> = stake_table
+            .into_iter()
+            .filter(|peer| peer.stake_table_entry.stake() > U256::ZERO)
+            .collect();
+
+        let eligible_leaders = stake_entries.clone();
+        let indexed_stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = stake_entries
+            .into_iter()
+            .map(|peer_config| {
+                (
+                    PubKey::public_key(&peer_config.stake_table_entry),
+                    peer_config,
+                )
+            })
+            .collect();
+
+        let committee = EpochCommittee {
+            eligible_leaders,
+            stake_table: indexed_stake_table,
+            validators: Default::default(),
+            address_mapping: HashMap::new(),
+            block_reward: metadata.block_reward,
+            stake_table_hash: metadata.stake_table_hash,
+            header: epoch_root,
+        };
+
+        self.state.insert(epoch, committee);
     }
 }
 

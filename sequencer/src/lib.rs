@@ -558,7 +558,9 @@ where
         epoch_height,
     );
     info!("Membership created. Reloading stake");
-    membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+    membership
+        .reload_epoch_state(RECENT_STAKE_TABLES_LIMIT)
+        .await;
     info!("Stake reloaded");
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
@@ -566,7 +568,7 @@ where
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         network_config.config.epoch_height,
-        &persistence.clone(),
+        persistence.clone(),
     );
 
     let instance_state = NodeState {
@@ -1311,7 +1313,7 @@ pub mod testing {
                 fetcher,
                 config.epoch_height,
             );
-            membership.reload_stake(50).await;
+            membership.reload_epoch_state(50).await;
 
             let membership = Arc::new(RwLock::new(membership));
             let persistence = Arc::new(persistence);
@@ -1319,7 +1321,7 @@ pub mod testing {
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
                 config.epoch_height,
-                &persistence.clone(),
+                persistence.clone(),
             );
 
             let node_state = NodeState::new(

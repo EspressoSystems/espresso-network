@@ -18,10 +18,7 @@ use crate::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
-        storage::{
-            load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
-            Storage, StoreDrbProgressFn, StoreDrbResultFn,
-        },
+        storage::{EpochStateStorage, Storage},
     },
     utils::root_block_in_epoch,
     PeerConfig,
@@ -47,18 +44,13 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// alerting them the membership is ready.  The first caller for an epoch will
     /// wait for the actual catchup and alert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
+    /// Backing storage for consensus artifacts
+    storage: Arc<dyn EpochStateStorage<TYPES>>,
 
     drb_calculation_map: Arc<Mutex<DrbMap<TYPES>>>,
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
-
-    store_drb_progress_fn: StoreDrbProgressFn,
-
-    load_drb_progress_fn: LoadDrbProgressFn,
-
-    /// Callback function to store a drb result in storage when one is calculated during catchup
-    store_drb_result_fn: StoreDrbResultFn<TYPES>,
 
     /// Callback function to select a DRB difficulty based on the view number of the seed
     pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
@@ -71,9 +63,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             catchup_map: Arc::clone(&self.catchup_map),
             drb_calculation_map: Arc::clone(&self.drb_calculation_map),
             epoch_height: self.epoch_height,
-            store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
-            load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
-            store_drb_result_fn: self.store_drb_result_fn.clone(),
+            storage: Arc::clone(&self.storage),
             drb_difficulty_selector: Arc::clone(&self.drb_difficulty_selector),
         }
     }
@@ -87,16 +77,14 @@ where
     pub fn new<S: Storage<TYPES>>(
         membership: Arc<RwLock<TYPES::Membership>>,
         epoch_height: u64,
-        storage: &S,
+        storage: S,
     ) -> Self {
         Self {
             membership,
             catchup_map: Arc::default(),
+            storage: Arc::new(storage),
             drb_calculation_map: Arc::default(),
             epoch_height,
-            store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
-            load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
-            store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
         }
     }
@@ -152,6 +140,15 @@ where
         {
             return Ok(ret_val);
         }
+        if self
+            .insert_from_storage(epoch, true)
+            .await
+            .inspect_err(|e| {
+                let _ = warn!("loading from storage for {epoch:?} failed: {e}");
+            })?
+        {
+            return Ok(ret_val);
+        }
         if self.catchup_map.lock().await.contains_key(&epoch) {
             return Err(warn!(
                 "Randomized stake table for epoch {epoch:?} unavailable. Catchup already in \
@@ -184,6 +181,15 @@ where
         if self.membership.read().await.has_stake_table(epoch) {
             return Ok(ret_val);
         }
+        if self
+            .insert_from_storage(epoch, false)
+            .await
+            .inspect_err(|e| {
+                let _ = warn!("loading from storage for epoch {epoch:?} failed: {e}");
+            })?
+        {
+            return Ok(ret_val);
+        }
         if self.catchup_map.lock().await.contains_key(&epoch) {
             return Err(warn!(
                 "Stake table for Epoch {epoch:?} Unavailable. Catch up already in Progress"
@@ -197,6 +203,71 @@ where
         Err(warn!(
             "Stake table for Epoch {epoch:?} Unavailable. Starting catchup"
         ))
+    }
+
+    async fn insert_from_storage(
+        &self,
+        epoch: TYPES::Epoch,
+        need_randomized: bool,
+    ) -> Result<bool> {
+        let has_stake_table = self.membership.read().await.has_stake_table(epoch);
+        let has_randomized = if need_randomized {
+            self.membership
+                .read()
+                .await
+                .has_randomized_stake_table(epoch)
+                .wrap()?
+        } else {
+            true
+        };
+
+        // If we have everything we need, return early
+        if has_stake_table && has_randomized {
+            return Ok(true);
+        }
+
+        // First check if storage has an epoch root
+        // if not, we can't proceed
+        let Some(block_header) = self.storage.load_epoch_root(epoch).await.wrap()? else {
+            return Ok(false);
+        };
+
+        // Load stake table if we don't have it
+        if !has_stake_table {
+            if let Some((stake_table, metadata)) =
+                self.storage.load_stake_table(epoch).await.wrap()?
+            {
+                let metadata: <TYPES::Membership as Membership<TYPES>>::StakeTableMetadata =
+                    *metadata.downcast().unwrap();
+                self.membership.write().await.insert_epoch_state(
+                    epoch,
+                    stake_table,
+                    Some(block_header.clone()),
+                    metadata,
+                );
+            }
+        }
+
+        // Load DRB result if we need it and don't have it
+        if need_randomized && !has_randomized {
+            if let Ok(drb_result) = self.storage.load_drb_result(epoch).await {
+                self.membership
+                    .write()
+                    .await
+                    .add_drb_result(epoch, drb_result);
+            }
+        }
+
+        // we call add epoch_root()
+        // this function will verify everything
+        // that the epoch state should have
+        // and if something is missing, then it calculates/fetches
+        // like block reward
+        Membership::add_epoch_root(self.membership.clone(), epoch, block_header)
+            .await
+            .map_err(|e| error!("Failed to verify epoch state for {epoch:?}: {e}"))?;
+
+        Ok(true)
     }
 
     /// Catches the membership up to the epoch passed as an argument.  
@@ -519,17 +590,14 @@ where
             difficulty_level: drb_difficulty,
         };
 
-        let store_drb_progress_fn = self.store_drb_progress_fn.clone();
-        let load_drb_progress_fn = self.load_drb_progress_fn.clone();
-
-        let drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await;
+        let drb = compute_drb_result(drb_input, self.storage.clone()).await;
 
         let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
         drb_calculation_map_lock.remove(&epoch);
         drop(drb_calculation_map_lock);
 
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
-        if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
+        if let Err(e) = self.storage.store_drb_result(epoch, drb).await {
             tracing::warn!("Failed to add drb result to storage: {e}");
         }
         self.membership.write().await.add_drb_result(epoch, drb);
@@ -548,7 +616,7 @@ fn spawn_catchup<T: NodeType>(
     });
 }
 /// Wrapper around a membership that guarantees that the epoch
-/// has a stake table
+/// has a stake table for
 pub struct EpochMembership<TYPES: NodeType> {
     /// Epoch the `membership` is guaranteed to have a stake table for
     pub epoch: Option<TYPES::Epoch>,
