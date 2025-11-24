@@ -878,6 +878,17 @@ impl<
         Ok(tree)
     }
 
+    async fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.inner()
+            .get_all_reward_accounts(height, offset, limit)
+            .await
+    }
+
     #[tracing::instrument(skip(self, instance))]
     async fn get_reward_accounts_v1(
         &self,
@@ -1075,6 +1086,23 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             ))?;
 
         retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
+    }
+
+    // We can iterate over the in-memory reward merkle tree
+    // however, there is no guarantee that we have all the accounts in
+    // in-memory reward tree
+    // So, we only query the state table in database for the reward accounts
+    // We never hit this because we only query the storage in `StorageState``
+    // trait implementation
+    async fn get_all_reward_accounts(
+        &self,
+        _height: u64,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        // ApiState only has access to in-memory state, which may not contain the full reward tree
+        // or historical snapshots. The storage-backed path (StorageState) should be used instead.
+        bail!("get_all_reward_accounts is not implemented for ApiState")
     }
 
     #[tracing::instrument(skip(self, _instance))]
@@ -2562,6 +2590,29 @@ mod test {
         sql::DataSource as SqlDataSource,
     };
     use super::*;
+
+    async fn wait_until_block_height(
+        client: &Client<ServerError, StaticVersion<0, 1>>,
+        endpoint: &str,
+        height: u64,
+    ) {
+        const MAX_RETRIES: usize = 30;
+
+        for _retry in 0..=MAX_RETRIES {
+            let bh = client
+                .get::<u64>(endpoint)
+                .send()
+                .await
+                .expect("block height not found");
+
+            if bh >= height {
+                return;
+            }
+            sleep(Duration::from_secs(3)).await;
+        }
+
+        panic!("Max retries reached. {endpoint} block height did not exceed {height}");
+    }
     use crate::{
         api::{
             options::Query,
@@ -6343,34 +6394,6 @@ mod test {
         let decided_leaf = network.server.decided_leaf().await;
         let height = decided_leaf.height();
 
-        async fn wait_until_block_height(
-            client: &Client<ServerError, StaticVersion<0, 1>>,
-            endpoint: &str,
-            height: u64,
-        ) {
-            for retry in 0..=MAX_RETRIES {
-                let bh = client
-                    .get::<u64>(endpoint)
-                    .send()
-                    .await
-                    .expect("block height not found");
-
-                println!("{endpoint}: block height = {bh}");
-
-                if bh >= height {
-                    return;
-                }
-                sleep(Duration::from_secs(3)).await;
-
-                if retry == MAX_RETRIES {
-                    panic!(
-                        "Max retries reached. {endpoint} block height ({bh}) did not exceed \
-                         {height}"
-                    );
-                }
-            }
-        }
-
         // validate proof returned from the api
         if Ver::Base::VERSION == EpochVersion::VERSION {
             // V1 case
@@ -6539,6 +6562,75 @@ mod test {
             .expect("validators");
 
         assert!(!validators.is_empty());
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_reward_accounts_catchup_endpoint() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let config = TestNetworkConfigBuilder::<5, _, _>::with_num_nodes()
+            .api_config(Options::with_port(api_port))
+            .network_config(
+                TestConfigBuilder::default()
+                    .epoch_height(EPOCH_HEIGHT)
+                    .build(),
+            )
+            .build();
+
+        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        client.connect(None).await;
+
+        // Wait for a few epochs so the catchup endpoint has data to read.
+        let mut events = network.server.event_stream().await;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+
+        // Ensure reward state is available up to the decided height.
+        let height = network.server.decided_leaf().await.height();
+        wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+
+        let err = client
+            .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
+                "catchup/{height}/reward-amounts/10001/0"
+            ))
+            .send()
+            .await
+            .unwrap_err();
+
+        assert_matches!(err, ServerError { status, message } if
+            status == StatusCode::BAD_REQUEST &&
+            message.contains("limit 10001 exceeds maximum allowed 10000")
+        );
+
+        // A sane request should succeed and match the snapshot ordering.
+        let mut expected: Vec<_> = network
+            .server
+            .decided_state()
+            .await
+            .reward_merkle_tree_v2
+            .iter()
+            .map(|(addr, amt)| (*addr, *amt))
+            .collect();
+        expected.sort_by_key(|(acct, _)| *acct);
+        let limit = expected.len().min(10_000) as u64;
+        let offset = 0u64;
+        let expected: Vec<_> = expected.into_iter().take(limit as usize).collect();
+
+        let res = client
+            .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
+                "catchup/{height}/reward-amounts/{limit}/{offset}"
+            ))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(res, expected);
 
         Ok(())
     }

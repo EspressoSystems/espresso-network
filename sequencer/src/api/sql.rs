@@ -7,7 +7,7 @@ use espresso_types::{
     get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1,
+        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{
@@ -28,7 +28,7 @@ use hotshot_query_service::{
         },
         VersionedDataSource,
     },
-    merklized_state::Snapshot,
+    merklized_state::{MerklizedState, Snapshot},
     Resolvable,
 };
 use hotshot_types::{
@@ -42,6 +42,7 @@ use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme,
 };
+use serde_json::Value;
 use sqlx::{Encode, Type};
 use vbs::version::StaticVersionType;
 
@@ -248,6 +249,70 @@ impl CatchupStorage for SqlStorage {
                 reconstruct_state(instance, &mut tx, block_height - 1, view, &[], accounts).await?;
             Ok((state.reward_merkle_tree_v2, leaf))
         }
+    }
+
+    async fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch all reward accounts; height {height}"
+        ))?;
+
+        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+            .await
+            .context("getting block height")? as u64;
+        ensure!(
+            block_height > 0,
+            "cannot get accounts for height {height}: no blocks available"
+        );
+
+        ensure!(
+            height < block_height,
+            "requested height {height} is not yet available (latest block height: {block_height})"
+        );
+
+        let leaf = tx
+            .get_leaf(LeafId::<SeqTypes>::from(height as usize))
+            .await
+            .context(format!("leaf {height} not available"))?;
+        let header = leaf.header();
+
+        if header.version() < DrbAndHeaderUpgradeVersion::version() {
+            return Ok(Vec::new());
+        }
+
+        let rows = query_as::<(Value, Value)>(&format!(
+            "SELECT idx, entry
+               FROM {}
+              WHERE created = $1
+                AND entry IS NOT NULL
+                AND idx IS NOT NULL
+              ORDER BY idx, entry
+              LIMIT $2 OFFSET $3",
+            RewardMerkleTreeV2::state_type()
+        ))
+        .bind(height as i64)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(tx.as_mut())
+        .await
+        .context("loading reward accounts from storage")?;
+
+        let mut accounts = Vec::new();
+        for (idx, entry) in rows {
+            let account: RewardAccountV2 =
+                serde_json::from_value(idx).context("deserializing reward account")?;
+            let balance: RewardAmount = serde_json::from_value(entry).context(format!(
+                "deserializing reward balance for account {account}"
+            ))?;
+
+            accounts.push((account, balance));
+        }
+
+        Ok(accounts)
     }
 
     async fn get_accounts(

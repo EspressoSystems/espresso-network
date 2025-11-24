@@ -16,7 +16,7 @@ use espresso_types::{
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
@@ -550,6 +550,15 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
+    fn get_all_reward_accounts(
+        &self,
+        _height: u64,
+        _offset: u64,
+        _limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>> {
+        async { bail!("merklized state catchup is not supported for this data source") }
+    }
+
     /// Get the blocks Merkle tree frontier.
     ///
     /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
@@ -618,6 +627,17 @@ where
     ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
         self.inner()
             .get_reward_accounts_v2(instance, height, view, accounts)
+            .await
+    }
+
+    async fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.inner()
+            .get_all_reward_accounts(height, offset, limit)
             .await
     }
 
