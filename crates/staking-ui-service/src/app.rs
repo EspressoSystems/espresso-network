@@ -596,13 +596,13 @@ mod test {
         };
 
         // Sanity check the node statistics.
-        assert!(snapshot.nodes[0].leader_participation > 0f32.into());
-        assert!(snapshot.nodes[0].leader_participation < 1f32.into());
-        assert_eq!(snapshot.nodes[0].voter_participation, 1f32.into());
+        assert!(snapshot.nodes[0].proposals > 0);
+        assert!(snapshot.nodes[0].proposals < snapshot.nodes[0].slots);
+        assert_eq!(snapshot.nodes[0].votes, snapshot.nodes[0].eligible_votes);
 
-        assert!(snapshot.nodes[1].leader_participation > 0f32.into());
-        assert!(snapshot.nodes[1].leader_participation < 1f32.into());
-        assert_eq!(snapshot.nodes[1].voter_participation, 0f32.into());
+        assert!(snapshot.nodes[1].proposals > 0);
+        assert!(snapshot.nodes[1].proposals < snapshot.nodes[1].slots);
+        assert_eq!(snapshot.nodes[1].votes, 0);
 
         // Check indexed snapshot endpoint.
         let indexed_snapshot = client

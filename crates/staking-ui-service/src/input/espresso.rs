@@ -29,7 +29,7 @@ use crate::{
     Error, Result,
     error::ensure,
     types::{
-        common::{ActiveNodeSetEntry, Address, ESPTokenAmount, EpochAndBlock, Ratio},
+        common::{ActiveNodeSetEntry, Address, ESPTokenAmount, EpochAndBlock},
         global::{ActiveNodeSetDiff, ActiveNodeSetSnapshot, ActiveNodeSetUpdate},
     },
 };
@@ -645,8 +645,10 @@ impl ActiveNode {
     pub fn into_node_set_entry(self, blocks_in_epoch: usize) -> ActiveNodeSetEntry {
         ActiveNodeSetEntry {
             address: self.address,
-            voter_participation: Ratio::new(self.votes, blocks_in_epoch),
-            leader_participation: Ratio::new(self.proposals, self.slots),
+            votes: self.votes as u64,
+            eligible_votes: blocks_in_epoch as u64,
+            proposals: self.proposals as u64,
+            slots: self.slots as u64,
         }
     }
 }
@@ -748,28 +750,25 @@ mod test {
             failed_leader = epoch.leader(leaf.view_number() - 1),
             "checking leaders"
         );
-        // We don't know exactly what the leader participation rate should be, because it depends on
-        // whether the failed leader and successful leader were the same or different (depending on
-        // randomness, you can have the same leader twice in a row). But we know that the _average_
-        // participation of the failed and successful leader should be 1/2.
+        // Exactly which nodes succeeded and failed depends on the leader election function, but we
+        // know there should be a total of one successful proposal out of 2 possible slots.
         assert_eq!(
-            f32::from(snapshot.nodes[epoch.leader(leaf.view_number())].leader_participation)
-                + f32::from(
-                    snapshot.nodes[epoch.leader(leaf.view_number() - 1)].leader_participation
-                ),
-            1f32
+            snapshot
+                .nodes
+                .iter()
+                .map(|node| node.proposals)
+                .sum::<u64>(),
+            1
         );
+        assert_eq!(snapshot.nodes.iter().map(|node| node.slots).sum::<u64>(), 2);
 
         tracing::info!("checking vote participation");
-        assert_eq!(
-            snapshot.nodes[0].voter_participation,
-            (1f32 / (blocks_in_epoch as f32)).into()
-        );
-        assert_eq!(
-            snapshot.nodes[1].voter_participation,
-            (1f32 / (blocks_in_epoch as f32)).into()
-        );
-        assert_eq!(snapshot.nodes[2].voter_participation, 0f32.into());
+        assert_eq!(snapshot.nodes[0].votes, 1);
+        assert_eq!(snapshot.nodes[0].eligible_votes, blocks_in_epoch);
+        assert_eq!(snapshot.nodes[1].votes, 1);
+        assert_eq!(snapshot.nodes[1].eligible_votes, blocks_in_epoch);
+        assert_eq!(snapshot.nodes[2].votes, 0);
+        assert_eq!(snapshot.nodes[2].eligible_votes, blocks_in_epoch);
 
         // Update should have been recorded.
         assert_eq!(
@@ -855,9 +854,9 @@ mod test {
             stake_table
         );
         // Everybody participated in the first view of the new epoch.
-        assert_eq!(snapshot.nodes[0].voter_participation, 1f32.into());
-        assert_eq!(snapshot.nodes[1].voter_participation, 1f32.into());
-        assert_eq!(snapshot.nodes[2].voter_participation, 1f32.into());
+        assert_eq!(snapshot.nodes[0].votes, 1);
+        assert_eq!(snapshot.nodes[1].votes, 1);
+        assert_eq!(snapshot.nodes[2].votes, 1);
 
         // Epoch state has been updated.
         let epoch = &state.last_block().unwrap().epoch;
@@ -973,11 +972,9 @@ mod test {
             }
         );
         for node in &snapshot.nodes {
-            assert_eq!(
-                f32::from(node.voter_participation),
-                (leaves.len() as f32) / ((pre_blocks + leaves.len()) as f32)
-            );
-            assert_eq!(node.leader_participation, 1f32.into());
+            assert_eq!(node.votes, leaves.len() as u64);
+            assert_eq!(node.eligible_votes, (pre_blocks + leaves.len()) as u64);
+            assert_eq!(node.slots, node.proposals);
         }
 
         // We should have one diff for each leaf.

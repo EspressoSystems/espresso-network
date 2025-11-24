@@ -268,8 +268,10 @@ snapshots. However, unlike that endpoint, this one will never fail with `404 Not
     "nodes": [
         {
             "address": Hex,
-            "voter_participation": float,
-            "leader_participation": float
+            "votes": integer,
+            "eligible_votes": integer,
+            "proposals": integer,
+            "slots": integer
         }
     ]
 }

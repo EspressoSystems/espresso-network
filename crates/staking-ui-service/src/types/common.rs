@@ -107,11 +107,17 @@ pub struct ActiveNodeSetEntry {
     /// The node's address.
     pub address: Address,
 
-    /// The node's voter participation in the current epoch.
-    pub voter_participation: Ratio,
+    /// The number of times this node has voted in the current epoch.
+    pub votes: u64,
 
-    /// The node's leader participation in the current epoch.
-    pub leader_participation: Ratio,
+    /// The number of times this node has been eligible to vote in the current epoch.
+    pub eligible_votes: u64,
+
+    /// The number of times this node has successfully proposed as leader in the current epoch.
+    pub proposals: u64,
+
+    /// The number of times this node has been eligible to propose as leader in the current epoch.
+    pub slots: u64,
 }
 
 /// A single delegation from a particular user to a particular node.

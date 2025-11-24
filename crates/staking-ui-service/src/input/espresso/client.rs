@@ -484,10 +484,10 @@ mod test {
             //
             // There is only one node, so we cannot have a QC without this node participating. Thus
             // its voter participation must be 1.
-            assert_eq!(snapshot.nodes[0].voter_participation, 1f32.into());
+            assert_eq!(snapshot.nodes[0].votes, snapshot.nodes[0].eligible_votes);
             // There still could be timeouts, so the leader participation might not be 1, but it
             // must be greater than 0 since at this point at least one leaf has been decided.
-            assert!(snapshot.nodes[0].leader_participation > 0f32.into());
+            assert!(snapshot.nodes[0].proposals > 0);
 
             if snapshot.espresso_block.epoch > first_epoch {
                 tracing::info!(
