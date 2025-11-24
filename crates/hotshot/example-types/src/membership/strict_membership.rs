@@ -9,11 +9,12 @@ use hotshot_types::{
     event::Event,
     stake_table::HSStakeTable,
     traits::{
+        block_contents::BlockHeader,
         election::{Membership, NoStakeTableHash},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::transition_block_for_epoch,
+    utils::{epoch_from_block_number, transition_block_for_epoch},
     PeerConfig,
 };
 
@@ -270,14 +271,17 @@ impl<
 
     async fn add_epoch_root(
         membership: Arc<RwLock<Self>>,
-        epoch: TYPES::Epoch,
-        _block_header: TYPES::BlockHeader,
+        block_header: TYPES::BlockHeader,
     ) -> anyhow::Result<()> {
         let mut membership_writer = membership.write().await;
 
-        membership_writer.epochs.insert(epoch);
+        let epoch =
+            epoch_from_block_number(block_header.block_number(), membership_writer.epoch_height)
+                + 2;
 
-        membership_writer.inner.add_epoch_root(*epoch);
+        membership_writer.epochs.insert(TYPES::Epoch::new(epoch));
+
+        membership_writer.inner.add_epoch_root(epoch);
 
         Ok(())
     }
