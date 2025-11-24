@@ -19,7 +19,7 @@ use espresso_types::{
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
-    availability::LeafId,
+    availability::{BlockId, LeafId},
     data_source::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
@@ -274,24 +274,28 @@ impl CatchupStorage for SqlStorage {
             "requested height {height} is not yet available (latest block height: {block_height})"
         );
 
-        let leaf = tx
-            .get_leaf(LeafId::<SeqTypes>::from(height as usize))
+        let header = tx
+            .get_header(BlockId::<SeqTypes>::from(height as usize))
             .await
-            .context(format!("leaf {height} not available"))?;
-        let header = leaf.header();
+            .context(format!("header {height} not available"))?;
 
         if header.version() < DrbAndHeaderUpgradeVersion::version() {
             return Ok(Vec::new());
         }
 
+        // get the latest balance for each account
+        // We use ROW_NUMBER() to rank entries by created height per account,
+        // then select only the most recent entry (rn = 1) for each account.
         let rows = query_as::<(Value, Value)>(&format!(
-            "SELECT idx, entry
-               FROM {}
-              WHERE created = $1
-                AND entry IS NOT NULL
-                AND idx IS NOT NULL
-              ORDER BY idx, entry
-              LIMIT $2 OFFSET $3",
+            "SELECT idx, entry FROM (
+                 SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
+             rn
+                   FROM {}
+                  WHERE created <= $1 AND idx IS NOT NULL AND entry IS NOT NULL
+             ) sub
+             WHERE rn = 1
+             ORDER BY idx
+             LIMIT $2 OFFSET $3",
             RewardMerkleTreeV2::state_type()
         ))
         .bind(height as i64)

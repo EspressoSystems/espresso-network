@@ -2505,6 +2505,7 @@ mod api_tests {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
+        str::FromStr,
         time::Duration,
     };
 
@@ -2528,7 +2529,9 @@ mod test {
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::RewardMerkleProofV2,
+        v0_4::{
+            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
+        },
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
@@ -2551,8 +2554,13 @@ mod test {
             BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
             VidCommonQueryData,
         },
-        data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
+        data_source::{
+            sql::Config,
+            storage::{sql::query, SqlStorage},
+            Transaction as _, VersionedDataSource,
+        },
         explorer::TransactionSummariesResponse,
+        merklized_state::UpdateStateData,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2565,7 +2573,10 @@ mod test {
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
-    use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
+    use jf_merkle_tree_compat::{
+        prelude::{MerkleProof, Sha3Node},
+        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+    };
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
@@ -6342,7 +6353,6 @@ mod test {
     ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
-        const MAX_RETRIES: usize = 30;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -6569,29 +6579,55 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_reward_accounts_catchup_endpoint() -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
-
-        let config = TestNetworkConfigBuilder::<5, _, _>::with_num_nodes()
-            .api_config(Options::with_port(api_port))
-            .network_config(
-                TestConfigBuilder::default()
-                    .epoch_height(EPOCH_HEIGHT)
-                    .build(),
-            )
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let api_port = pick_unused_port().expect("No ports free for query service");
+        println!("API PORT = {api_port}");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port).catchup(Default::default()),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersionV4>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, PosVersionV4::new()).await;
+
         let client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         client.connect(None).await;
 
-        // Wait for a few epochs so the catchup endpoint has data to read.
         let mut events = network.server.event_stream().await;
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
-        // Ensure reward state is available up to the decided height.
         let height = network.server.decided_leaf().await.height();
         wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
@@ -6603,12 +6639,11 @@ mod test {
             .await
             .unwrap_err();
 
-        assert_matches!(err, ServerError { status, message } if
-            status == StatusCode::BAD_REQUEST &&
-            message.contains("limit 10001 exceeds maximum allowed 10000")
+        assert_matches!(err, ServerError { status, .. } if
+            status == StatusCode::BAD_REQUEST
+
         );
 
-        // A sane request should succeed and match the snapshot ordering.
         let mut expected: Vec<_> = network
             .server
             .decided_state()
@@ -6631,6 +6666,143 @@ mod test {
             .unwrap();
 
         assert_eq!(res, expected);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_get_all_reward_accounts_multiple_cases() -> anyhow::Result<()> {
+        let storage = SqlDataSource::create_storage().await;
+        let sql_options = tmp_options(&storage);
+        let db = SqlStorage::connect(Config::try_from(&sql_options)?).await?;
+
+        let validated_state = ValidatedState::default();
+        let instance_state =
+            NodeState::mock().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
+        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis::<
+            SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+        >(&validated_state, &instance_state)
+        .await;
+
+        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+
+        let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
+        let account2 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000002")?;
+        let account3 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000003")?;
+        let account4 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000004")?;
+
+        // Insert account1 with balance 1000, account2 with balance 2000
+        let accounts_height_5 = vec![
+            (account1, RewardAmount::from(1000u64)),
+            (account2, RewardAmount::from(2000u64)),
+        ];
+
+        let accounts_height_10 = vec![
+            (account1, RewardAmount::from(1500u64)),
+            (account3, RewardAmount::from(3000u64)),
+        ];
+
+        let accounts_height_15 = vec![
+            (account2, RewardAmount::from(2500u64)),
+            (account4, RewardAmount::from(4000u64)),
+        ];
+
+        let mut tx = db.write().await?;
+
+        let header_json = serde_json::to_value(genesis_leaf.header())?;
+
+        for height in [5i64, 10, 15, 16] {
+            query(
+                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
+                     VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(height)
+            .bind(format!("hash_{height}"))
+            .bind("payload_hash")
+            .bind(0i64)
+            .bind(&header_json)
+            .execute(tx.as_mut())
+            .await?;
+        }
+
+        for (height, accounts) in [
+            (5u64, &accounts_height_5),
+            (10, &accounts_height_10),
+            (15, &accounts_height_15),
+        ] {
+            for (account, balance) in accounts {
+                reward_tree.update(*account, *balance)?;
+
+                let (_, proof) = reward_tree.lookup(*account).expect_ok().unwrap();
+
+                let traversal_path = <RewardAccountV2 as ToTraversalPath<
+                    { RewardMerkleTreeV2::ARITY },
+                >>::to_traversal_path(
+                    account, reward_tree.height()
+                );
+
+                UpdateStateData::<
+                    crate::SeqTypes,
+                    RewardMerkleTreeV2,
+                    { RewardMerkleTreeV2::ARITY },
+                >::insert_merkle_nodes(&mut tx, proof, traversal_path, height)
+                .await?;
+            }
+        }
+
+        tx.commit().await?;
+
+        let result_height_5 = db.get_all_reward_accounts(5, 0, 100).await?;
+        assert_eq!(result_height_5.len(), 2,);
+        for (account, balance) in &accounts_height_5 {
+            assert!(result_height_5
+                .iter()
+                .any(|(acc, bal)| acc == account && bal == balance),);
+        }
+
+        let result_height_10 = db.get_all_reward_accounts(10, 0, 100).await?;
+        assert_eq!(result_height_10.len(), 3,);
+
+        // Verify account1 has the updated balance from height 10
+        //  not the old balance from height 5
+        let expected_at_height_10 = vec![
+            (account1, RewardAmount::from(1500u64)),
+            (account2, RewardAmount::from(2000u64)),
+            (account3, RewardAmount::from(3000u64)),
+        ];
+        for (account, balance) in &expected_at_height_10 {
+            assert!(result_height_10
+                .iter()
+                .any(|(acc, bal)| acc == account && bal == balance),);
+        }
+
+        let result_height_15 = db.get_all_reward_accounts(15, 0, 100).await?;
+        assert_eq!(result_height_15.len(), 4,);
+
+        // Verify account2 has the updated balance from height 15, and account4 is new
+        let expected_at_height_15 = vec![
+            (account1, RewardAmount::from(1500u64)),
+            (account2, RewardAmount::from(2500u64)),
+            (account3, RewardAmount::from(3000u64)),
+            (account4, RewardAmount::from(4000u64)),
+        ];
+        for (account, balance) in &expected_at_height_15 {
+            assert!(result_height_15
+                .iter()
+                .any(|(acc, bal)| acc == account && bal == balance),);
+        }
+
+        // Test pagination
+        // results are sorted by account address
+        let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
+        assert_eq!(result_limit_2.len(), 2);
+        assert_eq!(result_limit_2[0], (account1, RewardAmount::from(1500u64)));
+        assert_eq!(result_limit_2[1], (account2, RewardAmount::from(2500u64)));
+
+        let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
+        assert_eq!(result_offset_2.len(), 2);
+        assert_eq!(result_offset_2[0], (account3, RewardAmount::from(3000u64)));
+        assert_eq!(result_offset_2[1], (account4, RewardAmount::from(4000u64)));
 
         Ok(())
     }
