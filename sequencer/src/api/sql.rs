@@ -526,6 +526,17 @@ impl CatchupStorage for DataSource {
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         self.as_ref().get_leaf_chain(height).await
     }
+
+    async fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.as_ref()
+            .get_all_reward_accounts(height, offset, limit)
+            .await
+    }
 }
 
 #[async_trait]

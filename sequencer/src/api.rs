@@ -6577,7 +6577,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_reward_accounts_catchup_endpoint() -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
-        const NUM_NODES: usize = 5;
+        const NUM_NODES: usize = 3;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -6616,7 +6616,7 @@ mod test {
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersionV4::new()).await;
+        let mut network = TestNetwork::new(config, PosVersionV4::new()).await;
 
         let client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -6624,8 +6624,9 @@ mod test {
         client.connect(None).await;
 
         let mut events = network.server.event_stream().await;
-        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
 
+        network.stop_consensus().await;
         let height = network.server.decided_leaf().await.height();
         wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
@@ -6651,6 +6652,8 @@ mod test {
             .map(|(addr, amt)| (*addr, *amt))
             .collect();
         expected.sort_by_key(|(acct, _)| *acct);
+
+        tracing::info!("expected accounts = {expected:?}");
         let limit = expected.len().min(10_000) as u64;
         let offset = 0u64;
         let expected: Vec<_> = expected.into_iter().take(limit as usize).collect();
