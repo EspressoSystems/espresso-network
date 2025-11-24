@@ -60,8 +60,11 @@ check_owner() {
     local expected_owner="$2"
     local description="$3"
     local owner=$(cast call "$contract_addr" "owner()(address)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
-    [ "${owner,,}" = "${expected_owner,,}" ] && echo -e "${GREEN}✓${NC} $description" || echo -e "${RED}✗${NC} $description mismatch: expected $expected_owner"
+    local owner_lower=$(echo "$owner" | tr '[:upper:]' '[:lower:]')
+    local expected_owner_lower=$(echo "$expected_owner" | tr '[:upper:]' '[:lower:]')
+    [ "$owner_lower" = "$expected_owner_lower" ] && echo -e "${GREEN}✓${NC} $description" || echo -e "${RED}✗${NC} $description mismatch: expected $expected_owner"
 }
+
 echo ""
 echo "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
 echo "Verifying deployment matches expected configuration based on env vars"
@@ -109,10 +112,6 @@ fi
 echo ""
 
 # Check contract ownership
-[ -n "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS:-}" ] && {
-    check_owner "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "RewardClaim owned by SafeExit Timelock: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
-} || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS not set, skipping RewardClaim ownership check"
-
 [ -n "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS:-}" ] && {
     check_owner "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "EspToken owned by SafeExit Timelock: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS not set, skipping EspToken ownership check"
@@ -128,6 +127,17 @@ echo ""
 [ -n "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS:-}" ] && {
     check_owner "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "StakeTable owned by Ops Timelock: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS not set, skipping StakeTable ownership check"
+
+# Check admin roles
+[ -n "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}" ] && {
+    ST_DEFAULT_ADMIN_ROLE=$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "DEFAULT_ADMIN_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
+    check_has_role "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ST_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "StakeTable admin: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+} || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS not set, skipping StakeTable admin check"
+
+[ -n "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && {
+    RC_DEFAULT_ADMIN_ROLE=$(cast call "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "DEFAULT_ADMIN_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
+    check_has_role "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "$RC_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "RewardClaim admin: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
+} || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS not set, skipping RewardClaim admin check"
 
 # Check pauser roles
 [ -n "${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:-}" ] && {
@@ -151,10 +161,14 @@ echo ""
 # Check EspToken <-> RewardClaim link
 [ -n "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && {
     ESP_REWARD_CLAIM=$(cast call "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" "rewardClaim()(address)" --rpc-url "$RPC_URL" 2>/dev/null)
-    [ "${ESP_REWARD_CLAIM,,}" = "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS,,}" ] && echo -e "${GREEN}✓${NC} EspToken reward claim: $ESP_REWARD_CLAIM" || echo -e "${RED}✗${NC} EspToken reward claim: $ESP_REWARD_CLAIM (expected $ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS)"
+    ESP_REWARD_CLAIM_LOWER=$(echo "$ESP_REWARD_CLAIM" | tr '[:upper:]' '[:lower:]')
+    ESP_RC_ADDR_LOWER=$(echo "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
+    [ "$ESP_REWARD_CLAIM_LOWER" = "$ESP_RC_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} EspToken reward claim: $ESP_REWARD_CLAIM" || echo -e "${RED}✗${NC} EspToken reward claim: $ESP_REWARD_CLAIM (expected $ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS)"
     
     RC_ESP_TOKEN=$(cast call "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "espToken()(address)" --rpc-url "$RPC_URL" 2>/dev/null)
-    [ "${RC_ESP_TOKEN,,}" = "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS,,}" ] && echo -e "${GREEN}✓${NC} RewardClaim espToken: $RC_ESP_TOKEN" || echo -e "${RED}✗${NC} RewardClaim espToken: $RC_ESP_TOKEN (expected $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS)"
+    RC_ESP_TOKEN_LOWER=$(echo "$RC_ESP_TOKEN" | tr '[:upper:]' '[:lower:]')
+    ESP_TOKEN_ADDR_LOWER=$(echo "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
+    [ "$RC_ESP_TOKEN_LOWER" = "$ESP_TOKEN_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} RewardClaim espToken: $RC_ESP_TOKEN" || echo -e "${RED}✗${NC} RewardClaim espToken: $RC_ESP_TOKEN (expected $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS)"
 }
 
 # Check token supply
@@ -186,9 +200,13 @@ fi
 # Check StakeTable references
 [ -n "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}" ] && {
     ST_TOKEN=$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "token()(address)" --rpc-url "$RPC_URL")
-    [ "${ST_TOKEN,,}" = "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS,,}" ] && echo -e "${GREEN}✓${NC} StakeTable token: $ST_TOKEN" || echo -e "${RED}✗${NC} StakeTable token: $ST_TOKEN (expected $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS)"
+    ST_TOKEN_LOWER=$(echo "$ST_TOKEN" | tr '[:upper:]' '[:lower:]')
+    ESP_TOKEN_ADDR_LOWER=$(echo "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
+    [ "$ST_TOKEN_LOWER" = "$ESP_TOKEN_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} StakeTable token: $ST_TOKEN" || echo -e "${RED}✗${NC} StakeTable token: $ST_TOKEN (expected $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS)"
     
     ST_LIGHT_CLIENT=$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "lightClient()(address)" --rpc-url "$RPC_URL")
-    [ "${ST_LIGHT_CLIENT,,}" = "${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS,,}" ] && echo -e "${GREEN}✓${NC} StakeTable light client: $ST_LIGHT_CLIENT" || echo -e "${RED}✗${NC} StakeTable light client: $ST_LIGHT_CLIENT (expected $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS)"
+    ST_LIGHT_CLIENT_LOWER=$(echo "$ST_LIGHT_CLIENT" | tr '[:upper:]' '[:lower:]')
+    LC_ADDR_LOWER=$(echo "$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
+    [ "$ST_LIGHT_CLIENT_LOWER" = "$LC_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} StakeTable light client: $ST_LIGHT_CLIENT" || echo -e "${RED}✗${NC} StakeTable light client: $ST_LIGHT_CLIENT (expected $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS)"
 }
 
