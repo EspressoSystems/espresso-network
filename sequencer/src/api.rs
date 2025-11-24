@@ -1100,8 +1100,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         _offset: u64,
         _limit: u64,
     ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        // ApiState only has access to in-memory state, which may not contain the full reward tree
-        // or historical snapshots. The storage-backed path (StorageState) should be used instead.
         bail!("get_all_reward_accounts is not implemented for ApiState")
     }
 
