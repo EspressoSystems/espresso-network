@@ -37,6 +37,7 @@ struct Args {
 fn get_default_rpc_url(network: &str) -> Option<Url> {
     match network {
         "decaf" => "https://ethereum-sepolia-rpc.publicnode.com".parse().ok(),
+        "hoodi" => "https://ethereum-hoodi-rpc.publicnode.com".parse().ok(),
         "mainnet" => "https://ethereum-rpc.publicnode.com".parse().ok(),
         _ => None,
     }
