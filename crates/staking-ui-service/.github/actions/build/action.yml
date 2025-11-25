@@ -11,9 +11,12 @@ inputs:
     required: true
     type: string
 outputs:
-  digest:
-    description: Digest of the generated Docker image
-    value: ${{ steps.build.outputs.digest }}
+  service-digest:
+    description: Digest of the generated staking-ui-service Docker image
+    value: ${{ steps.build-service.outputs.digest }}
+  client-swarm-digest:
+    description: Digest of the generated staking-client-swarm Docker image
+    value: ${{ steps.build-client-swarm.outputs.digest }}
 
 runs:
   using: 'composite'
@@ -28,7 +31,7 @@ runs:
 
     - name: Cargo Build
       shell: bash
-      run: just build release
+      run: just build release --features rand
 
     - name: Setup Docker BuildKit (buildx)
       uses: docker/setup-buildx-action@v3
@@ -41,8 +44,8 @@ runs:
         password: ${{ inputs.github_token }}
 
     - uses: docker/metadata-action@v5
-      name: Generate Docker Metadata
-      id: metadata
+      name: Generate staking-ui-service Docker Metadata
+      id: service-metadata
       with:
         images: ghcr.io/espressosystems/staking-ui-service
         flavor: |
@@ -51,11 +54,32 @@ runs:
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v6
-      id: build
+      id: build-service
       with:
         context: .
-        file: Dockerfile
-        labels: ${{ steps.metadata.outputs.labels }}
-        tags: ${{ steps.metadata.outputs.tags }}
+        file: docker/staking-ui-service.Dockerfile
+        labels: ${{ steps.service-metadata.outputs.labels }}
+        tags: ${{ steps.service-metadata.outputs.tags }}
+        platforms: linux/${{ inputs.platform }}
+        push: ${{ github.event_name != 'pull_request' }}
+    
+
+    - uses: docker/metadata-action@v5
+      name: Generate client-swarm Docker Metadata
+      id: client-swarm-metadata
+      with:
+        images: ghcr.io/espressosystems/staking-ui-service
+        flavor: |
+          latest=true
+          suffix=-${{ inputs.platform }},onlatest=true
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v6
+      id: build-client-swarm
+      with:
+        context: .
+        file: docker/client-swarm.Dockerfile
+        labels: ${{ steps.client-swarm-metadata.outputs.labels }}
+        tags: ${{ steps.client-swarm-metadata.outputs.tags }}
         platforms: linux/${{ inputs.platform }}
         push: ${{ github.event_name != 'pull_request' }}

@@ -80,9 +80,9 @@ In additional, the following _optional_ variables are available for customizatio
 ## Docker
 
 The ultimate build target for this service is a Docker image, enabling easy deployment in a variety
-of settings. The image is defined in the [Dockerfile](./Dockerfile). The CI pipeline automatically
-builds a cross-platform (for ARM and AMD on Linux) image from this Dockerfile and publishes it as
-`ghcr.io/espressosystems/staking-ui-service:latest`.
+of settings. The image is defined in the [Dockerfile](./docker/staking-ui-service.Dockerfile). The
+CI pipeline automatically builds a cross-platform (for ARM and AMD on Linux) image from this
+Dockerfile and publishes it as `ghcr.io/espressosystems/staking-ui-service:latest`.
 
 If you are running Linux, you can build your own version of this image using `just build-docker`.
 

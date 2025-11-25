@@ -19,7 +19,8 @@ jobs:
   build-amd:
     runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      service-digest: ${{ steps.build.outputs.service-digest }}
+      client-swarm-digest: ${{ steps.build.outputs.client-swarm-digest }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -34,7 +35,8 @@ jobs:
     # Arm builds cost money, skip them on PRs.
     if: github.event_name != 'pull_request'
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      service-digest: ${{ steps.build.outputs.service-digest }}
+      client-swarm-digest: ${{ steps.build.outputs.client-swarm-digest }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -66,19 +68,34 @@ jobs:
           images: ghcr.io/espressosystems/staking-ui-service
           flavor: latest=true
 
-      - name: Create and push branch tag
+      - name: Create and push staking-ui-service branch tag
         uses: Noelware/docker-manifest-action@master
         with:
             tags: ghcr.io/espressosystems/staking-ui-service:${{ steps.meta.outputs.version }}
-            inputs: ghcr.io/espressosystems/staking-ui-service@${{ needs.build-amd.outputs.digest }},ghcr.io/espressosystems/staking-ui-service@${{needs.build-arm.outputs.digest}}
+            inputs: ghcr.io/espressosystems/staking-ui-service@${{ needs.build-amd.outputs.service-digest }},ghcr.io/espressosystems/staking-ui-service@${{needs.build-arm.outputs.service-digest}}
             push: ${{ github.event_name != 'pull_request' }}
 
-      - name: Create and push latest tag
+      - name: Create and push staking-ui-service latest tag
         uses: Noelware/docker-manifest-action@master
         with:
             tags: ghcr.io/espressosystems/staking-ui-service:latest
-            inputs: ghcr.io/espressosystems/staking-ui-service@${{ needs.build-amd.outputs.digest }},ghcr.io/espressosystems/staking-ui-service@${{ needs.build-arm.outputs.digest }}
+            inputs: ghcr.io/espressosystems/staking-ui-service@${{ needs.build-amd.outputs.service-digest }},ghcr.io/espressosystems/staking-ui-service@${{ needs.build-arm.outputs.service-digest }}
             push: ${{ github.event_name != 'pull_request' }}
+
+      - name: Create and push client-swarm branch tag
+        uses: Noelware/docker-manifest-action@master
+        with:
+            tags: ghcr.io/espressosystems/staking-client-swarm:${{ steps.meta.outputs.version }}
+            inputs: ghcr.io/espressosystems/staking-client-swarm@${{ needs.build-amd.outputs.client-swarm-digest }},ghcr.io/espressosystems/staking-client-swarm@${{needs.build-arm.outputs.client-swarm-digest}}
+            push: ${{ github.event_name != 'pull_request' }}
+
+      - name: Create and push client-swarm latest tag
+        uses: Noelware/docker-manifest-action@master
+        with:
+            tags: ghcr.io/espressosystems/staking-client-swarm:latest
+            inputs: ghcr.io/espressosystems/staking-client-swarm@${{ needs.build-amd.outputs.client-swarm-digest }},ghcr.io/espressosystems/staking-client-swarm@${{ needs.build-arm.outputs.client-swarm-digest }}
+            push: ${{ github.event_name != 'pull_request' }}
+
   test-demo:
     # On pull requests, we don't push the new Docker images, so we can't test the Docker demo.
     if: github.event_name != 'pull_request'

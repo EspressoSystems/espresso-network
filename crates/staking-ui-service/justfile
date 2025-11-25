@@ -60,8 +60,14 @@ coverage:
     cargo llvm-cov report --html --ignore-filename-regex testing.rs
     @echo "HTML report available at file://${CARGO_TARGET_DIR:-target}/llvm-cov/html/index.html"
 
-build-docker: (build "release")
+build-docker: (build "release" "--features" "rand")
     docker build \
         --build-arg CARGO_TARGET_DIR=$(realpath -s --relative-to="$PWD" "${CARGO_TARGET_DIR:-target}") \
         -t ghcr.io/espressosystems/staking-ui-service:main \
+        -f docker/staking-ui-service.Dockerfile \
+        .
+    docker build \
+        --build-arg CARGO_TARGET_DIR=$(realpath -s --relative-to="$PWD" "${CARGO_TARGET_DIR:-target}") \
+        -t ghcr.io/espressosystems/staking-client-swarm:main \
+        -f docker/client-swarm.Dockerfile \
         .

@@ -68,5 +68,19 @@ services:
     volumes:
       - espresso_storage:/data/espresso
 
+  client-swarm:
+    image: ghcr.io/espressosystems/staking-client-swarm:latest
+    ports:
+      - "$STAKING_CLIENT_SWARM_PORT:$STAKING_CLIENT_SWARM_PORT"
+    environment:
+      - STAKING_CLIENT_SWARM_PORT
+      - STAKING_CLIENT_SWARM_STAKING_SERVICE=http://staking-ui-service:$ESPRESSO_STAKING_SERVICE_PORT/v0/staking
+      - STAKING_CLIENT_SWARM_QUERY_SERVICE=http://espresso-dev-node:$ESPRESSO_SEQUENCER_API_PORT/v1
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+    depends_on:
+      staking-ui-service:
+        condition: service_healthy
+
 volumes:
   espresso_storage:
