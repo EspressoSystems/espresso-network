@@ -230,7 +230,6 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Handles notifications that a new epoch root has been created.
     fn add_epoch_root(
         _membership: Arc<RwLock<Self>>,
-        _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
     ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 
