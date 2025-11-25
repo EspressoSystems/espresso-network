@@ -742,6 +742,39 @@ impl EspressoPersistence for Persistence {
         }
     }
 
+    async fn initialize_lifetime_rewards(
+        &mut self,
+        rewards: Vec<(Address, ESPTokenAmount)>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("acquiring connection")?;
+
+        sqlx::query("DELETE FROM lifetime_rewards")
+            .execute(tx.as_mut())
+            .await
+            .context("clearing existing lifetime rewards")?;
+
+        if !rewards.is_empty() {
+            QueryBuilder::new("INSERT INTO lifetime_rewards (address, amount) ")
+                .push_values(
+                    rewards
+                        .into_iter()
+                        .map(|(addr, amount)| (addr.to_string(), amount.to_string())),
+                    |mut q, (addr, amount)| {
+                        q.push_bind(addr);
+                        q.push_bind(amount);
+                    },
+                )
+                .build()
+                .execute(tx.as_mut())
+                .await
+                .context("initializing lifetime rewards")?;
+        }
+
+        tx.commit().await.context("committing transaction")?;
+
+        Ok(())
+    }
+
     async fn apply_update(
         &mut self,
         update: ActiveNodeSetUpdate,
@@ -941,9 +974,16 @@ impl EspressoPersistence for Persistence {
 
         // Dole out rewards.
         if !rewards.is_empty() {
+            // handle duplicates
+            // if node is a validator and also a delegator
+            let mut aggregated_rewards: HashMap<Address, ESPTokenAmount> = HashMap::new();
+            for (addr, amount) in rewards {
+                *aggregated_rewards.entry(addr).or_default() += amount;
+            }
+
             let current_amounts =
                 QueryBuilder::new("SELECT address, amount FROM lifetime_rewards WHERE address IN ")
-                    .push_tuples(&rewards, |mut q, (addr, _)| {
+                    .push_tuples(aggregated_rewards.keys(), |mut q, addr| {
                         q.push_bind(addr.to_string());
                     })
                     .build_query_as::<(String, String)>()
@@ -957,7 +997,7 @@ impl EspressoPersistence for Persistence {
                     .try_collect::<HashMap<Address, ESPTokenAmount>>()
                     .await
                     .context("fetching current reward amounts")?;
-            let new_amounts = rewards.into_iter().map(|(addr, amount)| {
+            let new_amounts = aggregated_rewards.into_iter().map(|(addr, amount)| {
                 let new_amount = amount + current_amounts.get(&addr).copied().unwrap_or_default();
                 (addr.to_string(), new_amount.to_string())
             });
@@ -981,11 +1021,11 @@ impl EspressoPersistence for Persistence {
 mod tests {
     use super::*;
     use crate::input::l1::testing::{block_snapshot, make_node};
-    use crate::types::common::{NodeExit, PendingWithdrawal, Withdrawal};
+    use crate::types::common::{Address, ESPTokenAmount, NodeExit, PendingWithdrawal, Withdrawal};
     use crate::types::global::FullNodeSetDiff;
     use im::ordmap;
-    use tempfile::TempDir;
 
+    use tempfile::TempDir;
     /// Tests the complete persistence lifecycle
     #[test_log::test(tokio::test)]
     async fn test_snapshot_save_apply_load() {

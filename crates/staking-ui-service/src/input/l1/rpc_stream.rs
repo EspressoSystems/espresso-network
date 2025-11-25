@@ -588,7 +588,8 @@ mod tests {
     use futures::StreamExt;
     use hotshot_contract_adapter::sol_types::StakeTableV2::{
         CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
-        ValidatorExit, ValidatorRegistered, ValidatorRegisteredV2,
+        UndelegatedV2, ValidatorExit, ValidatorExitClaimed, ValidatorExitV2, ValidatorRegistered,
+        ValidatorRegisteredV2, WithdrawalClaimed,
     };
     use staking_cli::demo::DelegationConfig;
     use std::time::Duration;
@@ -1065,11 +1066,15 @@ mod tests {
                 ValidatorRegistered::SIGNATURE,
                 ValidatorRegisteredV2::SIGNATURE,
                 ValidatorExit::SIGNATURE,
+                ValidatorExitV2::SIGNATURE,
+                ValidatorExitClaimed::SIGNATURE,
                 Delegated::SIGNATURE,
                 Undelegated::SIGNATURE,
+                UndelegatedV2::SIGNATURE,
                 ConsensusKeysUpdated::SIGNATURE,
                 ConsensusKeysUpdatedV2::SIGNATURE,
                 CommissionUpdated::SIGNATURE,
+                WithdrawalClaimed::SIGNATURE,
             ])
             .from_block(start_block)
             .to_block(end_block);
@@ -1090,15 +1095,16 @@ mod tests {
                 let L1Event::StakeTable(st_event) = event else {
                     panic!("got unexpected non-stake table event");
                 };
-                let event = st_event.as_ref().clone().try_into().unwrap();
-                let result = state.apply_event(event);
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(err)) => {
-                        println!("Expected error: {err:?}");
-                    }
-                    Err(err) => {
-                        panic!("Critical err: {err:?}");
+                if let Ok(event) = st_event.as_ref().clone().try_into() {
+                    let result = state.apply_event(event);
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => {
+                            println!("Expected error: {err:?}");
+                        }
+                        Err(err) => {
+                            panic!("Critical err: {err:?}");
+                        }
                     }
                 }
             }

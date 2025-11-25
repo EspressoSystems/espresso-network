@@ -335,3 +335,24 @@ too old will return `410 Gone`, and requests for blocks in the future will retur
 }
 ```
 """
+
+[route.wallet_rewards]
+PATH = ["/wallet/:address/rewards/:block"]
+":address" = "Literal"
+":block" = "Integer"
+DOC = """
+Get the total lifetime rewards earned by the requested account, as of the specified Espresso block.
+
+This returns the cumulative total of all rewards ever earned by this account up to and including the
+requested Espresso block. Rewards are earned in two ways:
+- When this account is a node operator and successfully proposes an Espresso block
+- When this account has delegated stake to a node that successfully proposes an Espresso block
+
+This information is only guaranteed to be available for the latest Espresso block. Queries for
+older blocks may return cached results if available, but generally clients should only query the
+latest block number.
+
+### Returns
+
+`U256` : The total lifetime rewards in WEI
+"""

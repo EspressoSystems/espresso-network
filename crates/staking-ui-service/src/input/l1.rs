@@ -598,20 +598,31 @@ impl Snapshot {
                     // on the node set or the wallets.
                     (vec![], vec![])
                 }
-                StakeTableV2Events::ValidatorExit(ev) => {
-                    if !self.node_set.contains_key(&ev.validator) {
+                ev @ (StakeTableV2Events::ValidatorExit(_)
+                | StakeTableV2Events::ValidatorExitV2(_)) => {
+                    let (validator, exit_time) = match ev {
+                        StakeTableV2Events::ValidatorExit(e) => {
+                            (e.validator, timestamp + self.block.exit_escrow_period)
+                        }
+                        StakeTableV2Events::ValidatorExitV2(e) => {
+                            (e.validator, e.unlocksAt.to::<u64>())
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    if !self.node_set.contains_key(&validator) {
                         // This should not happen, but if we somehow see a validator exit event for
                         // a non-existent validator:
                         // * don't generate an invalid diff to pass along to the front end
                         // * complain loudly because it probably means our node set is out of sync
                         //   with the contract
-                        tracing::error!(%ev.validator, "got ValidatorExit event for non-existent validator");
+
+                        tracing::error!(%validator, "got ValidatorExit event for non-existent validator");
                         return Default::default();
                     }
 
-                    let exit_time = timestamp + self.block.exit_escrow_period;
                     let node_diff = FullNodeSetDiff::NodeExit(NodeExit {
-                        address: ev.validator,
+                        address: validator,
                         exit_time,
                     });
 
@@ -619,10 +630,10 @@ impl Snapshot {
                         .wallets
                         .iter()
                         .filter_map(|(wallet_address, wallet)| {
-                            wallet.nodes.get(&ev.validator).map(|delegation| {
+                            wallet.nodes.get(&validator).map(|delegation| {
                                 let pending_exit = PendingWithdrawal {
                                     delegator: *wallet_address,
-                                    node: ev.validator,
+                                    node: validator,
                                     amount: delegation.amount,
                                     available_time: exit_time,
                                 };
@@ -717,31 +728,42 @@ impl Snapshot {
 
                     (vec![node_diff], vec![(ev.delegator, wallet_diff)])
                 }
-                StakeTableV2Events::Undelegated(ev) => {
-                    let node = self.node_set.get(&ev.validator).unwrap_or_else(|| {
-                        panic!(
-                            "got Undelegated event for non existent validator: {}",
-                            ev.validator
-                        )
+                ev
+                @ (StakeTableV2Events::Undelegated(_) | StakeTableV2Events::UndelegatedV2(_)) => {
+                    let (validator, delegator, amount, available_time) = match ev {
+                        StakeTableV2Events::Undelegated(e) => (
+                            e.validator,
+                            e.delegator,
+                            e.amount,
+                            timestamp + self.block.exit_escrow_period,
+                        ),
+                        StakeTableV2Events::UndelegatedV2(e) => {
+                            (e.validator, e.delegator, e.amount, e.unlocksAt.to::<u64>())
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let node = self.node_set.get(&validator).unwrap_or_else(|| {
+                        panic!("got Undelegated event for non existent validator: {validator}",)
                     });
 
                     let node_diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: ev.validator,
+                        address: validator,
                         staking_key: node.staking_key.clone(),
                         state_key: node.state_key.clone(),
                         commission: node.commission,
-                        stake: node.stake - ev.amount,
+                        stake: node.stake - amount,
                     });
 
                     let pending_withdrawal = PendingWithdrawal {
-                        delegator: ev.delegator,
-                        node: ev.validator,
-                        amount: ev.amount,
-                        available_time: timestamp + self.block.exit_escrow_period,
+                        delegator,
+                        node: validator,
+                        amount,
+                        available_time,
                     };
                     let wallet_diff = WalletDiff::UndelegatedFromNode(pending_withdrawal);
 
-                    (vec![node_diff], vec![(ev.delegator, wallet_diff)])
+                    (vec![node_diff], vec![(delegator, wallet_diff)])
                 }
                 StakeTableV2Events::Withdrawal(ev) => {
                     let wallet = self.wallets.get(&ev.account).unwrap_or_else(|| {
@@ -787,6 +809,52 @@ impl Snapshot {
                         ev.account, ev.amount
                     );
                 }
+                StakeTableV2Events::WithdrawalClaimed(ev) => {
+                    let wallet = self.wallets.get(&ev.delegator).unwrap_or_else(|| {
+                        panic!(
+                            "got WithdrawalClaimed event for non existent wallet: {}",
+                            ev.delegator
+                        )
+                    });
+
+                    if !wallet.pending_undelegations.contains_key(&ev.validator) {
+                        panic!(
+                            "got WithdrawalClaimed but no pending undelegation for delegator {} validator {} amount {}",
+                            ev.delegator, ev.validator, ev.amount
+                        );
+                    }
+
+                    let withdrawal = Withdrawal {
+                        delegator: ev.delegator,
+                        node: ev.validator,
+                        amount: ev.amount,
+                    };
+                    let wallet_diff = WalletDiff::UndelegationWithdrawal(withdrawal);
+                    (vec![], vec![(ev.delegator, wallet_diff)])
+                }
+                StakeTableV2Events::ValidatorExitClaimed(ev) => {
+                    let wallet = self.wallets.get(&ev.delegator).unwrap_or_else(|| {
+                        panic!(
+                            "got ValidatorExitClaimed event for non existent wallet: {}",
+                            ev.delegator
+                        )
+                    });
+
+                    if !wallet.pending_exits.contains_key(&ev.validator) {
+                        panic!(
+                            "got ValidatorExitClaimed but no pending exit for delegator {} validator {} amount {}",
+                            ev.delegator, ev.validator, ev.amount
+                        );
+                    }
+
+                    let withdrawal = Withdrawal {
+                        delegator: ev.delegator,
+                        node: ev.validator,
+                        amount: ev.amount,
+                    };
+                    let wallet_diff = WalletDiff::NodeExitWithdrawal(withdrawal);
+                    (vec![], vec![(ev.delegator, wallet_diff)])
+                }
                 // These events are not relevant to this service. We still list them out explicitly
                 // (rather than matching on _) so that it is clear that we are not missing any
                 // important events, and if new event types are added, the compiler will force us to
@@ -800,7 +868,8 @@ impl Snapshot {
                 | StakeTableV2Events::RoleAdminChanged(_)
                 | StakeTableV2Events::RoleGranted(_)
                 | StakeTableV2Events::RoleRevoked(_)
-                | StakeTableV2Events::Upgraded(_) => {
+                | StakeTableV2Events::Upgraded(_)
+                | StakeTableV2Events::MetadataUriUpdated(_) => {
                     tracing::debug!("skipping irrelevant event");
                     (vec![], vec![])
                 }

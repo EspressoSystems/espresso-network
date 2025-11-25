@@ -1,7 +1,7 @@
 #![cfg(any(test, feature = "testing"))]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     sync::{
         Arc,
@@ -10,9 +10,7 @@ use std::{
 };
 
 use alloy::{
-    network::EthereumWallet,
-    node_bindings::Anvil,
-    primitives::{FixedBytes, map::HashSet},
+    network::EthereumWallet, node_bindings::Anvil, primitives::FixedBytes,
     providers::ProviderBuilder,
 };
 use async_lock::RwLock;
@@ -129,6 +127,18 @@ impl EspressoClient for MockEspressoClient {
 
         let offset = self.leaf_offset(height).ok_or_else(Error::not_found)?;
         Ok(self.leaves[offset].0.clone())
+    }
+
+    async fn block_reward(&self, _epoch: u64) -> Result<ESPTokenAmount> {
+        // 1 ESP token
+        Ok(ESPTokenAmount::from(1_000_000_000_000_000_000u128))
+    }
+
+    async fn fetch_all_reward_accounts(
+        &self,
+        _block: u64,
+    ) -> Result<Vec<(Address, ESPTokenAmount)>> {
+        Ok(Vec::new())
     }
 
     fn leaves(&self, from: u64) -> impl Send + Unpin + Stream<Item = (Leaf2, BitVec)> {
@@ -326,6 +336,22 @@ impl EspressoPersistence for MemoryStorage {
         let rewards = &self.db.read().await.1;
         // If a reward account is not in the database, it has 0 balance by default.
         Ok(rewards.get(&account).copied().unwrap_or_default())
+    }
+
+    async fn initialize_lifetime_rewards(
+        &mut self,
+        initial_rewards: Vec<(Address, ESPTokenAmount)>,
+    ) -> Result<()> {
+        self.mock_errors()?;
+
+        let (_active_nodes, rewards) = &mut *self.db.write().await;
+        rewards.clear();
+
+        for (account, amount) in initial_rewards {
+            rewards.insert(account, amount);
+        }
+
+        Ok(())
     }
 
     async fn apply_update(

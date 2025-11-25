@@ -584,6 +584,7 @@ pub fn validator_registered_event_with_account(
         commission,
         blsSig: G1PointSol::from(bls_sig).into(),
         schnorrSig: StateSignatureSol::from(schnorr_sig).into(),
+        metadataUri: "https://example.com/validator-metadata.json".to_string(),
     }
 }
 
@@ -1340,10 +1341,16 @@ pub fn assert_events_eq(l: &L1Event, r: &L1Event) {
             (StakeTableV2Events::ValidatorExit(l), StakeTableV2Events::ValidatorExit(r)) => {
                 assert_eq!(l, r);
             }
+            (StakeTableV2Events::ValidatorExitV2(l), StakeTableV2Events::ValidatorExitV2(r)) => {
+                assert_eq!(l, r);
+            }
             (StakeTableV2Events::Delegated(l), StakeTableV2Events::Delegated(r)) => {
                 assert_eq!(l, r);
             }
             (StakeTableV2Events::Undelegated(l), StakeTableV2Events::Undelegated(r)) => {
+                assert_eq!(l, r);
+            }
+            (StakeTableV2Events::UndelegatedV2(l), StakeTableV2Events::UndelegatedV2(r)) => {
                 assert_eq!(l, r);
             }
             (
@@ -1414,6 +1421,18 @@ pub fn assert_events_eq(l: &L1Event, r: &L1Event) {
                 assert_eq!(l, r);
             }
             (StakeTableV2Events::Withdrawal(l), StakeTableV2Events::Withdrawal(r)) => {
+                assert_eq!(l, r);
+            }
+            (
+                StakeTableV2Events::WithdrawalClaimed(l),
+                StakeTableV2Events::WithdrawalClaimed(r),
+            ) => {
+                assert_eq!(l, r);
+            }
+            (
+                StakeTableV2Events::ValidatorExitClaimed(l),
+                StakeTableV2Events::ValidatorExitClaimed(r),
+            ) => {
                 assert_eq!(l, r);
             }
             (l, r) => {

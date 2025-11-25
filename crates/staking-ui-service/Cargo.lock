@@ -152,7 +152,7 @@ dependencies = [
 [[package]]
 name = "alloy-compat"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "ethers-core",
@@ -2365,7 +2365,7 @@ dependencies = [
 [[package]]
 name = "cdn-broker"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
 dependencies = [
  "cdn-proto",
  "clap 4.5.51",
@@ -2387,7 +2387,7 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.6.2"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
 dependencies = [
  "cdn-proto",
  "clap 4.5.51",
@@ -2403,7 +2403,7 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
 dependencies = [
  "cdn-proto",
  "clap 4.5.51",
@@ -2416,7 +2416,7 @@ dependencies = [
 [[package]]
 name = "cdn-proto"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat#54621aebfe5aadcdb4f57e35e9b19366da22e302"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
 dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
@@ -2584,7 +2584,7 @@ checksum = "021080b0a3dbefcf1c1f0b3ad6a923b81f16801d874ec338c168ac0b0762baf5"
 [[package]]
 name = "client"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3801,7 +3801,7 @@ dependencies = [
 [[package]]
 name = "espresso-contract-deployer"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3839,7 +3839,7 @@ source = "git+https://github.com/espressosystems/espresso-systems-common?tag=0.4
 [[package]]
 name = "espresso-types"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "alloy-compat",
@@ -4780,7 +4780,7 @@ dependencies = [
 [[package]]
 name = "hotshot"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4823,7 +4823,7 @@ dependencies = [
 [[package]]
 name = "hotshot-builder-api"
 version = "0.1.7"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "async-trait",
  "clap 4.5.51",
@@ -4842,7 +4842,7 @@ dependencies = [
 [[package]]
 name = "hotshot-builder-refactored"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -4874,7 +4874,7 @@ dependencies = [
 [[package]]
 name = "hotshot-builder-shared"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -4913,7 +4913,7 @@ dependencies = [
 [[package]]
 name = "hotshot-contract-adapter"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4942,7 +4942,7 @@ dependencies = [
 [[package]]
 name = "hotshot-events-service"
 version = "0.1.57"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "async-broadcast",
@@ -4967,7 +4967,7 @@ dependencies = [
 [[package]]
 name = "hotshot-example-types"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4997,7 +4997,7 @@ dependencies = [
 [[package]]
 name = "hotshot-libp2p-networking"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -5028,7 +5028,7 @@ dependencies = [
 [[package]]
 name = "hotshot-macros"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "derive_builder",
  "proc-macro2",
@@ -5039,7 +5039,7 @@ dependencies = [
 [[package]]
 name = "hotshot-orchestrator"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -5063,7 +5063,7 @@ dependencies = [
 [[package]]
 name = "hotshot-query-service"
 version = "0.1.76"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -5120,7 +5120,7 @@ dependencies = [
 [[package]]
 name = "hotshot-state-prover"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -5168,7 +5168,7 @@ dependencies = [
 [[package]]
 name = "hotshot-task"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -5181,7 +5181,7 @@ dependencies = [
 [[package]]
 name = "hotshot-task-impls"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -5219,7 +5219,7 @@ dependencies = [
 [[package]]
 name = "hotshot-testing"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -5261,7 +5261,7 @@ dependencies = [
 [[package]]
 name = "hotshot-types"
 version = "0.1.11"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -5320,7 +5320,7 @@ dependencies = [
 [[package]]
 name = "hotshot-utils"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "tracing",
 ]
@@ -6909,7 +6909,7 @@ dependencies = [
 [[package]]
 name = "light-client"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "anyhow",
  "committable",
@@ -8768,7 +8768,7 @@ dependencies = [
 [[package]]
 name = "request-response"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -9479,7 +9479,7 @@ checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 [[package]]
 name = "sequencer"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -9568,7 +9568,7 @@ dependencies = [
 [[package]]
 name = "sequencer-utils"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -10301,7 +10301,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "staking-cli"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "alloy",
  "anyhow",
@@ -10319,10 +10319,12 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
+ "jf-merkle-tree-compat",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "portpicker",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
+ "reqwest",
  "rstest",
  "rstest_reuse",
  "rust_decimal",
@@ -11800,7 +11802,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vid"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/espresso-network.git#3a1b08b23c40b55f3c67c7715c81ab987585503d"
+source = "git+https://github.com/EspressoSystems/espresso-network.git#f40ce465415ed7afd5a9195372a4507671c313ad"
 dependencies = [
  "anyhow",
  "ark-bn254",

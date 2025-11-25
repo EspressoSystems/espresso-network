@@ -285,6 +285,7 @@ mod test {
                             node.blsSig,
                             node.schnorrSig.clone(),
                             node.commission,
+                            "https://example.com/validator-metadata.json".to_string(),
                         )
                         .send()
                         .await
