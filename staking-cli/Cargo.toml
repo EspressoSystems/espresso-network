@@ -5,6 +5,9 @@ authors = { workspace = true }
 edition = { workspace = true }
 description = "A CLI to interact with the Espresso stake table contract"
 
+[features]
+testing = ["warp"]
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -51,9 +54,6 @@ pretty_assertions = { workspace = true }
 staking-cli = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
-
-[features]
-testing = ["warp"]
 
 [lints]
 workspace = true
