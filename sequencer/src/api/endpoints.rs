@@ -663,6 +663,32 @@ where
         }
         .boxed()
     })?
+    .get("reward_amounts", move |req, state| {
+        async move {
+            let height = req
+                .integer_param::<_, u64>("height")
+                .map_err(Error::from_request_error)?;
+            let offset = req
+                .integer_param::<_, u64>("offset")
+                .map_err(Error::from_request_error)?;
+            let limit = req
+                .integer_param::<_, u64>("limit")
+                .map_err(Error::from_request_error)?;
+
+            if limit > 10_000 {
+                return Err(Error::catch_all(
+                    StatusCode::BAD_REQUEST,
+                    format!("limit {limit} exceeds maximum allowed 10000"),
+                ));
+            }
+
+            state
+                .get_all_reward_accounts(height, offset, limit)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
     .at("reward_accounts_v2", move |req, state| {
         async move {
             let (height, view) = parse_height_view(&req)?;
