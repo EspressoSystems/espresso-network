@@ -1568,13 +1568,12 @@ checksum = "155a5a185e42c6b77ac7b88a15143d930a9e9727a5b7b77eed417404ab15c247"
 
 [[package]]
 name = "assert_cmd"
-version = "2.0.17"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd389a4b2970a01282ee455294913c0a43724daedcd1a24c3eb0ec1c1320b66"
+checksum = "bcbb6924530aa9e0432442af08bbcafdad182db80d2e560da42a6d442535bf85"
 dependencies = [
  "anstyle",
  "bstr",
- "doc-comment",
  "libc",
  "predicates",
  "predicates-core",
@@ -4181,6 +4180,7 @@ dependencies = [
  "hotshot-types",
  "rand 0.8.5",
  "sequencer-utils",
+ "serde",
  "serde_json",
  "surf-disco",
  "test-log",
@@ -4535,9 +4535,9 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flate2"
-version = "1.1.2"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a3d7db9596fecd151c5f638c0ee5d5bd487b6e0ea232e5dc96d5250f6f94b1d"
+checksum = "bfe33edd8e85a12a67454e37f8c75e730830d83e313556ab9ebf9ee7fbeb3bfb"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -7837,6 +7837,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
+ "simd-adler32",
 ]
 
 [[package]]
@@ -10334,6 +10335,7 @@ dependencies = [
  "anyhow",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
+ "assert_cmd",
  "async-channel 2.5.0",
  "async-lock 3.4.1",
  "async-once-cell",
@@ -10354,6 +10356,7 @@ dependencies = [
  "espresso-contract-deployer",
  "espresso-macros",
  "espresso-types",
+ "flate2",
  "futures",
  "generic-tests",
  "hotshot",
@@ -10381,6 +10384,7 @@ dependencies = [
  "num_enum",
  "parking_lot",
  "portpicker",
+ "predicates",
  "pretty_assertions",
  "priority-queue",
  "rand 0.8.5",
@@ -10778,6 +10782,12 @@ dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
 ]
+
+[[package]]
+name = "simd-adler32"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 
 [[package]]
 name = "simdutf8"
