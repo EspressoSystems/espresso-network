@@ -7,7 +7,7 @@ import "./RewardClaim.t.sol";
 
 contract RewardClaimProofVerificationTest is RewardClaimTest {
     function test_ValidProof_SingleAccount_Succeeds() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         vm.prank(testCase.account);
@@ -20,7 +20,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_ValidProof_MultipleAccounts_Succeeds() public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixtures(10);
+        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getRewardFixtures(10);
         lightClient.setAuthRoot(authRoot);
 
         for (uint256 i = 0; i < fixtures.length; i++) {
@@ -34,7 +34,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_WrongAddress_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getFixtures(2);
+        (uint256 authRoot, RewardClaimTestCase[] memory fixtures) = getRewardFixtures(2, 0);
         lightClient.setAuthRoot(authRoot);
 
         address attacker = fixtures[1].account;
@@ -46,7 +46,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_WrongAddress_Random_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         address randomAttacker = makeAddr("attacker");
@@ -57,7 +57,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_WrongAmount_Higher_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         validateTestCase(testCase, authRoot);
@@ -70,7 +70,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_WrongAmount_Lower_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         vm.assume(testCase.lifetimeRewards > 1);
@@ -84,7 +84,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_AlreadyClaimed_Full_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         vm.prank(testCase.account);
@@ -96,7 +96,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_WrongAuthRoot_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
 
         lightClient.setAuthRoot(authRoot + 1);
 
@@ -106,7 +106,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_NoAuthRoot_Fails() public {
-        (, RewardClaimTestCase memory testCase) = getFixture(0);
+        (, RewardClaimTestCase memory testCase) = getRewardFixture(0);
 
         vm.prank(testCase.account);
         vm.expectRevert(IRewardClaim.InvalidAuthRoot.selector);
@@ -114,7 +114,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_ClaimZeroAmount_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         vm.prank(testCase.account);
@@ -123,7 +123,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_ClaimingZeroRewards_Fails() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         vm.prank(testCase.account);
@@ -133,7 +133,7 @@ contract RewardClaimProofVerificationTest is RewardClaimTest {
     }
 
     function test_AddressZero_CannotClaim() public {
-        (uint256 authRoot, RewardClaimTestCase memory testCase) = getFixture(0);
+        (uint256 authRoot, RewardClaimTestCase memory testCase) = getRewardFixture(0);
         lightClient.setAuthRoot(authRoot);
 
         vm.prank(address(0));

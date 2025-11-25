@@ -5,7 +5,6 @@ use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 use rust_decimal::{prelude::ToPrimitive as _, Decimal};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
-use url::Url;
 
 pub fn parse_bls_priv_key(s: &str) -> Result<BLSPrivKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
@@ -13,14 +12,6 @@ pub fn parse_bls_priv_key(s: &str) -> Result<BLSPrivKey, Tb64Error> {
 
 pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
-}
-
-pub fn validate_metadata_uri(s: &str) -> Result<Url, String> {
-    let url = Url::parse(s).map_err(|e| e.to_string())?;
-    if s.len() > 2048 {
-        return Err("metadata URI cannot exceed 2048 bytes".to_string());
-    }
-    Ok(url)
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Add)]

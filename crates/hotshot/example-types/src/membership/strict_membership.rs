@@ -9,11 +9,12 @@ use hotshot_types::{
     event::Event,
     stake_table::HSStakeTable,
     traits::{
+        block_contents::BlockHeader,
         election::{Membership, NoStakeTableHash},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::{epoch_from_block_number, transition_block_for_epoch},
+    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
 };
 
@@ -271,27 +272,30 @@ impl<
 
     async fn add_epoch_root(
         membership: Arc<RwLock<Self>>,
-        epoch: TYPES::Epoch,
-        _block_header: TYPES::BlockHeader,
+        block_header: TYPES::BlockHeader,
     ) -> anyhow::Result<()> {
         let mut membership_writer = membership.write().await;
 
-        membership_writer.epochs.insert(epoch);
+        let epoch =
+            epoch_from_block_number(block_header.block_number(), membership_writer.epoch_height)
+                + 2;
 
-        membership_writer.inner.add_epoch_root(*epoch);
+        membership_writer.epochs.insert(TYPES::Epoch::new(epoch));
+
+        membership_writer.inner.add_epoch_root(epoch);
 
         Ok(())
     }
 
     async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
-        block_height: u64,
-        _epoch: TYPES::Epoch,
+        epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
-        let epoch = epoch_from_block_number(block_height, membership_reader.epoch_height);
 
-        let stake_table = membership_reader.inner.stake_table(Some(epoch));
+        let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
+
+        let stake_table = membership_reader.inner.stake_table(Some(*epoch));
         let fetcher = membership_reader.fetcher.clone();
 
         drop(membership_reader);

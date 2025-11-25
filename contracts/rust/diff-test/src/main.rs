@@ -617,12 +617,24 @@ fn main() {
             );
         },
         Action::GenRewardFixture => {
-            if cli.args.len() != 2 {
-                panic!("Should provide arg1=numAccounts, arg2=seed");
+            if cli.args.len() < 2 || cli.args.len() > 3 {
+                panic!("Should provide arg1=numAccounts, arg2=seed, arg3(opt)=accountIndex");
             }
 
             let num_accounts = cli.args[0].parse::<usize>().unwrap();
             let seed = cli.args[1].parse::<u64>().unwrap();
+            let account_index = if cli.args.len() == 3 {
+                let idx = cli.args[2].parse::<usize>().unwrap();
+                if idx >= num_accounts {
+                    panic!(
+                        "Account index {idx} out of range (max {})",
+                        num_accounts - 1
+                    );
+                }
+                Some(idx)
+            } else {
+                None
+            };
 
             let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
             let mut rng = StdRng::seed_from_u64(seed);
@@ -656,8 +668,14 @@ fn main() {
             let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
             let auth_root_u256: U256 = auth_root.into();
 
+            let fixture_accounts = if let Some(idx) = account_index {
+                vec![accounts[idx]]
+            } else {
+                accounts
+            };
+
             let mut fixtures: Vec<(Address, U256, Bytes)> = Vec::new();
-            for &account in &accounts {
+            for &account in &fixture_accounts {
                 let proof = RewardAccountProofV2::prove(&tree, account).unwrap();
                 let query_data: RewardAccountQueryDataV2 = proof.into();
                 let claim_input = query_data.to_reward_claim_input().unwrap();

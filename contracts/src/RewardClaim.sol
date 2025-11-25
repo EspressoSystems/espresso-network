@@ -2,8 +2,6 @@
 pragma solidity ^0.8.28;
 
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { PausableUpgradeable } from
@@ -17,10 +15,20 @@ import "./EspTokenV2.sol";
 import "./libraries/RewardMerkleTreeVerifier.sol";
 import "./interfaces/IRewardClaim.sol";
 
+/// @title RewardClaim - Espresso Reward Claim Contract
+/// @notice Allows validators and delegators to claim ESP token rewards based on cryptographic
+/// proofs from the Espresso network.
+/// @dev Governance Architecture:
+/// This contract uses ONLY AccessControlUpgradeable.
+/// - DEFAULT_ADMIN_ROLE: Can upgrade contract, manage roles, update daily limits
+/// - PAUSER_ROLE: Can pause/unpause user facing methods in the contract during emergencies
+/// Governance: This contract enforces a single-admin model. `_currentAdmin` and
+/// `DEFAULT_ADMIN_ROLE` always reference the same address and can only be changed via
+/// `grantRole(DEFAULT_ADMIN_ROLE, ...)`. Any attempt to revoke or renounce the default admin role
+/// reverts so that there is always a single admin.
 contract RewardClaim is
     IRewardClaim,
     Initializable,
-    OwnableUpgradeable,
     UUPSUpgradeable,
     PausableUpgradeable,
     AccessControlUpgradeable,
@@ -75,8 +83,9 @@ contract RewardClaim is
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
-    /// @notice The proxy updates the implementation address
-    event Upgrade(address implementation);
+    /// @notice Current admin address with DEFAULT_ADMIN_ROLE
+    /// @dev Tracks the single admin to enforce single-admin invariant
+    address private _currentAdmin;
 
     /// @notice The daily limit is updated
     event DailyLimitUpdated(uint256 oldLimit, uint256 newLimit);
@@ -96,28 +105,37 @@ contract RewardClaim is
     /// @notice Pauser address is zero during initialization
     error ZeroPauserAddress();
 
+    /// @notice Admin address is zero during initialization
+    error ZeroAdminAddress();
+
     /// @notice Light client address is zero during initialization
     error ZeroLightClientAddress();
 
     /// @notice ESP token address is zero during initialization
     error ZeroTokenAddress();
 
+    /// @notice Attempted to renounce DEFAULT_ADMIN_ROLE which would break governance
+    error DefaultAdminCannotBeRenounced();
+
+    /// @notice Attempted to revoke DEFAULT_ADMIN_ROLE which would break governance
+    error DefaultAdminCannotBeRevoked();
+
     constructor() {
         _disableInitializers();
     }
 
     /// @notice Initializes the RewardClaim contract
-    /// @param _owner Address that will own the contract
+    /// @param _admin Address that will be granted DEFAULT_ADMIN_ROLE for contract administration
     /// @param _espToken Address of the ESP token contract
     /// @param _lightClient Address of the light client contract
     /// @param _pauser Address to be granted the pauser role
     /// @dev Sets daily limit to 1% of total ESP token supply
-    function initialize(address _owner, address _espToken, address _lightClient, address _pauser)
+    function initialize(address _admin, address _espToken, address _lightClient, address _pauser)
         external
         virtual
         initializer
     {
-        // NOTE: __Ownable_init checks _owner != address(0)
+        require(_admin != address(0), ZeroAdminAddress());
         require(_lightClient != address(0), ZeroLightClientAddress());
         require(_pauser != address(0), ZeroPauserAddress());
         require(_espToken != address(0), ZeroTokenAddress());
@@ -131,13 +149,13 @@ contract RewardClaim is
         uint256 _dailyLimit = (totalSupply * initialBps) / 10000;
         require(_dailyLimit > 0, ZeroDailyLimit());
 
-        __Ownable_init(_owner);
         __UUPSUpgradeable_init();
         __Pausable_init();
         __AccessControl_init();
         __ReentrancyGuard_init();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, _owner);
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _currentAdmin = _admin;
         _grantRole(PAUSER_ROLE, _pauser);
 
         espToken = EspTokenV2(_espToken);
@@ -166,7 +184,12 @@ contract RewardClaim is
     /// @dev nonReentrant protects against reentrancy during the external call to `totalSupply`.
     /// @dev Unlikely to be exploited: we are calling our token, but the token is upgradable.
     /// @dev DO NOT REMOVE: Added for defense-in-depth.
-    function setDailyLimit(uint256 basisPoints) external virtual onlyOwner nonReentrant {
+    function setDailyLimit(uint256 basisPoints)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        nonReentrant
+    {
         require(basisPoints > 0, ZeroDailyLimit());
         require(basisPoints <= MAX_DAILY_LIMIT_BASIS_POINTS, DailyLimitTooHigh());
         uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
@@ -237,8 +260,56 @@ contract RewardClaim is
         }
     }
 
-    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
-        emit Upgrade(newImplementation);
+    /// @notice only the timelock can authorize an upgrade
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    // solhint-disable-next-line no-empty-blocks
+    {
+        // Only the timelock can authorize upgrades
+        // No additional checks needed beyond the onlyRole modifier
+    }
+
+    /// @notice Override grantRole to enforce single-admin invariant for DEFAULT_ADMIN_ROLE
+    /// @dev When granting DEFAULT_ADMIN_ROLE, automatically revokes it from the current admin.
+    /// This ensures only one address has DEFAULT_ADMIN_ROLE at any time, atomically.
+    /// This is intentionally not pausable for emergency governance access.
+    /// @inheritdoc AccessControlUpgradeable
+    function grantRole(bytes32 role, address account) public virtual override {
+        super.grantRole(role, account);
+        if (role == DEFAULT_ADMIN_ROLE) {
+            address oldAdmin = _currentAdmin;
+            if (oldAdmin == account) {
+                return;
+            }
+            _currentAdmin = account;
+            // revoke role from old admin so that there is always one admin
+            if (oldAdmin != address(0)) {
+                _revokeRole(DEFAULT_ADMIN_ROLE, oldAdmin);
+            }
+        }
+    }
+
+    /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve governance control
+    /// @notice Override renounceRole() to revert when attempting to renounce DEFAULT_ADMIN_ROLE,
+    /// preventing accidental or malicious admin role renunciation
+    /// @inheritdoc AccessControlUpgradeable
+    function renounceRole(bytes32 role, address callerConfirmation) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRenounced();
+        }
+        super.renounceRole(role, callerConfirmation);
+    }
+
+    /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
+    function revokeRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRevoked();
+        }
+        super.revokeRole(role, account);
     }
 
     function _verifyAuthRoot(uint256 lifetimeRewards, bytes calldata authData)

@@ -40,11 +40,14 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
+        block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
+    utils::{
+        epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
+    },
     PeerConfig,
 };
 use humantime::format_duration;
@@ -1548,7 +1551,6 @@ impl EpochCommittees {
         coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<RewardAmount> {
         let membership_read = coordinator.membership().read().await;
-        let epoch_height = membership_read.epoch_height;
         let fixed_block_reward = membership_read.fixed_block_reward;
 
         let committee = membership_read
@@ -1585,13 +1587,11 @@ impl EpochCommittees {
                 tracing::info!(?root_epoch, "catchup epoch root header");
 
                 let membership = coordinator.membership();
-                let leaf = Self::get_epoch_root(
-                    membership.clone(),
-                    root_block_in_epoch(root_epoch, epoch_height),
-                    current_epoch,
-                )
-                .await
-                .with_context(|| format!("Failed to get epoch root for root_epoch={root_epoch}"))?;
+                let leaf = Self::get_epoch_root(membership.clone(), EpochNumber::new(root_epoch))
+                    .await
+                    .with_context(|| {
+                        format!("Failed to get epoch root for root_epoch={root_epoch}")
+                    })?;
                 leaf.block_header().clone()
             },
         };
@@ -2185,16 +2185,32 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// It also calculates and stores the block reward based on header version.
     async fn add_epoch_root(
         membership: Arc<RwLock<Self>>,
-        epoch: Epoch,
         block_header: Header,
     ) -> anyhow::Result<()> {
-        tracing::info!(
-            ?epoch,
-            "adding epoch root. height={:?}",
-            block_header.height()
-        );
+        let block_number = block_header.block_number();
 
-        let fetcher = { membership.read().await.fetcher.clone() };
+        let membership_reader = membership.read().await;
+        let epoch_height = membership_reader.epoch_height;
+
+        let epoch =
+            Epoch::new(epoch_from_block_number(block_number, membership_reader.epoch_height) + 2);
+
+        tracing::info!(?epoch, "adding epoch root. height={:?}", block_number);
+
+        if !is_epoch_root(block_number, epoch_height) {
+            tracing::error!(
+                "`add_epoch_root` was called with a block header that was not the root block for \
+                 an epoch. This should never happen. Header:\n\n{block_header:?}"
+            );
+            bail!(
+                "Failed to add epoch root: block {block_number:?} is not a root block for an epoch"
+            );
+        }
+
+        let fetcher = membership_reader.fetcher.clone();
+
+        drop(membership_reader);
+
         let version = block_header.version();
         // Update the chain config if the block header contains a newer one.
         fetcher.update_chain_config(&block_header).await?;
@@ -2338,12 +2354,9 @@ impl Membership<SeqTypes> for EpochCommittees {
         Ok(self.randomized_committees.contains_key(&epoch))
     }
 
-    async fn get_epoch_root(
-        membership: Arc<RwLock<Self>>,
-        block_height: u64,
-        epoch: Epoch,
-    ) -> anyhow::Result<Leaf2> {
+    async fn get_epoch_root(membership: Arc<RwLock<Self>>, epoch: Epoch) -> anyhow::Result<Leaf2> {
         let membership_reader = membership.read().await;
+        let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
         let peers = membership_reader.fetcher.peers.clone();
         let stake_table = membership_reader.stake_table(Some(epoch)).clone();
         let success_threshold = membership_reader.success_threshold(Some(epoch));

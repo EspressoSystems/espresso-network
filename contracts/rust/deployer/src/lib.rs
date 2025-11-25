@@ -954,7 +954,7 @@ pub async fn deploy_reward_claim_proxy(
     contracts: &mut Contracts,
     esp_token_addr: Address,
     light_client_addr: Address,
-    owner: Address,
+    admin: Address,
     pauser: Address,
 ) -> Result<Address> {
     let reward_claim_addr = contracts
@@ -976,7 +976,7 @@ pub async fn deploy_reward_claim_proxy(
     }
 
     let init_data = reward_claim
-        .initialize(owner, esp_token_addr, light_client_addr, pauser)
+        .initialize(admin, esp_token_addr, light_client_addr, pauser)
         .calldata()
         .to_owned();
     let reward_claim_proxy_addr = contracts
@@ -995,7 +995,12 @@ pub async fn deploy_reward_claim_proxy(
         reward_claim_proxy.getVersion().call().await?,
         (1, 0, 0).into()
     );
-    assert_eq!(reward_claim_proxy.owner().call().await?, owner);
+    // Verify admin has DEFAULT_ADMIN_ROLE
+    let admin_role = reward_claim_proxy.DEFAULT_ADMIN_ROLE().call().await?;
+    assert!(
+        reward_claim_proxy.hasRole(admin_role, admin).call().await?,
+        "admin should have DEFAULT_ADMIN_ROLE"
+    );
     assert_eq!(reward_claim_proxy.espToken().call().await?, esp_token_addr);
     assert_eq!(
         reward_claim_proxy.lightClient().call().await?,
@@ -1162,7 +1167,10 @@ pub async fn upgrade_stake_table_v2(
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
 
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
-        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?,);
+        assert!(
+            proxy_as_v2.hasRole(pauser_role, pauser).call().await?,
+            "pauser should have PAUSER_ROLE"
+        );
 
         let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?;
         assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?,);
@@ -1240,10 +1248,11 @@ pub async fn transfer_ownership(
                 .await?
         },
         Contract::RewardClaim | Contract::RewardClaimProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer RewardClaim ownership");
+            tracing::info!(%target_address, %new_owner, "Grant RewardClaim DEFAULT_ADMIN_ROLE");
             let reward_claim = RewardClaim::new(target_address, &provider);
+            let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
             reward_claim
-                .transferOwnership(new_owner)
+                .grantRole(admin_role, new_owner)
                 .send()
                 .await?
                 .get_receipt()
@@ -1492,7 +1501,7 @@ mod tests {
             multisig::{
                 transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
                 upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-                LightClientV2UpgradeParams, TransferOwnershipParams,
+                LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
                 cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
@@ -2275,7 +2284,7 @@ mod tests {
             },
             options.is_mock,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
@@ -2500,7 +2509,10 @@ mod tests {
 
         // get pauser role
         let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?;
-        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?,);
+        assert!(
+            stake_table_v2.hasRole(pauser_role, pauser).call().await?,
+            "pauser should have PAUSER_ROLE"
+        );
 
         // get admin role
         let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?;
@@ -2604,10 +2616,12 @@ mod tests {
             &provider,
             l1_client,
             &mut contracts,
-            sepolia_rpc_url,
-            multisig_admin,
-            pauser,
-            Some(dry_run),
+            StakeTableV2UpgradeParams {
+                rpc_url: sepolia_rpc_url,
+                multisig_address: multisig_admin,
+                pauser,
+                dry_run,
+            },
         )
         .await?;
 
@@ -2899,7 +2913,7 @@ mod tests {
             &provider,
             &mut contracts,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
