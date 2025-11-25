@@ -68,7 +68,7 @@ runs:
       name: Generate client-swarm Docker Metadata
       id: client-swarm-metadata
       with:
-        images: ghcr.io/espressosystems/staking-ui-service
+        images: ghcr.io/espressosystems/staking-client-swarm
         flavor: |
           latest=true
           suffix=-${{ inputs.platform }},onlatest=true
