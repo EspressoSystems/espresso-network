@@ -264,7 +264,7 @@ where
         // that the epoch state should have
         // and if something is missing, then it calculates/fetches
         // like block reward
-        Membership::add_epoch_root(self.membership.clone(), epoch, block_header)
+        Membership::add_epoch_root(self.membership.clone(), block_header)
             .await
             .wrap()?;
 
