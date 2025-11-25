@@ -31,7 +31,7 @@ Examples:
   # Download binary artifact
   $(basename "$0") --repo SUPERCILEX/fuc --asset x86_64-unknown-linux-gnu-rmz --output /tmp/rmz
 
-  # Download tarball artifcat
+  # Download tarball artifact
   $(basename "$0") --repo F1bonacc1/process-compose --asset process-compose_linux_amd64.tar.gz --extract-to /tmp --extract-file process-compose 
 
   # Download and extract a single binary from a tarball
