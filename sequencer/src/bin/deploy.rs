@@ -15,7 +15,7 @@ use espresso_contract_deployer::{
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
     proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
     provider::connect_ledger,
-    Contract, Contracts, DeployedContracts,
+    Contract, Contracts, DeployStep, DeployedContracts, DeploymentState,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -348,6 +348,14 @@ struct Options {
     #[clap(flatten)]
     logging: logging::Config,
 
+    /// Deploy one step then exit (for incremental deployment)
+    #[clap(long)]
+    one_step: bool,
+
+    /// Path to state file
+    #[clap(long, default_value = ".espresso_deploy_state.json")]
+    state_file: PathBuf,
+
     /// Command to run
     ///
     /// For backwards compatibility, the default is to deploy contracts, if no
@@ -363,6 +371,256 @@ enum Command {
     VerifyNodeJsFiles,
 }
 
+async fn deploy_one_step(
+    opt: Options,
+    provider: espresso_contract_deployer::HttpProviderWithWallet,
+    chain_id: u64,
+) -> anyhow::Result<()> {
+    let mut state = if opt.state_file.exists()
+        && opt
+            .state_file
+            .metadata()
+            .map(|m| m.len() > 0)
+            .unwrap_or(false)
+    {
+        DeploymentState::load(&opt.state_file)?
+    } else {
+        DeploymentState::new(chain_id)
+    };
+
+    if state.chain_id != chain_id {
+        anyhow::bail!(
+            "Chain ID mismatch: state file has {}, connected to {}",
+            state.chain_id,
+            chain_id
+        );
+    }
+
+    let next_step = match state.next_step() {
+        Some(step) => step,
+        None => {
+            println!("All steps complete");
+            return Ok(());
+        },
+    };
+
+    tracing::info!("Deploying step: {:?}", next_step);
+
+    let mut contracts = Contracts::from(opt.contracts.clone());
+    for (contract, address) in &state.contracts {
+        contracts.insert(*contract, *address);
+    }
+
+    let mut args_builder = DeployerArgsBuilder::default();
+    args_builder
+        .deployer(provider.clone())
+        .mock_light_client(opt.use_mock)
+        .use_multisig(opt.use_multisig)
+        .dry_run(opt.dry_run)
+        .rpc_url(opt.rpc_url.clone());
+
+    if let Some(multisig) = opt.multisig_address {
+        args_builder.multisig(multisig);
+    }
+    if let Some(multisig_pauser) = opt.multisig_pauser_address {
+        args_builder.multisig_pauser(multisig_pauser);
+    }
+
+    if let Some(blocks_per_epoch) = state.blocks_per_epoch.or(opt.blocks_per_epoch) {
+        args_builder.blocks_per_epoch(blocks_per_epoch);
+    }
+    if let Some(epoch_start_block) = state.epoch_start_block.or(opt.epoch_start_block) {
+        args_builder.epoch_start_block(epoch_start_block);
+    }
+
+    match next_step {
+        DeployStep::LightClientV1 => {
+            let (genesis_state, genesis_stake) =
+                if let (Some(lc), Some(st)) = (&state.genesis_lc_state, &state.genesis_st_state) {
+                    (lc.clone(), st.clone())
+                } else if opt.mock_espresso_live_network {
+                    light_client_genesis_from_stake_table(
+                        &Default::default(),
+                        DEFAULT_STAKE_TABLE_CAPACITY,
+                    )?
+                } else {
+                    light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?
+                };
+
+            state.genesis_lc_state = Some(genesis_state.clone());
+            state.genesis_st_state = Some(genesis_stake.clone());
+
+            args_builder
+                .genesis_lc_state(genesis_state)
+                .genesis_st_state(genesis_stake);
+
+            if let Some(prover) = opt.permissioned_prover {
+                args_builder.permissioned_prover(prover);
+            }
+        },
+        DeployStep::LightClientV2 | DeployStep::LightClientV3 => {
+            let (blocks_per_epoch, epoch_start_block) =
+                if let (Some(bpe), Some(esb)) = (state.blocks_per_epoch, state.epoch_start_block) {
+                    (bpe, esb)
+                } else if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
+                    (10, 22)
+                } else {
+                    loop {
+                        match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                            opt.sequencer_url.clone(),
+                        )
+                        .get::<PublicNetworkConfig>("config/hotshot")
+                        .send()
+                        .await
+                        {
+                            Ok(resp) => {
+                                let config = resp.hotshot_config();
+                                break (config.blocks_per_epoch(), config.epoch_start_block());
+                            },
+                            Err(e) => {
+                                tracing::error!("Failed to fetch the network config: {e}");
+                                sleep(Duration::from_secs(5));
+                            },
+                        }
+                    }
+                };
+
+            state.blocks_per_epoch = Some(blocks_per_epoch);
+            state.epoch_start_block = Some(epoch_start_block);
+
+            args_builder.blocks_per_epoch(blocks_per_epoch);
+            args_builder.epoch_start_block(epoch_start_block);
+        },
+        DeployStep::StakeTable => {
+            if let Some(escrow_period) = opt.exit_escrow_period {
+                args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
+            }
+        },
+        DeployStep::OpsTimelock => {
+            let ops_timelock_admin = opt.ops_timelock_admin.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --ops-timelock-admin when deploying ops timelock in one-step \
+                     mode"
+                )
+            })?;
+            args_builder.ops_timelock_admin(ops_timelock_admin);
+
+            let ops_timelock_delay = opt.ops_timelock_delay.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --ops-timelock-delay when deploying ops timelock in one-step \
+                     mode"
+                )
+            })?;
+            args_builder.ops_timelock_delay(U256::from(ops_timelock_delay));
+
+            let ops_timelock_executors = opt.ops_timelock_executors.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --ops-timelock-executors when deploying ops timelock in \
+                     one-step mode"
+                )
+            })?;
+            args_builder.ops_timelock_executors(ops_timelock_executors.into_iter().collect());
+
+            let ops_timelock_proposers = opt.ops_timelock_proposers.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --ops-timelock-proposers when deploying ops timelock in \
+                     one-step mode"
+                )
+            })?;
+            args_builder.ops_timelock_proposers(ops_timelock_proposers.into_iter().collect());
+        },
+        DeployStep::SafeExitTimelock => {
+            let safe_exit_timelock_admin = opt.safe_exit_timelock_admin.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --safe-exit-timelock-admin when deploying safe exit timelock in \
+                     one-step mode"
+                )
+            })?;
+            args_builder.safe_exit_timelock_admin(safe_exit_timelock_admin);
+
+            let safe_exit_timelock_delay = opt.safe_exit_timelock_delay.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --safe-exit-timelock-delay when deploying safe exit timelock in \
+                     one-step mode"
+                )
+            })?;
+            args_builder.safe_exit_timelock_delay(U256::from(safe_exit_timelock_delay));
+
+            let safe_exit_timelock_executors =
+                opt.safe_exit_timelock_executors.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Must provide --safe-exit-timelock-executors when deploying safe exit \
+                         timelock in one-step mode"
+                    )
+                })?;
+            args_builder
+                .safe_exit_timelock_executors(safe_exit_timelock_executors.into_iter().collect());
+
+            let safe_exit_timelock_proposers =
+                opt.safe_exit_timelock_proposers.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Must provide --safe-exit-timelock-proposers when deploying safe exit \
+                         timelock in one-step mode"
+                    )
+                })?;
+            args_builder
+                .safe_exit_timelock_proposers(safe_exit_timelock_proposers.into_iter().collect());
+        },
+        DeployStep::EspToken => {
+            let token_recipient = opt.initial_token_grant_recipient.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --initial-token-grant-recipient when deploying esp token in \
+                     one-step mode"
+                )
+            })?;
+            let token_name = opt.token_name.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --token-name when deploying esp token in one-step mode"
+                )
+            })?;
+            let token_symbol = opt.token_symbol.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --token-symbol when deploying esp token in one-step mode"
+                )
+            })?;
+            let initial_token_supply = opt.initial_token_supply.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --initial-token-supply when deploying esp token in one-step mode"
+                )
+            })?;
+
+            args_builder.token_name(token_name);
+            args_builder.token_symbol(token_symbol);
+            args_builder.initial_token_supply(initial_token_supply);
+            args_builder.token_recipient(token_recipient);
+        },
+        _ => {},
+    }
+
+    if opt.use_timelock_owner {
+        args_builder.use_timelock_owner(true);
+    }
+
+    let args = args_builder.build()?;
+    let target = next_step.target_contract();
+
+    args.deploy(&mut contracts, target).await?;
+
+    for (contract, address) in contracts.iter() {
+        state.contracts.insert(*contract, *address);
+    }
+
+    state.save(&opt.state_file)?;
+
+    tracing::info!(
+        "Step {:?} complete. Saved state to {:?}",
+        next_step,
+        opt.state_file
+    );
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
@@ -374,7 +632,6 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let mut contracts = Contracts::from(opt.contracts);
     let provider = if opt.ledger {
         let signer = connect_ledger(opt.account_index as usize).await?;
         tracing::info!("Using ledger for signing, watch ledger device for prompts.");
@@ -382,6 +639,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         build_provider(
             opt.mnemonic
+                .clone()
                 .expect("Mnemonic provided when not using ledger"),
             opt.account_index,
             opt.rpc_url.clone(),
@@ -427,6 +685,12 @@ async fn main() -> anyhow::Result<()> {
             opt.account_index
         );
     }
+
+    if opt.one_step {
+        return deploy_one_step(opt, provider, chain_id).await;
+    }
+
+    let mut contracts = Contracts::from(opt.contracts);
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();

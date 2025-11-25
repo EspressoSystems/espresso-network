@@ -143,6 +143,9 @@ test-log = { workspace = true }
 light-client = { workspace = true, features = ["testing"] }
 sequencer = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
+assert_cmd = "2.1.1"
+predicates = "3.1.3"
+flate2 = "1.1.5"
 
 [lints]
 workspace = true

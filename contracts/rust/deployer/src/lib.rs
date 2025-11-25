@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Write, time::Duration};
+use std::{collections::HashMap, fs, io::Write, path::Path, time::Duration};
 
 use alloy::{
     contract::RawCallBuilder,
@@ -24,6 +24,7 @@ use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use espresso_types::{v0_1::L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::sol_types::*;
+use serde::{Deserialize, Serialize};
 
 pub mod builder;
 pub mod impersonate_filler;
@@ -184,7 +185,7 @@ pub struct DeployedContracts {
 }
 
 /// An identifier for a particular contract.
-#[derive(Clone, Copy, Debug, Display, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Contract {
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_ADDRESS")]
     PlonkVerifier,
@@ -233,7 +234,7 @@ impl From<Contract> for OsStr {
 }
 
 /// Cache of contracts predeployed or deployed during this current run.
-#[derive(Deref, Debug, Clone, Default)]
+#[derive(Deref, derive_more::DerefMut, Debug, Clone, Default)]
 pub struct Contracts(HashMap<Contract, Address>);
 
 impl From<DeployedContracts> for Contracts {
@@ -346,6 +347,121 @@ impl Contracts {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeployStep {
+    OpsTimelock,
+    SafeExitTimelock,
+    FeeContract,
+    EspToken,
+    LightClientV1,
+    LightClientV2,
+    LightClientV3,
+    RewardClaim,
+    EspTokenV2,
+    StakeTable,
+    StakeTableV2,
+}
+
+impl DeployStep {
+    fn all_steps() -> Vec<DeployStep> {
+        vec![
+            DeployStep::OpsTimelock,
+            DeployStep::SafeExitTimelock,
+            DeployStep::FeeContract,
+            DeployStep::EspToken,
+            DeployStep::LightClientV1,
+            DeployStep::LightClientV2,
+            DeployStep::LightClientV3,
+            DeployStep::RewardClaim,
+            DeployStep::EspTokenV2,
+            DeployStep::StakeTable,
+            DeployStep::StakeTableV2,
+        ]
+    }
+
+    fn required_contracts(&self) -> Vec<Contract> {
+        match self {
+            DeployStep::OpsTimelock => vec![Contract::OpsTimelock],
+            DeployStep::SafeExitTimelock => vec![Contract::SafeExitTimelock],
+            DeployStep::FeeContract => vec![Contract::FeeContract, Contract::FeeContractProxy],
+            DeployStep::EspToken => vec![Contract::EspToken, Contract::EspTokenProxy],
+            DeployStep::RewardClaim => vec![Contract::RewardClaim, Contract::RewardClaimProxy],
+            DeployStep::EspTokenV2 => vec![Contract::EspTokenV2],
+            DeployStep::LightClientV1 => {
+                vec![Contract::LightClient, Contract::LightClientProxy]
+            },
+            DeployStep::LightClientV2 => vec![Contract::LightClientV2],
+            DeployStep::LightClientV3 => vec![Contract::LightClientV3],
+            DeployStep::StakeTable => vec![Contract::StakeTable, Contract::StakeTableProxy],
+            DeployStep::StakeTableV2 => vec![Contract::StakeTableV2],
+        }
+    }
+
+    pub fn target_contract(&self) -> Contract {
+        match self {
+            DeployStep::OpsTimelock => Contract::OpsTimelock,
+            DeployStep::SafeExitTimelock => Contract::SafeExitTimelock,
+            DeployStep::FeeContract => Contract::FeeContractProxy,
+            DeployStep::EspToken => Contract::EspTokenProxy,
+            DeployStep::RewardClaim => Contract::RewardClaimProxy,
+            DeployStep::EspTokenV2 => Contract::EspTokenV2,
+            DeployStep::LightClientV1 => Contract::LightClientProxy,
+            DeployStep::LightClientV2 => Contract::LightClientV2,
+            DeployStep::LightClientV3 => Contract::LightClientV3,
+            DeployStep::StakeTable => Contract::StakeTableProxy,
+            DeployStep::StakeTableV2 => Contract::StakeTableV2,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeploymentState {
+    pub contracts: HashMap<Contract, Address>,
+    pub genesis_lc_state: Option<LightClientStateSol>,
+    pub genesis_st_state: Option<StakeTableStateSol>,
+    pub blocks_per_epoch: Option<u64>,
+    pub epoch_start_block: Option<u64>,
+    pub chain_id: u64,
+}
+
+impl DeploymentState {
+    pub fn new(chain_id: u64) -> Self {
+        Self {
+            contracts: HashMap::new(),
+            genesis_lc_state: None,
+            genesis_st_state: None,
+            blocks_per_epoch: None,
+            epoch_start_block: None,
+            chain_id,
+        }
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let contents = fs::read_to_string(path)?;
+        let state = serde_json::from_str(&contents)?;
+        Ok(state)
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let contents = serde_json::to_string_pretty(self)?;
+        fs::write(path, contents)?;
+        Ok(())
+    }
+
+    pub fn next_step(&self) -> Option<DeployStep> {
+        DeployStep::all_steps().into_iter().find(|step| {
+            let required = step.required_contracts();
+            required
+                .iter()
+                .any(|contract| !self.contracts.contains_key(contract))
+        })
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.next_step().is_none()
+    }
+}
+
 /// Default deployment function `LightClient.sol` or `LightClientMock.sol` with `mock: true`.
 ///
 /// # NOTE:
@@ -398,13 +514,18 @@ pub(crate) async fn deploy_light_client_contract(
 
     // Deploy the light client
     let light_client_addr = if mock {
-        // for mock, we don't populate the `contracts` since it only track production-ready deployments
-        let addr = LightClientMock::deploy_builder(&provider)
-            .map(|req| req.with_deploy_code(lc_linked_bytecode))
-            .deploy()
-            .await?;
-        tracing::info!("deployed LightClientMock at {addr:#x}");
-        addr
+        if let Some(addr) = contracts.address(Contract::LightClient) {
+            tracing::info!("skipping deployment of LightClientMock, already deployed at {addr:#x}");
+            addr
+        } else {
+            let addr = LightClientMock::deploy_builder(&provider)
+                .map(|req| req.with_deploy_code(lc_linked_bytecode))
+                .deploy()
+                .await?;
+            tracing::info!("deployed LightClientMock at {addr:#x}");
+            contracts.insert(Contract::LightClient, addr);
+            addr
+        }
     } else {
         contracts
             .deploy(
@@ -544,12 +665,20 @@ pub async fn upgrade_light_client_v2(
                 }
             };
             let lcv2_addr = if is_mock {
-                let addr = LightClientV2Mock::deploy_builder(&provider)
-                    .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
-                    .deploy()
-                    .await?;
-                tracing::info!("deployed LightClientV2Mock at {addr:#x}");
-                addr
+                if let Some(addr) = contracts.address(Contract::LightClientV2) {
+                    tracing::info!(
+                        "skipping deployment of LightClientV2Mock, already deployed at {addr:#x}"
+                    );
+                    addr
+                } else {
+                    let addr = LightClientV2Mock::deploy_builder(&provider)
+                        .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
+                        .deploy()
+                        .await?;
+                    tracing::info!("deployed LightClientV2Mock at {addr:#x}");
+                    contracts.insert(Contract::LightClientV2, addr);
+                    addr
+                }
             } else {
                 contracts
                     .deploy(
@@ -683,12 +812,20 @@ pub async fn upgrade_light_client_v3(
                 }
             };
             let lcv3_addr = if is_mock {
-                let addr = LightClientV3Mock::deploy_builder(&provider)
-                    .map(|req| req.with_deploy_code(lcv3_linked_bytecode))
-                    .deploy()
-                    .await?;
-                tracing::info!("deployed LightClientV3Mock at {addr:#x}");
-                addr
+                if let Some(addr) = contracts.address(Contract::LightClientV3) {
+                    tracing::info!(
+                        "skipping deployment of LightClientV3Mock, already deployed at {addr:#x}"
+                    );
+                    addr
+                } else {
+                    let addr = LightClientV3Mock::deploy_builder(&provider)
+                        .map(|req| req.with_deploy_code(lcv3_linked_bytecode))
+                        .deploy()
+                        .await?;
+                    tracing::info!("deployed LightClientV3Mock at {addr:#x}");
+                    contracts.insert(Contract::LightClientV3, addr);
+                    addr
+                }
             } else {
                 contracts
                     .deploy(
