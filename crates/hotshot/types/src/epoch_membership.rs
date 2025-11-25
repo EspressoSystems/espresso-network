@@ -141,11 +141,20 @@ where
         {
             return Ok(ret_val);
         }
+        if let Err(e) = self.catchup_from_storage(epoch).await {
+            tracing::warn!("catchup from storage for {epoch:?} failed: {e}");
+        }
+
         if self
-            .insert_from_storage(epoch, true)
+            .membership
+            .read()
             .await
-            .inspect_err(|e| {
-                let _ = warn!("loading from storage for {epoch:?} failed: {e}");
+            .has_randomized_stake_table(epoch)
+            .map_err(|e| {
+                error!(
+                    "membership_for_epoch failed while called with maybe_epoch {maybe_epoch:?}: \
+                     {e}"
+                )
             })?
         {
             return Ok(ret_val);
@@ -182,13 +191,10 @@ where
         if self.membership.read().await.has_stake_table(epoch) {
             return Ok(ret_val);
         }
-        if self
-            .insert_from_storage(epoch, false)
-            .await
-            .inspect_err(|e| {
-                let _ = warn!("loading from storage for epoch {epoch:?} failed: {e}");
-            })?
-        {
+        if let Err(e) = self.catchup_from_storage(epoch).await {
+            tracing::warn!("catchup from storage for {epoch:?} failed: {e}");
+        }
+        if self.membership.read().await.has_stake_table(epoch) {
             return Ok(ret_val);
         }
         if self.catchup_map.lock().await.contains_key(&epoch) {
@@ -206,31 +212,23 @@ where
         ))
     }
 
-    async fn insert_from_storage(
-        &self,
-        epoch: TYPES::Epoch,
-        need_randomized: bool,
-    ) -> Result<bool> {
+    /// Tries to populate the membership for an epoch from storage before
+    /// falling back to network catchup.
+    async fn catchup_from_storage(&self, epoch: TYPES::Epoch) -> Result<()> {
         let has_stake_table = self.membership.read().await.has_stake_table(epoch);
-        let has_randomized = if need_randomized {
-            self.membership
-                .read()
-                .await
-                .has_randomized_stake_table(epoch)
-                .wrap()?
-        } else {
-            true
-        };
+        let has_randomized = self
+            .membership
+            .read()
+            .await
+            .has_randomized_stake_table(epoch)
+            .wrap()?;
 
-        // If we have everything we need, return early
         if has_stake_table && has_randomized {
-            return Ok(true);
+            return Ok(());
         }
 
-        // First check if storage has an epoch root
-        // if not, we can't proceed
         let Some(block_header) = self.storage.load_epoch_root(epoch).await.wrap()? else {
-            return Ok(false);
+            bail!("epoch root header not found");
         };
 
         // Load stake table if we don't have it
@@ -251,11 +249,10 @@ where
             }
         }
 
-        // Load DRB result if we need it and don't have it
-        if need_randomized && !has_randomized {
+        // Load DRB result if we don't have it
+        if !has_randomized {
             if let Ok(drb_result) = self.storage.load_drb_result(epoch).await {
                 tracing::debug!("inserting DRB result for {epoch} from storage");
-
                 self.membership
                     .write()
                     .await
@@ -270,9 +267,9 @@ where
         // like block reward
         Membership::add_epoch_root(self.membership.clone(), epoch, block_header)
             .await
-            .map_err(|e| error!("Failed to verify epoch state for {epoch:?}: {e}"))?;
+            .wrap()?;
 
-        Ok(true)
+        Ok(())
     }
 
     /// Catches the membership up to the epoch passed as an argument.  
