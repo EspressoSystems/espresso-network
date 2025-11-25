@@ -5,8 +5,16 @@ ARG TARGETARCH
 COPY target/$TARGETARCH/release/espresso-dev-node /bin/espresso-dev-node
 RUN chmod +x /bin/espresso-dev-node
 
-# Download the anvil binary
-RUN curl -L https://github.com/foundry-rs/foundry/releases/download/nightly/foundry_nightly_linux_${TARGETARCH}.tar.gz --output -| tar -xzvf - -C /bin/ anvil
+# Download and verify the anvil binary using verified GitHub release download
+COPY scripts/download-github-release.sh /tmp/download-github-release.sh
+RUN chmod +x /tmp/download-github-release.sh && \
+    /tmp/download-github-release.sh \
+      --repo foundry-rs/foundry \
+      --tag nightly \
+      --asset "foundry_nightly_linux_${TARGETARCH}.tar.gz" \
+      --extract-to /bin \
+      --extract-file anvil && \
+    rm /tmp/download-github-release.sh
 
 # When running as a Docker service, we always want a healthcheck endpoint, so set a default for the
 # port that the HTTP server will run on. This can be overridden in any given deployment environment.
