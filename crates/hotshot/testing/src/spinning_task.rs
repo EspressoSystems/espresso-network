@@ -19,7 +19,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
-    membership::fetcher::Leaf2FetcherTrait,
+    membership::fetcher::Leaf2Fetcher,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
     testable_delay::DelayConfig,
@@ -107,8 +107,8 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
 {
     type Event = Event<TYPES>;
@@ -257,7 +257,7 @@ where
                                         node.handle.hotshot.config.known_nodes_with_stake.clone(),
                                         node.handle.hotshot.config.known_da_nodes.clone(),
                                         Default::default(),
-                                        Leaf2FetcherTrait::<TYPES>::new::<I>(
+                                        Leaf2Fetcher::<TYPES>::new::<I>(
                                             generated_network.clone(),
                                             node.handle.storage().clone(),
                                             node.handle.public_key().clone(),

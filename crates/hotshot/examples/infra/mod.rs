@@ -35,7 +35,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
-    membership::fetcher::Leaf2FetcherTrait,
+    membership::fetcher::{Leaf2Fetcher, Leaf2FetcherTrait},
     node_types::{Libp2pImpl, PushCdnImpl},
     state_types::TestInstanceState,
     storage_types::TestStorage,
@@ -393,7 +393,7 @@ pub trait RunDa<
             config.config.known_nodes_with_stake.clone(),
             config.config.known_da_nodes.clone(),
             Default::default(),
-            Leaf2FetcherTrait::<TYPES>::new::<NODE>(network.clone(), storage.clone(), pk.clone()),
+            Leaf2Fetcher::<TYPES>::new::<NODE>(network.clone(), storage.clone(), pk.clone()),
             config.config.epoch_height,
         )));
 
