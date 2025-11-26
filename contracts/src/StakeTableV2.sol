@@ -762,7 +762,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param newExitEscrowPeriod The new exit escrow period
     /// @dev This function ensures that the exit escrow period is within the valid range
     /// @dev This function is not pausable so that governance can perform emergency updates in the
-    /// presence of system
+    /// presence of systemLightClientV2
     function updateExitEscrowPeriod(uint64 newExitEscrowPeriod)
         external
         virtual
@@ -770,7 +770,14 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     {
         uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
             // block
-        uint64 maxExitEscrowPeriod = 86400 * 14; // 14 days
+        uint64 absoluteMaxExitEscrowPeriod = 86400 * 14; // 14 days, reasonable upper bound
+
+        // Calculate dynamic maximum: ensure it's always greater than minimum
+        // Use the larger of: absolute max (14 days) or 2x the minimum
+        // This ensures valid bounds even when epochs are very long
+        uint256 maxExitEscrowPeriod = absoluteMaxExitEscrowPeriod > minExitEscrowPeriod * 2
+            ? absoluteMaxExitEscrowPeriod
+            : minExitEscrowPeriod * 2;
 
         if (newExitEscrowPeriod < minExitEscrowPeriod || newExitEscrowPeriod > maxExitEscrowPeriod)
         {

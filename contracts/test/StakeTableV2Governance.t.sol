@@ -12,6 +12,7 @@ import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
 import { StakeTable_register_Test } from "./StakeTable.t.sol";
+import { ILightClient } from "../src/interfaces/ILightClient.sol";
 
 /// @title StakeTableV2 Governance Tests
 /// @notice Comprehensive tests for governance functions: transferOwnership, grantRole, revokeRole
@@ -222,6 +223,56 @@ contract StakeTableV2GovernanceTest is Test {
             )
         );
         proxy.updateExitEscrowPeriod(200 seconds);
+        vm.stopPrank();
+    }
+
+    function test_UpdateExitEscrowPeriod_WithLargeBlocksPerEpoch() public {
+        address defaultAdmin = proxy.owner();
+
+        // Mock a blocksPerEpoch that would make min > absolute max (14 days)
+        // 14 days = 1,209,600 seconds
+        // To exceed this: blocksPerEpoch * 15 > 1,209,600
+        // So blocksPerEpoch > 80,640
+        uint64 largeBlocksPerEpoch = 100000; // Makes min = 1,500,000 seconds
+
+        // Mock the light client to return this large value
+        vm.mockCall(
+            address(proxy.lightClient()),
+            abi.encodeWithSelector(ILightClient.blocksPerEpoch.selector),
+            abi.encode(largeBlocksPerEpoch)
+        );
+
+        uint64 minExitEscrowPeriod = largeBlocksPerEpoch * 15; // 1,500,000 seconds
+        uint64 absoluteMax = 86400 * 14; // 1,209,600 seconds
+        uint64 expectedMax = minExitEscrowPeriod * 2; // 3,000,000 seconds (dynamic max)
+
+        // Verify min > absolute max (this is the edge case)
+        assertTrue(minExitEscrowPeriod > absoluteMax, "Min should exceed absolute max");
+
+        vm.startPrank(defaultAdmin);
+
+        // Should succeed with a value between min and dynamic max
+        uint64 validPeriod = minExitEscrowPeriod + 100000; // Between min and dynamic max
+        vm.expectEmit(false, false, false, true, address(proxy));
+        emit StakeTableV2.ExitEscrowPeriodUpdated(validPeriod);
+        proxy.updateExitEscrowPeriod(validPeriod);
+
+        // Should succeed with a value above large blocks per epoch
+        uint64 validLargePeriod = (largeBlocksPerEpoch + 1) * 15;
+        vm.expectEmit(false, false, false, true, address(proxy));
+        emit StakeTableV2.ExitEscrowPeriodUpdated(validLargePeriod);
+        proxy.updateExitEscrowPeriod(validLargePeriod);
+
+        assertEq(proxy.exitEscrowPeriod(), validLargePeriod, "Escrow period should be updated");
+
+        // Should revert if below min
+        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
+        proxy.updateExitEscrowPeriod(minExitEscrowPeriod - 1);
+
+        // Should revert if above dynamic max
+        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
+        proxy.updateExitEscrowPeriod(expectedMax + 1);
+
         vm.stopPrank();
     }
 
