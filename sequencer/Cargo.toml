@@ -75,12 +75,15 @@ light-client = { workspace = true }
 include_dir = "0.7"
 indexmap = { workspace = true }
 itertools = { workspace = true }
+mimalloc = { workspace = true }
+
 jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
-
 jf-advz = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
+
+
 libp2p = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"

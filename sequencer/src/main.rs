@@ -1,3 +1,5 @@
+use mimalloc::MiMalloc;
+
 // NOTE: due to nextest eagerly compiling binaries we allow the build if we're
 // not building with --release (without debug_assertions). There is
 // unfortunately no good way to detect if a build is performed by nextest
@@ -25,6 +27,9 @@ Similarly, avoid enabling the `embedded-db` feature by using passing the cargo
 flag `--all-features` when building the sequencer binary target.
 "#
 );
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
