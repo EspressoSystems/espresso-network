@@ -35,7 +35,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
-    membership::fetcher::{Leaf2Fetcher, Leaf2FetcherTrait},
+    membership::fetcher::Leaf2Fetcher,
     node_types::{Libp2pImpl, PushCdnImpl},
     state_types::TestInstanceState,
     storage_types::TestStorage,
@@ -348,8 +348,8 @@ pub trait RunDa<
 > where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
     TYPES: NodeType<Transaction = TestTransaction>,
     Leaf<TYPES>: TestableLeaf,
@@ -637,8 +637,8 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
@@ -721,8 +721,8 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
@@ -826,8 +826,8 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
@@ -913,8 +913,8 @@ pub async fn main_entry_point<
 ) where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
     Leaf<TYPES>: TestableLeaf,
 {

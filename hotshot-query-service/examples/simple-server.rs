@@ -28,9 +28,7 @@ use hotshot::{
     HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
-    membership::fetcher::{Leaf2Fetcher, Leaf2FetcherTrait},
-    state_types::TestInstanceState,
-    storage_types::TestStorage,
+    membership::fetcher::Leaf2Fetcher, state_types::TestInstanceState, storage_types::TestStorage,
 };
 use hotshot_query_service::{
     data_source,

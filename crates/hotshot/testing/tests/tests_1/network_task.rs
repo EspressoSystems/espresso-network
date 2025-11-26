@@ -12,7 +12,7 @@ use std::{
 use async_broadcast::Sender;
 use async_lock::RwLock;
 use hotshot::traits::implementations::MemoryNetwork;
-use hotshot_example_types::{membership::fetcher::Leaf2FetcherTrait, node_types::{MemoryImpl, TestTypes, TestVersions}};
+use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
 use hotshot_task::task::{ConsensusTaskRegistry, Task};
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkEventTaskState};
 use hotshot_testing::{
