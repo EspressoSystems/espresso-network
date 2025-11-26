@@ -229,7 +229,7 @@ contract StakeTableV2GovernanceTest is Test {
     function test_UpdateExitEscrowPeriod_WithLargeBlocksPerEpoch() public {
         address defaultAdmin = proxy.owner();
 
-        // Mock a blocksPerEpoch that would make min > absolute max (14 days)
+        // Mock a blocksPerEpoch that would make min > max (14 days)
         // 14 days = 1,209,600 seconds
         // To exceed this: blocksPerEpoch * 15 > 1,209,600
         // So blocksPerEpoch > 80,640
@@ -243,35 +243,16 @@ contract StakeTableV2GovernanceTest is Test {
         );
 
         uint64 minExitEscrowPeriod = largeBlocksPerEpoch * 15; // 1,500,000 seconds
-        uint64 absoluteMax = 86400 * 14; // 1,209,600 seconds
-        uint64 expectedMax = minExitEscrowPeriod * 2; // 3,000,000 seconds (dynamic max)
-
-        // Verify min > absolute max (this is the edge case)
-        assertTrue(minExitEscrowPeriod > absoluteMax, "Min should exceed absolute max");
+        uint64 maxExitEscrowPeriod = 14 days;
+        // Verify min > max (this is the edge case that should revert)
+        assertTrue(minExitEscrowPeriod > maxExitEscrowPeriod, "Min should exceed max");
 
         vm.startPrank(defaultAdmin);
 
-        // Should succeed with a value between min and dynamic max
-        uint64 validPeriod = minExitEscrowPeriod + 100000; // Between min and dynamic max
-        vm.expectEmit(false, false, false, true, address(proxy));
-        emit StakeTableV2.ExitEscrowPeriodUpdated(validPeriod);
-        proxy.updateExitEscrowPeriod(validPeriod);
-
-        // Should succeed with a value above large blocks per epoch
-        uint64 validLargePeriod = (largeBlocksPerEpoch + 1) * 15;
-        vm.expectEmit(false, false, false, true, address(proxy));
-        emit StakeTableV2.ExitEscrowPeriodUpdated(validLargePeriod);
-        proxy.updateExitEscrowPeriod(validLargePeriod);
-
-        assertEq(proxy.exitEscrowPeriod(), validLargePeriod, "Escrow period should be updated");
-
-        // Should revert if below min
+        // B04 Fix: Should revert when min > max (invalid bounds)
+        // This prevents the function from being called with impossible constraints
         vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
-        proxy.updateExitEscrowPeriod(minExitEscrowPeriod - 1);
-
-        // Should revert if above dynamic max
-        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
-        proxy.updateExitEscrowPeriod(expectedMax + 1);
+        proxy.updateExitEscrowPeriod(maxExitEscrowPeriod);
 
         vm.stopPrank();
     }
