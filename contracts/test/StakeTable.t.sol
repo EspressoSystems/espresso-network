@@ -579,6 +579,25 @@ contract StakeTable_register_Test is LightClientCommonTest {
         stakeTable.delegate(makeAddr("non-existent"), 1 ether);
     }
 
+    function test_RevertWhen_DelegateToExitedValidator() public {
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        stakeTable.delegate(validator, 1 ether);
+        vm.stopPrank();
+
+        vm.prank(validator);
+        stakeTable.deregisterValidator();
+
+        vm.prank(delegator);
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.delegate(validator, 1 ether);
+    }
+
     function test_MultiDelegationsToSameValidator() public {
         // Should test multiple delegations to same validator accumulate correctly
         vm.prank(tokenGrantRecipient);

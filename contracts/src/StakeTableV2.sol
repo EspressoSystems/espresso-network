@@ -473,9 +473,29 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param validator The validator to delegate to
     /// @param amount The amount to delegate
     /// @dev This function is overridden to add pausable functionality
+    /// @dev The function body is copied from V1 to maintain checks-effects-interactions pattern.
     function delegate(address validator, uint256 amount) public virtual override whenNotPaused {
-        super.delegate(validator, amount);
+        ensureValidatorActive(validator);
+        address delegator = msg.sender;
+
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+
+        uint256 allowance = token.allowance(delegator, address(this));
+        if (allowance < amount) {
+            revert InsufficientAllowance(allowance, amount);
+        }
+
+        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
+
+        validators[validator].delegatedAmount += amount;
+        delegations[validator][delegator] += amount;
+
+        // Added in V2
         activeStake += amount;
+
+        emit Delegated(delegator, validator, amount);
     }
 
     /// @notice Undelegate funds from a validator
