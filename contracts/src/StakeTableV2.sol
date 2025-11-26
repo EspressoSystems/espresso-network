@@ -296,6 +296,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         require(admin != address(0), ZeroAddress());
         require(pauser != address(0), ZeroAddress());
         __AccessControl_init();
+        __Pausable_init();
 
         _grantRole(PAUSER_ROLE, pauser);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
