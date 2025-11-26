@@ -15,8 +15,6 @@ import "../interfaces/IRewardClaim.sol";
  * - Double hashing of leaves as cheap domain separator
  */
 library RewardMerkleTreeVerifier {
-    error InvalidProofLength();
-
     uint256 public constant TREE_DEPTH = 160;
 
     function _hashLeaf(uint256 value) internal pure returns (bytes32) {
