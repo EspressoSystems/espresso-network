@@ -18,7 +18,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestTransaction,
-    membership::fetcher::Leaf2FetcherTrait,
+    membership::fetcher::Leaf2Fetcher,
     node_types::TestTypes,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -70,8 +70,8 @@ pub async fn build_system_handle<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
 {
     let builder: TestDescription<TYPES, I, V> = TestDescription::default_multiple_rounds();
@@ -99,8 +99,8 @@ pub async fn build_system_handle_from_launcher<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
-    <<TYPES as NodeType>::Membership as Membership<TYPES>>::Fetcher: Leaf2FetcherTrait<TYPES>,
+    <TYPES as NodeType>::Membership:
+        Membership<TYPES, Storage = TestStorage<TYPES>, Fetcher = Leaf2Fetcher<TYPES>>,
     <<TYPES as NodeType>::Membership as Membership<TYPES>>::FixedBlockReward: Default,
 {
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
@@ -141,7 +141,7 @@ where
         hotshot_config.known_nodes_with_stake.clone(),
         hotshot_config.known_da_nodes.clone(),
         Default::default(),
-        Leaf2FetcherTrait::<TYPES>::new::<I>(network.clone(), storage.clone(), public_key.clone()),
+        Leaf2Fetcher::<TYPES>::new::<I>(network.clone(), storage.clone(), public_key.clone()),
         launcher.metadata.test_config.epoch_height,
     )));
 

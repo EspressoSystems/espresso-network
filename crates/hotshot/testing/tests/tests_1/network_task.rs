@@ -12,7 +12,7 @@ use std::{
 use async_broadcast::Sender;
 use async_lock::RwLock;
 use hotshot::traits::implementations::MemoryNetwork;
-use hotshot_example_types::{membership::fetcher::Leaf2FetcherTrait, node_types::{MemoryImpl, TestTypes, TestVersions}};
+use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
 use hotshot_task::task::{ConsensusTaskRegistry, Task};
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkEventTaskState};
 use hotshot_testing::{
@@ -29,6 +29,7 @@ use hotshot_types::{
     },
 };
 use tokio::time::timeout;
+use hotshot_example_types::membership::fetcher::Leaf2Fetcher;
 
 // Test that the event task sends a message, and the message task receives it
 // and emits the proper event
@@ -63,7 +64,7 @@ async fn test_network_task() {
         all_nodes.clone(),
         all_nodes,
         (),
-        Leaf2FetcherTrait::<TestTypes>::new::<MemoryImpl>(
+        Leaf2Fetcher::<TestTypes>::new::<MemoryImpl>(
             network.clone(),
             storage.clone(),
             public_key,
@@ -244,7 +245,7 @@ async fn test_network_storage_fail() {
         all_nodes.clone(),
         all_nodes,
         (),
-        Leaf2FetcherTrait::<TestTypes>::new::<MemoryImpl>(
+        Leaf2Fetcher::<TestTypes>::new::<MemoryImpl>(
             network.clone(),
             storage.clone(),
             public_key,

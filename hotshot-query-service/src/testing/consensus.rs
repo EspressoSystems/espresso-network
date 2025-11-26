@@ -25,8 +25,7 @@ use hotshot::{
     HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
-    membership::fetcher::Leaf2FetcherTrait, state_types::TestInstanceState,
-    storage_types::TestStorage,
+    membership::fetcher::Leaf2Fetcher, state_types::TestInstanceState, storage_types::TestStorage,
 };
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
@@ -199,7 +198,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             known_nodes_with_stake_clone.clone(),
                             known_nodes_with_stake_clone,
                             (),
-                            Leaf2FetcherTrait::<MockTypes>::new::<MockNodeImpl>(
+                            Leaf2Fetcher::<MockTypes>::new::<MockNodeImpl>(
                                 network.clone(),
                                 hs_storage.clone(),
                                 pub_keys[node_id],
