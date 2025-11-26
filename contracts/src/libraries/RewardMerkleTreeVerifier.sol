@@ -34,7 +34,9 @@ library RewardMerkleTreeVerifier {
     }
 
     /**
-     * @dev Compute reward commitment from a key-value pair and proof
+     * @dev Compute reward commitment from a key-value pair and proof.
+     * @dev Designed to authenticate non-zero values for non-zero keys; caller must ensure
+     * neither key nor value is zero.
      * @param key The key to prove - Ethereum address
      * @param value The value to prove - lifetime earned rewards amount
      * @param proof The membership proof containing sibling hashes and numLeaves
