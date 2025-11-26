@@ -27,6 +27,7 @@ use hotshot_contract_adapter::sol_types::*;
 use serde::{Deserialize, Serialize};
 
 pub mod builder;
+pub mod contract_types;
 pub mod impersonate_filler;
 pub mod network_config;
 pub mod proposals;

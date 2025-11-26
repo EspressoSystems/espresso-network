@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use alloy::providers::{Provider, ProviderBuilder};
 use anyhow::{Context, Result};
 use clap::Parser;
 use deployment_info::{
@@ -16,7 +17,7 @@ use url::Url;
 struct Args {
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
+        env = "RPC_URL",
         help = "RPC URL for L1 provider. Defaults to publicnode for decaf/mainnet networks."
     )]
     rpc_url: Option<Url>,
@@ -32,6 +33,9 @@ struct Args {
         help = "Output file path. If not provided, prints to stdout instead of writing to a file."
     )]
     output: Option<PathBuf>,
+
+    #[clap(long, help = "Chain ID. If not provided, will be queried from the RPC")]
+    chain_id: Option<u64>,
 }
 
 fn get_default_rpc_url(network: &str) -> Option<Url> {
@@ -64,10 +68,26 @@ async fn main() -> Result<()> {
              set ESPRESSO_SEQUENCER_L1_PROVIDER",
         )?;
 
-    tracing::info!("Collecting deployment info for network: {}", args.network);
-    tracing::info!("Using RPC URL: {}", rpc_url);
+    let chain_id = if let Some(id) = args.chain_id {
+        id
+    } else {
+        let provider = ProviderBuilder::new().connect_http(rpc_url.clone());
+        provider
+            .get_chain_id()
+            .await
+            .context("Failed to query chain ID from RPC")?
+    };
 
-    let info = collect_deployment_info(rpc_url, args.network, addresses)
+    let sanitized_url = format!(
+        "{}://{}/..",
+        rpc_url.scheme(),
+        rpc_url.host_str().unwrap_or_default()
+    );
+    tracing::info!("Collecting deployment info for network: {}", args.network);
+    tracing::info!("Using RPC: {}", sanitized_url);
+    tracing::info!("Chain ID: {}", chain_id);
+
+    let info = collect_deployment_info(rpc_url, addresses, chain_id)
         .await
         .context("Failed to collect deployment info")?;
 

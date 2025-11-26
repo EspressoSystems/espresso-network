@@ -1,15 +1,11 @@
 use std::{collections::HashMap, path::Path};
 
 use alloy::{
-    primitives::Address,
-    providers::{Provider, ProviderBuilder},
+    primitives::Address, providers::ProviderBuilder, rpc::client::RpcClient,
+    transports::layers::RetryBackoffLayer,
 };
 use anyhow::{Context, Result};
-use hotshot_contract_adapter::sol_types::{
-    EspTokenV2, FeeContract, ISafe, IVersioned, LightClient, OpsTimelock, SafeExitTimelock,
-    StakeTable,
-};
-use serde::{Deserialize, Serialize};
+use espresso_contract_deployer::contract_types::{DeploymentState, FromOnchainConfig};
 use url::Url;
 
 const STAKE_TABLE_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS";
@@ -32,49 +28,6 @@ pub struct DeploymentAddresses {
     pub multisig: Option<Address>,
     pub ops_timelock: Option<Address>,
     pub safe_exit_timelock: Option<Address>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-pub enum ContractDeployment {
-    Deployed {
-        proxy_address: Address,
-        owner: Address,
-        version: String,
-    },
-    NotYetDeployed,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-pub enum MultisigDeployment {
-    Deployed {
-        address: Address,
-        version: String,
-        owners: Vec<Address>,
-        threshold: u64,
-    },
-    NotYetDeployed,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-pub enum TimelockDeployment {
-    Deployed { address: Address, min_delay: u64 },
-    NotYetDeployed,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DeploymentInfo {
-    pub network: String,
-    pub multisig: MultisigDeployment,
-    pub ops_timelock: TimelockDeployment,
-    pub safe_exit_timelock: TimelockDeployment,
-    pub stake_table_proxy: ContractDeployment,
-    pub esp_token_proxy: ContractDeployment,
-    pub light_client_proxy: ContractDeployment,
-    pub fee_contract_proxy: ContractDeployment,
-    pub reward_claim_proxy: ContractDeployment,
 }
 
 pub fn load_addresses_from_env_file(path: Option<&Path>) -> Result<DeploymentAddresses> {
@@ -119,229 +72,37 @@ pub fn load_addresses_from_env_file(path: Option<&Path>) -> Result<DeploymentAdd
     })
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ContractType {
-    LightClient,
-    FeeContract,
-    EspToken,
-    StakeTable,
-    RewardClaim,
-}
-
-async fn get_owner<P: Provider>(
-    provider: &P,
-    addr: Address,
-    contract_type: ContractType,
-) -> Result<Address> {
-    match contract_type {
-        ContractType::LightClient => {
-            let contract = LightClient::new(addr, provider);
-            Ok(contract.owner().call().await?)
-        },
-        ContractType::FeeContract => {
-            let contract = FeeContract::new(addr, provider);
-            Ok(contract.owner().call().await?)
-        },
-        ContractType::EspToken => {
-            let contract = EspTokenV2::new(addr, provider);
-            Ok(contract.owner().call().await?)
-        },
-        ContractType::StakeTable => {
-            let contract = StakeTable::new(addr, provider);
-            Ok(contract.owner().call().await?)
-        },
-        ContractType::RewardClaim => Ok(Address::ZERO),
-    }
-}
-
-async fn get_version<P: Provider>(
-    provider: &P,
-    addr: Address,
-    _contract_type: ContractType,
-) -> Result<String> {
-    let contract = IVersioned::new(addr, provider);
-    let v = contract.getVersion().call().await?;
-    Ok(format!("{}.{}.{}", v._0, v._1, v._2))
-}
-
-async fn get_contract_info<P: Provider>(
-    provider: &P,
-    proxy_addr: Address,
-    contract_type: ContractType,
-) -> Result<ContractDeployment> {
-    let owner = get_owner(provider, proxy_addr, contract_type).await?;
-    let version = get_version(provider, proxy_addr, contract_type).await?;
-
-    Ok(ContractDeployment::Deployed {
-        proxy_address: proxy_addr,
-        owner,
-        version,
-    })
-}
-
-async fn collect_contract_info<P: Provider>(
-    provider: &P,
-    addr: Option<Address>,
-    contract_type: ContractType,
-    contract_name: &str,
-) -> Result<ContractDeployment> {
-    let Some(addr) = addr else {
-        return Ok(ContractDeployment::NotYetDeployed);
-    };
-
-    get_contract_info(provider, addr, contract_type)
-        .await
-        .with_context(|| format!("Failed to query {} at {}", contract_name, addr))
-}
-
-async fn get_multisig_info<P: Provider>(provider: &P, addr: Address) -> Result<MultisigDeployment> {
-    let contract = ISafe::new(addr, provider);
-
-    let version = contract
-        .VERSION()
-        .call()
-        .await
-        .context("Failed to get VERSION")?;
-
-    let owners = contract
-        .getOwners()
-        .call()
-        .await
-        .context("Failed to get owners")?;
-
-    let threshold = contract
-        .getThreshold()
-        .call()
-        .await
-        .context("Failed to get threshold")?
-        .to::<u64>();
-
-    Ok(MultisigDeployment::Deployed {
-        address: addr,
-        version,
-        owners,
-        threshold,
-    })
-}
-
-async fn collect_multisig_info<P: Provider>(
-    provider: &P,
-    addr: Option<Address>,
-) -> Result<MultisigDeployment> {
-    let Some(addr) = addr else {
-        return Ok(MultisigDeployment::NotYetDeployed);
-    };
-
-    get_multisig_info(provider, addr)
-        .await
-        .with_context(|| format!("Failed to query multisig at {}", addr))
-}
-
-async fn get_timelock_info<P: Provider>(
-    provider: &P,
-    addr: Address,
-    is_ops: bool,
-) -> Result<TimelockDeployment> {
-    let min_delay = if is_ops {
-        OpsTimelock::new(addr, provider)
-            .getMinDelay()
-            .call()
-            .await
-            .context("Failed to get min delay from OpsTimelock")?
-            .to::<u64>()
-    } else {
-        SafeExitTimelock::new(addr, provider)
-            .getMinDelay()
-            .call()
-            .await
-            .context("Failed to get min delay from SafeExitTimelock")?
-            .to::<u64>()
-    };
-
-    Ok(TimelockDeployment::Deployed {
-        address: addr,
-        min_delay,
-    })
-}
-
-async fn collect_timelock_info<P: Provider>(
-    provider: &P,
-    addr: Option<Address>,
-    name: &str,
-    is_ops: bool,
-) -> Result<TimelockDeployment> {
-    let Some(addr) = addr else {
-        return Ok(TimelockDeployment::NotYetDeployed);
-    };
-
-    get_timelock_info(provider, addr, is_ops)
-        .await
-        .with_context(|| format!("Failed to query {} at {}", name, addr))
-}
-
 pub async fn collect_deployment_info(
     rpc_url: Url,
-    network: String,
     addresses: DeploymentAddresses,
-) -> Result<DeploymentInfo> {
-    let provider = ProviderBuilder::new().connect_http(rpc_url);
+    chain_id: u64,
+) -> Result<DeploymentState> {
+    let client = RpcClient::builder()
+        .layer(RetryBackoffLayer::new(10, 100, 300))
+        .http(rpc_url);
+    let provider = ProviderBuilder::new().connect_client(client);
 
-    Ok(DeploymentInfo {
-        network,
-        multisig: collect_multisig_info(&provider, addresses.multisig).await?,
-        ops_timelock: collect_timelock_info(&provider, addresses.ops_timelock, "OpsTimelock", true)
-            .await?,
-        safe_exit_timelock: collect_timelock_info(
-            &provider,
-            addresses.safe_exit_timelock,
-            "SafeExitTimelock",
-            false,
-        )
-        .await?,
-        stake_table_proxy: collect_contract_info(
-            &provider,
-            addresses.stake_table_proxy,
-            ContractType::StakeTable,
-            "StakeTable",
-        )
-        .await?,
-        esp_token_proxy: collect_contract_info(
-            &provider,
-            addresses.esp_token_proxy,
-            ContractType::EspToken,
-            "EspToken",
-        )
-        .await?,
-        light_client_proxy: collect_contract_info(
-            &provider,
-            addresses.light_client_proxy,
-            ContractType::LightClient,
-            "LightClient",
-        )
-        .await?,
-        fee_contract_proxy: collect_contract_info(
-            &provider,
-            addresses.fee_contract_proxy,
-            ContractType::FeeContract,
-            "FeeContract",
-        )
-        .await?,
-        reward_claim_proxy: collect_contract_info(
-            &provider,
-            addresses.reward_claim_proxy,
-            ContractType::RewardClaim,
-            "RewardClaim",
-        )
-        .await?,
-    })
+    let config = FromOnchainConfig {
+        light_client_proxy: addresses.light_client_proxy,
+        stake_table_proxy: addresses.stake_table_proxy,
+        esp_token_proxy: addresses.esp_token_proxy,
+        fee_contract_proxy: addresses.fee_contract_proxy,
+        reward_claim_proxy: addresses.reward_claim_proxy,
+        multisig: addresses.multisig,
+        ops_timelock: addresses.ops_timelock,
+        safe_exit_timelock: addresses.safe_exit_timelock,
+    };
+
+    DeploymentState::from_onchain(&provider, config, chain_id).await
 }
 
-pub fn write_deployment_info(info: &DeploymentInfo, output_path: &std::path::Path) -> Result<()> {
+pub fn write_deployment_info(state: &DeploymentState, output_path: &Path) -> Result<()> {
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create output directory")?;
     }
 
-    let json = serde_json::to_string_pretty(info).context("Failed to serialize deployment info")?;
+    let json =
+        serde_json::to_string_pretty(state).context("Failed to serialize deployment info")?;
 
     std::fs::write(output_path, json).context("Failed to write deployment info")?;
 
@@ -352,6 +113,7 @@ pub fn write_deployment_info(info: &DeploymentInfo, output_path: &std::path::Pat
 mod tests {
     use alloy::{
         node_bindings::Anvil,
+        primitives::U256,
         providers::{ProviderBuilder, WalletProvider},
     };
     use espresso_contract_deployer::{
@@ -387,15 +149,15 @@ mod tests {
             .blocks_per_epoch(100)
             .epoch_start_block(1)
             .multisig_pauser(deployer_address)
-            .exit_escrow_period(alloy::primitives::U256::from(250))
+            .exit_escrow_period(U256::from(250))
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
-            .initial_token_supply(alloy::primitives::U256::from(3590000000u64))
-            .ops_timelock_delay(alloy::primitives::U256::from(100))
+            .initial_token_supply(U256::from(3590000000u64))
+            .ops_timelock_delay(U256::from(100))
             .ops_timelock_admin(deployer_address)
             .ops_timelock_proposers(vec![deployer_address])
             .ops_timelock_executors(vec![deployer_address])
-            .safe_exit_timelock_delay(alloy::primitives::U256::from(200))
+            .safe_exit_timelock_delay(U256::from(200))
             .safe_exit_timelock_admin(deployer_address)
             .safe_exit_timelock_proposers(vec![deployer_address])
             .safe_exit_timelock_executors(vec![deployer_address])
@@ -438,64 +200,57 @@ mod tests {
             safe_exit_timelock: Some(safe_exit_timelock_addr),
         };
 
-        let info = collect_deployment_info(rpc_url, "test-network".to_string(), addresses).await?;
+        let chain_id = anvil.chain_id();
 
-        assert_eq!(info.network, "test-network");
-        assert_eq!(
-            info.stake_table_proxy,
-            ContractDeployment::Deployed {
-                proxy_address: stake_table_addr,
-                owner: deployer_address,
-                version: "2.0.0".to_string(),
-            }
-        );
-        assert_eq!(
-            info.esp_token_proxy,
-            ContractDeployment::Deployed {
-                proxy_address: esp_token_addr,
-                owner: deployer_address,
-                version: "2.0.0".to_string(),
-            }
-        );
-        assert_eq!(
-            info.light_client_proxy,
-            ContractDeployment::Deployed {
-                proxy_address: light_client_addr,
-                owner: deployer_address,
-                version: "3.0.0".to_string(),
-            }
-        );
-        assert_eq!(
-            info.fee_contract_proxy,
-            ContractDeployment::Deployed {
-                proxy_address: fee_contract_addr,
-                owner: deployer_address,
-                version: "1.0.0".to_string(),
-            }
-        );
-        assert_eq!(
-            info.reward_claim_proxy,
-            ContractDeployment::Deployed {
-                proxy_address: reward_claim_addr,
-                owner: Address::ZERO,
-                version: "1.0.0".to_string(),
-            }
-        );
-        assert_eq!(
-            info.ops_timelock,
-            TimelockDeployment::Deployed {
-                address: ops_timelock_addr,
-                min_delay: 100
-            }
-        );
-        assert_eq!(
-            info.safe_exit_timelock,
-            TimelockDeployment::Deployed {
-                address: safe_exit_timelock_addr,
-                min_delay: 200
-            }
-        );
-        assert_eq!(info.multisig, MultisigDeployment::NotYetDeployed);
+        let state = collect_deployment_info(rpc_url, addresses, chain_id).await?;
+
+        assert_eq!(state.chain_id, chain_id);
+
+        assert!(state.light_client.is_some());
+        let lc = state.light_client.as_ref().unwrap();
+        assert_eq!(lc.proxy_address(), light_client_addr);
+        assert_eq!(lc.owner(), deployer_address);
+        assert_eq!(lc.version_string(), "3");
+
+        assert!(state.stake_table.is_some());
+        let st = state.stake_table.as_ref().unwrap();
+        assert_eq!(st.proxy_address(), stake_table_addr);
+        assert_eq!(st.owner(), deployer_address);
+        assert_eq!(st.version_string(), "2");
+
+        assert!(state.esp_token.is_some());
+        let token = state.esp_token.as_ref().unwrap();
+        assert_eq!(token.proxy_address(), esp_token_addr);
+        assert_eq!(token.owner(), deployer_address);
+        assert_eq!(token.version_string(), "2");
+
+        assert!(state.fee_contract.is_some());
+        let fee = state.fee_contract.as_ref().unwrap();
+        assert_eq!(fee.proxy_address, fee_contract_addr);
+        assert_eq!(fee.owner, deployer_address);
+
+        assert!(state.reward_claim.is_some());
+        let reward = state.reward_claim.as_ref().unwrap();
+        assert_eq!(reward.proxy_address, reward_claim_addr);
+        assert_eq!(reward.admin, deployer_address);
+
+        assert!(state.ops_timelock.is_some());
+        let ops = state.ops_timelock.as_ref().unwrap();
+        assert_eq!(ops.address, ops_timelock_addr);
+        assert_eq!(ops.min_delay, 100);
+        assert_eq!(ops.admin, deployer_address);
+        assert_eq!(ops.proposers, vec![deployer_address]);
+        assert_eq!(ops.executors, vec![deployer_address]);
+
+        assert!(state.safe_exit_timelock.is_some());
+        let safe_exit = state.safe_exit_timelock.as_ref().unwrap();
+        assert_eq!(safe_exit.address, safe_exit_timelock_addr);
+        assert_eq!(safe_exit.min_delay, 200);
+        assert_eq!(safe_exit.admin, deployer_address);
+        assert_eq!(safe_exit.proposers, vec![deployer_address]);
+        assert_eq!(safe_exit.executors, vec![deployer_address]);
+
+        assert!(state.multisig.is_none());
 
         Ok(())
     }

@@ -4193,6 +4193,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-trait",
  "clap 4.5.48",
  "derive_builder",
  "derive_more 2.0.1",
