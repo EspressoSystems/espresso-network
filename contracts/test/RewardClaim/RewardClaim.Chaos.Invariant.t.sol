@@ -198,6 +198,7 @@ contract RewardClaimInvariantTest is StdInvariant, Test {
         uint256 totalMinted = currentSupply - handler.initialSupply();
 
         assertEq(totalMinted, handler.totalClaimedAllAccounts(), "Total minted != total claimed");
+        assertEq(handler.rewardClaim().totalClaimed(), handler.totalClaimedAllAccounts());
     }
 
     function afterInvariant() external view {

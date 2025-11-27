@@ -91,5 +91,7 @@ contract RewardClaimInitializeTest is Test {
         RewardClaim rewardClaim = RewardClaim(payable(address(proxy)));
 
         assertEq(rewardClaim.dailyLimitWei(), 1);
+        assertEq(rewardClaim.totalClaimed(), 0);
+        assertEq(rewardClaim.currentAdmin(), owner);
     }
 }

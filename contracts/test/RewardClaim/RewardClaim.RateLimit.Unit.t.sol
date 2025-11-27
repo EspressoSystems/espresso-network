@@ -12,9 +12,11 @@ import "../../src/interfaces/IRewardClaim.sol";
 // - Tests verifying limit exceeded should exceed by exactly 1 wei for precision
 contract RewardClaimRateLimitTest is RewardClaimMockTest {
     function checkLimitEnforced(address user, uint256 lifetimeRewards) internal {
+        uint256 totalClaimedBefore = rewardClaim.totalClaimed();
         vm.prank(user);
         vm.expectRevert(IRewardClaim.DailyLimitExceeded.selector);
         rewardClaim.claimRewards(lifetimeRewards, "");
+        assertEq(rewardClaim.totalClaimed(), totalClaimedBefore);
     }
 
     function test_Claim_WithinLimit() public {
@@ -61,6 +63,12 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
 
         vm.warp(nextDayStart);
         claim(DAILY_LIMIT * 2);
+    }
+
+    function test_Claim_TotalClaimedTracked() public {
+        assertEq(0, rewardClaim.totalClaimed());
+        claim(1);
+        assertEq(1, rewardClaim.totalClaimed());
     }
 
     function test_SetDailyLimit_IncreasesCapacity() public {
