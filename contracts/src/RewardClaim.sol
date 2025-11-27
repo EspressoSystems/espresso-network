@@ -99,9 +99,10 @@ contract RewardClaim is
 
     /// @notice Total amount of rewards claimed across all users
     ///
-    /// @notice Enables convenient monitoring of unclaimed rewards by comparing subtracting this
-    /// value from `total_reward_distributed` in the Espresso block header. Will be used to make
-    /// decisions about increasing the daily limit in the future.
+    /// @notice Enables convenient monitoring of unclaimed rewards by subtracting `totalClaimed`
+    /// from `total_reward_distributed` in the Espresso block header. As long as the total unclaimed
+    /// rewards is less than the daily limit, honest claims are guaranteed to never exceed the daily
+    /// limit.
     uint256 public totalClaimed;
 
     /// @notice The daily limit is updated
