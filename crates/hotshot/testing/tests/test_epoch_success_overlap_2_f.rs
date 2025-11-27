@@ -20,6 +20,15 @@ cross_tests!(
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-        TestDescription::default().set_num_nodes(14, 14)
+        let mut metadata = TestDescription::default().set_num_nodes(14, 14);
+
+        let timing_data = TimingData {
+            next_view_timeout: 12_000,
+            ..Default::default()
+        };
+
+        metadata.timing_data = timing_data;
+
+        metadata
     },
 );
