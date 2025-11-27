@@ -18,6 +18,16 @@ import "./interfaces/IRewardClaim.sol";
 /// @title RewardClaim - Espresso Reward Claim Contract
 /// @notice Allows validators and delegators to claim ESP token rewards based on cryptographic
 /// proofs from the Espresso network.
+///
+/// @notice Daily Limit Fairness: This contract enforces daily claim limits on a first-come,
+/// first-served basis. Once the limit is reached, remaining claimers must wait until the next day.
+/// In unlikely but not impossible scenarios they may be unable to claim for multiple days. The
+/// limit (default 1%, max 5% of supply) is set high enough that it should never be reached under
+/// normal operation. This is a simple defense-in-depth mechanism to limit potential damage in the
+/// unlikely case an attacker is able to circumvent authentication of reward claims. It is not a
+/// mechanism to throttle rate of withdrawals under normal operation. Stakers are encouraged to
+/// claim their rewards periodically and take advantage of staking their rewards.
+///
 /// @dev Governance Architecture:
 /// This contract uses ONLY AccessControlUpgradeable.
 /// - DEFAULT_ADMIN_ROLE: Can upgrade contract, manage roles, update daily limits
@@ -248,6 +258,7 @@ contract RewardClaim is
         return (1, 0, 0);
     }
 
+    /// @dev See "Daily Limit Fairness" in contract docs.
     function _enforceDailyLimit(uint256 amount) internal virtual {
         uint256 today = block.timestamp / 1 days;
         if (today != _currentDay) {
