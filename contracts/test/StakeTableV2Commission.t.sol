@@ -218,6 +218,7 @@ contract StakeTableV2CommissionTest is Test {
         // should fail
         assertEq(proxy.minCommissionIncreaseInterval(), 7 days);
         assertEq(proxy.maxCommissionIncrease(), 500);
+        assertEq(proxy.MAX_COMMISSION_BPS(), 10000);
     }
 
     function test_InitializeV2_RevertWhenInitialValidatorNotRegistered() public {
