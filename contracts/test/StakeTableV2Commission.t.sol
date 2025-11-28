@@ -143,7 +143,7 @@ contract StakeTableV2CommissionTest is Test {
 
     function test_CommissionUpdate_DecreaseMaxDelta() public {
         address validator = makeAddr("validator");
-        uint16 maxCommission = 10000;
+        uint16 maxCommission = proxy.MAX_COMMISSION_BPS();
         stakeTableUpgradeTest.registerValidatorOnStakeTableV2(
             validator, "123", maxCommission, proxy
         );
