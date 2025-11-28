@@ -91,7 +91,15 @@ contract RewardClaimInitializeTest is Test {
         RewardClaim rewardClaim = RewardClaim(payable(address(proxy)));
 
         assertEq(rewardClaim.dailyLimitWei(), 1);
-        assertEq(rewardClaim.totalClaimed(), 0);
         assertEq(rewardClaim.currentAdmin(), owner);
+    }
+
+    function test_Initialize_TotalClaimedIsZero() public {
+        (bytes memory initData) = prepare(supply, owner, lc, pauser);
+
+        ERC1967Proxy proxy = new ERC1967Proxy(impl, initData);
+        RewardClaim rewardClaim = RewardClaim(payable(address(proxy)));
+
+        assertEq(rewardClaim.totalClaimed(), 0);
     }
 }
