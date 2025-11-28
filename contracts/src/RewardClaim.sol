@@ -76,6 +76,9 @@ contract RewardClaim is
     /// intentional to ensure careful consideration and governance of security parameters.
     uint256 public constant MAX_DAILY_LIMIT_BASIS_POINTS = 500; // 5%
 
+    /// @notice Basis points denominator (100% = 10000 bps)
+    uint256 public constant BPS_DENOMINATOR = 10000;
+
     /// @notice Current day number (days since epoch)
     uint256 private _currentDay;
 
@@ -156,7 +159,7 @@ contract RewardClaim is
 
         // Set initial daily limit to 1% (100 basis points) of total supply
         uint256 initialBps = 100; // 1%
-        uint256 _dailyLimit = (totalSupply * initialBps) / 10000;
+        uint256 _dailyLimit = (totalSupply * initialBps) / BPS_DENOMINATOR;
         require(_dailyLimit > 0, ZeroDailyLimit());
 
         __UUPSUpgradeable_init();
@@ -202,7 +205,7 @@ contract RewardClaim is
     {
         require(basisPoints > 0, ZeroDailyLimit());
         require(basisPoints <= MAX_DAILY_LIMIT_BASIS_POINTS, DailyLimitTooHigh());
-        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / BPS_DENOMINATOR;
         require(newLimit > 0, ZeroDailyLimit());
 
         // Due to computation based on current total supply, the new limit is very unlikely to be
