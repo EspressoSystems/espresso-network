@@ -15,8 +15,6 @@ import "../interfaces/IRewardClaim.sol";
  * - Double hashing of leaves as cheap domain separator
  */
 library RewardMerkleTreeVerifier {
-    error InvalidProofLength();
-
     uint256 public constant TREE_DEPTH = 160;
 
     function _hashLeaf(uint256 value) internal pure returns (bytes32) {
@@ -25,21 +23,20 @@ library RewardMerkleTreeVerifier {
         return keccak256(abi.encodePacked(firstHash));
     }
 
-    function _hashInternal(bytes32 left, bytes32 right) internal pure returns (bytes32) {
-        // keccak256(abi.encodePacked(left, right)) in assembly saves about 10%
-        // gas for the entire proof verification.
-        bytes32 hash;
+    function _hashInternal(bytes32 left, bytes32 right) internal pure returns (bytes32 hash) {
+        // Use scratch space at 0x00-0x3f
+        // keccak256 has its own opcode and doesn't use local memory.
         assembly {
-            let ptr := mload(0x40) // Get free memory pointer
-            mstore(ptr, left) // Store left (32 bytes)
-            mstore(add(ptr, 0x20), right) // Store right (32 bytes)
-            hash := keccak256(ptr, 0x40) // Hash 64 bytes
+            mstore(0x00, left)
+            mstore(0x20, right)
+            hash := keccak256(0x00, 0x40)
         }
-        return hash;
     }
 
     /**
-     * @dev Compute reward commitment from a key-value pair and proof
+     * @dev Compute reward commitment from a key-value pair and proof.
+     * @dev Designed to authenticate non-zero values for non-zero keys; caller must ensure
+     * neither key nor value is zero.
      * @param key The key to prove - Ethereum address
      * @param value The value to prove - lifetime earned rewards amount
      * @param proof The membership proof containing sibling hashes and numLeaves
@@ -50,11 +47,6 @@ library RewardMerkleTreeVerifier {
         pure
         returns (bytes32)
     {
-        // TODO: unittest this function
-        // TODO: fuzz test this function
-        // TODO: benchmark gas cost by averaging gas cost over many different trees with
-        //       realistic size.
-        // TODO: optimize gas cost
         bytes32 currentHash = _hashLeaf(value);
 
         // Traverse from leaf to root using the same pattern as RewardMerkleTreeV2
