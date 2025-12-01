@@ -38,7 +38,10 @@ use staking_ui_service::{
 };
 use surf_disco::Url;
 use tide_disco::{App, Error as _, StatusCode};
-use tokio::time::{sleep, timeout};
+use tokio::{
+    task::spawn,
+    time::{sleep, timeout},
+};
 use toml::toml;
 use tracing::instrument;
 use tracing_subscriber::EnvFilter;
@@ -479,6 +482,27 @@ async fn main() -> anyhow::Result<()> {
     let (send_result, recv_result) = unbounded();
     let client = InstrumentedHTTPClient::new(opt.url.join("/v0/staking/")?, send_result);
 
+    let mut app = App::<_, Error>::with_state(Arc::new(RwLock::new(registry)));
+    app.module::<Error, StaticVersion<0, 1>>("status", api)?
+        .metrics("metrics", |_, registry| {
+            async move { Ok(std::borrow::Cow::Borrowed(registry)) }.boxed()
+        })?;
+
+    let port = opt.port;
+    let server = spawn(async move {
+        if let Err(err) = app
+            .serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1>::instance())
+            .await
+        {
+            tracing::error!("metrics server exited: {err:#}");
+        }
+    })
+    .boxed();
+    let metrics_task = spawn(async move {
+        metrics.update(recv_result).await;
+    })
+    .boxed();
+
     // Get delegator addresses, so we have non-trivial wallets to simulate.
     let espresso =
         QueryServiceClient::new(QueryServiceOptions::new(opt.espresso_url.clone())).await?;
@@ -490,37 +514,21 @@ async fn main() -> anyhow::Result<()> {
         .flat_map(|v| v.delegators.keys())
         .copied()
         .collect::<HashSet<_>>();
-
-    let mut app = App::<_, Error>::with_state(Arc::new(RwLock::new(registry)));
-    app.module::<Error, StaticVersion<0, 1>>("status", api)?
-        .metrics("metrics", |_, registry| {
-            async move { Ok(std::borrow::Cow::Borrowed(registry)) }.boxed()
-        })?;
-
-    let port = opt.port;
-    let server = async move {
-        if let Err(err) = app
-            .serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1>::instance())
-            .await
-        {
-            tracing::error!("metrics server exited: {err:#}");
-        }
-    }
-    .boxed();
-    let metrics_task = async move {
-        metrics.update(recv_result).await;
-    }
-    .boxed();
-    let futures = delegators
+    let clients = delegators
         .iter()
         .cycle()
         .take(opt.num_clients)
         .enumerate()
         .map(|(id, wallet)| {
             let mut client = Client::new(opt.clone(), client.clone(), id as u64, *wallet);
-            async move { client.run().await }.boxed()
+            async move {
+                client.run().await;
+                Ok(())
+            }
+            .boxed()
         });
-    join_all([server, metrics_task].into_iter().chain(futures)).await;
+
+    join_all([server, metrics_task].into_iter().chain(clients)).await;
 
     Ok(())
 }

@@ -9,7 +9,7 @@ services:
       - "$ESPRESSO_SEQUENCER_L1_WS_PORT:8545"
     # Run anvil with fast block time _and_ fast finalization time. This lets us drive Espresso
     # epochs (which rely on the L1 finalized block) really fast, in turn.
-    command: [ anvil --block-time 1 --slots-in-an-epoch 3 ]
+    command: [ anvil --block-time 1 --slots-in-an-epoch 0 ]
     healthcheck:
       test: cast block-number
       interval: 5s
