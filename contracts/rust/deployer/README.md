@@ -10,6 +10,7 @@
 - [Safe Multisig Proposals](#safe-multisig-proposals)
 - [Troubleshooting](#troubleshooting)
 - [POS Deployment](#pos-deployment)
+  - [Automated Deployment Verification](#automated-deployment-verification)
 
 ## Prerequisites
 
@@ -1285,6 +1286,32 @@ After completing all steps, verify:
 3. **EspToken**: Deployed with SafeExitTimelock as owner, correct supply, correct initial recipient
 4. **StakeTable**: Upgraded to V2, owned by OpsTimelock, EspressoSys multisig has pauser role
 5. **All proxies**: Point to correct implementation addresses
+
+### Automated Deployment Verification
+
+The `scripts/verify-pos-deployment.sh` script automates the verification of your deployment configuration. It checks
+timelock delays, roles, contract ownership, versions, and cross-contract references.
+
+#### Prerequisites
+
+- Foundry installed (for `cast` command)
+- Environment variables set (see below)
+- Access to the RPC endpoint where contracts are deployed
+
+#### Usage
+
+##### Source environment variables from your deployment output file
+
+source .env.eth.mainnet.staketable # or your deployment output file
+
+##### Run verification
+
+./scripts/verify-pos-deployment.sh --rpc-url $RPC_URL#### Environment Variables
+
+For a complete list of required and optional environment variables, run:
+
+./scripts/verify-pos-deployment.sh --helpThe script will skip checks for any unset variables and show warnings. At
+minimum, you should set the contract proxy addresses you want to verify.
 
 ## Arbitrum Mainnet
 
