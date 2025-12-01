@@ -1115,4 +1115,21 @@ contract LightClient_V2ToV3UpgradeTest is LightClientCommonTest {
         LCV3(proxyAddr).initializeV3();
         vm.stopPrank();
     }
+
+    function test_renounceOwnership_Reverts() public {
+        init();
+        vm.prank(admin);
+        vm.expectRevert(LC.OwnershipCannotBeRenounced.selector);
+        lc.renounceOwnership();
+    }
+
+    function test_renounceOwnership_ByNonOwnerReverts() public {
+        init();
+        address nonOwner = makeAddr("nonOwner");
+        vm.prank(nonOwner);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
+        );
+        lc.renounceOwnership();
+    }
 }

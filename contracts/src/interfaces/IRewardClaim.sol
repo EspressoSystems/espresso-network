@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+/// @notice This interface contains the methods, events and errors for claiming Espresso staking
+/// rewards.
+///
+/// @notice This interface does not include administrative functionality of the RewardClaim
+/// contract.
 interface IRewardClaim {
     /// @notice User claimed rewards
     event RewardsClaimed(address indexed user, uint256 amount);

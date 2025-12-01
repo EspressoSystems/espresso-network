@@ -59,7 +59,7 @@ jobs:
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses differend features testing,emdbedded-db
+            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 
@@ -122,7 +122,7 @@ jobs:
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses differend features testing,emdbedded-db
+            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 

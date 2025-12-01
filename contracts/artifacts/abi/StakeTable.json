@@ -936,6 +936,11 @@
   },
   {
     "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "PowPrecompileFailed",
     "inputs": []
   },
