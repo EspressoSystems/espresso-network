@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
@@ -14,7 +14,10 @@ use hotshot_example_types::{
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
 use hotshot_macros::cross_tests;
-use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
+use hotshot_testing::{
+    block_builder::SimpleBuilderImplementation,
+    test_builder::{TestDescription, TimingData},
+};
 
 cross_tests!(
     TestName: test_success_with_async_delay_with_epochs,
@@ -40,6 +43,13 @@ cross_tests!(
             config_map.insert(i as u64, config.clone());
         }
         metadata.async_delay_config = config_map;
+
+        metadata.timing_data = TimingData {
+            next_view_timeout: 12000,
+            view_sync_timeout: Duration::from_millis(4000),
+            ..Default::default()
+        };
+
         metadata
     },
 );

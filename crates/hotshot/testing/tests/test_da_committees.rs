@@ -15,7 +15,7 @@ use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     overall_safety_task::OverallSafetyPropertiesDescription,
-    test_builder::TestDescription,
+    test_builder::{TestDescription, TimingData},
 };
 use hotshot_types::ValidatorConfig;
 use vbs::version::Version;
@@ -154,6 +154,12 @@ cross_tests!(
             ..Default::default()
         };
 
+        metadata.timing_data = TimingData {
+            next_view_timeout: 12000,
+            view_sync_timeout: Duration::from_millis(4000),
+            ..Default::default()
+        };
+
         metadata
     },
 );
@@ -230,6 +236,12 @@ cross_tests!(
 
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 200,
+            ..Default::default()
+        };
+
+        metadata.timing_data = TimingData {
+            next_view_timeout: 12000,
+            view_sync_timeout: Duration::from_millis(4000),
             ..Default::default()
         };
 
