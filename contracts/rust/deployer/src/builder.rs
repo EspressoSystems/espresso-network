@@ -770,9 +770,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
             "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
             "staketable" | "staketableproxy" => Contract::StakeTableProxy,
+            "rewardclaim" | "rewardclaimproxy" => Contract::RewardClaimProxy,
             _ => anyhow::bail!(
                 "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-                 staketable",
+                 staketable, rewardclaim",
                 target_contract
             ),
         };
@@ -785,19 +786,29 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             )
         })?;
 
-        tracing::info!(
-            "Transferring ownership of {} from EOA to {}",
-            target_contract,
-            new_owner
-        );
-
-        // Use the existing transfer_ownership function from lib.rs
-        let receipt =
+        // RewardClaim uses AccessControl instead of Ownable, so we need to grant the admin role
+        // instead of transferring ownership
+        let receipt = if contract_type == Contract::RewardClaimProxy {
+            tracing::info!(
+                "Granting DEFAULT_ADMIN_ROLE for {} to {} (RewardClaim uses AccessControl, not \
+                 Ownable)",
+                target_contract,
+                new_owner
+            );
+            crate::grant_admin_role(&self.deployer, contract_type, contract_address, new_owner)
+                .await?
+        } else {
+            tracing::info!(
+                "Transferring ownership of {} from EOA to {}",
+                target_contract,
+                new_owner
+            );
             crate::transfer_ownership(&self.deployer, contract_type, contract_address, new_owner)
-                .await?;
+                .await?
+        };
 
         tracing::info!(
-            "Successfully transferred ownership of {} to {}. Transaction: {}",
+            "Successfully transferred admin control of {} to {}. Transaction: {}",
             target_contract,
             new_owner,
             receipt.transaction_hash
