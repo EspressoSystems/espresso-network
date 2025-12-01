@@ -41,7 +41,8 @@
     let
       RUST_LOG = "info,isahc=error,surf=error";
       RUST_BACKTRACE = 1;
-      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
+      RUST_MIN_STACK = 10485760;
+      rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE RUST_MIN_STACK; };
 
       rustShellHook = ''
         # on mac os `bin/pwd -P` returns the canonical path on case insensitive file-systems

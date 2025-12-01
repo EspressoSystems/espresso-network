@@ -18,6 +18,7 @@ use alloy::primitives::U256;
 use anyhow::Context;
 use clap::Parser;
 use futures::{TryStreamExt, future::try_join_all};
+use serde_json::Value;
 use sqlx::{
     ConnectOptions, QueryBuilder,
     sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions},
@@ -120,20 +121,24 @@ impl Persistence {
         };
 
         // Load all registered nodes
-        let node_rows = sqlx::query_as::<_, (String, String, String, f64, String)>(
-            "SELECT address, staking_key, state_key, commission, stake FROM node",
+        let node_rows = sqlx::query_as::<_, (String, String, String, f64, String, Option<Value>)>(
+            "SELECT address, staking_key, state_key, commission, stake, metadata FROM node",
         )
         .fetch_all(&self.pool)
         .await?;
 
         let mut node_set = NodeSet::default();
-        for (address, staking_key, state_key, commission, stake_str) in node_rows {
+        for (address, staking_key, state_key, commission, stake_str, metadata) in node_rows {
             let node = NodeSetEntry {
                 address: address.parse().context("failed to parse node address")?,
                 staking_key: staking_key.parse().context("failed to parse staking key")?,
                 state_key: state_key.parse().context("failed to parse state key")?,
                 stake: U256::from_str(&stake_str).context("failed to parse node stake")?,
                 commission: Ratio::from(commission as f32),
+                metadata: metadata
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .context("failed to parse metadata")?,
             };
             node_set.push(node);
         }
@@ -255,20 +260,28 @@ impl Persistence {
     ) -> Result<()> {
         match diff {
             FullNodeSetDiff::NodeUpdate(node) => {
+                let metadata = node
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .context("serializing metadata")?;
                 sqlx::query(
-                    "INSERT INTO node (address, staking_key, state_key, commission, stake)
-                     VALUES ($1, $2, $3, $4, $5)
+                    "INSERT INTO node (address, staking_key, state_key, commission, stake, metadata)
+                     VALUES ($1, $2, $3, $4, $5, $6)
                      ON CONFLICT(address) DO UPDATE SET
                          staking_key = excluded.staking_key,
                          state_key = excluded.state_key,
                          commission = excluded.commission,
-                         stake = excluded.stake",
+                         stake = excluded.stake,
+                         metadata = excluded.metadata",
                 )
                 .bind(node.address.to_string())
                 .bind(node.staking_key.to_string())
                 .bind(node.state_key.to_string())
                 .bind(f32::from(node.commission) as f64)
                 .bind(node.stake.to_string())
+                .bind(metadata)
                 .execute(&mut **tx)
                 .await?;
             }
@@ -627,8 +640,17 @@ impl L1Persistence for Persistence {
                 // this same service) will always generate the same updates for the same sequence of
                 // L1 blocks. Otherwise, we might be leaving the database in a different state than
                 // if we had applied the update we were given, if someone else had applied a
-                // different update for the same block. This determinism assumption should be upheld
-                // by the rest of the logic in this service.
+                // different update for the same block.
+                //
+                // This determinism assumption should be upheld by the rest of the logic in this
+                // service, with the exception that `NodeUpdate` diffs may have different `metadata`
+                // content when processed by different services, due to inherent nondeterminism in
+                // third-party services providing metadata. This is acceptable since the contents of
+                // the metadata are informational only: they do not effect state _transitions_, and
+                // so at worst, our database will be left with different metadata for a node than it
+                // otherwise would have had by continuing here, but this will not cause our state to
+                // diverge any further: this metadata will not be touched until it is eventually
+                // overwritten in its entirety by a subsequent `MetadataUriUpdated` event.
                 continue;
             }
 
@@ -1019,13 +1041,20 @@ impl EspressoPersistence for Persistence {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::input::l1::testing::{block_snapshot, make_node};
-    use crate::types::common::{Address, ESPTokenAmount, NodeExit, PendingWithdrawal, Withdrawal};
+    use crate::types::common::{
+        Address, ESPTokenAmount, ImageSet, NodeExit, NodeMetadata, NodeMetadataContent,
+        PendingWithdrawal, RatioSet, Withdrawal,
+    };
     use crate::types::global::FullNodeSetDiff;
     use im::ordmap;
 
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
     /// Tests the complete persistence lifecycle
     #[test_log::test(tokio::test)]
     async fn test_snapshot_save_apply_load() {
@@ -1065,10 +1094,10 @@ mod tests {
 
         // Block 100: Register 4 nodes, set up initial delegations, delegator1 withdraws and claims rewards
         let initial_node_set_diffs = vec![
-            FullNodeSetDiff::NodeUpdate(node1.clone()),
-            FullNodeSetDiff::NodeUpdate(node2.clone()),
-            FullNodeSetDiff::NodeUpdate(node3.clone()),
-            FullNodeSetDiff::NodeUpdate(node4.clone()),
+            FullNodeSetDiff::NodeUpdate(Arc::new(node1.clone())),
+            FullNodeSetDiff::NodeUpdate(Arc::new(node2.clone())),
+            FullNodeSetDiff::NodeUpdate(Arc::new(node3.clone())),
+            FullNodeSetDiff::NodeUpdate(Arc::new(node4.clone())),
         ];
 
         let initial_wallet_diffs = [
@@ -1304,7 +1333,7 @@ mod tests {
         let node5 = make_node(5);
 
         let node_set_diffs = vec![
-            FullNodeSetDiff::NodeUpdate(node5.clone()),
+            FullNodeSetDiff::NodeUpdate(Arc::new(node5.clone())),
             FullNodeSetDiff::NodeExit(NodeExit {
                 address: node2.address,
                 exit_time: 1200,
@@ -2050,6 +2079,7 @@ mod tests {
                 node_set_diffs: nodes
                     .iter()
                     .cloned()
+                    .map(Arc::new)
                     .map(FullNodeSetDiff::NodeUpdate)
                     .collect(),
                 wallet_diffs: Default::default(),
@@ -2095,7 +2125,7 @@ mod tests {
                 update,
                 Update {
                     block: block_snapshot(3),
-                    node_set_diffs: vec![FullNodeSetDiff::NodeUpdate(new_node.clone())],
+                    node_set_diffs: vec![FullNodeSetDiff::NodeUpdate(Arc::new(new_node.clone()))],
                     wallet_diffs: [(wallet, vec![WalletDiff::DelegatedToNode(new_delegation)])]
                         .into_iter()
                         .collect(),
@@ -2124,5 +2154,90 @@ mod tests {
                 new_node.address => new_delegation
             }
         );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_node_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let options = PersistenceOptions {
+            path: db_path,
+            max_connections: 5,
+        };
+        let mut persistence = Persistence::new(&options).await.unwrap();
+
+        let content = NodeMetadataContent {
+            name: Some("test".into()),
+            description: Some("longer description".into()),
+            company_name: Some("Espresso Systems".into()),
+            company_website: Some("https://www.espressosys.com/".parse().unwrap()),
+            client_version: Some("release-main".into()),
+            icon: Some(ImageSet {
+                small: RatioSet {
+                    ratio1: Some(
+                        "https://www.espressosys.com/icon-14x14@1x.svg"
+                            .parse()
+                            .unwrap(),
+                    ),
+                    ratio2: Some(
+                        "https://www.espressosys.com/icon-14x14@2x.svg"
+                            .parse()
+                            .unwrap(),
+                    ),
+                    ratio3: Some(
+                        "https://www.espressosys.com/icon-14x14@3x.svg"
+                            .parse()
+                            .unwrap(),
+                    ),
+                },
+                large: RatioSet {
+                    ratio1: Some(
+                        "https://www.espressosys.com/icon-24x24@1x.svg"
+                            .parse()
+                            .unwrap(),
+                    ),
+                    ratio2: Some(
+                        "https://www.espressosys.com/icon-24x24@2x.svg"
+                            .parse()
+                            .unwrap(),
+                    ),
+                    ratio3: Some(
+                        "https://www.espressosys.com/icon-24x24@3x.svg"
+                            .parse()
+                            .unwrap(),
+                    ),
+                },
+            }),
+        };
+        let metadata = NodeMetadata {
+            uri: "https://www.espressosys.com/metadata/".parse().unwrap(),
+            content: Some(content),
+        };
+
+        // Initialize a node.
+        persistence
+            .save_genesis(Snapshot::empty(block_snapshot(0)))
+            .await
+            .unwrap();
+        let node = NodeSetEntry {
+            metadata: Some(metadata.clone()),
+            ..make_node(0)
+        };
+        persistence
+            .apply_updates(vec![Update {
+                block: block_snapshot(1),
+                node_set_diffs: vec![FullNodeSetDiff::NodeUpdate(Arc::new(node.clone()))],
+                wallet_diffs: Default::default(),
+            }])
+            .await
+            .unwrap();
+
+        // Check that we get the same metadata when we read it back.
+        let snapshot = persistence
+            .load_finalized_snapshot()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.node_set[&node.address].metadata, Some(metadata));
     }
 }

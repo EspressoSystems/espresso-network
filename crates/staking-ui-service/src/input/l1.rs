@@ -10,10 +10,13 @@ use alloy::primitives::BlockHash;
 use async_lock::{RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use derive_more::{Deref, DerefMut};
 use espresso_types::{PubKey, v0_3::COMMISSION_BASIS_POINTS};
-use futures::stream::{Stream, StreamExt};
+use futures::{
+    future::join_all,
+    stream::{Stream, StreamExt},
+};
 use hotshot_contract_adapter::sol_types::{
     RewardClaim::RewardClaimEvents,
-    StakeTableV2::{StakeTableV2Events, ValidatorRegistered, ValidatorRegisteredV2},
+    StakeTableV2::{StakeTableV2Events, ValidatorRegistered},
 };
 use hotshot_types::light_client::StateVerKey;
 use tokio::time::sleep;
@@ -21,16 +24,18 @@ use tracing::instrument;
 
 use crate::{
     error::{Error, Result, ensure},
+    input::l1::metadata::{METADATA_REFRESH_BLOCKS, MetadataFetcher},
     types::{
         common::{
-            Address, Delegation, ESPTokenAmount, L1BlockId, L1BlockInfo, NodeExit, NodeSetEntry,
-            PendingWithdrawal, Ratio, Timestamp, Withdrawal,
+            Address, Delegation, ESPTokenAmount, L1BlockId, L1BlockInfo, NodeExit, NodeMetadata,
+            NodeSetEntry, PendingWithdrawal, Ratio, Timestamp, Withdrawal,
         },
         global::{FullNodeSetDiff, FullNodeSetSnapshot, FullNodeSetUpdate},
         wallet::{WalletDiff, WalletSnapshot, WalletUpdate},
     },
 };
 
+pub mod metadata;
 pub mod options;
 pub mod provider;
 mod rpc_catchup;
@@ -43,7 +48,7 @@ pub mod testing;
 
 /// In-memory state populated by the L1 input source.
 #[derive(Clone, Debug)]
-pub struct State<S> {
+pub struct State<S, M> {
     /// Information about each L1 block since the finalized one.
     ///
     /// This forms a chain of updates and snapshots dating back to the persisted/finalized snapshot.
@@ -60,14 +65,22 @@ pub struct State<S> {
 
     /// Persistent storage handle.
     storage: S,
+
+    /// Interface for downloading node metadata from third-party URIs.
+    metadata_fetcher: M,
 }
 
-impl<S: L1Persistence> State<S> {
+impl<S: L1Persistence, M: MetadataFetcher> State<S, M> {
     /// Create a new L1 input data source.
     ///
     /// Previously saved state will be loaded from `storage` if possible. If there is no previous
     /// state in storage, the given genesis state will be used.
-    pub async fn new(mut storage: S, genesis: Snapshot, catchup: &impl L1Catchup) -> Result<Self> {
+    pub async fn new(
+        mut storage: S,
+        metadata_fetcher: M,
+        genesis: Snapshot,
+        catchup: &impl L1Catchup,
+    ) -> Result<Self> {
         let mut state = match storage.finalized_snapshot().await? {
             Some(snapshot) => {
                 tracing::info!(?snapshot.block, "starting from saved snapshot");
@@ -89,7 +102,7 @@ impl<S: L1Persistence> State<S> {
         if !catchup_inputs.is_empty() {
             let mut updates = vec![];
             for (id, (timestamp, events)) in catchup_inputs {
-                updates.push(state.apply(id, timestamp, &events));
+                updates.push(state.apply(&metadata_fetcher, id, timestamp, &events).await);
             }
 
             // Persist updates.
@@ -115,6 +128,7 @@ impl<S: L1Persistence> State<S> {
             blocks,
             blocks_by_hash,
             storage,
+            metadata_fetcher,
         })
     }
 
@@ -323,7 +337,9 @@ impl<S: L1Persistence> State<S> {
         }
 
         // Convert the input event into new updates to our state.
-        let new_block = state.blocks[state.blocks.len() - 1].next(head);
+        let new_block = state.blocks[state.blocks.len() - 1]
+            .next(&state.metadata_fetcher, head)
+            .await;
 
         // Update state. As soon as we take this write lock, we are updating the state object in
         // place. We must not fail after this point, or we may drop the lock while the state is in a
@@ -428,11 +444,18 @@ struct BlockData {
 
 impl BlockData {
     /// Get the [`BlockData`] that follows from this one after applying the next L1 block.
-    fn next(&self, input: &BlockInput) -> Self {
+    async fn next(&self, metadata_fetcher: &impl MetadataFetcher, input: &BlockInput) -> Self {
         // Cloning entire state in order to apply updates and get the new state. This is cheap
         // thanks to the magic of immutable data structures.
         let mut state = self.state.clone();
-        let update = state.apply(input.block, input.timestamp, &input.events);
+        let update = state
+            .apply(
+                metadata_fetcher,
+                input.block,
+                input.timestamp,
+                &input.events,
+            )
+            .await;
         Self {
             state,
             node_set_update: Some(update.node_set_diffs),
@@ -519,8 +542,9 @@ impl Snapshot {
     /// Transform the state snapshot by applying a new L1 block.
     ///
     /// Returns the updates that were made while applying the block.
-    fn apply<'a>(
+    async fn apply<'a>(
         &mut self,
+        metadata_fetcher: &impl MetadataFetcher,
         id: L1BlockId,
         timestamp: Timestamp,
         events: impl IntoIterator<Item = &'a L1Event>,
@@ -540,7 +564,8 @@ impl Snapshot {
         for event in events {
             // Convert contract events into either node set or wallet updates, and apply updates
             // to state snapshots.
-            let (nodes_diff, wallets_diff) = self.handle_event(timestamp, event);
+            let (nodes_diff, wallets_diff) =
+                self.handle_event(metadata_fetcher, timestamp, event).await;
             for diff in nodes_diff {
                 self.node_set.apply(&diff);
                 node_set_diffs.push(diff);
@@ -548,6 +573,17 @@ impl Snapshot {
             for (address, diff) in wallets_diff {
                 self.wallets.apply(address, &diff);
                 wallet_diffs.entry(address).or_default().push(diff);
+            }
+        }
+
+        // Every so often, refresh metadata sourced from third party URIs, as these can change
+        // contents without emitting a contract event.
+        if id.number.is_multiple_of(METADATA_REFRESH_BLOCKS) {
+            tracing::info!("refreshing metadata");
+            for node in self.refresh_metadata(metadata_fetcher).await {
+                let diff = FullNodeSetDiff::NodeUpdate(Arc::new(node));
+                self.node_set.apply(&diff);
+                node_set_diffs.push(diff);
             }
         }
 
@@ -562,9 +598,10 @@ impl Snapshot {
     ///
     /// Updates the block state accordingly and returns the diffs that should be applied to the rest
     /// of the state.
-    #[tracing::instrument(skip(self))]
-    fn handle_event(
+    #[tracing::instrument(skip(self, metadata_fetcher))]
+    async fn handle_event(
         &mut self,
+        metadata_fetcher: &impl MetadataFetcher,
         timestamp: Timestamp,
         event: &L1Event,
     ) -> (Vec<FullNodeSetDiff>, Vec<(Address, WalletDiff)>) {
@@ -572,6 +609,7 @@ impl Snapshot {
         match event {
             L1Event::StakeTable(ev) => match ev.as_ref() {
                 StakeTableV2Events::ValidatorRegisteredV2(ev) => {
+                    // Authenticate signatures.
                     if let Err(err) = ev.authenticate() {
                         // The contract doesn't check all the signatures, so it's possible that an
                         // invalid event got through. We can safely just ignore it as the consensus
@@ -579,11 +617,31 @@ impl Snapshot {
                         tracing::warn!("got invalid ValidatorRegisteredV2 event: {err:#}");
                         return Default::default();
                     }
-                    (vec![FullNodeSetDiff::NodeUpdate(ev.into())], vec![])
+
+                    // Download third-party metadata.
+                    let metadata = metadata_fetcher.fetch_infallible(&ev.metadataUri).await;
+
+                    // Downgrade the event: apart from authentication and metadata, the V2 event
+                    // contains the same information as the V1 event, and can be converted to a node
+                    // the same way.
+                    let legacy = ValidatorRegistered {
+                        account: ev.account,
+                        blsVk: ev.blsVK,
+                        commission: ev.commission,
+                        schnorrVk: ev.schnorrVK,
+                    };
+                    let node = NodeSetEntry {
+                        metadata,
+                        ..(&legacy).into()
+                    };
+                    (vec![FullNodeSetDiff::NodeUpdate(Arc::new(node))], vec![])
                 }
                 StakeTableV2Events::ValidatorRegistered(ev) => {
                     tracing::warn!("received legacy ValidatorRegistered event");
-                    (vec![FullNodeSetDiff::NodeUpdate(ev.into())], vec![])
+                    (
+                        vec![FullNodeSetDiff::NodeUpdate(Arc::new(ev.into()))],
+                        vec![],
+                    )
                 }
                 StakeTableV2Events::ExitEscrowPeriodUpdated(ev) => {
                     // This should be quite rare, we can be a little loud about it.
@@ -652,13 +710,11 @@ impl Snapshot {
                         )
                     });
 
-                    let diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: ev.account,
+                    let diff = FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
                         staking_key: PubKey::from(ev.blsVK).into(),
                         state_key: StateVerKey::from(ev.schnorrVK).into(),
-                        stake: node.stake,
-                        commission: node.commission,
-                    });
+                        ..node.clone()
+                    }));
                     (vec![diff], vec![])
                 }
                 StakeTableV2Events::ConsensusKeysUpdatedV2(ev) => {
@@ -674,13 +730,11 @@ impl Snapshot {
                         )
                     });
 
-                    let diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: ev.account,
+                    let diff = FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
                         staking_key: PubKey::from(ev.blsVK).into(),
                         state_key: StateVerKey::from(ev.schnorrVK).into(),
-                        stake: node.stake,
-                        commission: node.commission,
-                    });
+                        ..node.clone()
+                    }));
                     (vec![diff], vec![])
                 }
                 StakeTableV2Events::CommissionUpdated(ev) => {
@@ -691,16 +745,26 @@ impl Snapshot {
                         )
                     });
 
-                    let diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: ev.validator,
-                        staking_key: node.staking_key.clone(),
-                        state_key: node.state_key.clone(),
-                        stake: node.stake,
+                    let diff = FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
                         commission: Ratio::new(
                             ev.newCommission.into(),
                             COMMISSION_BASIS_POINTS.into(),
                         ),
+                        ..node.clone()
+                    }));
+                    (vec![diff], vec![])
+                }
+                StakeTableV2Events::MetadataUriUpdated(ev) => {
+                    let node = self.node_set.get(&ev.validator).unwrap_or_else(|| {
+                        panic!(
+                            "got MetadataUriUpdated event for non existent validator: {}",
+                            ev.validator
+                        )
                     });
+                    let diff = FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
+                        metadata: metadata_fetcher.fetch_infallible(&ev.metadataUri).await,
+                        ..node.clone()
+                    }));
                     (vec![diff], vec![])
                 }
                 StakeTableV2Events::Delegated(ev) => {
@@ -711,13 +775,10 @@ impl Snapshot {
                         )
                     });
 
-                    let node_diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: ev.validator,
-                        staking_key: node.staking_key.clone(),
-                        state_key: node.state_key.clone(),
-                        commission: node.commission,
+                    let node_diff = FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
                         stake: node.stake + ev.amount,
-                    });
+                        ..node.clone()
+                    }));
 
                     let delegation = Delegation {
                         delegator: ev.delegator,
@@ -747,13 +808,10 @@ impl Snapshot {
                         panic!("got Undelegated event for non existent validator: {validator}",)
                     });
 
-                    let node_diff = FullNodeSetDiff::NodeUpdate(NodeSetEntry {
-                        address: validator,
-                        staking_key: node.staking_key.clone(),
-                        state_key: node.state_key.clone(),
-                        commission: node.commission,
+                    let node_diff = FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
                         stake: node.stake - amount,
-                    });
+                        ..node.clone()
+                    }));
 
                     let pending_withdrawal = PendingWithdrawal {
                         delegator,
@@ -839,8 +897,7 @@ impl Snapshot {
                 | StakeTableV2Events::RoleAdminChanged(_)
                 | StakeTableV2Events::RoleGranted(_)
                 | StakeTableV2Events::RoleRevoked(_)
-                | StakeTableV2Events::Upgraded(_)
-                | StakeTableV2Events::MetadataUriUpdated(_) => {
+                | StakeTableV2Events::Upgraded(_) => {
                     tracing::debug!("skipping irrelevant event");
                     (vec![], vec![])
                 }
@@ -853,6 +910,56 @@ impl Snapshot {
                 _ => (vec![], vec![]),
             },
         }
+    }
+
+    /// Refresh metadata sourced from third party URIs.
+    ///
+    /// Fetches the latest metadata for every node. Returns those nodes whose metadata has changed.
+    async fn refresh_metadata(&self, metadata_fetcher: &impl MetadataFetcher) -> Vec<NodeSetEntry> {
+        let fetches = self.node_set.values().filter_map(|node| {
+            // If a node has not registered a metadata URI to begin with, it can't have updated
+            // metadata.
+            let metadata = node.metadata.as_ref()?;
+
+            // Fetch the node's metadata again; see if it has changed.
+            Some(async move {
+                let new = match metadata_fetcher.fetch_content(&metadata.uri).await {
+                    Ok(content) => content,
+                    Err(err) => {
+                        // We know this node has a valid metadata URI, so if we get an error (e.g.
+                        // the third party metadata source is down) it's better to keep the metadata
+                        // that we already have for this node, rather than wipe it out with
+                        // [`None`], so we bail without emitting a new node entry.
+                        tracing::warn!(
+                            %node.address,
+                            %metadata.uri,
+                            "not updating node metadata at refresh due to fetch failure: {err:#}",
+                        );
+                        return None;
+                    }
+                };
+
+                // Only emit a new node entry if the metadata is actually changing.
+                if metadata.content.as_ref() != Some(&new) {
+                    tracing::info!(?node, ?new, "updating node metadata due to refresh");
+                    Some(NodeSetEntry {
+                        metadata: Some(NodeMetadata {
+                            uri: metadata.uri.clone(),
+                            content: Some(new),
+                        }),
+                        ..node.clone()
+                    })
+                } else {
+                    tracing::debug!(
+                        %node.address,
+                        %metadata.uri,
+                        "not updating node metadata which has not changed",
+                    );
+                    None
+                }
+            })
+        });
+        join_all(fetches).await.into_iter().flatten().collect()
     }
 }
 
@@ -1023,7 +1130,7 @@ impl NodeSet {
     pub fn apply(&mut self, diff: &FullNodeSetDiff) {
         match diff {
             FullNodeSetDiff::NodeUpdate(node) => {
-                self.insert(node.address, node.clone());
+                self.insert(node.address, node.as_ref().clone());
             }
             FullNodeSetDiff::NodeExit(node) => {
                 self.remove(&node.address);
@@ -1075,20 +1182,6 @@ impl From<StakeTableV2Events> for L1Event {
     }
 }
 
-impl From<&ValidatorRegisteredV2> for NodeSetEntry {
-    fn from(e: &ValidatorRegisteredV2) -> Self {
-        // Downgrade the event: apart from authentication, the V2 event contains the same
-        // information as the V1 event, and can be converted to a node the same way.
-        let e = ValidatorRegistered {
-            account: e.account,
-            blsVk: e.blsVK,
-            commission: e.commission,
-            schnorrVk: e.schnorrVK,
-        };
-        (&e).into()
-    }
-}
-
 impl From<&ValidatorRegistered> for NodeSetEntry {
     fn from(e: &ValidatorRegistered) -> Self {
         NodeSetEntry {
@@ -1099,6 +1192,7 @@ impl From<&ValidatorRegistered> for NodeSetEntry {
             // All nodes start with 0 stake, a separate delegation event will be generated when
             // someone delegates non-zero stake to a node.
             stake: ESPTokenAmount::ZERO,
+            metadata: None,
         }
     }
 }
@@ -1170,14 +1264,21 @@ pub trait L1Persistence: Send {
 mod test {
     use std::time::{Duration, Instant};
 
-    use crate::types::common::Address;
+    use crate::{
+        input::l1::{
+            metadata::METADATA_REFRESH_BLOCKS,
+            testing::{ConstMetadata, NoMetadata},
+        },
+        types::common::{Address, NodeMetadataContent},
+    };
     use alloy::primitives::U256;
     use espresso_types::{StakeTableState, v0_3::StakeTableEvent};
     use hotshot_contract_adapter::sol_types::StakeTableV2::{
-        Delegated, ExitEscrowPeriodUpdated, Undelegated, ValidatorExit, ValidatorExitClaimed,
-        WithdrawalClaimed,
+        Delegated, ExitEscrowPeriodUpdated, MetadataUriUpdated, Undelegated, ValidatorExit,
+        ValidatorExitClaimed, ValidatorRegisteredV2, WithdrawalClaimed,
     };
     use pretty_assertions::assert_eq;
+    use reqwest::Url;
     use tide_disco::{Error as _, StatusCode};
 
     use super::{
@@ -1194,11 +1295,14 @@ mod test {
     };
 
     /// Generate a test [`State`] from a list of L1 blocks.
-    fn from_blocks<S: Default>(blocks: impl IntoIterator<Item = BlockData>) -> State<S> {
-        let mut state = State::<S> {
+    fn from_blocks<S: Default, M: Default>(
+        blocks: impl IntoIterator<Item = BlockData>,
+    ) -> State<S, M> {
+        let mut state = State {
             blocks: Default::default(),
             blocks_by_hash: Default::default(),
             storage: S::default(),
+            metadata_fetcher: M::default(),
         };
         for block in blocks {
             state
@@ -1232,7 +1336,7 @@ mod test {
         for finalized in 0..3 {
             tracing::info!(finalized, "test garbage collection");
             let blocks = (0..3).map(BlockData::empty).collect::<Vec<_>>();
-            let mut state = from_blocks::<MemoryStorage>(blocks.clone());
+            let mut state = from_blocks::<MemoryStorage, NoMetadata>(blocks.clone());
 
             state.garbage_collect(finalized as u64);
 
@@ -1250,7 +1354,7 @@ mod test {
     #[test_log::test]
     fn test_api_l1_block() {
         let block = BlockData::empty(1);
-        let state = from_blocks::<MemoryStorage>([block.clone()]);
+        let state = from_blocks::<MemoryStorage, NoMetadata>([block.clone()]);
 
         // Query for old block.
         let err = state.l1_block(0).unwrap_err();
@@ -1273,9 +1377,9 @@ mod test {
         let mut block = BlockData::empty(1);
         let node = make_node(0);
         block.state.node_set.push(node.clone());
-        block.node_set_update = Some(vec![FullNodeSetDiff::NodeUpdate(node)]);
+        block.node_set_update = Some(vec![FullNodeSetDiff::NodeUpdate(Arc::new(node))]);
 
-        let state = from_blocks::<MemoryStorage>([finalized.clone(), block.clone()]);
+        let state = from_blocks::<MemoryStorage, NoMetadata>([finalized.clone(), block.clone()]);
 
         // Query for unknown block.
         let unknown = BlockData::empty(2).block().hash();
@@ -1338,7 +1442,7 @@ mod test {
             .wallets
             .insert(not_updated, not_updated_wallet.clone());
 
-        let state = from_blocks::<MemoryStorage>([finalized.clone(), block.clone()]);
+        let state = from_blocks::<MemoryStorage, NoMetadata>([finalized.clone(), block.clone()]);
 
         // Query for unknown block.
         let unknown = BlockData::empty(2).block().hash();
@@ -1388,8 +1492,8 @@ mod test {
         assert_eq!(update.l1_block, block.block().info());
     }
 
-    #[test_log::test]
-    fn test_replay_consistency() {
+    #[test_log::test(tokio::test)]
+    async fn test_replay_consistency() {
         let mut block = BlockData::empty(0);
         let mut state = StakeTableState::default();
         let mut num_events = 0;
@@ -1401,7 +1505,7 @@ mod test {
 
             // Compute the full node set snapshot as the staking UI service would do it.
             let start = Instant::now();
-            block = block.next(&input);
+            block = block.next(&NoMetadata, &input).await;
             tracing::debug!(elapsed = ?start.elapsed(), "updated BlockData");
 
             // Compute the Espresso validator set as the protocol does it.
@@ -1430,8 +1534,8 @@ mod test {
         );
     }
 
-    #[test_log::test]
-    fn test_large_state() {
+    #[test_log::test(tokio::test)]
+    async fn test_large_state() {
         let mut block = BlockData::empty(0);
 
         // Realistically large state: 500 registered validators, 10000 delegators, each delegating
@@ -1465,7 +1569,7 @@ mod test {
         let inputs = InputGenerator::default().take(100);
         let start = Instant::now();
         for input in inputs {
-            block = block.next(&input);
+            block = block.next(&NoMetadata, &input).await;
         }
         let elapsed = start.elapsed();
         tracing::info!(?elapsed, avg_duration = ?elapsed / 100, "processed 100 inputs");
@@ -1478,7 +1582,9 @@ mod test {
         let stream = &mut VecStream::default();
 
         // Start with just the finalized state.
-        let state = RwLock::new(from_blocks::<MemoryStorage>([BlockData::empty(0)]));
+        let state = RwLock::new(from_blocks::<MemoryStorage, NoMetadata>([
+            BlockData::empty(0),
+        ]));
 
         // Apply blocks without finalizing a new block.
         for input in &inputs {
@@ -1529,7 +1635,9 @@ mod test {
         let stream = &mut VecStream::default();
 
         // Start with just the finalized state.
-        let state = RwLock::new(from_blocks::<FailStorage>([BlockData::empty(0)]));
+        let state = RwLock::new(from_blocks::<FailStorage, NoMetadata>([BlockData::empty(
+            0,
+        )]));
 
         // Apply blocks without finalizing a new block.
         for input in &inputs {
@@ -1559,7 +1667,7 @@ mod test {
         }
 
         // Start with just the finalized state.
-        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([
+        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage, NoMetadata>([
             BlockData::empty(0),
         ])));
 
@@ -1592,7 +1700,7 @@ mod test {
         stream = stream.with_reorg(inputs);
 
         // Start with just the finalized state.
-        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([
+        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage, NoMetadata>([
             BlockData::empty(0),
         ])));
 
@@ -1627,7 +1735,7 @@ mod test {
         stream = stream.with_reorg(inputs.clone());
 
         // Start with just the genesis state.
-        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage>([
+        let state = Arc::new(RwLock::new(from_blocks::<MemoryStorage, NoMetadata>([
             BlockData::empty(0),
         ])));
 
@@ -1669,7 +1777,7 @@ mod test {
         let genesis = Snapshot::empty(block_snapshot(0));
         let storage = MemoryStorage::default();
         let state = Arc::new(RwLock::new(
-            State::new(storage.clone(), genesis.clone(), &NoCatchup)
+            State::new(storage.clone(), NoMetadata, genesis.clone(), &NoCatchup)
                 .await
                 .unwrap(),
         ));
@@ -1692,7 +1800,7 @@ mod test {
         // Restart and check that we reload the finalized snapshot (and don't use the genesis, for
         // which we will pass in some nonsense).
         let genesis = Snapshot::empty(block_snapshot(1000));
-        let state = State::new(storage.clone(), genesis, &NoCatchup)
+        let state = State::new(storage.clone(), NoMetadata, genesis, &NoCatchup)
             .await
             .unwrap();
         assert_eq!(state.blocks.len(), 1);
@@ -1719,13 +1827,21 @@ mod test {
     /// * the result of applying the each event is consistent with applying it to a
     ///   [`StakeTableState`].
     /// * if an event is invalid, the state is not modified and no updates are recorded.
-    fn test_events(events: impl IntoIterator<Item = StakeTableV2Events>) -> BlockData {
+    async fn test_events(
+        metadata_fetcher: &impl MetadataFetcher,
+        events: impl IntoIterator<Item = StakeTableV2Events>,
+    ) -> BlockData {
         let mut curr = BlockData::empty(0);
         let mut stake_table = StakeTableState::default();
 
         for (i, event) in events.into_iter().enumerate() {
             let number = i as u64 + 1;
-            let next = curr.next(&BlockInput::empty(number).with_event(event.clone()));
+            let next = curr
+                .next(
+                    metadata_fetcher,
+                    &BlockInput::empty(number).with_event(event.clone()),
+                )
+                .await;
             assert_eq!(next.block().id(), block_id(number));
 
             // Calling `next` should always populate the update fields.
@@ -1750,50 +1866,67 @@ mod test {
         curr
     }
 
-    #[test_log::test]
-    fn test_event_validator_registered_v2_valid() {
-        let event = validator_registered_event(rand::thread_rng());
-        let block = test_events([StakeTableV2Events::ValidatorRegisteredV2(event.clone())]);
-        let expected = NodeSetEntry::from(&event);
+    #[test_log::test(tokio::test)]
+    async fn test_event_validator_registered_v2_valid() {
+        let mut event = validator_registered_event(rand::thread_rng());
+        event.metadataUri = "".into();
+        let block = test_events(
+            &NoMetadata,
+            [StakeTableV2Events::ValidatorRegisteredV2(event.clone())],
+        )
+        .await;
+        let expected = NodeSetEntry::from_event_no_metadata(&event);
         assert_eq!(block.state.node_set.len(), 1);
         assert_eq!(block.state.node_set[&event.account], expected);
         assert_eq!(
             block.node_set_update.unwrap(),
-            [FullNodeSetDiff::NodeUpdate(expected)]
+            [FullNodeSetDiff::NodeUpdate(Arc::new(expected))]
         );
     }
 
-    #[test_log::test]
-    fn test_event_validator_registered_v2_invalid_bls() {
+    #[test_log::test(tokio::test)]
+    async fn test_event_validator_registered_v2_invalid_bls() {
         let mut event = validator_registered_event(rand::thread_rng());
 
         // Change the signature so it doesn't match the public key.
         event.blsSig = validator_registered_event(rand::thread_rng()).blsSig;
 
-        let block = test_events([StakeTableV2Events::ValidatorRegisteredV2(event)]);
+        let block = test_events(
+            &NoMetadata,
+            [StakeTableV2Events::ValidatorRegisteredV2(event)],
+        )
+        .await;
         assert_eq!(block.state.node_set.len(), 0);
     }
 
-    #[test_log::test]
-    fn test_event_validator_registered_v2_invalid_schnorr() {
+    #[test_log::test(tokio::test)]
+    async fn test_event_validator_registered_v2_invalid_schnorr() {
         let mut event = validator_registered_event(rand::thread_rng());
 
         // Change the signature so it doesn't match the public key.
         event.schnorrSig = validator_registered_event(rand::thread_rng()).schnorrSig;
 
-        let block = test_events([StakeTableV2Events::ValidatorRegisteredV2(event)]);
+        let block = test_events(
+            &NoMetadata,
+            [StakeTableV2Events::ValidatorRegisteredV2(event)],
+        )
+        .await;
         assert_eq!(block.state.node_set.len(), 0);
     }
 
-    #[test_log::test]
-    fn test_event_validator_exit_valid() {
+    #[test_log::test(tokio::test)]
+    async fn test_event_validator_exit_valid() {
         let node = validator_registered_event(rand::thread_rng());
-        let next = test_events([
-            StakeTableV2Events::ValidatorRegisteredV2(node.clone()),
-            StakeTableV2Events::ValidatorExit(ValidatorExit {
-                validator: node.account,
-            }),
-        ]);
+        let next = test_events(
+            &NoMetadata,
+            [
+                StakeTableV2Events::ValidatorRegisteredV2(node.clone()),
+                StakeTableV2Events::ValidatorExit(ValidatorExit {
+                    validator: node.account,
+                }),
+            ],
+        )
+        .await;
         assert_eq!(next.state.node_set.len(), 0);
         assert_eq!(
             next.node_set_update.as_ref().unwrap(),
@@ -1804,27 +1937,110 @@ mod test {
         );
     }
 
-    #[test_log::test]
-    fn test_event_validator_exit_invalid_not_found() {
-        test_events([StakeTableV2Events::ValidatorExit(ValidatorExit {
-            validator: Address::random(),
-        })]);
+    #[test_log::test(tokio::test)]
+    async fn test_event_validator_exit_invalid_not_found() {
+        test_events(
+            &NoMetadata,
+            [StakeTableV2Events::ValidatorExit(ValidatorExit {
+                validator: Address::random(),
+            })],
+        )
+        .await;
     }
 
-    #[test_log::test]
-    fn test_exit_escrow_period_updated() {
-        let block = test_events([StakeTableV2Events::ExitEscrowPeriodUpdated(
-            ExitEscrowPeriodUpdated {
-                newExitEscrowPeriod: 12345,
-            },
-        )]);
+    #[test_log::test(tokio::test)]
+    async fn test_event_registration_no_metadata() {
+        let mut node = validator_registered_event(rand::thread_rng());
+        node.metadataUri = "".into();
+        let block = test_events(
+            &NoMetadata,
+            [StakeTableV2Events::ValidatorRegisteredV2(node.clone())],
+        )
+        .await;
+        assert_eq!(block.state.node_set[&node.account].metadata, None);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_event_registration_with_metadata() {
+        let mut node = validator_registered_event(rand::thread_rng());
+        node.metadataUri = "https://testmetadata.com".to_string();
+        let block: BlockData = test_events(
+            &ConstMetadata::default(),
+            [StakeTableV2Events::ValidatorRegisteredV2(node.clone())],
+        )
+        .await;
+        assert_eq!(
+            block.state.node_set[&node.account].metadata,
+            Some(NodeMetadata {
+                uri: node.metadataUri.parse().unwrap(),
+                content: Some(NodeMetadataContent::default())
+            })
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_event_updated_no_metadata() {
+        let mut node = validator_registered_event(rand::thread_rng());
+        node.metadataUri = "https://testmetadata.com".to_string();
+        let block = test_events(
+            &ConstMetadata::default(),
+            [
+                StakeTableV2Events::ValidatorRegisteredV2(node.clone()),
+                StakeTableV2Events::MetadataUriUpdated(MetadataUriUpdated {
+                    validator: node.account,
+                    metadataUri: "".to_string(),
+                }),
+            ],
+        )
+        .await;
+        assert_eq!(block.state.node_set[&node.account].metadata, None);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_event_updated_with_metadata() {
+        let mut node = validator_registered_event(rand::thread_rng());
+        node.metadataUri = "".to_string();
+
+        let uri = "https://testmetadata.com";
+        let block = test_events(
+            &ConstMetadata::default(),
+            [
+                StakeTableV2Events::ValidatorRegisteredV2(node.clone()),
+                StakeTableV2Events::MetadataUriUpdated(MetadataUriUpdated {
+                    validator: node.account,
+                    metadataUri: uri.to_string(),
+                }),
+            ],
+        )
+        .await;
+        assert_eq!(
+            block.state.node_set[&node.account].metadata,
+            Some(NodeMetadata {
+                uri: uri.parse().unwrap(),
+                content: Some(NodeMetadataContent::default())
+            })
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_exit_escrow_period_updated() {
+        let block = test_events(
+            &NoMetadata,
+            [StakeTableV2Events::ExitEscrowPeriodUpdated(
+                ExitEscrowPeriodUpdated {
+                    newExitEscrowPeriod: 12345,
+                },
+            )],
+        )
+        .await;
         assert_eq!(block.block().exit_escrow_period, 12345);
     }
 
-    #[test_log::test]
-    fn test_exit_escrow_period_updated_and_validator_exit_in_same_block() {
+    #[test_log::test(tokio::test)]
+    async fn test_exit_escrow_period_updated_and_validator_exit_in_same_block() {
         let genesis = BlockData::empty(0);
-        let node = validator_registered_event(rand::thread_rng());
+        let mut node = validator_registered_event(rand::thread_rng());
+        node.metadataUri = "".into();
 
         let input = BlockInput::empty(1)
             .with_event(StakeTableV2Events::ValidatorRegisteredV2(node.clone()))
@@ -1836,7 +2052,7 @@ mod test {
             .with_event(StakeTableV2Events::ValidatorExit(ValidatorExit {
                 validator: node.account,
             }));
-        let block = genesis.next(&input);
+        let block = genesis.next(&NoMetadata, &input).await;
         assert!(block.state.node_set.is_empty());
         assert_eq!(
             block.block().exit_escrow_period,
@@ -1845,7 +2061,7 @@ mod test {
         assert_eq!(
             block.node_set_update.as_ref().unwrap(),
             &[
-                FullNodeSetDiff::NodeUpdate(NodeSetEntry::from(&node)),
+                FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry::from_event_no_metadata(&node))),
                 FullNodeSetDiff::NodeExit(NodeExit {
                     address: node.account,
                     exit_time: block.block().timestamp() + block.block().exit_escrow_period
@@ -1856,8 +2072,8 @@ mod test {
 
     // tests edge case where a delegator can have both
     // a pending undelegation AND a pending exit for the same validator.
-    #[test]
-    fn test_simultaneous_pending_undelegation_and_exit() {
+    #[test_log::test(tokio::test)]
+    async fn test_simultaneous_pending_undelegation_and_exit() {
         let delegator = Address::random();
 
         // Create a validator registration event
@@ -1873,7 +2089,7 @@ mod test {
                 amount: U256::from(1000),
             }),
         ];
-        let block1 = test_events(events);
+        let block1 = test_events(&NoMetadata, events).await;
 
         // Verify delegation exists
         let wallet = block1.state.wallets.get(&delegator).unwrap();
@@ -1886,13 +2102,16 @@ mod test {
         assert_eq!(wallet.pending_exits.len(), 0);
 
         // undelegation of 400 tokens
-        let block2 = block1.next(&BlockInput::empty(2).with_event(
-            StakeTableV2Events::Undelegated(Undelegated {
-                delegator,
-                validator: validator_address,
-                amount: U256::from(400),
-            }),
-        ));
+        let block2 = block1
+            .next(
+                &NoMetadata,
+                &BlockInput::empty(2).with_event(StakeTableV2Events::Undelegated(Undelegated {
+                    delegator,
+                    validator: validator_address,
+                    amount: U256::from(400),
+                })),
+            )
+            .await;
 
         // Verify
         let wallet = block2.state.wallets.get(&delegator).unwrap();
@@ -1913,11 +2132,16 @@ mod test {
         assert_eq!(wallet.pending_exits.len(), 0);
 
         // Validator exits
-        let block3 = block2.next(&BlockInput::empty(3).with_event(
-            StakeTableV2Events::ValidatorExit(ValidatorExit {
-                validator: validator_address,
-            }),
-        ));
+        let block3 = block2
+            .next(
+                &NoMetadata,
+                &BlockInput::empty(3).with_event(StakeTableV2Events::ValidatorExit(
+                    ValidatorExit {
+                        validator: validator_address,
+                    },
+                )),
+            )
+            .await;
 
         // Verify both pending operations exists
         let wallet = block3.state.wallets.get(&delegator).unwrap();
@@ -1938,14 +2162,19 @@ mod test {
         ); // Exit for remaining delegation
 
         // Withdraw the undelegation
-        let block4 = block3.next(&BlockInput::empty(4).with_event(
-            StakeTableV2Events::WithdrawalClaimed(WithdrawalClaimed {
-                delegator,
-                validator: validator_address,
-                undelegationId: 0,
-                amount: U256::from(400),
-            }),
-        ));
+        let block4 = block3
+            .next(
+                &NoMetadata,
+                &BlockInput::empty(4).with_event(StakeTableV2Events::WithdrawalClaimed(
+                    WithdrawalClaimed {
+                        delegator,
+                        validator: validator_address,
+                        undelegationId: 0,
+                        amount: U256::from(400),
+                    },
+                )),
+            )
+            .await;
 
         // Verify undelegation withdrawn but exit still pending
         let wallet = block4.state.wallets.get(&delegator).unwrap();
@@ -1958,13 +2187,18 @@ mod test {
         );
 
         // Withdraw the exit
-        let block5 = block4.next(&BlockInput::empty(5).with_event(
-            StakeTableV2Events::ValidatorExitClaimed(ValidatorExitClaimed {
-                delegator,
-                validator: validator_address,
-                amount: U256::from(600),
-            }),
-        ));
+        let block5 = block4
+            .next(
+                &NoMetadata,
+                &BlockInput::empty(5).with_event(StakeTableV2Events::ValidatorExitClaimed(
+                    ValidatorExitClaimed {
+                        delegator,
+                        validator: validator_address,
+                        amount: U256::from(600),
+                    },
+                )),
+            )
+            .await;
 
         let wallet = block5.state.wallets.get(&delegator).unwrap();
         assert_eq!(wallet.nodes.len(), 0);
@@ -1994,9 +2228,14 @@ mod test {
 
         // Start the normal state.
         let state_block_by_block = Arc::new(RwLock::new(
-            State::new(MemoryStorage::default(), genesis.clone(), &NoCatchup)
-                .await
-                .unwrap(),
+            State::new(
+                MemoryStorage::default(),
+                NoMetadata,
+                genesis.clone(),
+                &NoCatchup,
+            )
+            .await
+            .unwrap(),
         ));
         let mut stream = VecStream::infinite();
         for block in &blocks {
@@ -2010,6 +2249,7 @@ mod test {
         // Have a state do fast catchup from genesis.
         let state_catchup = State::new(
             MemoryStorage::default(),
+            NoMetadata,
             genesis,
             &CatchupFromEvents::from_blocks(blocks.clone()),
         )
@@ -2027,5 +2267,193 @@ mod test {
 
         // The caught up state only has the latest block.
         assert_eq!(state_catchup.blocks.len(), 1);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_metadata_refresh() {
+        let node = ValidatorRegisteredV2 {
+            metadataUri: "https://www.metadata.com".into(),
+            ..validator_registered_event(rand::thread_rng())
+        };
+        let uri: Url = node.metadataUri.parse().unwrap();
+
+        let mut block = BlockData::empty(0);
+
+        // Suppose we register a node and for some reason (possibly the third party website is down,
+        // possibly our own network fails) we fail to fetch the metadata. We will register this node
+        // as having the default metadata for a time.
+        block = block
+            .next(
+                &NoMetadata,
+                &BlockInput::empty(1)
+                    .with_event(StakeTableV2Events::ValidatorRegisteredV2(node.clone())),
+            )
+            .await;
+        assert_eq!(
+            block.state.node_set[&node.account].metadata,
+            Some(NodeMetadata {
+                uri: uri.clone(),
+                content: None,
+            })
+        );
+
+        // Eventually, after processing a number of blocks, regardless of the events in those
+        // blocks, we will refresh the node's metadata, which gives us another chance to load it
+        // successfully.
+        let content = NodeMetadataContent {
+            name: Some("refreshed".into()),
+            ..Default::default()
+        };
+        for i in 0..METADATA_REFRESH_BLOCKS {
+            block = block
+                .next(
+                    &vec![(uri.clone(), Some(content.clone()))],
+                    &BlockInput::empty(2 + i),
+                )
+                .await;
+        }
+        assert_eq!(
+            block.state.node_set[&node.account].metadata,
+            Some(NodeMetadata {
+                uri,
+                content: Some(content)
+            })
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_refresh_metadata() {
+        // With four nodes, we cover the four cases that we can encounter in `refresh_metadata`:
+        // * One node that has no metadata
+        // * One whose metadata doesn't change
+        // * One that has metadata and fails to refresh, so we keep the old metadata
+        // * One that refreshes and changes.
+        let metadata_const = NodeMetadata {
+            uri: "https://const-metadata.com".parse().unwrap(),
+            content: Some(NodeMetadataContent {
+                name: Some("const".into()),
+                ..Default::default()
+            }),
+        };
+        let metadata_fail = NodeMetadata {
+            uri: "https://fail-metadata.com".parse().unwrap(),
+            content: Some(NodeMetadataContent {
+                name: Some("fail".into()),
+                ..Default::default()
+            }),
+        };
+        let metadata_change = NodeMetadata {
+            uri: "https://change-metadata.com".parse().unwrap(),
+            content: Some(NodeMetadataContent {
+                name: Some("change".into()),
+                ..Default::default()
+            }),
+        };
+        let after_change_metadata = NodeMetadataContent {
+            name: Some("changed metadata".into()),
+            ..metadata_change.content.clone().unwrap()
+        };
+
+        let mut state = Snapshot::empty(block_snapshot(0));
+        state.node_set = NodeSet(
+            [
+                NodeSetEntry {
+                    metadata: None,
+                    ..make_node(0)
+                },
+                NodeSetEntry {
+                    metadata: Some(metadata_const.clone()),
+                    ..make_node(1)
+                },
+                NodeSetEntry {
+                    metadata: Some(metadata_fail.clone()),
+                    ..make_node(2)
+                },
+                NodeSetEntry {
+                    metadata: Some(metadata_change.clone()),
+                    ..make_node(3)
+                },
+            ]
+            .into_iter()
+            .map(|node| (node.address, node))
+            .collect(),
+        );
+
+        let fetcher = vec![
+            (metadata_const.uri, metadata_const.content),
+            (metadata_fail.uri, None),
+            (
+                metadata_change.uri.clone(),
+                Some(after_change_metadata.clone()),
+            ),
+        ];
+        assert_eq!(
+            state.refresh_metadata(&fetcher).await,
+            [NodeSetEntry {
+                metadata: Some(NodeMetadata {
+                    uri: metadata_change.uri,
+                    content: Some(after_change_metadata)
+                }),
+                ..make_node(3)
+            }]
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_refresh_and_update_metadata_same_block() {
+        // If we get a `MetadataUriUpdated` event in the same block that has an automatic metadata
+        // refresh, we prioritize the metadata from the URI in the contract event.
+
+        let before = NodeMetadata {
+            uri: "https://before.com".parse().unwrap(),
+            content: Some(NodeMetadataContent {
+                name: Some("before".to_string()),
+                ..Default::default()
+            }),
+        };
+        let after = NodeMetadata {
+            uri: "https://after.com".parse().unwrap(),
+            content: Some(NodeMetadataContent {
+                name: Some("after".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        let mut state = Snapshot::empty(block_snapshot(METADATA_REFRESH_BLOCKS - 1));
+        let node = NodeSetEntry {
+            metadata: Some(before.clone()),
+            ..make_node(0)
+        };
+        state.node_set = NodeSet(
+            [node.clone()]
+                .into_iter()
+                .map(|node| (node.address, node))
+                .collect(),
+        );
+
+        let fetcher = vec![
+            (before.uri, before.content),
+            (after.uri.clone(), after.content.clone()),
+        ];
+        let update = state
+            .apply(
+                &fetcher,
+                block_id(METADATA_REFRESH_BLOCKS),
+                12 * METADATA_REFRESH_BLOCKS,
+                [&StakeTableV2Events::MetadataUriUpdated(MetadataUriUpdated {
+                    validator: node.address,
+                    metadataUri: after.uri.to_string(),
+                })
+                .into()],
+            )
+            .await;
+        assert_eq!(state.node_set[&node.address].metadata, Some(after.clone()));
+        assert_eq!(
+            update.node_set_diffs,
+            [FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
+                metadata: Some(after),
+                ..node
+            }))]
+        );
     }
 }

@@ -11,7 +11,10 @@ use staking_ui_service::{
             self,
             client::{QueryServiceClient, QueryServiceOptions},
         },
-        l1::{self, RpcCatchup, RpcStream, Snapshot, options::L1ClientOptions},
+        l1::{
+            self, RpcCatchup, RpcStream, Snapshot, metadata::HttpMetadataFetcher,
+            options::L1ClientOptions,
+        },
     },
     persistence::sql,
 };
@@ -114,9 +117,14 @@ impl Options {
 
         // Create server state.
         let l1 = Arc::new(RwLock::new(
-            l1::State::new(storage.clone(), genesis, &l1_catchup)
-                .await
-                .map_err(|err| err.context("initializing L1 state"))?,
+            l1::State::new(
+                storage.clone(),
+                HttpMetadataFetcher::default(),
+                genesis,
+                &l1_catchup,
+            )
+            .await
+            .map_err(|err| err.context("initializing L1 state"))?,
         ));
         let espresso = Arc::new(RwLock::new(
             espresso::State::new(storage, espresso_input)

@@ -17,6 +17,7 @@ concurrency:
 
 env:
   RUST_LOG: info
+  RUST_MIN_STACK: '10485760'
   CARGO_TERM_COLOR: always
 
 jobs:

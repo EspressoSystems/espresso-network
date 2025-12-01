@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use crate::types::common::NodeSetEntry;
+use crate::types::common::{NodeMetadataContent, NodeSetEntry};
 use alloy::{
     network::EthereumWallet,
     primitives::{Address, FixedBytes, U256, keccak256},
@@ -37,9 +37,9 @@ use hotshot_contract_adapter::{
         G1PointSol,
         RewardClaim::RewardsClaimed,
         StakeTableV2::{
-            self, ConsensusKeysUpdatedV2, Delegated, ExitEscrowPeriodUpdated, Undelegated,
-            ValidatorExit, ValidatorExitClaimed, ValidatorRegistered, ValidatorRegisteredV2,
-            WithdrawalClaimed,
+            self, CommissionUpdated, ConsensusKeysUpdatedV2, Delegated, ExitEscrowPeriodUpdated,
+            MetadataUriUpdated, Undelegated, ValidatorExit, ValidatorExitClaimed,
+            ValidatorRegistered, ValidatorRegisteredV2, WithdrawalClaimed,
         },
     },
     stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
@@ -248,6 +248,44 @@ impl L1Catchup for CatchupFromEvents {
     }
 }
 
+/// A dummy [`NodeMetadata`] for testing.
+pub fn default_node_metadata() -> NodeMetadata {
+    NodeMetadata {
+        uri: "https://www.example.com".parse().unwrap(),
+        content: Default::default(),
+    }
+}
+
+/// Dummy [`MetadataFetcher`] that always returns [`None`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoMetadata;
+
+impl MetadataFetcher for NoMetadata {
+    async fn fetch_content(&self, _uri: &Url) -> Result<NodeMetadataContent> {
+        Err(Error::internal().context("NoMetadata"))
+    }
+}
+
+/// Dummy [`MetadataFetcher`] that returns a given object whenever the URI is valid.
+#[derive(Clone, Debug, Default)]
+pub struct ConstMetadata(pub NodeMetadataContent);
+
+impl MetadataFetcher for ConstMetadata {
+    async fn fetch_content(&self, _uri: &Url) -> Result<NodeMetadataContent> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Metadata fetcher which returns responses based on a mapping from URIs.
+impl MetadataFetcher for Vec<(Url, Option<NodeMetadataContent>)> {
+    async fn fetch_content(&self, uri: &Url) -> Result<NodeMetadataContent> {
+        self.iter()
+            .find_map(|(k, v)| if k == uri { Some(v.clone()) } else { None })
+            .ok_or_else(|| Error::not_found().context("unknown URL"))?
+            .ok_or_else(|| Error::internal().context("injected fetch failure"))
+    }
+}
+
 /// Generate a block ID for testing.
 pub fn block_id(number: u64) -> L1BlockId {
     let parent = keccak256(number.saturating_sub(1).to_le_bytes());
@@ -270,7 +308,20 @@ pub fn block_snapshot(number: u64) -> L1BlockSnapshot {
 
 /// Generate an arbitrary node for testing.
 pub fn make_node(i: usize) -> NodeSetEntry {
-    (&validator_registered_event(StdRng::seed_from_u64(i as u64))).into()
+    let e = validator_registered_event(StdRng::seed_from_u64(i as u64));
+    NodeSetEntry::from_event_no_metadata(&e)
+}
+
+impl NodeSetEntry {
+    pub fn from_event_no_metadata(event: &ValidatorRegisteredV2) -> Self {
+        let legacy = ValidatorRegistered {
+            account: event.account,
+            blsVk: event.blsVK,
+            commission: event.commission,
+            schnorrVk: event.schnorrVK,
+        };
+        (&legacy).into()
+    }
 }
 
 /// Generate random L1 events for testing.
@@ -281,6 +332,7 @@ pub fn make_node(i: usize) -> NodeSetEntry {
 #[derive(Debug)]
 pub struct EventGenerator {
     nodes: HashSet<Address>,
+    commissions: HashMap<Address, u16>,
     delegations: HashMap<(Address, Address), U256>,
     pending_undelegations: HashMap<(Address, Address), U256>,
     pending_exits: HashMap<(Address, Address), U256>,
@@ -293,6 +345,7 @@ impl Default for EventGenerator {
     fn default() -> Self {
         Self {
             nodes: Default::default(),
+            commissions: Default::default(),
             delegations: Default::default(),
             pending_undelegations: Default::default(),
             pending_exits: Default::default(),
@@ -328,15 +381,16 @@ impl Iterator for EventGenerator {
             const UNDELEGATE: usize = 4;
             const WITHDRAWAL: usize = 5;
             const KEY_UPDATE: usize = 6;
+            const COMMISSION_UPDATE: usize = 7;
 
-            const MAX_STAKE_TABLE_EVENT_TYPE: usize = 7;
+            const MAX_STAKE_TABLE_EVENT_TYPE: usize = 8;
 
             // Other contract events that the UI service cares about but consensus does not.
-            const EXIT_ESCROW_PERIOD_UPDATED: usize = 7;
+            const EXIT_ESCROW_PERIOD_UPDATED: usize = 8;
+            const METADATA_URI_UPDATED: usize = 9;
+            const CLAIM_REWARDS: usize = 10;
 
-            const CLAIM_REWARDS: usize = 8;
-
-            const MAX_EVENT_TYPE: usize = 9;
+            const MAX_EVENT_TYPE: usize = 11;
 
             // Generate the code for a random event type.
             let max = if self.stake_table_only {
@@ -354,6 +408,7 @@ impl Iterator for EventGenerator {
                     // This insert should always return `true` because with a random address, it is
                     // vanishingly unlikely we have generated this same address before.
                     assert!(self.nodes.insert(event.account));
+                    self.commissions.insert(event.account, event.commission);
 
                     if t == REGISTER {
                         StakeTableV2Events::ValidatorRegistered(ValidatorRegistered {
@@ -390,6 +445,7 @@ impl Iterator for EventGenerator {
                     }
 
                     self.nodes.remove(&node);
+                    self.commissions.remove(&node);
                     self.exited_nodes.insert(node);
                     StakeTableV2Events::ValidatorExit(ValidatorExit { validator: node }).into()
                 }
@@ -535,6 +591,22 @@ impl Iterator for EventGenerator {
                     .into()
                 }
 
+                COMMISSION_UPDATE => {
+                    let Some(&node) = self.nodes.iter().choose(&mut self.rng) else {
+                        continue;
+                    };
+                    let new_commission = self.rng.gen_range(0..COMMISSION_BASIS_POINTS);
+                    let old_commission = self.commissions.insert(node, new_commission).unwrap();
+
+                    StakeTableV2Events::CommissionUpdated(CommissionUpdated {
+                        validator: node,
+                        oldCommission: old_commission,
+                        newCommission: new_commission,
+                        timestamp: self.rng.next_u64().try_into().unwrap(),
+                    })
+                    .into()
+                }
+
                 CLAIM_REWARDS => {
                     let delegators: Vec<Address> = self
                         .delegations
@@ -551,6 +623,17 @@ impl Iterator for EventGenerator {
                     let amount = U256::from(self.rng.gen_range(10u64..1000u64));
 
                     RewardClaimEvents::RewardsClaimed(RewardsClaimed { user, amount }).into()
+                }
+
+                METADATA_URI_UPDATED => {
+                    let Some(&node) = self.nodes.iter().choose(&mut self.rng) else {
+                        continue;
+                    };
+                    StakeTableV2Events::MetadataUriUpdated(MetadataUriUpdated {
+                        validator: node,
+                        metadataUri: random_metadata_uri(&mut self.rng),
+                    })
+                    .into()
                 }
 
                 _ => unreachable!(),
@@ -597,7 +680,22 @@ pub fn validator_registered_event_with_account(
         commission,
         blsSig: G1PointSol::from(bls_sig).into(),
         schnorrSig: StateSignatureSol::from(schnorr_sig).into(),
-        metadataUri: "https://example.com/validator-metadata.json".to_string(),
+        metadataUri: random_metadata_uri(&mut rng),
+    }
+}
+
+fn random_metadata_uri(mut rng: impl RngCore + CryptoRng) -> String {
+    // Flip a coin (weighted towards heads) to see if we register with a metadata URI.
+    if rng.gen_ratio(3, 4) {
+        "https://example.com/validator-metadata.json".into()
+    } else {
+        // Flip a coin to see if we register an empty URI or invalid URI. Both are allowed by the
+        // contract and treated the same as a missing URI by the staking service.
+        if rng.gen_ratio(1, 2) {
+            "".into()
+        } else {
+            "notarealuri".into()
+        }
     }
 }
 
@@ -679,7 +777,7 @@ impl BlockInput {
     }
 }
 
-impl<S: Default> super::State<S> {
+impl<S: Default, M: Default> super::State<S, M> {
     pub fn with_l1_block_range(start: u64, end: u64) -> Self {
         let blocks = (start..end).map(BlockData::empty).collect::<Vec<_>>();
         let blocks_by_hash = blocks
@@ -690,6 +788,7 @@ impl<S: Default> super::State<S> {
             blocks,
             blocks_by_hash,
             storage: Default::default(),
+            metadata_fetcher: Default::default(),
         }
     }
 }
@@ -709,13 +808,14 @@ impl BlockData {
 ///
 /// Returns a lock on the state, frozen after the first observation where the predicate was
 /// satisfied.
-pub async fn subscribe_until<S>(
-    state: &'_ Arc<RwLock<State<S>>>,
+pub async fn subscribe_until<S, M>(
+    state: &'_ Arc<RwLock<State<S, M>>>,
     stream: impl ResettableStream + Send + 'static,
-    p: impl Fn(&State<S>) -> bool,
-) -> RwLockReadGuard<'_, State<S>>
+    p: impl Fn(&State<S, M>) -> bool,
+) -> RwLockReadGuard<'_, State<S, M>>
 where
     S: L1Persistence + Sync + 'static,
+    M: MetadataFetcher + Send + Sync + 'static,
 {
     let task = spawn(State::subscribe(state.clone(), stream));
 

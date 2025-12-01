@@ -574,6 +574,7 @@ mod tests {
 
     use crate::input::l1::testing::MemoryStorage;
     use crate::input::l1::testing::NoCatchup;
+    use crate::input::l1::testing::NoMetadata;
     use crate::input::l1::{Snapshot, State};
     use crate::types::common::Ratio;
     use async_lock::RwLock;
@@ -1141,9 +1142,14 @@ mod tests {
 
         let storage = MemoryStorage::default();
         let state = Arc::new(RwLock::new(
-            State::new(storage.clone(), genesis_snapshot.clone(), &NoCatchup)
-                .await
-                .unwrap(),
+            State::new(
+                storage.clone(),
+                NoMetadata,
+                genesis_snapshot.clone(),
+                &NoCatchup,
+            )
+            .await
+            .unwrap(),
         ));
 
         let background_task = deployment.spawn_task_with_interval(Duration::from_millis(100));

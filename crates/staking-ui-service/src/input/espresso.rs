@@ -1247,7 +1247,11 @@ mod test {
         loop {
             sleep(Duration::from_secs(1)).await;
             let state = state_lock.read().await;
-            let latest_block = state.latest_espresso_block().unwrap();
+            let Ok(latest_block) = state.latest_espresso_block() else {
+                tracing::info!("waiting for Espresso API to become available");
+                sleep(Duration::from_secs(1)).await;
+                continue;
+            };
             tracing::info!("Latest Espresso block processed: {latest_block}");
 
             if latest_block >= min_blocks_to_wait {

@@ -1,5 +1,7 @@
 //! Types that make up the global state API.
 
+use std::sync::Arc;
+
 use super::common::{ActiveNodeSetEntry, EpochAndBlock, L1BlockInfo, NodeExit, NodeSetEntry};
 use alloy::primitives::Address;
 use bitvec::vec::BitVec;
@@ -32,7 +34,7 @@ pub enum FullNodeSetDiff {
     ///
     /// This can indicate an update to any and all of the data for a specific node, or the addition
     /// of a new node.
-    NodeUpdate(NodeSetEntry),
+    NodeUpdate(Arc<NodeSetEntry>),
 
     /// A node leaving the set.
     NodeExit(NodeExit),
