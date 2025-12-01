@@ -2376,7 +2376,7 @@ dependencies = [
  "local-ip-address",
  "parking_lot",
  "portpicker",
- "prometheus",
+ "prometheus 0.13.4",
  "rand 0.8.5",
  "rkyv",
  "tokio",
@@ -2430,7 +2430,7 @@ dependencies = [
  "mnemonic",
  "num_enum",
  "pem",
- "prometheus",
+ "prometheus 0.13.4",
  "quinn",
  "rand 0.8.5",
  "rcgen",
@@ -5093,7 +5093,7 @@ dependencies = [
  "lazy_static",
  "log",
  "portpicker",
- "prometheus",
+ "prometheus 0.13.4",
  "rand 0.8.5",
  "refinery",
  "refinery-core",
@@ -8208,6 +8208,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ca5326d8d0b950a9acd87e6a3f94745394f62e4dae1b1ee22b2bc0c394af43a"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "prometheus-client"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10360,6 +10374,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-lock 3.4.1",
+ "async-trait",
  "bitvec",
  "clap 4.5.51",
  "cld",
@@ -10379,6 +10394,7 @@ dependencies = [
  "parking_lot",
  "portpicker",
  "pretty_assertions",
+ "prometheus 0.14.0",
  "prometheus-parse",
  "rand 0.8.5",
  "reqwest",
@@ -10926,7 +10942,7 @@ dependencies = [
  "maud",
  "parking_lot",
  "pin-project",
- "prometheus",
+ "prometheus 0.13.4",
  "rand 0.8.5",
  "reqwest",
  "routefinder",

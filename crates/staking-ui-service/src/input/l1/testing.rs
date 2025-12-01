@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use crate::metrics::PrometheusMetrics;
 use crate::types::common::{NodeMetadataContent, NodeSetEntry};
 use alloy::{
     network::EthereumWallet,
@@ -789,6 +790,7 @@ impl<S: Default, M: Default> super::State<S, M> {
             blocks_by_hash,
             storage: Default::default(),
             metadata_fetcher: Default::default(),
+            metrics: PrometheusMetrics::default(),
         }
     }
 }

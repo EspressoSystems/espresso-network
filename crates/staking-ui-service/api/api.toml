@@ -356,3 +356,11 @@ latest block number.
 
 `U256` : The total lifetime rewards in WEI
 """
+
+[route.metrics]
+PATH = ["/metrics"]
+METHOD = "METRICS"
+DOC = """
+Get Prometheus metrics
+"""
+

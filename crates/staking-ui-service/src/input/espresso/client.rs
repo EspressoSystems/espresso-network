@@ -307,6 +307,7 @@ mod test {
         State,
         testing::{EPOCH_HEIGHT, MemoryStorage, start_pos_network},
     };
+    use crate::metrics::PrometheusMetrics;
 
     use super::*;
 
@@ -523,9 +524,13 @@ mod test {
         let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
         let client = QueryServiceClient::new(opt).await.unwrap();
         let state = Arc::new(RwLock::new(
-            State::new(MemoryStorage::default(), client.clone())
-                .await
-                .unwrap(),
+            State::new(
+                MemoryStorage::default(),
+                client.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .unwrap(),
         ));
         let task = spawn(State::update_task(state.clone()));
 

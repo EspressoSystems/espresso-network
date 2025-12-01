@@ -1,9 +1,10 @@
 //! HTTP server application for the staking UI service.
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use async_lock::RwLock;
-use futures::FutureExt;
+use async_trait::async_trait;
+use futures::{FutureExt, future::BoxFuture};
 use tide_disco::{Api, App, api::ApiError};
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -13,6 +14,7 @@ use crate::{
         espresso::{self, EspressoClient, EspressoPersistence},
         l1::{self, L1Persistence, metadata::MetadataFetcher},
     },
+    metrics::PrometheusMetrics,
 };
 
 type Version = StaticVersion<0, 1>;
@@ -22,12 +24,31 @@ type Version = StaticVersion<0, 1>;
 pub struct State<L, E> {
     l1: Arc<RwLock<L>>,
     espresso: Arc<RwLock<E>>,
+    metrics: PrometheusMetrics,
 }
 
 impl<L, E> State<L, E> {
     /// Set up an app with the given state.
-    pub fn new(l1: Arc<RwLock<L>>, espresso: Arc<RwLock<E>>) -> Self {
-        Self { l1, espresso }
+    pub fn new(l1: Arc<RwLock<L>>, espresso: Arc<RwLock<E>>, metrics: PrometheusMetrics) -> Self {
+        Self {
+            l1,
+            espresso,
+            metrics,
+        }
+    }
+}
+
+#[async_trait]
+impl<L: 'static + Send + Sync, E: 'static + Send + Sync> tide_disco::method::ReadState
+    for State<L, E>
+{
+    type State = Self;
+
+    async fn read<T>(
+        &self,
+        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
+    ) -> T {
+        op(self).await
     }
 }
 
@@ -183,6 +204,9 @@ where
             state.espresso.read().await.lifetime_rewards(address, block).await
         }
         .boxed()
+    })?
+    .metrics("metrics", |_, state| {
+        async move { Ok(Cow::Borrowed(&state.metrics)) }.boxed()
     })?;
 
     Ok(())
@@ -194,6 +218,7 @@ mod test {
 
     use crate::{
         input::l1::testing::{MemoryStorage, NoMetadata},
+        metrics::PrometheusMetrics,
         types::wallet::{WalletSnapshot, WalletUpdate},
     };
     use alloy::primitives::Address;
@@ -240,7 +265,9 @@ mod test {
         client.push_leaf(0, [true]).await;
 
         let storage = EspressoStorage::default();
-        espresso::State::new(storage, client).await.unwrap()
+        espresso::State::new(storage, client, PrometheusMetrics::default())
+            .await
+            .unwrap()
     }
 
     /// Generate a trivial L1 state.
@@ -252,6 +279,7 @@ mod test {
             NoMetadata,
             Snapshot::empty(block_snapshot(0)),
             &NoCatchup,
+            PrometheusMetrics::default(),
         )
         .await
         .unwrap()
@@ -264,7 +292,11 @@ mod test {
 
         let l1 = l1::State::<L1Storage, NoMetadata>::with_l1_block_range(1, 3);
         let espresso = empty_espresso_state().await;
-        let state = State::new(Arc::new(RwLock::new(l1)), Arc::new(RwLock::new(espresso)));
+        let state = State::new(
+            Arc::new(RwLock::new(l1)),
+            Arc::new(RwLock::new(espresso)),
+            PrometheusMetrics::default(),
+        );
         let task = spawn(state.serve(port));
 
         tracing::info!("waiting for service to become available");
@@ -322,6 +354,7 @@ mod test {
                 NoMetadata,
                 Snapshot::empty(block_snapshot(1)),
                 &NoCatchup,
+                PrometheusMetrics::default(),
             )
             .await
             .unwrap(),
@@ -338,7 +371,11 @@ mod test {
         );
         subscribe_until(&l1, inputs, |l1| l1.latest_l1_block().number == 2).await;
 
-        let state = State::new(l1, Arc::new(RwLock::new(empty_espresso_state().await)));
+        let state = State::new(
+            l1,
+            Arc::new(RwLock::new(empty_espresso_state().await)),
+            PrometheusMetrics::default(),
+        );
         let task = spawn(state.serve(port));
 
         tracing::info!("waiting for service to become available");
@@ -416,6 +453,7 @@ mod test {
                 NoMetadata,
                 Snapshot::empty(block_snapshot(1)),
                 &NoCatchup,
+                PrometheusMetrics::default(),
             )
             .await
             .unwrap(),
@@ -450,6 +488,7 @@ mod test {
         let state = State::new(
             l1.clone(),
             Arc::new(RwLock::new(empty_espresso_state().await)),
+            PrometheusMetrics::default(),
         );
         let task = spawn(state.serve(port));
 
@@ -578,15 +617,23 @@ mod test {
         let node_0_address = nodes[0].account;
         let node_1_address = nodes[1].account;
 
-        let espresso_state = espresso::State::new(EspressoStorage::default(), espresso)
-            .await
-            .unwrap();
+        let espresso_state = espresso::State::new(
+            EspressoStorage::default(),
+            espresso,
+            PrometheusMetrics::default(),
+        )
+        .await
+        .unwrap();
         let espresso = Arc::new(RwLock::new(espresso_state));
         let espresso_update_task = espresso::State::update_task(espresso.clone());
 
         let l1 = empty_l1_state().await;
 
-        let state = State::new(Arc::new(RwLock::new(l1)), espresso.clone());
+        let state = State::new(
+            Arc::new(RwLock::new(l1)),
+            espresso.clone(),
+            PrometheusMetrics::default(),
+        );
         let server_task = spawn(state.serve(port));
         let update_task = spawn(espresso_update_task);
 
@@ -680,15 +727,23 @@ mod test {
         let epoch_height = espresso.epoch_height();
         let nodes = espresso.stake_table_for_epoch(epoch).await.unwrap();
 
-        let espresso = espresso::State::new(EspressoStorage::default(), espresso)
-            .await
-            .unwrap();
+        let espresso = espresso::State::new(
+            EspressoStorage::default(),
+            espresso,
+            PrometheusMetrics::default(),
+        )
+        .await
+        .unwrap();
         // Handle the leaves we gave it.
         let espresso = Arc::new(RwLock::new(espresso));
         let update_task = espresso::State::update_task(espresso.clone());
 
         let l1 = empty_l1_state().await;
-        let state = State::new(Arc::new(RwLock::new(l1)), espresso);
+        let state = State::new(
+            Arc::new(RwLock::new(l1)),
+            espresso,
+            PrometheusMetrics::default(),
+        );
         let server_task = state.serve(port);
 
         let task = spawn(try_join(update_task, server_task));

@@ -27,6 +27,7 @@ use tracing::instrument;
 use crate::{
     Error, Result,
     error::ensure,
+    metrics::PrometheusMetrics,
     types::{
         common::{ActiveNodeSetEntry, Address, ESPTokenAmount, EpochAndBlock},
         global::{ActiveNodeSetDiff, ActiveNodeSetSnapshot, ActiveNodeSetUpdate},
@@ -67,6 +68,9 @@ pub struct State<S, C> {
 
     /// Espresso query service client.
     espresso: C,
+
+    /// Prometheus metrics.
+    metrics: PrometheusMetrics,
 }
 
 impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
@@ -97,7 +101,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         Ok(())
     }
 
-    pub async fn new(storage: S, espresso: C) -> Result<Self> {
+    pub async fn new(storage: S, espresso: C, metrics: PrometheusMetrics) -> Result<Self> {
         let epoch_height = espresso.epoch_height().await?;
         Ok(Self {
             last_block: None,
@@ -105,6 +109,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
             espresso,
             storage,
             epoch_height,
+            metrics,
         })
     }
 
@@ -418,7 +423,23 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         self.updates.push(update);
         self.last_block = Some(block);
 
+        self.update_metrics();
+
         Ok(())
+    }
+
+    fn update_metrics(&self) {
+        if let Some(block) = &self.last_block {
+            self.metrics.latest_espresso_block.set(block.number as f64);
+            self.metrics.current_epoch.set(block.epoch.number as f64);
+            self.metrics
+                .active_validators
+                .set(block.epoch.active_nodes.len() as f64);
+        }
+    }
+
+    pub fn metrics(&self) -> &PrometheusMetrics {
+        &self.metrics
     }
 
     /// Get the latest Espresso block.
@@ -848,7 +869,11 @@ mod test {
         let leaf = leaf.clone();
         let signers = signers.clone();
 
-        let state = RwLock::new(State::new(storage, espresso).await.unwrap());
+        let state = RwLock::new(
+            State::new(storage, espresso, PrometheusMetrics::default())
+                .await
+                .unwrap(),
+        );
 
         // Process the next leaf.
         handle_leaf(state.upgradable_read().await, &leaf, &signers)
@@ -948,9 +973,13 @@ mod test {
         leaves.push((leaf.clone(), signers.clone()));
 
         let state = RwLock::new(
-            State::new(MemoryStorage::default(), espresso)
-                .await
-                .unwrap(),
+            State::new(
+                MemoryStorage::default(),
+                espresso,
+                PrometheusMetrics::default(),
+            )
+            .await
+            .unwrap(),
         );
 
         for (leaf, signers) in leaves {
@@ -1053,7 +1082,9 @@ mod test {
             leaves.push((leaf.clone(), signers.clone()));
         }
 
-        let mut state = State::new(storage, espresso).await.unwrap();
+        let mut state = State::new(storage, espresso, PrometheusMetrics::default())
+            .await
+            .unwrap();
 
         // Throw in a transient storage failure, the update task should handle this gracefully.
         state.storage.fail_next();
@@ -1125,9 +1156,13 @@ mod test {
         let (leaf, signers) = (leaf.clone(), signers.clone());
 
         let state = RwLock::new(
-            State::new(MemoryStorage::default(), espresso)
-                .await
-                .unwrap(),
+            State::new(
+                MemoryStorage::default(),
+                espresso,
+                PrometheusMetrics::default(),
+            )
+            .await
+            .unwrap(),
         );
         handle_leaf(state.upgradable_read().await, &leaf, &signers)
             .await
@@ -1171,9 +1206,13 @@ mod test {
         let (leaf, signers) = espresso.push_leaf(0, [true, true, true]).await;
         let (leaf, signers) = (leaf.clone(), signers.clone());
 
-        let mut state = State::new(MemoryStorage::default(), espresso)
-            .await
-            .unwrap();
+        let mut state = State::new(
+            MemoryStorage::default(),
+            espresso,
+            PrometheusMetrics::default(),
+        )
+        .await
+        .unwrap();
         let pre_state = state.clone();
         let pre_storage = pre_state.storage.cmp_key().await;
 
@@ -1193,6 +1232,7 @@ mod test {
             epoch_height: pre_epoch_height,
             storage: _,
             espresso: _,
+            metrics: _,
         } = pre_state;
         let State {
             updates,
@@ -1200,6 +1240,7 @@ mod test {
             epoch_height,
             storage,
             espresso: _,
+            metrics: _,
         } = state.into_inner();
         assert_eq!(pre_updates, updates);
         assert_eq!(pre_last_block, last_block);
@@ -1362,9 +1403,13 @@ mod test {
             })
             .await
             .expect("Failed to create SQL persistence");
-            let espresso_state = State::new(espresso_storage.clone(), espresso_client.clone())
-                .await
-                .expect("Failed to initialize Espresso state");
+            let espresso_state = State::new(
+                espresso_storage.clone(),
+                espresso_client.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .expect("Failed to initialize Espresso state");
             espresso_state.epoch_height
         };
 
@@ -1377,9 +1422,13 @@ mod test {
             })
             .await
             .expect("Failed to create SQL persistence");
-            let espresso_state = State::new(espresso_storage.clone(), espresso_client.clone())
-                .await
-                .expect("Failed to initialize Espresso state");
+            let espresso_state = State::new(
+                espresso_storage.clone(),
+                espresso_client.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .expect("Failed to initialize Espresso state");
 
             let state_lock = Arc::new(RwLock::new(espresso_state));
             let update_task = spawn(State::update_task(state_lock.clone()));
@@ -1403,9 +1452,13 @@ mod test {
             })
             .await
             .expect("Failed to create SQL persistence");
-            let espresso_state = State::new(espresso_storage.clone(), espresso_client.clone())
-                .await
-                .expect("Failed to initialize Espresso state");
+            let espresso_state = State::new(
+                espresso_storage.clone(),
+                espresso_client.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .expect("Failed to initialize Espresso state");
 
             let state_lock = Arc::new(RwLock::new(espresso_state));
             let update_task = spawn(State::update_task(state_lock.clone()));
@@ -1433,9 +1486,13 @@ mod test {
             })
             .await
             .expect("Failed to create SQL persistence");
-            let espresso_state = State::new(espresso_storage.clone(), espresso_client.clone())
-                .await
-                .expect("Failed to initialize Espresso state");
+            let espresso_state = State::new(
+                espresso_storage.clone(),
+                espresso_client.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .expect("Failed to initialize Espresso state");
 
             let state_lock = Arc::new(RwLock::new(espresso_state));
             let update_task = spawn(State::update_task(state_lock.clone()));
@@ -1463,9 +1520,13 @@ mod test {
             })
             .await
             .expect("Failed to create SQL persistence");
-            let espresso_state = State::new(espresso_storage.clone(), espresso_client.clone())
-                .await
-                .expect("Failed to initialize Espresso state");
+            let espresso_state = State::new(
+                espresso_storage.clone(),
+                espresso_client.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .expect("Failed to initialize Espresso state");
 
             let state_lock = Arc::new(RwLock::new(espresso_state));
             let update_task = spawn(State::update_task(state_lock.clone()));
@@ -1494,9 +1555,13 @@ mod test {
             })
             .await
             .expect("Failed to create SQL persistence");
-            let espresso_state = State::new(espresso_storage.clone(), espresso_client.clone())
-                .await
-                .expect("Failed to initialize Espresso state");
+            let espresso_state = State::new(
+                espresso_storage.clone(),
+                espresso_client.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .expect("Failed to initialize Espresso state");
 
             let state_lock = Arc::new(RwLock::new(espresso_state));
             let update_task = spawn(State::update_task(state_lock.clone()));
@@ -1526,9 +1591,13 @@ mod test {
         let espresso = WaitForEpochsClient::new(espresso);
 
         let state = Arc::new(RwLock::new(
-            State::new(MemoryStorage::default(), espresso.clone())
-                .await
-                .unwrap(),
+            State::new(
+                MemoryStorage::default(),
+                espresso.clone(),
+                PrometheusMetrics::default(),
+            )
+            .await
+            .unwrap(),
         ));
         let task = spawn(State::update_task(state.clone()));
 

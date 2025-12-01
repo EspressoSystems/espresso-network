@@ -25,6 +25,7 @@ use tracing::instrument;
 use crate::{
     error::{Error, Result, ensure},
     input::l1::metadata::{METADATA_REFRESH_BLOCKS, MetadataFetcher},
+    metrics::PrometheusMetrics,
     types::{
         common::{
             Address, Delegation, ESPTokenAmount, L1BlockId, L1BlockInfo, NodeExit, NodeMetadata,
@@ -68,6 +69,9 @@ pub struct State<S, M> {
 
     /// Interface for downloading node metadata from third-party URIs.
     metadata_fetcher: M,
+
+    /// Prometheus metrics.
+    metrics: PrometheusMetrics,
 }
 
 impl<S: L1Persistence, M: MetadataFetcher> State<S, M> {
@@ -80,6 +84,7 @@ impl<S: L1Persistence, M: MetadataFetcher> State<S, M> {
         metadata_fetcher: M,
         genesis: Snapshot,
         catchup: &impl L1Catchup,
+        metrics: PrometheusMetrics,
     ) -> Result<Self> {
         let mut state = match storage.finalized_snapshot().await? {
             Some(snapshot) => {
@@ -124,17 +129,42 @@ impl<S: L1Persistence, M: MetadataFetcher> State<S, M> {
             .into_iter()
             .collect();
         let blocks = vec![finalized];
-        Ok(Self {
+        let state = Self {
             blocks,
             blocks_by_hash,
             storage,
             metadata_fetcher,
-        })
+            metrics,
+        };
+        state.update_metrics();
+        Ok(state)
     }
 
     /// Get the latest known L1 block.
     pub fn latest_l1_block(&self) -> L1BlockId {
         self.blocks[self.blocks.len() - 1].block().id()
+    }
+
+    pub fn update_metrics(&self) {
+        let latest = self.blocks.last().expect("blocks is never empty");
+        let finalized = &self.blocks[0];
+
+        self.metrics
+            .latest_l1_block
+            .set(latest.block().number() as f64);
+        self.metrics
+            .finalized_l1_block
+            .set(finalized.block().number() as f64);
+        self.metrics
+            .unique_wallets
+            .set(latest.state.wallets.len() as f64);
+        self.metrics
+            .node_count
+            .set(latest.state.node_set.len() as f64);
+    }
+
+    pub fn metrics(&self) -> &PrometheusMetrics {
+        &self.metrics
     }
 
     /// Get the hashes identifying a particular L1 block.
@@ -350,6 +380,8 @@ impl<S: L1Persistence, M: MetadataFetcher> State<S, M> {
             .blocks_by_hash
             .insert(new_block.block().hash(), new_block.block().number());
         state.blocks.push(new_block);
+
+        state.update_metrics();
 
         Ok(())
     }
@@ -1303,6 +1335,7 @@ mod test {
             blocks_by_hash: Default::default(),
             storage: S::default(),
             metadata_fetcher: M::default(),
+            metrics: PrometheusMetrics::default(),
         };
         for block in blocks {
             state
@@ -1777,9 +1810,15 @@ mod test {
         let genesis = Snapshot::empty(block_snapshot(0));
         let storage = MemoryStorage::default();
         let state = Arc::new(RwLock::new(
-            State::new(storage.clone(), NoMetadata, genesis.clone(), &NoCatchup)
-                .await
-                .unwrap(),
+            State::new(
+                storage.clone(),
+                NoMetadata,
+                genesis.clone(),
+                &NoCatchup,
+                PrometheusMetrics::default(),
+            )
+            .await
+            .unwrap(),
         ));
         // Initializing the state should cause a genesis snapshot to be saved.
         assert_eq!(
@@ -1800,9 +1839,15 @@ mod test {
         // Restart and check that we reload the finalized snapshot (and don't use the genesis, for
         // which we will pass in some nonsense).
         let genesis = Snapshot::empty(block_snapshot(1000));
-        let state = State::new(storage.clone(), NoMetadata, genesis, &NoCatchup)
-            .await
-            .unwrap();
+        let state = State::new(
+            storage.clone(),
+            NoMetadata,
+            genesis,
+            &NoCatchup,
+            PrometheusMetrics::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(state.blocks.len(), 1);
         assert_eq!(state.blocks[0].block(), block_snapshot(1));
 
@@ -2233,6 +2278,7 @@ mod test {
                 NoMetadata,
                 genesis.clone(),
                 &NoCatchup,
+                PrometheusMetrics::default(),
             )
             .await
             .unwrap(),
@@ -2252,6 +2298,7 @@ mod test {
             NoMetadata,
             genesis,
             &CatchupFromEvents::from_blocks(blocks.clone()),
+            PrometheusMetrics::default(),
         )
         .await
         .unwrap();

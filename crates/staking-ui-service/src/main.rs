@@ -16,6 +16,7 @@ use staking_ui_service::{
             options::L1ClientOptions,
         },
     },
+    metrics::PrometheusMetrics,
     persistence::sql,
 };
 use tokio::time::sleep;
@@ -115,6 +116,8 @@ impl Options {
             .await
             .map_err(|err| err.context("connecting to Espresso query service"))?;
 
+        let metrics = PrometheusMetrics::new();
+
         // Create server state.
         let l1 = Arc::new(RwLock::new(
             l1::State::new(
@@ -122,16 +125,17 @@ impl Options {
                 HttpMetadataFetcher::default(),
                 genesis,
                 &l1_catchup,
+                metrics.clone(),
             )
             .await
             .map_err(|err| err.context("initializing L1 state"))?,
         ));
         let espresso = Arc::new(RwLock::new(
-            espresso::State::new(storage, espresso_input)
+            espresso::State::new(storage, espresso_input, metrics.clone())
                 .await
                 .map_err(|err| err.context("initializing Espresso state"))?,
         ));
-        let app = app::State::new(l1.clone(), espresso.clone());
+        let app = app::State::new(l1.clone(), espresso.clone(), metrics);
 
         // Create tasks that will run in parallel.
         let l1_task = l1::State::subscribe(l1, l1_input);
@@ -203,8 +207,9 @@ mod test {
     use sequencer::testing::TestConfigBuilder;
     use staking_ui_service::input::espresso::testing::start_pos_network;
     use staking_ui_service::types::common::L1BlockId;
-    use staking_ui_service::types::global::ActiveNodeSetSnapshot;
+    use staking_ui_service::types::global::{ActiveNodeSetSnapshot, FullNodeSetSnapshot};
     use staking_ui_service::{Error, input::l1::testing::ContractDeployment};
+
     use surf_disco::Client;
     use tempfile::tempdir;
     use tide_disco::{Error as _, StatusCode};
@@ -212,6 +217,18 @@ mod test {
     use vbs::version::StaticVersion;
 
     use super::*;
+
+    fn get_metric_value(metrics: &str, name: &str) -> f64 {
+        for line in metrics.lines() {
+            if line.starts_with(name) && !line.starts_with(&format!("{}_", name)) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 && parts[0] == name {
+                    return parts[1].parse().unwrap();
+                }
+            }
+        }
+        panic!("metric {name} not found");
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn e2e_smoke_test() {
@@ -403,5 +420,100 @@ mod test {
         let _ = task.await;
 
         network.stop_consensus().await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_metrics_endpoint() {
+        let port = pick_unused_port().unwrap();
+        let tmp = tempdir().unwrap();
+        let espresso_port = pick_unused_port().unwrap();
+        let (mut network, deployment, _storage) = start_pos_network(espresso_port).await;
+        let espresso_url = format!("http://localhost:{espresso_port}").parse().unwrap();
+
+        let opt = Options {
+            l1_options: L1ClientOptions {
+                http_providers: vec![deployment.rpc_url],
+                l1_ws_provider: None,
+                stake_table_address: deployment.stake_table_addr,
+                reward_contract_address: deployment.reward_claim_addr,
+                ..Default::default()
+            },
+            espresso_options: QueryServiceOptions::new(espresso_url),
+            port,
+            persistence: sql::PersistenceOptions {
+                path: tmp.path().join("temp.db"),
+                max_connections: 5,
+            },
+            log_format: Some(LogFormat::Json),
+        };
+
+        let task = spawn(async move {
+            opt.run().await.unwrap();
+        });
+
+        let client: Client<Error, StaticVersion<0, 1>> = Client::new(
+            format!("http://localhost:{port}/v0/staking/")
+                .parse()
+                .unwrap(),
+        );
+        client.connect(None).await;
+
+        loop {
+            if client
+                .get::<ActiveNodeSetSnapshot>("nodes/active")
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+
+            sleep(Duration::from_secs(1)).await;
+        }
+
+        network.stop_consensus().await;
+        sleep(Duration::from_secs(2)).await;
+
+        let metrics_url = format!("http://localhost:{port}/v0/staking/metrics");
+        let metrics: String = reqwest::get(&metrics_url)
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        tracing::info!(metrics = %metrics, "got metrics");
+
+        let metrics_latest_l1 = get_metric_value(&metrics, "latest_l1_block") as u64;
+        let metrics_node_count = get_metric_value(&metrics, "node_count") as usize;
+        let metrics_latest_espresso = get_metric_value(&metrics, "latest_espresso_block") as u64;
+        let metrics_current_epoch = get_metric_value(&metrics, "current_epoch") as u64;
+        let metrics_active_validators = get_metric_value(&metrics, "active_validators") as usize;
+        let metrics_unique_wallets = get_metric_value(&metrics, "unique_wallets") as usize;
+
+        let l1_block: L1BlockId = client.get("l1/block/latest").send().await.unwrap();
+        let full_node_set: FullNodeSetSnapshot = client
+            .get(&format!("nodes/all/{}", l1_block.hash))
+            .send()
+            .await
+            .unwrap();
+        let active_node_set: ActiveNodeSetSnapshot =
+            client.get("nodes/active").send().await.unwrap();
+
+        // L1 Anvil keeps advancing
+        // so l1 block can be greater than or equal to the metrics l1
+        assert!(l1_block.number >= metrics_latest_l1);
+        assert_eq!(metrics_node_count, full_node_set.nodes.len());
+
+        // consensus is stopped, so these should match exactly
+        assert_eq!(
+            active_node_set.espresso_block.block,
+            metrics_latest_espresso
+        );
+        assert_eq!(active_node_set.espresso_block.epoch, metrics_current_epoch);
+        assert_eq!(metrics_active_validators, active_node_set.nodes.len());
+        assert_eq!(metrics_unique_wallets, 3);
+
+        task.abort();
+        let _ = task.await;
     }
 }
