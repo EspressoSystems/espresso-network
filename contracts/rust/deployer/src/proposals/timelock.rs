@@ -254,6 +254,46 @@ impl TimelockContract {
     }
 }
 
+pub async fn get_timelock_for_contract(
+    provider: &impl Provider,
+    contract_type: Contract,
+    target_addr: Address,
+) -> Result<TimelockContract> {
+    match contract_type {
+        Contract::FeeContractProxy => Ok(TimelockContract::OpsTimelock(
+            FeeContract::new(target_addr, &provider)
+                .owner()
+                .call()
+                .await?,
+        )),
+        Contract::EspTokenProxy => Ok(TimelockContract::SafeExitTimelock(
+            EspToken::new(target_addr, &provider).owner().call().await?,
+        )),
+        Contract::LightClientProxy => Ok(TimelockContract::OpsTimelock(
+            LightClient::new(target_addr, &provider)
+                .owner()
+                .call()
+                .await?,
+        )),
+        Contract::StakeTableProxy => Ok(TimelockContract::OpsTimelock(
+            StakeTable::new(target_addr, &provider)
+                .owner()
+                .call()
+                .await?,
+        )),
+        Contract::RewardClaimProxy => Ok(TimelockContract::SafeExitTimelock(
+            RewardClaim::new(target_addr, &provider)
+                .currentAdmin()
+                .call()
+                .await?,
+        )),
+        _ => anyhow::bail!(
+            "Invalid contract type for timelock get operation: {}",
+            contract_type
+        ),
+    }
+}
+
 /// Schedule a timelock operation
 ///
 /// Parameters:
@@ -269,37 +309,7 @@ pub async fn schedule_timelock_operation(
     operation: TimelockOperationData,
 ) -> Result<B256> {
     let target_addr = operation.target;
-    let timelock = match contract_type {
-        Contract::FeeContractProxy => {
-            let proxy = FeeContract::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::EspTokenProxy => {
-            let proxy = EspToken::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::SafeExitTimelock(proxy_owner)
-        },
-        Contract::LightClientProxy => {
-            let proxy = LightClient::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::StakeTableProxy => {
-            let proxy = StakeTable::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::RewardClaimProxy => {
-            let proxy = RewardClaim::new(target_addr, &provider);
-            let proxy_owner = proxy.currentAdmin().call().await?;
-            TimelockContract::SafeExitTimelock(proxy_owner)
-        },
-        _ => anyhow::bail!(
-            "Invalid contract type for timelock schedule operation: {}",
-            contract_type
-        ),
-    };
+    let timelock = get_timelock_for_contract(provider, contract_type, target_addr).await?;
     let operation_id = timelock.get_operation_id(&operation, &provider).await?;
 
     let receipt = timelock.schedule(operation, &provider).await?;
@@ -335,37 +345,7 @@ pub async fn execute_timelock_operation(
     operation: TimelockOperationData,
 ) -> Result<B256> {
     let target_addr = operation.target;
-    let timelock = match contract_type {
-        Contract::FeeContractProxy => {
-            let proxy = FeeContract::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::EspTokenProxy => {
-            let proxy = EspToken::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::SafeExitTimelock(proxy_owner)
-        },
-        Contract::LightClientProxy => {
-            let proxy = LightClient::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::StakeTableProxy => {
-            let proxy = StakeTable::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::RewardClaimProxy => {
-            let proxy = RewardClaim::new(target_addr, &provider);
-            let proxy_owner = proxy.currentAdmin().call().await?;
-            TimelockContract::SafeExitTimelock(proxy_owner)
-        },
-        _ => anyhow::bail!(
-            "Invalid contract type for timelock execute operation: {}",
-            contract_type
-        ),
-    };
+    let timelock = get_timelock_for_contract(provider, contract_type, target_addr).await?;
     let operation_id = timelock.get_operation_id(&operation, &provider).await?;
 
     // execute the tx
@@ -398,37 +378,7 @@ pub async fn cancel_timelock_operation(
     operation: TimelockOperationData,
 ) -> Result<B256> {
     let target_addr = operation.target;
-    let timelock = match contract_type {
-        Contract::FeeContractProxy => {
-            let proxy = FeeContract::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::EspTokenProxy => {
-            let proxy = EspToken::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::SafeExitTimelock(proxy_owner)
-        },
-        Contract::LightClientProxy => {
-            let proxy = LightClient::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::StakeTableProxy => {
-            let proxy = StakeTable::new(target_addr, &provider);
-            let proxy_owner = proxy.owner().call().await?;
-            TimelockContract::OpsTimelock(proxy_owner)
-        },
-        Contract::RewardClaimProxy => {
-            let proxy = RewardClaim::new(target_addr, &provider);
-            let proxy_owner = proxy.currentAdmin().call().await?;
-            TimelockContract::SafeExitTimelock(proxy_owner)
-        },
-        _ => anyhow::bail!(
-            "Invalid contract type for timelock cancel operation: {}",
-            contract_type
-        ),
-    };
+    let timelock = get_timelock_for_contract(provider, contract_type, target_addr).await?;
     let operation_id = timelock.get_operation_id(&operation, &provider).await?;
     let receipt = timelock.cancel(operation_id, &provider).await?;
     tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
