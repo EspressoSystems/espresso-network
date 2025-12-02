@@ -503,7 +503,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             .address(Contract::SafeExitTimelock)
                             .expect("fail to get SafeExitTimelock address")
                     } else {
-                        self.ops_timelock_admin.context(
+                        self.safe_exit_timelock_admin.context(
                             "SafeExitTimelock contract address must be set when using \
                              --use-timelock-owner flag",
                         )?
