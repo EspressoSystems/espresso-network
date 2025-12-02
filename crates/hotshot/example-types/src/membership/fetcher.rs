@@ -127,10 +127,12 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             })
                             .collect();
 
+                        let heights = leaves.keys().collect::<Vec<_>>();
+
                         let Some(leaf) = leaves.get(&requested_height) else {
                             tracing::error!(
                                 "Block at height {requested_height} not found in storage.\n\n \
-                                 stored leaves: {leaves:?}"
+                                 stored leaf heights: {heights:?}"
                             );
                             continue;
                         };
@@ -151,7 +153,8 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                                 .await
                         {
                             tracing::error!(
-                                "Failed to send leaf response in test membership fetcher: {e}"
+                                "Failed to send leaf response in test membership fetcher: {e}, \
+                                 requested height: {requested_height}"
                             );
                         };
                     },
@@ -181,6 +184,30 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             ),
         };
 
+        let leaves: BTreeMap<u64, Leaf2<TYPES>> = self
+            .storage
+            .inner
+            .read()
+            .await
+            .proposals_wrapper
+            .values()
+            .map(|proposal| {
+                (
+                    proposal.data.block_header().block_number(),
+                    Leaf2::from_quorum_proposal(&proposal.data.clone()),
+                )
+            })
+            .collect();
+
+        let heights = leaves.keys().collect::<Vec<_>>();
+
+        if let Some(leaf) = leaves.get(&height) {
+            return Ok(leaf.clone());
+        };
+        tracing::debug!(
+            "Leaf at height {height} not found in storage. Stored leaf heights: {heights:?}"
+        );
+
         let mut network_receiver = self
             .network_receiver
             .clone()
@@ -196,7 +223,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             tracing::error!("Failed to send leaf request in test membership fetcher: {e}");
         };
 
-        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+        tokio::time::timeout(std::time::Duration::from_millis(20), async {
             loop {
                 match network_receiver.recv_direct().await {
                     Ok(Event {

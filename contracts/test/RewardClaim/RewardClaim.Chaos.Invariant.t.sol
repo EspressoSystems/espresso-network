@@ -42,7 +42,8 @@ contract RewardClaimHandler is RewardClaimTest {
         currentDay = block.timestamp / 1 days;
         initialSupply = espToken.totalSupply();
 
-        vm.prank(rewardClaim.owner());
+        // Use owner from test setup (has DEFAULT_ADMIN_ROLE)
+        vm.prank(owner);
         rewardClaim.setDailyLimit(300); // 3%
     }
 
@@ -150,12 +151,13 @@ contract RewardClaimHandler is RewardClaimTest {
         uint256 maxBasisPoints = rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS();
         uint256 basisPoints = _bound(limitSeed, 1, maxBasisPoints);
 
-        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / rewardClaim.BPS_DENOMINATOR();
         if (newLimit == rewardClaim.dailyLimitWei()) {
             return;
         }
 
-        vm.prank(rewardClaim.owner());
+        // Use owner from test setup (has DEFAULT_ADMIN_ROLE)
+        vm.prank(owner);
         rewardClaim.setDailyLimit(basisPoints);
         stats.updateDailyLimit.ok++;
     }
@@ -196,6 +198,7 @@ contract RewardClaimInvariantTest is StdInvariant, Test {
         uint256 totalMinted = currentSupply - handler.initialSupply();
 
         assertEq(totalMinted, handler.totalClaimedAllAccounts(), "Total minted != total claimed");
+        assertEq(handler.rewardClaim().totalClaimed(), handler.totalClaimedAllAccounts());
     }
 
     function afterInvariant() external view {

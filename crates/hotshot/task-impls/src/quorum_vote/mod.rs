@@ -120,7 +120,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
     #[allow(clippy::too_many_lines)]
     #[instrument(skip_all, fields(id = self.id, view = *self.view_number))]
     async fn handle_dep_result(self, res: Self::Output) {
-        let result = self.handle_vote_deps(&res).await;
+        let mut cancel_receiver = self.cancel_receiver.clone();
+        let result = tokio::select! { result = self.handle_vote_deps(&res) => {
+            result
+        }
+        _ = cancel_receiver.recv() => {
+            tracing::warn!("Vote dependency task cancelled");
+            return;
+        }
+        };
         if result.is_err() {
             log!(result);
             self.print_vote_events(&res)
@@ -633,7 +641,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             for view in *self.latest_voted_view..(*new_view) {
                 let maybe_cancel_sender = self.vote_dependencies.remove(&TYPES::View::new(view));
                 if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
-                    tracing::error!("Aborting vote dependency task for view {view}");
+                    tracing::warn!("Aborting vote dependency task for view {view}");
                     let _ = maybe_cancel_sender.unwrap().try_broadcast(());
                 }
             }
@@ -748,7 +756,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // Check that the signature is valid
                 ensure!(
                     sender.validate(&share.signature, payload_commitment.as_ref()),
-                    error!(
+                    warn!(
                         "VID share signature is invalid, sender: {}, signature: {:?}, \
                          payload_commitment: {:?}",
                         sender, share.signature, payload_commitment

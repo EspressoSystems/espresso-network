@@ -23,6 +23,7 @@ use alloy::sol;
 /// - structs should be exported and renamed with `xxSol` suffix to avoid confusion with other rust types
 ///   - see module doc for more explanation on types duplication issue in alloy
 pub use crate::bindings::{
+    access_control_upgradeable::AccessControlUpgradeable,
     erc1967_proxy::ERC1967Proxy,
     esp_token::EspToken,
     esp_token_v2::EspTokenV2,
@@ -331,6 +332,7 @@ impl Clone for StakeTableV2::StakeTableV2Events {
             Self::Upgraded(v) => Self::Upgraded(v.clone()),
             Self::ValidatorExitClaimed(v) => Self::ValidatorExitClaimed(v.clone()),
             Self::Withdrawal(v) => Self::Withdrawal(v.clone()),
+            Self::MetadataUriUpdated(v) => Self::MetadataUriUpdated(v.clone()),
         }
     }
 }
@@ -366,6 +368,7 @@ impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
             Self::Upgraded(v) => write!(f, "Upgraded({v:?})"),
             Self::ValidatorExitClaimed(v) => write!(f, "ValidatorExitClaimed({v:?})"),
             Self::Withdrawal(v) => write!(f, "Withdrawal({v:?})"),
+            Self::MetadataUriUpdated(v) => write!(f, "MetadataUriUpdated({v:?})"),
         }
     }
 }

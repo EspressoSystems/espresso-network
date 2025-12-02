@@ -5,6 +5,13 @@ authors = { workspace = true }
 edition = { workspace = true }
 publish = false
 
+[features]
+default = ["fee", "pos", "drb-and-header", "da-upgrade"]
+fee = ["sequencer/fee"]
+pos = ["sequencer/pos"]
+drb-and-header = ["sequencer/drb-and-header"]
+da-upgrade = ["sequencer/da-upgrade"]
+
 [dependencies]
 hotshot-query-service = { workspace = true }
 serde_json = { workspace = true }
@@ -28,6 +35,7 @@ sequencer = { path = "../sequencer", features = ["testing"] }
 sequencer-utils = { path = "../utils" }
 staking-cli = { path = "../staking-cli" }
 surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 tokio = { workspace = true }

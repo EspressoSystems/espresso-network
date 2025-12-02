@@ -9,11 +9,12 @@ use hotshot_types::{
     event::Event,
     stake_table::HSStakeTable,
     traits::{
+        block_contents::BlockHeader,
         election::{Membership, NoStakeTableHash},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
-    utils::transition_block_for_epoch,
+    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
 };
 
@@ -270,31 +271,35 @@ impl<
 
     async fn add_epoch_root(
         membership: Arc<RwLock<Self>>,
-        epoch: TYPES::Epoch,
-        _block_header: TYPES::BlockHeader,
+        block_header: TYPES::BlockHeader,
     ) -> anyhow::Result<()> {
         let mut membership_writer = membership.write().await;
 
-        membership_writer.epochs.insert(epoch);
+        let epoch =
+            epoch_from_block_number(block_header.block_number(), membership_writer.epoch_height)
+                + 2;
 
-        membership_writer.inner.add_epoch_root(*epoch);
+        membership_writer.epochs.insert(TYPES::Epoch::new(epoch));
+
+        membership_writer.inner.add_epoch_root(epoch);
 
         Ok(())
     }
 
     async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
-        block_height: u64,
-        _epoch: TYPES::Epoch,
+        epoch: TYPES::Epoch,
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
 
-        let full_stake_table = membership_reader.inner.full_stake_table();
+        let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
+
+        let stake_table = membership_reader.inner.stake_table(Some(*epoch));
         let fetcher = membership_reader.fetcher.clone();
 
         drop(membership_reader);
 
-        for node in full_stake_table {
+        for node in stake_table {
             if let Ok(leaf) = fetcher
                 .read()
                 .await
@@ -316,7 +321,6 @@ impl<
 
         let epoch_height = membership_reader.epoch_height;
         let epoch_drb = membership_reader.inner.get_epoch_drb(*epoch);
-        let full_stake_table = membership_reader.inner.full_stake_table();
         let fetcher = membership_reader.fetcher.clone();
 
         drop(membership_reader);
@@ -333,9 +337,13 @@ impl<
 
             let drb_block_height = transition_block_for_epoch(previous_epoch, epoch_height);
 
+            let membership_reader = membership.read().await;
+            let stake_table = membership_reader.inner.stake_table(Some(previous_epoch));
+            drop(membership_reader);
+
             let mut drb_leaf = None;
 
-            for node in full_stake_table {
+            for node in stake_table {
                 if let Ok(leaf) = fetcher
                     .read()
                     .await
@@ -352,7 +360,9 @@ impl<
                     "We fetched a leaf that is missing a DRB result. This should be impossible.",
                 )),
                 None => {
-                    anyhow::bail!("Failed to fetch leaf from all nodes");
+                    anyhow::bail!(
+                        "Failed to fetch leaf from all nodes. Height: {drb_block_height}"
+                    );
                 },
             }
         }

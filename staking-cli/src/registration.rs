@@ -11,6 +11,7 @@ use hotshot_contract_adapter::{
 };
 
 use crate::{
+    metadata::MetadataUri,
     parse::Commission,
     signature::{NodeSignatures, NodeSignaturesSol},
 };
@@ -19,6 +20,7 @@ pub async fn register_validator(
     provider: impl Provider,
     stake_table_addr: Address,
     commission: Commission,
+    metadata_uri: MetadataUri,
     payload: NodeSignatures,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
     tracing::info!(
@@ -53,6 +55,7 @@ pub async fn register_validator(
                 sol_payload.bls_signature.into(),
                 sol_payload.schnorr_signature.into(),
                 commission.to_evm(),
+                metadata_uri.to_string(),
             )
             .send()
             .await
@@ -123,6 +126,19 @@ pub async fn update_commission(
         .maybe_decode_revert::<StakeTableV2Errors>()
 }
 
+pub async fn update_metadata_uri(
+    provider: impl Provider,
+    stake_table_addr: Address,
+    metadata_uri: MetadataUri,
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    let stake_table = StakeTableV2::new(stake_table_addr, provider);
+    stake_table
+        .updateMetadataUri(metadata_uri.to_string())
+        .send()
+        .await
+        .maybe_decode_revert::<StakeTableV2Errors>()
+}
+
 pub async fn fetch_commission(
     provider: impl Provider,
     stake_table_addr: Address,
@@ -169,10 +185,12 @@ mod test {
             &system.state_key_pair,
         );
 
+        let metadata_uri = "https://example.com/metadata".parse()?;
         let receipt = register_validator(
             &system.provider,
             system.stake_table,
             system.commission,
+            metadata_uri,
             payload,
         )
         .await?
@@ -184,6 +202,7 @@ mod test {
             .unwrap();
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
+        assert_eq!(event.metadataUri, "https://example.com/metadata");
 
         assert_eq!(event.blsVK, system.bls_key_pair.ver_key().into());
         assert_eq!(event.schnorrVK, system.state_key_pair.ver_key().into());
@@ -339,6 +358,7 @@ mod test {
                 bls_sig.into(),
                 schnorr_sig_other_key.into(),
                 Commission::try_from("12.34")?.to_evm(),
+                "https://example.com/metadata".to_string(),
             )
             .send()
             .await
@@ -425,6 +445,78 @@ mod test {
         }
 
         println!("Events: {events:?}");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_metadata_uri() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+
+        let new_uri: MetadataUri = "https://example.com/updated".parse()?;
+        let receipt = update_metadata_uri(&system.provider, system.stake_table, new_uri.clone())
+            .await?
+            .assert_success()
+            .await?;
+
+        let event = receipt
+            .decoded_log::<StakeTableV2::MetadataUriUpdated>()
+            .unwrap();
+        assert_eq!(event.validator, system.deployer_address);
+        assert_eq!(event.metadataUri, new_uri.to_string());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_validator_with_empty_metadata_uri() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        let validator_address = system.deployer_address;
+        let payload = NodeSignatures::create(
+            validator_address,
+            &system.bls_key_pair,
+            &system.state_key_pair,
+        );
+
+        let metadata_uri = MetadataUri::empty();
+        let receipt = register_validator(
+            &system.provider,
+            system.stake_table,
+            system.commission,
+            metadata_uri,
+            payload,
+        )
+        .await?
+        .assert_success()
+        .await?;
+
+        let event = receipt
+            .decoded_log::<StakeTableV2::ValidatorRegisteredV2>()
+            .unwrap();
+        assert_eq!(event.account, validator_address);
+        assert_eq!(event.commission, system.commission.to_evm());
+        assert_eq!(event.metadataUri, "");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_metadata_uri_to_empty() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+
+        let metadata_uri = MetadataUri::empty();
+        let receipt = update_metadata_uri(&system.provider, system.stake_table, metadata_uri)
+            .await?
+            .assert_success()
+            .await?;
+
+        let event = receipt
+            .decoded_log::<StakeTableV2::MetadataUriUpdated>()
+            .unwrap();
+        assert_eq!(event.validator, system.deployer_address);
+        assert_eq!(event.metadataUri, "");
 
         Ok(())
     }

@@ -135,6 +135,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// A zero amount would lead to a no-op.
     error ZeroAmount();
 
+    /// Attempted to renounce ownership which would break governance controls.
+    error OwnershipCannotBeRenounced();
+
     /// The exit escrow period is invalid (either too short or too long)
     error ExitEscrowPeriodInvalid();
 
@@ -270,6 +273,13 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         // Only the owner (timelock) can authorize upgrades
         // No additional checks needed beyond the onlyOwner modifier
+    }
+
+    /// @notice Prevent renouncing ownership to preserve governance control.
+    /// @dev Override renounceOwnership() to revert, preventing accidental or malicious ownership
+    /// renunciation
+    function renounceOwnership() public virtual override onlyOwner {
+        revert OwnershipCannotBeRenounced();
     }
 
     /// @dev Computes a hash value of some G2 point.

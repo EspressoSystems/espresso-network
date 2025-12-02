@@ -41,9 +41,20 @@ clippy *args:
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
+check *args:
+    # postgres
+    cargo check {{args}}
+    # embedded-db
+    cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
+
 build profile="dev" features="":
+    # postgres
     cargo build --profile {{profile}} {{features}}
-    cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
+    # embedded-db 
+    cargo build --profile {{profile}} -p sequencer-sqlite -p espresso-dev-node {{features}}
+
+demo-native-fee *args: (build "test" "--no-default-features --features fee")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -59,6 +70,9 @@ demo-native-drb-header *args: (build "test" "--no-default-features --features dr
 
 demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features --features fee,drb-and-header")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-da-committees *args: (build "test" "--no-default-features --features da-upgrade")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -119,6 +133,49 @@ test-all:
 test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
+# Run process-compose integration tests with minimal features
+# Examples: just test-demo pos-base, just test-demo drb-header-base
+test-demo test_name:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	case "{{test_name}}" in
+		base)
+			features="--no-default-features --features fee"
+			test="test_native_demo_base"
+			;;
+		pos-upgrade)
+			features="--no-default-features --features fee,pos"
+			test="test_native_demo_pos_upgrade"
+			;;
+		pos-base)
+			features="--no-default-features --features pos"
+			test="test_native_demo_pos_base"
+			;;
+		fee-to-drb-header-upgrade)
+			features="--no-default-features --features fee,drb-and-header"
+			test="test_native_demo_fee_to_drb_header_upgrade"
+			;;
+		drb-header-upgrade)
+			features="--no-default-features --features pos,drb-and-header"
+			test="test_native_demo_drb_header_upgrade"
+			;;
+		drb-header-base)
+			features="--no-default-features --features drb-and-header"
+			test="test_native_demo_drb_header_base"
+			;;
+		da-committees)
+			features="--no-default-features --features da-upgrade"
+			test="test_native_demo_drb_header_base"
+			;;
+		*)
+			echo "Unknown test: {{test_name}}"
+			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees"
+			exit 1
+			;;
+	esac
+	just build test "$features"
+	cargo nextest run -p tests $features --nocapture --profile integration -E "test(/$test\$/)"
+
 check-features *args:
     cargo hack check --each-feature {{args}}
 
@@ -167,7 +224,7 @@ build-docker-images:
 
 # generate rust bindings for contracts
 VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
-EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|IRewardClaim|IPlonkVerifier"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules
@@ -191,7 +248,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken IRewardClaim; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken{,V2} IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 
@@ -261,7 +318,7 @@ contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
 
 contracts-test-forge *args='-vv':
-    forge test --no-match-test "testFuzz_|invariant_" {{args}}
+    forge test --no-match-test "testFuzz_|invariant_|test_Network_" {{args}}
 
 contracts-test-fuzz *args='-vv':
     forge test --match-test testFuzz {{args}}

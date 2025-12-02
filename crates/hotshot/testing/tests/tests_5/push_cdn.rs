@@ -32,7 +32,7 @@ async fn push_cdn_network() {
         },
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
+                duration: Duration::from_secs(120),
             },
         ),
         ..TestDescription::default()

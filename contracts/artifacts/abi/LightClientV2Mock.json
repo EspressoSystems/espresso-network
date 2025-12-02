@@ -1972,6 +1972,11 @@
   },
   {
     "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ProverNotPermissioned",
     "inputs": []
   },

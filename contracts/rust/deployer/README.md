@@ -10,6 +10,7 @@
 - [Safe Multisig Proposals](#safe-multisig-proposals)
 - [Troubleshooting](#troubleshooting)
 - [POS Deployment](#pos-deployment)
+  - [Automated Deployment Verification](#automated-deployment-verification)
 
 ## Prerequisites
 
@@ -259,7 +260,7 @@ Example output file (.env.mydemo) contents after a successful run
 
 ```text
 ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
-ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0xd04ff4a75edd737a73e92b2f2274cb887d96e110
+ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x2a264f26859166c5bf3868a54593ee716aebc848
 ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xe1aa25618fa0c7a1cfdab5d6b456af611873b629
 ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS=0xe1da8919f262ee86f9be05059c9280142cf23f48
 ```
@@ -1194,7 +1195,7 @@ touch $OUTPUT_FILE
 # Set the EspressoSys multisig address (will be the pauser of StakeTableV2)
 export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 
-# Set the pauser address for StakeTableV2 (same as EspressoSys multisig)
+# Set the pauser address for StakeTableV2
 export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 
 # Set the EspToken address (required for StakeTableV2)
@@ -1285,6 +1286,32 @@ After completing all steps, verify:
 3. **EspToken**: Deployed with SafeExitTimelock as owner, correct supply, correct initial recipient
 4. **StakeTable**: Upgraded to V2, owned by OpsTimelock, EspressoSys multisig has pauser role
 5. **All proxies**: Point to correct implementation addresses
+
+### Automated Deployment Verification
+
+The `scripts/verify-pos-deployment.sh` script automates the verification of your deployment configuration. It checks
+timelock delays, roles, contract ownership, versions, and cross-contract references.
+
+#### Prerequisites
+
+- Foundry installed (for `cast` command)
+- Environment variables set (see below)
+- Access to the RPC endpoint where contracts are deployed
+
+#### Usage
+
+##### Source environment variables from your deployment output file
+
+source .env.eth.mainnet.staketable # or your deployment output file
+
+##### Run verification
+
+./scripts/verify-pos-deployment.sh --rpc-url $RPC_URL#### Environment Variables
+
+For a complete list of required and optional environment variables, run:
+
+./scripts/verify-pos-deployment.sh --helpThe script will skip checks for any unset variables and show warnings. At
+minimum, you should set the contract proxy addresses you want to verify.
 
 ## Arbitrum Mainnet
 

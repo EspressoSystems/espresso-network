@@ -96,7 +96,7 @@ struct Options {
     )]
     multisig_address: Option<Address>,
 
-    /// Address for the multisig wallet that will be the pauser
+    /// Address for the multisig wallet that will be a pauser
     ///
     /// The multisig pauser can pause functions in contracts that have the `whenNotPaused` modifier
     #[clap(
@@ -151,6 +151,9 @@ struct Options {
     /// Option to upgrade to StakeTable V2
     #[clap(long, default_value = "false")]
     upgrade_stake_table_v2: bool,
+    /// Option to deploy RewardClaim proxy
+    #[clap(long, default_value = "false")]
+    deploy_reward_claim: bool,
     /// Option to deploy ops timelock
     #[clap(long, default_value = "false")]
     deploy_ops_timelock: bool,
@@ -688,9 +691,6 @@ async fn main() -> anyhow::Result<()> {
     if opt.deploy_esp_token {
         args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
     }
-    if opt.upgrade_esp_token_v2 {
-        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
-    }
     if opt.deploy_light_client_v1 {
         args.deploy(&mut contracts, Contract::LightClientProxy)
             .await?;
@@ -700,6 +700,14 @@ async fn main() -> anyhow::Result<()> {
     }
     if opt.upgrade_light_client_v3 {
         args.deploy(&mut contracts, Contract::LightClientV3).await?;
+    }
+    // Deploy RewardClaimProxy before upgrading EspTokenV2, as the upgrade requires it
+    if opt.deploy_reward_claim {
+        args.deploy(&mut contracts, Contract::RewardClaimProxy)
+            .await?;
+    }
+    if opt.upgrade_esp_token_v2 {
+        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
     }
     if opt.deploy_stake_table {
         args.deploy(&mut contracts, Contract::StakeTableProxy)

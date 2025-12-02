@@ -390,7 +390,7 @@ where
     network_config.config.stake_table_capacity = stake_table_capacity;
 
     if let Some(da_committees) = &genesis.da_committees {
-        tracing::warn!("setting da_committees from genesis");
+        tracing::warn!("setting da_committees from genesis: {da_committees:?}");
         network_config.config.da_committees = da_committees.clone();
     }
 
@@ -471,9 +471,20 @@ where
         .with_metrics(metrics)
         .connect(l1_params.urls)
         .with_context(|| "failed to create L1 client")?;
+
+    info!("Validating fee contract");
+
     genesis.validate_fee_contract(&l1_client).await?;
 
+    info!("Fee contract validated. Spawning L1 tasks");
+
     l1_client.spawn_tasks().await;
+
+    info!(
+        "L1 tasks spawned. Waiting for L1 genesis: {:?}",
+        genesis.l1_finalized
+    );
+
     let l1_genesis = match genesis.l1_finalized {
         L1Finalized::Block(b) => b,
         L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
@@ -483,6 +494,8 @@ where
                 .await
         },
     };
+
+    info!("L1 genesis found: {:?}", l1_genesis);
 
     let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
@@ -528,8 +541,14 @@ where
         l1_client.clone(),
         genesis.chain_config,
     );
+
+    info!("Spawning update loop");
+
     fetcher.spawn_update_loop().await;
+    info!("Update loop spawned. Fetching block reward");
+
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
+    info!("Block reward fetched: {:?}", block_reward);
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
@@ -538,7 +557,9 @@ where
         fetcher,
         epoch_height,
     );
+    info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+    info!("Stake reloaded");
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
@@ -567,6 +588,7 @@ where
 
     // Initialize the Libp2p network
     let network = {
+        info!("Initializing Libp2p network");
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
@@ -586,6 +608,8 @@ where
                 network_params.libp2p_bind_address
             )
         })?;
+
+        info!("Libp2p network initialized");
 
         tracing::warn!("Waiting for at least one connection to be initialized");
         select! {

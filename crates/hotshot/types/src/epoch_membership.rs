@@ -23,7 +23,6 @@ use crate::{
             Storage, StoreDrbProgressFn, StoreDrbResultFn,
         },
     },
-    utils::root_block_in_epoch,
     PeerConfig,
 };
 
@@ -269,6 +268,8 @@ where
                 }
             };
         }
+        let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
+        tracing::warn!("Fetching stake tables for epochs: {epochs:?}");
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
@@ -301,6 +302,7 @@ where
         let root_leaf = match self.fetch_stake_table(epoch).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
+                tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
                 self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                     .await;
                 return;
@@ -314,6 +316,10 @@ where
         .await
         {
             Ok(drb_result) => {
+                tracing::warn!(
+                    ?drb_result,
+                    "DRB result for epoch {epoch:?} retrieved from peers. Updating membership."
+                );
                 self.membership
                     .write()
                     .await
@@ -446,10 +452,7 @@ where
 
         // Get the epoch root headers and update our membership with them, finally sync them
         // Verification of the root is handled in get_epoch_root_and_drb
-        let Ok(root_leaf) = root_membership
-            .get_epoch_root(root_block_in_epoch(*root_epoch, self.epoch_height))
-            .await
-        else {
+        let Ok(root_leaf) = root_membership.get_epoch_root().await else {
             return Err(anytrace::error!(
                 "get epoch root leaf failed for epoch {root_epoch:?}"
             ));
@@ -457,7 +460,6 @@ where
 
         Membership::add_epoch_root(
             Arc::clone(&self.membership),
-            epoch,
             root_leaf.block_header().clone(),
         )
         .await
@@ -589,13 +591,12 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<Leaf2<TYPES>> {
+    async fn get_epoch_root(&self) -> anyhow::Result<Leaf2<TYPES>> {
         let Some(epoch) = self.epoch else {
             anyhow::bail!("Cannot get root for None epoch");
         };
         <TYPES::Membership as Membership<TYPES>>::get_epoch_root(
             self.coordinator.membership.clone(),
-            block_height,
             epoch,
         )
         .await

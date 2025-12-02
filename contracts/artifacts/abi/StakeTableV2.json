@@ -19,6 +19,32 @@
   },
   {
     "type": "function",
+    "name": "MAX_COMMISSION_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_METADATA_URI_LENGTH",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "PAUSER_ROLE",
     "inputs": [],
     "outputs": [
@@ -660,6 +686,11 @@
         "name": "commission",
         "type": "uint16",
         "internalType": "uint16"
+      },
+      {
+        "name": "metadataUri",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "outputs": [],
@@ -1023,6 +1054,19 @@
   },
   {
     "type": "function",
+    "name": "updateMetadataUri",
+    "inputs": [
+      {
+        "name": "metadataUri",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "upgradeToAndCall",
     "inputs": [
       {
@@ -1038,6 +1082,19 @@
     ],
     "outputs": [],
     "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "validateMetadataUri",
+    "inputs": [
+      {
+        "name": "metadataUri",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "pure"
   },
   {
     "type": "function",
@@ -1315,6 +1372,25 @@
         "type": "uint16",
         "indexed": false,
         "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MetadataUriUpdated",
+    "inputs": [
+      {
+        "name": "validator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "metadataUri",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
       }
     ],
     "anonymous": false
@@ -1734,6 +1810,12 @@
         "type": "bytes",
         "indexed": false,
         "internalType": "bytes"
+      },
+      {
+        "name": "metadataUri",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
       }
     ],
     "anonymous": false
@@ -1863,6 +1945,16 @@
   },
   {
     "type": "error",
+    "name": "DefaultAdminCannotBeRenounced",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DefaultAdminCannotBeRevoked",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "DeprecatedFunction",
     "inputs": []
   },
@@ -1951,6 +2043,11 @@
   },
   {
     "type": "error",
+    "name": "InvalidMetadataUriLength",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InvalidRateLimitParameters",
     "inputs": []
   },
@@ -2000,6 +2097,11 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
   },
   {
     "type": "error",

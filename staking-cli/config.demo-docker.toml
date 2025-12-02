@@ -1,0 +1,8 @@
+rpc_url = "http://demo-l1-network:8545"
+stake_table_address = "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"
+espresso_url = "http://sequencer0:24000"
+
+[signer]
+mnemonic = "test test test test test test test test test test test junk"
+account_index = 20
+ledger = false
