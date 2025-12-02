@@ -76,7 +76,7 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         checkLimitEnforced(claimer, DAILY_LIMIT + 1);
 
         uint256 basisPoints = 200; // 2%
-        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / rewardClaim.BPS_DENOMINATOR();
         vm.prank(owner);
         rewardClaim.setDailyLimit(basisPoints);
 
@@ -100,7 +100,7 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         claim(DAILY_LIMIT);
 
         uint256 basisPoints = 50; // 0.5%
-        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / rewardClaim.BPS_DENOMINATOR();
         vm.prank(owner);
         rewardClaim.setDailyLimit(basisPoints);
 
@@ -125,5 +125,17 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         vm.prank(claimer);
         vm.expectRevert();
         rewardClaim.claimRewards(amount, "");
+    }
+
+    function test_BpsDenominator() public view {
+        assertEq(rewardClaim.BPS_DENOMINATOR(), 10000);
+    }
+
+    function test_DefaultDailyLimit() public view {
+        uint256 expectedBps = 100; // 1%
+        uint256 expectedLimit =
+            (espToken.totalSupply() * expectedBps) / rewardClaim.BPS_DENOMINATOR();
+        assertEq(rewardClaim.lastSetDailyLimitBasisPoints(), expectedBps);
+        assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
     }
 }
