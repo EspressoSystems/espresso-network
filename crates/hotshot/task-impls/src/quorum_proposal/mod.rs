@@ -667,7 +667,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // This handles the race where we receive a proposal for the first view of a new epoch
                 // before we've processed the Extended QC that transitions us to that epoch.
                 if proposal_epoch > epoch_number {
-                    tracing::debug!(
+                    tracing::info!(
                         "Storing proposal for view {} for retry after epoch transition ({:?} -> \
                          {:?})",
                         view_number + 1,

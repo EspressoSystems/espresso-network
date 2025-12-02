@@ -23,7 +23,7 @@ test-ci-rest *args:
 # Build and run an integration test target
 test-ci test *args:
   echo Running integration test group {{test}}
-  RUST_LOG=debug cargo nextest run -p hotshot-testing --profile hotshot --test {{test}} {{args}}
+  RUST_LOG=info cargo nextest run -p hotshot-testing --profile hotshot --test {{test}} --nocapture {{args}}
 
 # Run all hotshot integration tests
 test-all *args:
