@@ -103,6 +103,11 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Proposals pending retry after epoch transition.
+    /// When we receive a proposal for a new epoch before our cur_epoch has updated,
+    /// we store it here to retry after the epoch transition completes.
+    pub pending_epoch_proposals: BTreeMap<TYPES::View, Arc<HotShotEvent<TYPES>>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
@@ -651,9 +656,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             },
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 let view_number = proposal.data.view_number();
+                let proposal_epoch = proposal.data.proposal.epoch;
+
                 // All nodes get the latest proposed view as a proxy of `cur_view` of old.
                 if !self.update_latest_proposed_view(view_number).await {
                     tracing::trace!("Failed to update latest proposed view");
+                }
+
+                // If proposal's epoch is ahead of our cur_epoch, store for retry after epoch transition.
+                // This handles the race where we receive a proposal for the first view of a new epoch
+                // before we've processed the Extended QC that transitions us to that epoch.
+                if proposal_epoch > epoch_number {
+                    tracing::debug!(
+                        "Storing proposal for view {} for retry after epoch transition ({:?} -> \
+                         {:?})",
+                        view_number + 1,
+                        epoch_number,
+                        proposal_epoch
+                    );
+                    self.pending_epoch_proposals
+                        .insert(view_number + 1, Arc::clone(&event));
                 }
 
                 self.create_dependency_task_if_new(
@@ -687,8 +709,37 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .await?;
             },
             HotShotEvent::ViewChange(view, epoch) => {
-                if epoch > &self.cur_epoch {
+                let epoch_changed = epoch > &self.cur_epoch;
+                if epoch_changed {
                     self.cur_epoch = *epoch;
+
+                    // Retry pending proposals that failed due to stale epoch.
+                    // This handles the race where QuorumProposalPreliminarilyValidated was processed
+                    // before the epoch transition completed.
+                    let pending = std::mem::take(&mut self.pending_epoch_proposals);
+                    for (pending_view, pending_event) in pending {
+                        // Only retry if we haven't already created a task and view is still relevant
+                        if !self.proposal_dependencies.contains_key(&pending_view)
+                            && pending_view > self.latest_proposed_view
+                        {
+                            tracing::info!(
+                                "Retrying dependency task for view {} after epoch transition to \
+                                 {:?}",
+                                pending_view,
+                                epoch
+                            );
+                            let _ = self
+                                .create_dependency_task_if_new(
+                                    pending_view,
+                                    *epoch,
+                                    event_receiver.clone(),
+                                    event_sender.clone(),
+                                    pending_event,
+                                    EpochTransitionIndicator::NotInTransition,
+                                )
+                                .await;
+                        }
+                    }
                 }
                 let keep_view = TYPES::View::new(view.saturating_sub(1));
                 self.cancel_tasks(keep_view);
