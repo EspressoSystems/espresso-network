@@ -19,6 +19,19 @@
   },
   {
     "type": "function",
+    "name": "MAX_COMMISSION_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_METADATA_URI_LENGTH",
     "inputs": [],
     "outputs": [

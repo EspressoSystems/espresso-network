@@ -108,6 +108,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Maximum length for metadata URIs (in bytes)
     uint256 public constant MAX_METADATA_URI_LENGTH = 2048;
 
+    /// @notice Maximum commission in basis points (100% = 10000 bps)
+    uint16 public constant MAX_COMMISSION_BPS = 10000;
+
     /// @notice Minimum time interval between commission increases (in seconds)
     uint256 public minCommissionIncreaseInterval;
 
@@ -588,7 +591,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             revert InvalidSchnorrSig();
         }
 
-        if (commission > 10000) {
+        if (commission > MAX_COMMISSION_BPS) {
             revert InvalidCommission();
         }
 
@@ -654,7 +657,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     function updateCommission(uint16 newCommission) external virtual whenNotPaused {
         address validator = msg.sender;
         ensureValidatorActive(validator);
-        require(newCommission <= 10000, InvalidCommission());
+        require(newCommission <= MAX_COMMISSION_BPS, InvalidCommission());
 
         CommissionTracking storage tracking = commissionTracking[validator];
         uint16 currentCommission = tracking.commission;
@@ -726,7 +729,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         virtual
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        require(newMaxIncrease > 0 && newMaxIncrease <= 10000, InvalidRateLimitParameters());
+        require(
+            newMaxIncrease > 0 && newMaxIncrease <= MAX_COMMISSION_BPS, InvalidRateLimitParameters()
+        );
         maxCommissionIncrease = newMaxIncrease;
         emit MaxCommissionIncreaseUpdated(newMaxIncrease);
     }
@@ -743,7 +748,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             address validator = initialCommissions[i].validator;
             uint16 commission = initialCommissions[i].commission;
 
-            require(commission <= 10000, InvalidCommission());
+            require(commission <= MAX_COMMISSION_BPS, InvalidCommission());
 
             ValidatorStatus status = validators[validator].status;
             require(status != ValidatorStatus.Unknown, ValidatorInactive());

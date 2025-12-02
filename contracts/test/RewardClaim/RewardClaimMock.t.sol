@@ -60,6 +60,7 @@ contract RewardClaimMockTest is Test {
         uint256 balanceBefore = espToken.balanceOf(user);
         uint256 alreadyClaimed = rewardClaim.claimedRewards(user);
         uint256 amountToClaim = lifetimeRewards - alreadyClaimed;
+        uint256 totalClaimedBefore = rewardClaim.totalClaimed();
 
         vm.prank(user);
         vm.expectEmit();
@@ -67,5 +68,6 @@ contract RewardClaimMockTest is Test {
         rewardClaim.claimRewards(lifetimeRewards, "");
 
         assertEq(espToken.balanceOf(user), balanceBefore + amountToClaim);
+        assertEq(rewardClaim.totalClaimed(), totalClaimedBefore + amountToClaim);
     }
 }
