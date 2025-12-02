@@ -341,6 +341,7 @@ contract RewardClaim is
         (bytes32[160] memory proof, bytes32[7] memory authRootInputs) =
             abi.decode(authData, (bytes32[160], bytes32[7]));
 
+        // msg.sender cannot be zero, lifetimeRewards validated non-zero in claimRewards()
         bytes32 rewardCommitment =
             RewardMerkleTreeVerifier.computeRoot(msg.sender, lifetimeRewards, proof);
         bytes32 authRoot = keccak256(
