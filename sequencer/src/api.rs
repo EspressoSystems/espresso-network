@@ -6678,7 +6678,11 @@ mod test {
     async fn test_get_all_reward_accounts_multiple_cases() -> anyhow::Result<()> {
         let storage = SqlDataSource::create_storage().await;
         let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(Config::try_from(&sql_options)?).await?;
+        let db = SqlStorage::connect(
+            Config::try_from(&sql_options)?,
+            StorageConnectionType::Sequencer,
+        )
+        .await?;
 
         let validated_state = ValidatedState::default();
         let instance_state =
