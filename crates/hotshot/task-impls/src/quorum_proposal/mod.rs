@@ -683,7 +683,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     let next_epoch_qc = next_epoch_qc.unwrap();
                     ensure!(
                         justify_qc.data.leaf_commit == next_epoch_qc.data.leaf_commit,
-                        "Proposal has EQC but leaf commits don't match: justify_qc={:?}, next_epoch_qc={:?}",
+                        "Proposal has EQC but leaf commits don't match: justify_qc={:?}, \
+                         next_epoch_qc={:?}",
                         justify_qc.data.leaf_commit,
                         next_epoch_qc.data.leaf_commit
                     );
