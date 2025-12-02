@@ -3590,4 +3590,109 @@ mod tests {
 
         Ok(())
     }
+
+    #[test_log::test(tokio::test)]
+    async fn test_perform_timelock_operation_reward_claim() -> Result<()> {
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        // Deploy SafeExitTimelock
+        let timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            vec![provider_wallet],
+            vec![provider_wallet],
+            provider_wallet,
+        )
+        .await?;
+
+        // Deploy dependencies
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+
+        // Deploy RewardClaim with timelock as admin
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            timelock_addr,
+            provider_wallet,
+        )
+        .await?;
+
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let pauser_role = reward_claim.PAUSER_ROLE().call().await?;
+        let new_pauser = Address::random();
+
+        // Verify new_pauser doesn't have the role yet
+        assert!(!reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        // Use DeployerArgsBuilder to test perform_timelock_operation_on_contract
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::TimelockOperationType;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Schedule)
+            .target_contract("RewardClaim".to_string())
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+
+        // Schedule the operation using the high-level function
+        args.perform_timelock_operation_on_contract(&mut contracts)
+            .await?;
+
+        // Now execute it
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Execute)
+            .target_contract("RewardClaim".to_string())
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+        args.perform_timelock_operation_on_contract(&mut contracts)
+            .await?;
+
+        // Verify the function was actually called
+        assert!(reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        Ok(())
+    }
 }

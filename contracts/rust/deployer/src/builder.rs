@@ -615,6 +615,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     .context("StakeTableProxy address not found")?,
                 Contract::StakeTableProxy,
             ),
+            "RewardClaim" => (
+                contracts
+                    .address(Contract::RewardClaimProxy)
+                    .context("RewardClaimProxy address not found")?,
+                Contract::RewardClaimProxy,
+            ),
             _ => anyhow::bail!("Invalid target contract: {}", target_contract),
         };
 

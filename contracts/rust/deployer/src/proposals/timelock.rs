@@ -6,7 +6,7 @@ use alloy::{
 use anyhow::Result;
 use clap::ValueEnum;
 use hotshot_contract_adapter::sol_types::{
-    EspToken, FeeContract, LightClient, OpsTimelock, SafeExitTimelock, StakeTable,
+    EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
 };
 
 use crate::Contract;
@@ -290,6 +290,11 @@ pub async fn schedule_timelock_operation(
             let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
+        Contract::RewardClaimProxy => {
+            let proxy = RewardClaim::new(target_addr, &provider);
+            let proxy_owner = proxy.currentAdmin().call().await?;
+            TimelockContract::SafeExitTimelock(proxy_owner)
+        },
         _ => anyhow::bail!(
             "Invalid contract type for timelock schedule operation: {}",
             contract_type
@@ -351,6 +356,11 @@ pub async fn execute_timelock_operation(
             let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
         },
+        Contract::RewardClaimProxy => {
+            let proxy = RewardClaim::new(target_addr, &provider);
+            let proxy_owner = proxy.currentAdmin().call().await?;
+            TimelockContract::SafeExitTimelock(proxy_owner)
+        },
         _ => anyhow::bail!(
             "Invalid contract type for timelock execute operation: {}",
             contract_type
@@ -408,6 +418,11 @@ pub async fn cancel_timelock_operation(
             let proxy = StakeTable::new(target_addr, &provider);
             let proxy_owner = proxy.owner().call().await?;
             TimelockContract::OpsTimelock(proxy_owner)
+        },
+        Contract::RewardClaimProxy => {
+            let proxy = RewardClaim::new(target_addr, &provider);
+            let proxy_owner = proxy.currentAdmin().call().await?;
+            TimelockContract::SafeExitTimelock(proxy_owner)
         },
         _ => anyhow::bail!(
             "Invalid contract type for timelock cancel operation: {}",
