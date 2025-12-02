@@ -15,7 +15,7 @@ use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     overall_safety_task::OverallSafetyPropertiesDescription,
-    test_builder::{TestDescription, TimingData},
+    test_builder::TestDescription,
 };
 use hotshot_types::ValidatorConfig;
 use vbs::version::Version;
@@ -89,12 +89,6 @@ cross_tests!(
             ..Default::default()
         };
 
-        metadata.timing_data = TimingData {
-            next_view_timeout: 12000,
-            view_sync_timeout: Duration::from_millis(4000),
-            ..Default::default()
-        };
-
         metadata
     },
 );
@@ -106,14 +100,7 @@ cross_tests!(
     Versions: [DaCommitteeTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(200),
-                                             },
-                                         ),
-            ..TestDescription::default()
-        };
+        let mut metadata = TestDescription::default();
 
         let node_configs = [
             ValidatorConfig::generated_from_seed_indexed(
@@ -167,12 +154,6 @@ cross_tests!(
             ..Default::default()
         };
 
-        metadata.timing_data = TimingData {
-            next_view_timeout: 12000,
-            view_sync_timeout: Duration::from_millis(4000),
-            ..Default::default()
-        };
-
         metadata
     },
 );
@@ -184,14 +165,7 @@ cross_tests!(
     Versions: [DaCommitteeTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(240),
-                                             },
-                                         ),
-            ..TestDescription::default()
-        };
+        let mut metadata = TestDescription::default();
 
         let node_configs = [
             ValidatorConfig::generated_from_seed_indexed(
@@ -256,12 +230,6 @@ cross_tests!(
 
         metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 200,
-            ..Default::default()
-        };
-
-        metadata.timing_data = TimingData {
-            next_view_timeout: 12000,
-            view_sync_timeout: Duration::from_millis(4000),
             ..Default::default()
         };
 

@@ -17,7 +17,7 @@ use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
-    test_builder::{TestDescription, TimingData},
+    test_builder::TestDescription,
 };
 
 cross_tests!(
@@ -60,13 +60,6 @@ cross_tests!(
         }
         config.add_setting(SupportedTraitTypesForAsyncDelay::ValidatedState, &delay_settings);
         metadata.async_delay_config = config_map;
-
-        metadata.timing_data = TimingData {
-            next_view_timeout: 12000,
-            view_sync_timeout: Duration::from_millis(4000),
-            ..Default::default()
-        };
-
         metadata
     },
 );
