@@ -5156,10 +5156,17 @@ mod test {
             .unwrap();
         let mut tx = ds.write().await?;
 
-        let (state, leaf) =
-            reconstruct_state(&instance, &mut tx, node_block_height - 1, to_view, &[], &[])
-                .await
-                .unwrap();
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &ds,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(leaf.view_number(), to_view);
         assert!(
             state
@@ -5173,6 +5180,7 @@ mod test {
         // Reconstruct fee state
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
@@ -5200,6 +5208,7 @@ mod test {
 
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
@@ -5244,6 +5253,7 @@ mod test {
 
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
