@@ -32,7 +32,7 @@ import "./interfaces/IRewardClaim.sol";
 /// This contract uses ONLY AccessControlUpgradeable.
 /// - DEFAULT_ADMIN_ROLE: Can upgrade contract, manage roles, update daily limits
 /// - PAUSER_ROLE: Can pause/unpause user facing methods in the contract during emergencies
-/// Governance: This contract enforces a single-admin model. `_currentAdmin` and
+/// Governance: This contract enforces a single-admin model. `currentAdmin` and
 /// `DEFAULT_ADMIN_ROLE` always reference the same address and can only be changed via
 /// `grantRole(DEFAULT_ADMIN_ROLE, ...)`. Any attempt to revoke or renounce the default admin role
 /// reverts so that there is always a single admin.
@@ -98,7 +98,15 @@ contract RewardClaim is
 
     /// @notice Current admin address with DEFAULT_ADMIN_ROLE
     /// @dev Tracks the single admin to enforce single-admin invariant
-    address private _currentAdmin;
+    address public currentAdmin;
+
+    /// @notice Total amount of rewards claimed across all users
+    ///
+    /// @notice Enables convenient monitoring of unclaimed rewards by subtracting `totalClaimed`
+    /// from `total_reward_distributed` in the Espresso block header. As long as the total unclaimed
+    /// rewards is less than the daily limit, honest claims are guaranteed to never exceed the daily
+    /// limit.
+    uint256 public totalClaimed;
 
     /// @notice The daily limit is updated
     event DailyLimitUpdated(uint256 oldLimit, uint256 newLimit);
@@ -168,7 +176,7 @@ contract RewardClaim is
         __ReentrancyGuard_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _currentAdmin = _admin;
+        currentAdmin = _admin;
         _grantRole(PAUSER_ROLE, _pauser);
 
         espToken = EspTokenV2(_espToken);
@@ -246,6 +254,7 @@ contract RewardClaim is
         require(_verifyAuthRoot(lifetimeRewards, authData), InvalidAuthRoot());
 
         claimedRewards[claimer] = lifetimeRewards;
+        totalClaimed += amountToClaim;
 
         espToken.mint(claimer, amountToClaim);
 
@@ -294,11 +303,11 @@ contract RewardClaim is
     function grantRole(bytes32 role, address account) public virtual override {
         super.grantRole(role, account);
         if (role == DEFAULT_ADMIN_ROLE) {
-            address oldAdmin = _currentAdmin;
+            address oldAdmin = currentAdmin;
             if (oldAdmin == account) {
                 return;
             }
-            _currentAdmin = account;
+            currentAdmin = account;
             // revoke role from old admin so that there is always one admin
             if (oldAdmin != address(0)) {
                 _revokeRole(DEFAULT_ADMIN_ROLE, oldAdmin);

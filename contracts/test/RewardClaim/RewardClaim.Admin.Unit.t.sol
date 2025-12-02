@@ -150,6 +150,7 @@ contract RewardClaimAdminTest is RewardClaimTest {
 
         assertTrue(rewardClaim.hasRole(adminRole, newAdmin), "new admin should hold role");
         assertFalse(rewardClaim.hasRole(adminRole, owner), "old admin should lose role");
+        assertEq(rewardClaim.currentAdmin(), newAdmin);
     }
 
     function test_GrantRole_DefaultAdminRole_SelfGrantNoOp() public {
@@ -159,5 +160,6 @@ contract RewardClaimAdminTest is RewardClaimTest {
         rewardClaim.grantRole(adminRole, owner);
 
         assertTrue(rewardClaim.hasRole(adminRole, owner), "owner should still have role");
+        assertEq(rewardClaim.currentAdmin(), owner);
     }
 }
