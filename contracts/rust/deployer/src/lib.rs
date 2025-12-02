@@ -1233,7 +1233,6 @@ pub async fn transfer_ownership(
 
 /// Grant DEFAULT_ADMIN_ROLE to a new admin for AccessControl-based contracts
 /// This handles contracts like RewardClaim that use AccessControl instead of Ownable
-/// TODO: create a function for pauser roles
 pub async fn grant_admin_role(
     provider: impl Provider,
     target_contract: Contract,
