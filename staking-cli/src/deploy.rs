@@ -79,7 +79,7 @@ impl TestSystem {
     pub async fn deploy_version(
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
-        let exit_escrow_period = Duration::from_secs(250);
+        let exit_escrow_period = Duration::from_secs(172800);
         // Sporadically the provider builder fails with a timeout inside alloy.
         // Retry a few times.
         let mut attempts = 0;

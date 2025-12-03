@@ -1826,7 +1826,7 @@ mod tests {
         )
         .await?;
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(172800);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -2430,7 +2430,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(172800);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -2489,7 +2489,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(172800);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -2600,7 +2600,7 @@ mod tests {
         )
         .await?;
 
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(172800);
         let owner = init_recipient;
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -3421,7 +3421,7 @@ mod tests {
         .await?;
 
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(172800);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -3458,7 +3458,7 @@ mod tests {
         .await?;
 
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(172800);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,

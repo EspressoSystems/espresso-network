@@ -1227,7 +1227,7 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
-    use std::time::Duration;
+    use std::{cmp::max, time::Duration};
 
     use alloy::{
         network::EthereumWallet,
@@ -1470,7 +1470,7 @@ pub mod test_helpers {
                 .genesis_st_state(genesis_stake)
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
-                .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
+                .exit_escrow_period(U256::from(max(blocks_per_epoch * 15 + 100, 172800)))
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())

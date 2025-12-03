@@ -1554,7 +1554,7 @@ mod tests {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
-            .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
+            .exit_escrow_period(U256::from(max(blocks_per_epoch * 15 + 100, 172800)))
             .multisig_pauser(network_config.signer().address())
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
