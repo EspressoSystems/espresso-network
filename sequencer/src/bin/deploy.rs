@@ -199,7 +199,7 @@ struct Options {
     /// Propose ownership transfer from multisig to timelock via Safe transaction service.
     /// This creates a transaction proposal in the Safe multisig that requires approval
     /// before execution. The actual transfer happens after multisig members approve.
-    /// Requires: --multisig-address, --target-contract, --timelock-address
+    /// Requires: --multisig-address, --target-contract
     /// Note: Only works on networks where Safe transaction service is available.
     #[clap(long, default_value = "false")]
     propose_transfer_ownership_to_timelock: bool,
@@ -391,9 +391,6 @@ struct Options {
         requires = "perform_timelock_operation"
     )]
     timelock_operation_delay: Option<u64>,
-    /// The address of the timelock controller
-    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS")]
-    timelock_address: Option<Address>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -710,14 +707,7 @@ async fn main() -> anyhow::Result<()> {
                  --propose-transfer-ownership-to-timelock"
             )
         })?;
-        let timelock_address = opt.timelock_address.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-address when using \
-                 --propose-transfer-ownership-to-timelock"
-            )
-        })?;
         args_builder.target_contract(target_contract);
-        args_builder.timelock_address(timelock_address);
     }
 
     // then deploy specified contracts

@@ -654,7 +654,6 @@ export RPC_URL=""
 cargo run --bin deploy -- \
     --propose-transfer-ownership-to-timelock \
     --target-contract FeeContract \
-    --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
     --fee-contract-proxy $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
     --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
     --rpc-url $RPC_URL \
@@ -678,7 +677,6 @@ export RPC_URL=""
 docker-compose run --rm deploy-sequencer-contracts \
     --propose-transfer-ownership-to-timelock \
     --target-contract lightclient \
-    --timelock-address $ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS \
     --light-client-proxy $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
     --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
     --rpc-url $RPC_URL

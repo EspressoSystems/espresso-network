@@ -21,8 +21,9 @@ use crate::{
             StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
-            cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-            TimelockOperationData, TimelockOperationType,
+            cancel_timelock_operation, derive_timelock_address_from_contract_type,
+            execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
+            TimelockOperationType,
         },
     },
     Contract, Contracts,
@@ -132,8 +133,6 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     transfer_ownership_from_eoa: Option<bool>,
     #[builder(default)]
     transfer_ownership_new_owner: Option<Address>,
-    #[builder(default)]
-    timelock_address: Option<Address>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -694,29 +693,27 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             )
         })?;
 
-        let timelock_address = self.timelock_address.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Timelock address must be set when proposing ownership transfer. Use \
-                 --timelock-address or ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS"
-            )
-        })?;
-
         // Parse the contract type from string
         let contract_type = match target_contract.to_lowercase().as_str() {
             "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
             "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
             "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
             "staketable" | "staketableproxy" => Contract::StakeTableProxy,
+            "rewardclaim" | "rewardclaimproxy" => Contract::RewardClaimProxy,
             _ => anyhow::bail!(
                 "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-                 staketable",
+                 staketable, rewardclaim",
                 target_contract
             ),
         };
 
+        let timelock_address =
+            derive_timelock_address_from_contract_type(contract_type, contracts)?;
+
         tracing::info!(
-            "Proposing transfer of ownership from multisig to timelock for {}",
-            target_contract
+            "Proposing transfer of ownership from multisig to timelock for {} (timelock: {:?})",
+            target_contract,
+            timelock_address
         );
 
         let contract = contract_type;

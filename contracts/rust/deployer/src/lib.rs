@@ -1525,10 +1525,11 @@ mod tests {
                 LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
-                cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-                TimelockOperationData,
+                cancel_timelock_operation, derive_timelock_address_from_contract_type,
+                execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
             },
         },
+        Contracts,
     };
 
     trait ProviderBuilderExt: Sized {
@@ -3703,6 +3704,49 @@ mod tests {
         // Verify the function was actually called
         assert!(reward_claim.hasRole(pauser_role, new_pauser).call().await?);
 
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_timelock_for_contract() -> Result<()> {
+        // TODO: Enhance this test to verify on-chain state
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+
+        // Deploy OpsTimelock
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers.clone(),
+            executors.clone(),
+            provider_wallet,
+        )
+        .await?;
+
+        // Deploy SafeExitTimelock
+        let safe_exit_timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        // FeeContractProxy with OpsTimelock
+        let timelock =
+            derive_timelock_address_from_contract_type(Contract::FeeContractProxy, &contracts)?;
+        assert_eq!(timelock, ops_timelock_addr);
+
+        let timelock =
+            derive_timelock_address_from_contract_type(Contract::EspTokenProxy, &contracts)?;
+        assert_eq!(timelock, safe_exit_timelock_addr);
         Ok(())
     }
 }

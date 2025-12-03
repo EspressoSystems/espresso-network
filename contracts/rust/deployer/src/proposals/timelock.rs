@@ -9,7 +9,7 @@ use hotshot_contract_adapter::sol_types::{
     EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
 };
 
-use crate::Contract;
+use crate::{Contract, Contracts};
 
 /// Data structure for timelock operations
 #[derive(Debug, Clone)]
@@ -270,6 +270,32 @@ impl TimelockContract {
             },
         }
     }
+}
+
+// Derive timelock address from contract type
+// FeeContract, LightClient, StakeTable => OpsTimelock
+// EspToken, RewardClaim => SafeExitTimelock
+pub fn derive_timelock_address_from_contract_type(
+    contract_type: Contract,
+    contracts: &Contracts,
+) -> Result<Address> {
+    let timelock_type = match contract_type {
+        Contract::FeeContractProxy | Contract::LightClientProxy | Contract::StakeTableProxy => {
+            Contract::OpsTimelock
+        },
+        Contract::EspTokenProxy | Contract::RewardClaimProxy => Contract::SafeExitTimelock,
+        _ => anyhow::bail!(
+            "Invalid contract type for timelock derivation: {}",
+            contract_type
+        ),
+    };
+
+    contracts.address(timelock_type).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{:?} not found in deployed contracts. Deploy it first or provide it via flag.",
+            timelock_type
+        )
+    })
 }
 
 pub async fn get_timelock_for_contract(
