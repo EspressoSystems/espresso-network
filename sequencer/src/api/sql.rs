@@ -316,7 +316,7 @@ impl CatchupStorage for SqlStorage {
                   WHERE created <= $1 AND idx IS NOT NULL
              ) sub
              WHERE rn = 1
-             ORDER BY idx
+             ORDER BY idx DESC
              LIMIT $2 OFFSET $3",
             RewardMerkleTreeV2::state_type()
         );
