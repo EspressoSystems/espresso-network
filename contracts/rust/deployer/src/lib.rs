@@ -3179,7 +3179,7 @@ mod tests {
                     &mut contracts,
                     token_addr,
                     lc_proxy_addr,
-                    U256::from(1000u64),
+                    U256::from(172800u64),
                     admin,
                 )
                 .await?
