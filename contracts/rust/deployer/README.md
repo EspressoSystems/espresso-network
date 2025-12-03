@@ -53,7 +53,7 @@ unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
 unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
 
 # Execute the deployment command
-RUST_LOG=info cargo run --bin deploy -- --deploy-fee --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-fee-v1 --rpc-url=$RPC_URL
 ```
 
 ### Transfer Ownership with Cargo
@@ -130,7 +130,7 @@ set +a
 unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
 
 # Deploy the fee contract with a multisig owner (requires ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS to be set which occurs in the step above)
-RUST_LOG=info cargo run --bin deploy -- --deploy-fee --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-fee-v1 --rpc-url=$RPC_URL
 ```
 
 ## Timelock Owner
@@ -146,7 +146,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
 ### Deploying Fee Contract with Docker compose
@@ -171,7 +171,7 @@ docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+  deploy --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 # Token
@@ -200,7 +200,7 @@ source .env
 set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
 unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
 
 ## Multisig Owner
@@ -212,7 +212,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
 
 ## Timelock Owner
@@ -228,7 +228,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
 ### Deploying Token with Docker compose
@@ -253,7 +253,7 @@ docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-safe-exit-timelock --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+  deploy --deploy-safe-exit-timelock --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 Example output file (.env.mydemo) contents after a successful run
@@ -284,7 +284,7 @@ export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPORESS_OPS_TIMELOCK_DELAY=0
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 The deployed contracts will be written to `.env.mydemo`
@@ -399,7 +399,7 @@ export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPORESS_OPS_TIMELOCK_DELAY=0
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 The deployed contracts will be written to `.env.mydemo`
@@ -577,7 +577,7 @@ set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
 # If doing a real run then, export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- \
-  --deploy-esp-token \
+  --deploy-esp-token-v1 \
   --upgrade-esp-token-v2 \
   --rpc-url=$RPC_URL \
   --use-multisig
@@ -593,7 +593,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-esp-token --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
+  deploy --deploy-esp-token-v1 --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
   # to simulate, add --dry-run
 ```
 
@@ -1117,7 +1117,7 @@ docker compose run --rm \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-sequencer-contracts \
-  deploy --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
+  deploy --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
   # to simulate, add --dry-run
 ```
 
@@ -1226,7 +1226,7 @@ docker compose run --rm \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-sequencer-contracts \
-  deploy --deploy-stake-table --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
+  deploy --deploy-stake-table-v1 --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
   # to simulate, add --dry-run
 ```
 

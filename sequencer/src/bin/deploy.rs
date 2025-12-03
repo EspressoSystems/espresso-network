@@ -74,7 +74,7 @@ struct Options {
     /// Mnemonic for an L1 wallet.
     ///
     /// This wallet is used to deploy the contracts, so the account indicated by ACCOUNT_INDEX must
-    /// be funded with with ETH.
+    /// be funded with ETH.
     #[clap(
         long,
         name = "MNEMONIC",
@@ -127,56 +127,85 @@ struct Options {
     )]
     ledger: bool,
 
-    /// Option to deploy fee contracts, (Backward compatibility: --deploy-fee is an alias for --deploy-fee-v1)
+    /// Option to deploy fee contracts
+    // (backward compatibility: --deploy-fee is an alias for --deploy-fee-v1)
     #[clap(long, default_value = "false")]
     deploy_fee: bool,
+
     /// Option to deploy fee contracts
     #[clap(long, default_value = "false")]
     deploy_fee_v1: bool,
+
     /// Option to deploy LightClient V1 and proxy
     #[clap(long, default_value = "false")]
     deploy_light_client_v1: bool,
+
     /// Option to upgrade to LightClient V2
     #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
+
     /// Option to upgrade to LightClient V3
     #[clap(long, default_value = "false")]
     upgrade_light_client_v3: bool,
-    /// Option to deploy esp token (Backward compatibility: --deploy-esp-token is an alias for --deploy-esp-token-v1)
+
+    /// Option to deploy esp token
+    // (backward compatibility: --deploy-esp-token is an alias for --deploy-esp-token-v1)
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
+
     /// Option to deploy esp token v1
     #[clap(long, default_value = "false")]
     deploy_esp_token_v1: bool,
+
     /// Option to upgrade esp token v2
     #[clap(long, default_value = "false")]
     upgrade_esp_token_v2: bool,
-    /// Option to deploy StakeTable V1 and proxy (Backward compatibility: --deploy-stake-table is an alias for --deploy-stake-table-v1)
+    /// Option to deploy StakeTable V1 and proxy
+    // (backward compatibility: --deploy-stake-table is an alias for --deploy-stake-table-v1)
     #[clap(long, default_value = "false")]
     deploy_stake_table: bool,
+
     /// Option to deploy StakeTable V1
     #[clap(long, default_value = "false")]
     deploy_stake_table_v1: bool,
+
     /// Option to upgrade to StakeTable V2
     #[clap(long, default_value = "false")]
     upgrade_stake_table_v2: bool,
+
     /// Option to deploy RewardClaimV1 proxy
     #[clap(long, default_value = "false")]
     deploy_reward_claim_v1: bool,
+
     /// Option to deploy ops timelock
     #[clap(long, default_value = "false")]
     deploy_ops_timelock: bool,
+
     /// Option to deploy safe exit timelock
     #[clap(long, default_value = "false")]
     deploy_safe_exit_timelock: bool,
+
     /// Option to use timelock as the owner of the proxy
+    /// Transfer contract ownership to a timelock during deployment/upgrade.
+    /// Which timelock is used depends on the contract:
+    /// - FeeContract, LightClient, StakeTable → OpsTimelock (shorter delay for critical ops)
+    /// - EspToken, RewardClaim → SafeExitTimelock (longer delay for token operations)
+    /// Requires timelocks to be deployed first (--deploy-ops-timelock, --deploy-safe-exit-timelock).
+    /// If not set, ownership goes to multisig (if --use-multisig) or deployer account.
     #[clap(long, default_value = "false")]
     use_timelock_owner: bool,
+
     /// Option to transfer ownership from multisig
+    /// Propose ownership transfer from multisig to timelock via Safe transaction service.
+    /// This creates a transaction proposal in the Safe multisig that requires approval
+    /// before execution. The actual transfer happens after multisig members approve.
+    /// Requires: --multisig-address, --target-contract, --timelock-address
+    /// Note: Only works on networks where Safe transaction service is available.
     #[clap(long, default_value = "false")]
     propose_transfer_ownership_to_timelock: bool,
 
     /// Option to transfer ownership directly from EOA to a new owner
+    /// Requires: --transfer-ownership-new-owner
     #[clap(long, default_value = "false")]
     transfer_ownership_from_eoa: bool,
 
@@ -194,15 +223,24 @@ struct Options {
     contracts: DeployedContracts,
 
     /// If toggled, launch a mock LightClient contract with a smaller verification key for testing.
-    /// Applies to both V1 and V2 of LightClient.
+    /// Applies to both V1, V2 and V3 of LightClient.
     #[clap(short, long)]
     pub use_mock: bool,
 
-    /// Option to deploy contracts owned by multisig
+    /// Option to deploy contracts owned by multisig.
+    ///
+    /// DEPLOYMENT: Directly sets multisig as owner (immediate transfer).
+    /// UPGRADES: Creates Safe multisig proposal (requires approval before execution).
+    ///
+    /// For upgrades, uses Safe transaction service to create proposals that
+    /// multisig members must approve. This adds a governance layer.
+    ///
+    /// Requires: --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
     #[clap(long, default_value = "false")]
     pub use_multisig: bool,
 
     /// Option to test upgrade stake table v2 multisig owner dry run
+    /// TODO: have dry-runs handle all operations
     #[clap(long, default_value = "false")]
     pub dry_run: bool,
 
@@ -210,7 +248,7 @@ struct Options {
     #[clap(long, default_value = "false")]
     pub mock_espresso_live_network: bool,
 
-    /// Option to verify node js files access to upgrade stake table v2 multisig owner dry run
+    /// Option to verify access to Node.js files required for Safe multisig operations.
     #[clap(long, default_value = "false")]
     pub verify_node_js_files: bool,
 
@@ -241,13 +279,14 @@ struct Options {
     #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
     initial_token_grant_recipient: Option<Address>,
 
-    /// The blocks per epoch    
+    /// The number of blocks per epoch for the HotShot consensus protocol.
     #[clap(long, env = "ESPRESSO_SEQUENCER_BLOCKS_PER_EPOCH")]
     blocks_per_epoch: Option<u64>,
 
     /// The epoch start block
     #[clap(long, env = "ESPRESSO_SEQUENCER_EPOCH_START_BLOCK")]
     epoch_start_block: Option<u64>,
+
     /// The initial supply of the tokens.
     #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY")]
     initial_token_supply: Option<U256>,
@@ -305,8 +344,9 @@ struct Options {
     )]
     timelock_operation_type: Option<TimelockOperationType>,
 
-    /// The target contract of the timelock operation
-    /// The timelock is the owner of this contract and can perform the timelock operation on it
+    /// The target contract for timelock operations or ownership transfers.
+    /// Valid values: "FeeContract", "EspToken", "LightClient", "StakeTable", "RewardClaim".
+    /// It's version agnostic
     #[clap(long, env = "ESPRESSO_TARGET_CONTRACT")]
     target_contract: Option<String>,
 

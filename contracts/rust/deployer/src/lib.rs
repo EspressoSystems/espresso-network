@@ -117,15 +117,19 @@ pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
     #[clap(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
+
     /// OpsTimelock.sol
     #[clap(long, env = Contract::OpsTimelock)]
     ops_timelock: Option<Address>,
+
     /// SafeExitTimelock.sol
     #[clap(long, env = Contract::SafeExitTimelock)]
     safe_exit_timelock: Option<Address>,
+
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
+
     /// PlonkVerifierV3.sol
     #[clap(long, env = Contract::PlonkVerifierV3)]
     plonk_verifier_v3: Option<Address>,
@@ -133,9 +137,11 @@ pub struct DeployedContracts {
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
     #[clap(long, env = Contract::LightClient)]
     light_client: Option<Address>,
+
     /// LightClientV2.sol
     #[clap(long, env = Contract::LightClientV2)]
     light_client_v2: Option<Address>,
+
     /// LightClientV3.sol
     #[clap(long, env = Contract::LightClientV3)]
     light_client_v3: Option<Address>,
@@ -175,9 +181,11 @@ pub struct DeployedContracts {
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
+
     /// RewardClaim.sol
     #[clap(long, env = Contract::RewardClaim)]
     reward_claim: Option<Address>,
+
     /// Use an already-deployed RewardClaim.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::RewardClaimProxy)]
     reward_claim_proxy: Option<Address>,
