@@ -22,13 +22,15 @@ use hotshot_types::{
         EpochRootQuorumCertificateV2, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
+    simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{
+        block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
         storage::Storage,
     },
-    utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
+    utils::{is_epoch_transition, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
@@ -39,7 +41,6 @@ use crate::{
     events::HotShotEvent, helpers::broadcast_view_change,
     quorum_proposal::handlers::handle_eqc_formed,
 };
-
 mod handlers;
 
 /// The state for the quorum proposal task.
@@ -166,6 +167,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                             _builder_commitment,
                             _metadata,
                             view_number,
+                            _epoch_number,
                             _fee,
                         ) = event
                         {
@@ -355,7 +357,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
         event: Arc<HotShotEvent<TYPES>>,
-        epoch_transition_indicator: EpochTransitionIndicator,
     ) -> Result<()> {
         let epoch_membership = self
             .membership_coordinator
@@ -363,29 +364,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             .await?;
         let leader_in_current_epoch =
             epoch_membership.leader(view_number).await? == self.public_key;
-        // If we are in the epoch transition and we are the leader in the next epoch,
-        // we might want to start collecting dependencies for our next epoch proposal.
-
-        let leader_in_next_epoch = !leader_in_current_epoch
-            && epoch_number.is_some()
-            && matches!(
-                epoch_transition_indicator,
-                EpochTransitionIndicator::InTransition
-            )
-            && epoch_membership
-                .next_epoch()
-                .await
-                .context(warn!(
-                    "Missing the randomized stake table for epoch {}",
-                    epoch_number.unwrap() + 1
-                ))?
-                .leader(view_number)
-                .await?
-                == self.public_key;
 
         // Don't even bother making the task if we are not entitled to propose anyway.
         ensure!(
-            leader_in_current_epoch || leader_in_next_epoch,
+            leader_in_current_epoch,
             debug!("We are not the leader of the next view")
         );
 
@@ -420,7 +402,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 view_number,
                 sender: event_sender,
                 receiver: event_receiver,
-                membership: epoch_membership,
+                membership_coordinator: epoch_membership.coordinator,
                 public_key: self.public_key.clone(),
                 private_key: self.private_key.clone(),
                 instance_state: Arc::clone(&self.instance_state),
@@ -477,15 +459,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
-        let epoch_number = self.cur_epoch;
-        let maybe_high_qc_block_number = self.consensus.read().await.high_qc().data.block_number;
-        let epoch_transition_indicator = if maybe_high_qc_block_number.is_some_and(|bn| {
-            is_epoch_transition(bn, self.epoch_height) && !is_last_block(bn, self.epoch_height)
-        }) {
-            EpochTransitionIndicator::InTransition
-        } else {
-            EpochTransitionIndicator::NotInTransition
-        };
         match event.as_ref() {
             HotShotEvent::UpgradeCertificateFormed(cert) => {
                 tracing::debug!(
@@ -504,11 +477,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     let view_number = timeout_cert.view_number + 1;
                     self.create_dependency_task_if_new(
                         view_number,
-                        epoch_number,
+                        timeout_cert.data.epoch,
                         event_receiver,
                         event_sender,
                         Arc::clone(&event),
-                        epoch_transition_indicator,
                     )
                     .await?;
                 },
@@ -519,6 +491,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                             "Received a QC for a view that was not > than our current high QC"
                         );
                     }
+
+                    let qc_epoch = qc.data.epoch;
+                    let is_eqc = qc
+                        .data
+                        .block_number
+                        .is_some_and(|bn| is_last_block(bn, self.epoch_height));
+                    let target_epoch = if is_eqc {
+                        qc_epoch.map(|e| e + 1)
+                    } else {
+                        qc_epoch
+                    };
 
                     self.formed_quorum_certificates
                         .insert(qc.view_number(), qc.clone());
@@ -548,11 +531,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     }
                     self.create_dependency_task_if_new(
                         view_number,
-                        epoch_number,
+                        target_epoch,
                         event_receiver,
                         event_sender,
                         Arc::clone(&event),
-                        epoch_transition_indicator,
                     )
                     .await?;
                 },
@@ -584,11 +566,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     .await;
                 self.create_dependency_task_if_new(
                     view_number,
-                    epoch_number,
+                    qc.data.epoch,
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -597,17 +578,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 _builder_commitment,
                 _metadata,
                 view_number,
+                epoch_number,
                 _fee,
             ) => {
                 let view_number = *view_number;
 
                 self.create_dependency_task_if_new(
                     view_number,
-                    epoch_number,
+                    *epoch_number,
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -645,7 +626,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     event,
-                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -669,6 +649,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     .is_some_and(|bn| is_last_block(bn, self.epoch_height));
                 let target_epoch = if is_eqc {
                     qc_epoch.map(|e| e + 1)
+                } else if is_last_block(
+                    proposal.data.block_header().block_number(),
+                    self.epoch_height,
+                ) {
+                    proposal.data.epoch().map(|e| e + 1)
                 } else {
                     qc_epoch
                 };
@@ -708,7 +693,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -722,13 +706,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             },
             HotShotEvent::VidDisperseSend(vid_disperse, _) => {
                 let view_number = vid_disperse.data.view_number();
+                let epoch_number = vid_disperse.data.epoch();
                 self.create_dependency_task_if_new(
                     view_number,
                     epoch_number,
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -769,13 +753,22 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .await;
 
                 let view_number = next_epoch_qc.view_number() + 1;
+                let epoch_number = next_epoch_qc.data.epoch;
+                let is_eqc = next_epoch_qc
+                    .data
+                    .block_number
+                    .is_some_and(|bn| is_last_block(bn, self.epoch_height));
+                let target_epoch = if is_eqc {
+                    epoch_number.map(|e| e + 1)
+                } else {
+                    epoch_number
+                };
                 self.create_dependency_task_if_new(
                     view_number,
-                    epoch_number,
+                    target_epoch,
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    epoch_transition_indicator,
                 )
                 .await?;
             },

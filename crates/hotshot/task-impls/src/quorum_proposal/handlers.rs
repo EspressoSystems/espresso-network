@@ -19,7 +19,7 @@ use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
     consensus::{CommitmentAndMetadata, OuterConsensus},
     data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2},
-    epoch_membership::EpochMembership,
+    epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
@@ -91,7 +91,7 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
     pub instance_state: Arc<TYPES::InstanceState>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: EpochMembership<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Our public key
     pub public_key: TYPES::SignatureKey,
@@ -152,7 +152,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 qc,
                 maybe_next_epoch_qc.as_ref(),
                 &self.consensus,
-                &self.membership.coordinator,
+                &self.membership_coordinator,
                 &self.upgrade_lock,
                 self.epoch_height,
             )
@@ -168,7 +168,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     if let Some(state_cert) = &maybe_state_cert {
                         if validate_light_client_state_update_certificate(
                             state_cert,
-                            &self.membership.coordinator,
+                            &self.membership_coordinator,
                             &self.upgrade_lock,
                         )
                         .await
@@ -235,7 +235,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     qc,
                     Some(next_epoch_qc),
                     &self.consensus,
-                    &self.membership.coordinator,
+                    &self.membership_coordinator,
                     &self.upgrade_lock,
                     self.epoch_height,
                 )
@@ -278,7 +278,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     qc,
                     Some(next_epoch_qc),
                     &self.consensus,
-                    &self.membership.coordinator,
+                    &self.membership_coordinator,
                     &self.upgrade_lock,
                     self.epoch_height,
                 )
@@ -360,7 +360,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 qc,
                 maybe_next_epoch_qc.as_ref(),
                 &self.consensus,
-                &self.membership.coordinator,
+                &self.membership_coordinator,
                 &self.upgrade_lock,
                 self.epoch_height,
             )
@@ -376,7 +376,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     if let Some(state_cert) = &maybe_state_cert {
                         if validate_light_client_state_update_certificate(
                             state_cert,
-                            &self.membership.coordinator,
+                            &self.membership_coordinator,
                             &self.upgrade_lock,
                         )
                         .await
@@ -457,7 +457,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let (parent_leaf, state) = parent_leaf_and_state(
             &self.sender,
             &self.receiver,
-            self.membership.coordinator.clone(),
+            self.membership_coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
@@ -567,8 +567,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         );
 
         let epoch_membership = self
-            .membership
-            .coordinator
+            .membership_coordinator
             .membership_for_epoch(epoch)
             .await?;
         // Make sure we are the leader for the view and epoch.
@@ -687,6 +686,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     builder_commitment,
                     metadata,
                     view,
+                    _epoch_number,
                     fees,
                 ) => {
                     commit_and_metadata = Some(CommitmentAndMetadata {

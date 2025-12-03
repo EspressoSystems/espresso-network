@@ -171,6 +171,7 @@ async fn test_upgrade_task_with_proposal() {
                     num_transactions: 0
                 },
                 ViewNumber::new(1),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -189,6 +190,7 @@ async fn test_upgrade_task_with_proposal() {
                 builder_commitment.clone(),
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -208,6 +210,7 @@ async fn test_upgrade_task_with_proposal() {
                 builder_commitment.clone(),
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
