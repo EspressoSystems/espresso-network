@@ -99,7 +99,7 @@ pub use fail_storage::FailStorage;
 #[cfg(feature = "file-system-data-source")]
 pub use fs::FileSystemStorage;
 #[cfg(feature = "sql-data-source")]
-pub use sql::SqlStorage;
+pub use sql::{SqlStorage, StorageConnectionType};
 
 /// Persistent storage for a HotShot blockchain.
 ///

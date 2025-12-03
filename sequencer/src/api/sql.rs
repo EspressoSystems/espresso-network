@@ -24,7 +24,8 @@ use hotshot_query_service::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
             sql::{query_as, Db, TransactionMode, Write},
-            AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            AvailabilityStorage, MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage,
+            SqlStorage,
         },
         VersionedDataSource,
     },
@@ -288,6 +289,16 @@ impl CatchupStorage for SqlStorage {
         ensure!(
             height < block_height,
             "requested height {height} is not yet available (latest block height: {block_height})"
+        );
+
+        let merklized_state_height = tx
+            .get_last_state_height()
+            .await
+            .context("getting merklized state height")? as u64;
+        ensure!(
+            height <= merklized_state_height,
+            "requested height {height} is not yet available. latest merklized state height: \
+             {merklized_state_height}"
         );
 
         let header = tx

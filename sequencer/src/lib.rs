@@ -229,6 +229,7 @@ where
             "node_identity_general".into(),
             vec![
                 "name".into(),
+                "description".into(),
                 "company_name".into(),
                 "company_website".into(),
                 "operating_system".into(),
@@ -237,15 +238,16 @@ where
             ],
         )
         .create(vec![
-            identity.node_name.unwrap_or("".into()),
-            identity.company_name.unwrap_or("".into()),
+            identity.node_name.unwrap_or_default(),
+            identity.node_description.unwrap_or_default(),
+            identity.company_name.unwrap_or_default(),
             identity
                 .company_website
                 .map(|u| u.into())
-                .unwrap_or("".into()),
-            identity.operating_system.unwrap_or("".into()),
-            identity.node_type.unwrap_or("".into()),
-            identity.network_type.unwrap_or("".into()),
+                .unwrap_or_default(),
+            identity.operating_system.unwrap_or_default(),
+            identity.node_type.unwrap_or_default(),
+            identity.network_type.unwrap_or_default(),
         ]);
 
     // Expose Node Identity Location via the status/metrics API
@@ -255,15 +257,52 @@ where
             vec!["country".into(), "latitude".into(), "longitude".into()],
         )
         .create(vec![
-            identity.country_code.unwrap_or("".into()),
-            identity
-                .latitude
-                .map(|l| l.to_string())
-                .unwrap_or("".into()),
+            identity.country_code.unwrap_or_default(),
+            identity.latitude.map(|l| l.to_string()).unwrap_or_default(),
             identity
                 .longitude
                 .map(|l| l.to_string())
-                .unwrap_or("".into()),
+                .unwrap_or_default(),
+        ]);
+
+    // Expose icons for node dashboard via the status/metrics API
+    metrics
+        .text_family(
+            "node_identity_icon".into(),
+            vec![
+                "small_1x".into(),
+                "small_2x".into(),
+                "small_3x".into(),
+                "large_1x".into(),
+                "large_2x".into(),
+                "large_3x".into(),
+            ],
+        )
+        .create(vec![
+            identity
+                .icon_14x14_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
         ]);
 
     // Stick our public key in `metrics` so it is easily accessible via the status API.
