@@ -839,6 +839,15 @@ pub async fn distribute_block_reward(
         return Ok(None);
     }
 
+    // If we just upgraded to V4 from any version we should pre-populate the merkle tree
+    // with accounts from the stake table, giving each address 0 initial balance
+    let parent_header = parent_leaf.block_header();
+    if version >= DrbAndHeaderUpgradeVersion::version()
+        && parent_header.version() < DrbAndHeaderUpgradeVersion::version()
+    {
+        pre_populate_reward_merkle_tree(coordinator.clone(), validated_state, epoch).await?;
+    }
+
     // Determine who the block leader is for this view and ensure missing block
     // rewards are fetched from peers if needed.
 
@@ -849,8 +858,6 @@ pub async fn distribute_block_reward(
         view_number,
     )
     .await?;
-
-    let parent_header = parent_leaf.block_header();
 
     // Initialize the total rewards distributed so far in this block.
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
@@ -865,13 +872,6 @@ pub async fn distribute_block_reward(
         instance_state.fixed_block_reward().await?
     };
 
-    // If we just upgraded to V4 from any version we should pre-poplute the merkle tree
-    // with accounts from the stake table, giving each address 0 initial balance
-    if version >= DrbAndHeaderUpgradeVersion::version()
-        && parent_header.version() < DrbAndHeaderUpgradeVersion::version()
-    {
-        pre_populate_reward_merkle_tree(coordinator.clone(), validated_state, epoch).await?;
-    }
     // If we are in the DRB + header upgrade
     // and the parent block is from V3 (which does not have a previously distributed reward field),
     // we need to recompute the previously distributed rewards
