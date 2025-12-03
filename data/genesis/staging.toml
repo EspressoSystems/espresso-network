@@ -4,7 +4,7 @@ genesis_version = "0.4"
 epoch_height = 3000
 drb_difficulty = 5000000000
 drb_upgrade_difficulty = 5000000000
-epoch_start_block = 297100
+epoch_start_block = 1
 
 [stake_table]
 capacity = 200
