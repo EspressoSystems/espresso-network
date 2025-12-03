@@ -526,6 +526,16 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         .ok_or_else(|| anyhow!("EspTokenProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("EspTokenProxy found at {proxy_addr:#x}");
     let proxy = EspToken::new(proxy_addr, &provider);
+
+    // Check if already on V2
+    let current_version = proxy.getVersion().call().await?;
+    if current_version.majorVersion >= 2 {
+        anyhow::bail!(
+            "EspToken is already on V{}, no upgrade needed",
+            current_version.majorVersion
+        )
+    }
+
     let owner_addr = proxy.owner().call().await?;
 
     if !dry_run {

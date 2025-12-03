@@ -857,6 +857,16 @@ pub async fn upgrade_esp_token_v2(
     };
 
     let proxy = EspToken::new(proxy_addr, &provider);
+
+    // Check if already on V2
+    let current_version = proxy.getVersion().call().await?;
+    if current_version.majorVersion >= 2 {
+        anyhow::bail!(
+            "EspToken is already on V{}, no upgrade needed",
+            current_version.majorVersion
+        )
+    }
+
     // Deploy the new implementation
     let v2_addr = contracts
         .deploy(Contract::EspTokenV2, EspTokenV2::deploy_builder(&provider))
