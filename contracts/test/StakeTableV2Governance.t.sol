@@ -92,12 +92,12 @@ contract StakeTableV2GovernanceTest is Test {
             )
         );
         vm.expectEmit(true, true, true, true, address(proxy));
-        emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
-        proxy.updateExitEscrowPeriod(200 seconds);
+        emit StakeTableV2.ExitEscrowPeriodUpdated(2 days);
+        proxy.updateExitEscrowPeriod(2 days);
         vm.stopPrank();
 
         vm.prank(initialOwner);
-        proxy.updateExitEscrowPeriod(200 seconds);
+        proxy.updateExitEscrowPeriod(2 days);
     }
 
     function test_TransferOwnership_Success() public {
@@ -171,7 +171,7 @@ contract StakeTableV2GovernanceTest is Test {
         vm.stopPrank();
 
         vm.prank(initialOwner);
-        proxy.updateExitEscrowPeriod(200 seconds);
+        proxy.updateExitEscrowPeriod(2 days);
     }
 
     function test_TransferOwnership_RevertsWhenNotAdmin() public {
@@ -197,7 +197,7 @@ contract StakeTableV2GovernanceTest is Test {
 
         vm.startPrank(newOwner);
 
-        uint64 newPeriod = 200 seconds;
+        uint64 newPeriod = 2 days;
         proxy.updateExitEscrowPeriod(newPeriod);
 
         proxy.grantRole(proxy.PAUSER_ROLE(), newOwner);
@@ -222,38 +222,7 @@ contract StakeTableV2GovernanceTest is Test {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, initialOwner, adminRole
             )
         );
-        proxy.updateExitEscrowPeriod(200 seconds);
-        vm.stopPrank();
-    }
-
-    function test_UpdateExitEscrowPeriod_WithLargeBlocksPerEpoch() public {
-        address defaultAdmin = proxy.owner();
-
-        // Mock a blocksPerEpoch that would make min > max (14 days)
-        // 14 days = 1,209,600 seconds
-        // To exceed this: blocksPerEpoch * 15 > 1,209,600
-        // So blocksPerEpoch > 80,640
-        uint64 largeBlocksPerEpoch = 100000; // Makes min = 1,500,000 seconds
-
-        // Mock the light client to return this large value
-        vm.mockCall(
-            address(proxy.lightClient()),
-            abi.encodeWithSelector(ILightClient.blocksPerEpoch.selector),
-            abi.encode(largeBlocksPerEpoch)
-        );
-
-        uint64 minExitEscrowPeriod = largeBlocksPerEpoch * 15; // 1,500,000 seconds
-        uint64 maxExitEscrowPeriod = 14 days;
-        // Verify min > max (this is the edge case that should revert)
-        assertTrue(minExitEscrowPeriod > maxExitEscrowPeriod, "Min should exceed max");
-
-        vm.startPrank(defaultAdmin);
-
-        // B04 Fix: Should revert when min > max (invalid bounds)
-        // This prevents the function from being called with impossible constraints
-        vm.expectRevert(S.ExitEscrowPeriodInvalid.selector);
-        proxy.updateExitEscrowPeriod(maxExitEscrowPeriod);
-
+        proxy.updateExitEscrowPeriod(2 days);
         vm.stopPrank();
     }
 
