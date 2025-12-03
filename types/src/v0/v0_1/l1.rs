@@ -3,7 +3,7 @@ use alloy::{
     primitives::{B256, U256},
     providers::{
         fillers::{FillProvider, JoinFill, RecommendedFillers},
-        Identity, RootProvider,
+        Identity, Provider, RootProvider,
     },
     transports::http::{Client, Http},
 };
@@ -236,6 +236,12 @@ pub struct L1Client {
     pub(crate) receiver: InactiveReceiver<L1Event>,
     /// Async task which updates the shared state.
     pub(crate) update_task: Arc<L1UpdateTask>,
+}
+
+impl Provider for L1Client {
+    fn root(&self) -> &RootProvider {
+        self.provider.root()
+    }
 }
 
 /// In-memory view of the L1 state, updated asynchronously.

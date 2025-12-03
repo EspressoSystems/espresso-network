@@ -13,6 +13,8 @@ use primitive_types::U256;
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
 
+pub mod payload;
+
 pub type Proof = Vec<MerkleNode<Commitment<Header>, u64, Sha3Node>>;
 pub type CircuitField = ark_ed_on_bn254::Fq;
 

@@ -7,7 +7,7 @@ use espresso_types::{
     get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1,
+        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{
@@ -19,16 +19,17 @@ use espresso_types::{
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
-    availability::LeafId,
+    availability::{BlockId, LeafId},
     data_source::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
             sql::{query_as, Db, TransactionMode, Write},
-            AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            AvailabilityStorage, MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage,
+            SqlStorage,
         },
         VersionedDataSource,
     },
-    merklized_state::Snapshot,
+    merklized_state::{MerklizedState, Snapshot},
     Resolvable,
 };
 use hotshot_types::{
@@ -42,6 +43,7 @@ use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme,
 };
+use serde_json::Value;
 use sqlx::{Encode, Type};
 use vbs::version::StaticVersionType;
 
@@ -250,6 +252,84 @@ impl CatchupStorage for SqlStorage {
         }
     }
 
+    async fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch all reward accounts; height {height}"
+        ))?;
+
+        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+            .await
+            .context("getting block height")? as u64;
+        ensure!(
+            block_height > 0,
+            "cannot get accounts for height {height}: no blocks available"
+        );
+
+        ensure!(
+            height < block_height,
+            "requested height {height} is not yet available (latest block height: {block_height})"
+        );
+
+        let merklized_state_height = tx
+            .get_last_state_height()
+            .await
+            .context("getting merklized state height")? as u64;
+        ensure!(
+            height <= merklized_state_height,
+            "requested height {height} is not yet available. latest merklized state height: \
+             {merklized_state_height}"
+        );
+
+        let header = tx
+            .get_header(BlockId::<SeqTypes>::from(height as usize))
+            .await
+            .context(format!("header {height} not available"))?;
+
+        if header.version() < DrbAndHeaderUpgradeVersion::version() {
+            return Ok(Vec::new());
+        }
+
+        // get the latest balance for each account
+        // We use ROW_NUMBER() to rank entries by created height per account,
+        // then select only the most recent entry (rn = 1) for each account.
+        let rows = query_as::<(Value, Value)>(&format!(
+            "SELECT idx, entry FROM (
+                 SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
+             rn
+                   FROM {}
+                  WHERE created <= $1 AND idx IS NOT NULL AND entry IS NOT NULL
+             ) sub
+             WHERE rn = 1
+             ORDER BY idx
+             LIMIT $2 OFFSET $3",
+            RewardMerkleTreeV2::state_type()
+        ))
+        .bind(height as i64)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(tx.as_mut())
+        .await
+        .context("loading reward accounts from storage")?;
+
+        let mut accounts = Vec::new();
+        for (idx, entry) in rows {
+            let account: RewardAccountV2 =
+                serde_json::from_value(idx).context("deserializing reward account")?;
+            let balance: RewardAmount = serde_json::from_value(entry).context(format!(
+                "deserializing reward balance for account {account}"
+            ))?;
+
+            accounts.push((account, balance));
+        }
+
+        Ok(accounts)
+    }
+
     async fn get_accounts(
         &self,
         instance: &NodeState,
@@ -456,6 +536,17 @@ impl CatchupStorage for DataSource {
     }
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         self.as_ref().get_leaf_chain(height).await
+    }
+
+    async fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.as_ref()
+            .get_all_reward_accounts(height, offset, limit)
+            .await
     }
 }
 
@@ -992,9 +1083,7 @@ pub(crate) mod impl_testable_data_source {
 
         #[cfg(feature = "embedded-db")]
         {
-            let opt = crate::persistence::sql::SqliteOptions {
-                path: Some(db.path()),
-            };
+            let opt = crate::persistence::sql::SqliteOptions { path: db.path() };
             opt.into()
         }
     }

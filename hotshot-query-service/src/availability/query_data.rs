@@ -13,13 +13,9 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use committable::{Commitment, Committable};
-use derive_more::derive::From;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidShare},
-    simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
-        QuorumCertificate2,
-    },
+    simple_certificate::QuorumCertificate2,
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
@@ -89,6 +85,26 @@ where
     pub position: u32,
 }
 
+/// The proof system and the statement which is proved will vary by application, with different
+/// applications proving stronger or weaker statements depending on the trust assumptions at
+/// play. Some may prove a very strong statement (for example, a shared sequencer proving that
+/// the transaction belongs not only to the block but to a section of the block dedicated to a
+/// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
+/// query service may use `()` for the proof).
+pub trait VerifiableInclusion<Types: NodeType>:
+    Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync
+{
+    /// Verify the inclusion proof against a payload commitment.
+    /// Returns `None` on error.
+    fn verify(
+        &self,
+        metadata: &Metadata<Types>,
+        tx: &Transaction<Types>,
+        payload_commitment: &VidCommitment,
+        common: &VidCommon,
+    ) -> bool;
+}
+
 /// A block payload whose contents (e.g. individual transactions) can be examined.
 ///
 /// Note to implementers: this trait has only a few required methods. The provided methods, for
@@ -107,14 +123,7 @@ where
         Self: 'a;
 
     /// A proof that a certain transaction exists in the block.
-    ///
-    /// The proof system and the statement which is proved will vary by application, with different
-    /// applications proving stronger or weaker statements depending on the trust assumptions at
-    /// play. Some may prove a very strong statement (for example, a shared sequencer proving that
-    /// the transaction belongs not only to the block but to a section of the block dedicated to a
-    /// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
-    /// query service may use `()` for the proof).
-    type InclusionProof: Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync;
+    type InclusionProof: VerifiableInclusion<Types>;
 
     /// The number of transactions in the block.
     fn len(&self, meta: &Self::Metadata) -> usize;
@@ -1073,39 +1082,8 @@ where
     }
 }
 
-/// A wrapper around `LightClientStateUpdateCertificateV2`.
-///
-/// The V2 certificate includes additional fields compared to earlier versions:
-/// - Light client v3 signatures
-/// - `auth_root` — used by the reward claim contract to verify that its
-///   calculated `auth_root` matches the one in the Light Client contract.
-///
-/// This struct is returned by the `state-cert-v2` API.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Limits {
     pub small_object_range_limit: usize,
     pub large_object_range_limit: usize,
-}
-
-impl<Types: NodeType> HeightIndexed for StateCertQueryDataV2<Types> {
-    fn height(&self) -> u64 {
-        self.0.light_client_state.block_height
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV1<Types: NodeType>(pub LightClientStateUpdateCertificateV1<Types>);
-
-impl<Types> From<StateCertQueryDataV2<Types>> for StateCertQueryDataV1<Types>
-where
-    Types: NodeType,
-{
-    fn from(cert: StateCertQueryDataV2<Types>) -> Self {
-        Self(cert.0.into())
-    }
 }

@@ -15,7 +15,7 @@ case "$1" in
         cargo build --locked --release -p sequencer-sqlite
         ;;
     "espresso-dev-node")
-        cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
+        cargo build --locked --release -p espresso-dev-node
         ;;
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \

@@ -74,6 +74,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
 {
     /// execute test
     ///
@@ -377,6 +378,19 @@ where
 
             networks_ready.push(networks_ready_future);
 
+            // See whether or not we should be DA
+            let is_da = node_id < config.da_staked_committee_size as u64;
+
+            // We assign node's public key and stake value rather than read from config file since it's a test
+            let validator_config = ValidatorConfig::<TYPES>::generated_from_seed_indexed(
+                [0u8; 32],
+                node_id,
+                self.launcher.metadata.node_stakes.get(node_id),
+                is_da,
+            );
+
+            let public_key = validator_config.public_key.clone();
+
             if late_start.contains(&node_id) {
                 if self.launcher.metadata.skip_late {
                     self.late_start.insert(
@@ -385,10 +399,14 @@ where
                             network: None,
                             context: LateNodeContext::UninitializedContext(
                                 LateNodeContextParameters {
-                                    storage,
-                                    memberships: <TYPES as NodeType>::Membership::new(
+                                    storage: storage.clone(),
+                                    memberships: <TYPES as NodeType>::Membership::new::<I>(
                                         config.known_nodes_with_stake.clone(),
                                         config.known_da_nodes.clone(),
+                                        storage.clone(),
+                                        network.clone(),
+                                        public_key.clone(),
+                                        config.epoch_height,
                                     ),
                                     config,
                                 },
@@ -416,23 +434,16 @@ where
                     .await
                     .unwrap();
 
-                    // See whether or not we should be DA
-                    let is_da = node_id < config.da_staked_committee_size as u64;
-
-                    // We assign node's public key and stake value rather than read from config file since it's a test
-                    let validator_config = ValidatorConfig::generated_from_seed_indexed(
-                        [0u8; 32],
-                        node_id,
-                        self.launcher.metadata.node_stakes.get(node_id),
-                        is_da,
-                    );
-
                     let hotshot = Self::add_node_with_config(
                         node_id,
                         network.clone(),
-                        <TYPES as NodeType>::Membership::new(
+                        <TYPES as NodeType>::Membership::new::<I>(
                             config.known_nodes_with_stake.clone(),
                             config.known_da_nodes.clone(),
+                            storage.clone(),
+                            network.clone(),
+                            public_key.clone(),
+                            config.epoch_height,
                         ),
                         initializer,
                         config,
@@ -451,10 +462,14 @@ where
             } else {
                 uninitialized_nodes.push((
                     node_id,
-                    network,
-                    <TYPES as NodeType>::Membership::new(
+                    network.clone(),
+                    <TYPES as NodeType>::Membership::new::<I>(
                         config.known_nodes_with_stake.clone(),
                         config.known_da_nodes.clone(),
+                        storage.clone(),
+                        network,
+                        public_key.clone(),
+                        config.epoch_height,
                     ),
                     config,
                     storage,

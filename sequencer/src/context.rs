@@ -196,6 +196,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             DataSource {
                 node_state: instance_state.clone(),
                 storage,
+                persistence: persistence.clone(),
                 consensus: handle.hotshot.clone(),
                 phantom: PhantomData,
             },
@@ -473,7 +474,7 @@ async fn handle_events<N, P, V>(
         // Process and clean up any leaves that we may have persisted last time we were running but
         // failed to handle due to a shutdown.
         if let Err(err) = persistence
-            .append_decided_leaves(view, vec![], &event_consumer)
+            .append_decided_leaves(view, vec![], None, &event_consumer)
             .await
         {
             tracing::warn!(

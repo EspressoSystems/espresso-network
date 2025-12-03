@@ -146,7 +146,7 @@ mod tests {
         use ark_ec::CurveGroup;
         use ark_std::{end_timer, start_timer, UniformRand};
 
-        let setup_time = start_timer!(|| format!("KZG10::Setup with degree {}", max_degree));
+        let setup_time = start_timer!(|| format!("KZG10::Setup with degree {max_degree}"));
         let beta = <Bn254 as Pairing>::ScalarField::rand(rng);
         let g = <Bn254 as Pairing>::G1::rand(rng);
         let h = <Bn254 as Pairing>::G2::rand(rng);

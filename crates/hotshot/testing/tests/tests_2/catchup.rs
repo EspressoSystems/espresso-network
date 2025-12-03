@@ -21,12 +21,9 @@ use hotshot_testing::{
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -37,9 +34,9 @@ async fn test_catchup() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
-        idx: 19,
+        idx: 13,
         updown: NodeAction::Up,
     }];
 
@@ -54,12 +51,6 @@ async fn test_catchup() {
         node_changes: vec![(10, catchup_node)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         // Make sure we keep committing rounds after the catchup, but not the full 50.
         num_successful_views: 22,
@@ -77,12 +68,9 @@ async fn test_catchup() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_cdn() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{PushCdnImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -93,7 +81,7 @@ async fn test_catchup_cdn() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, PushCdnImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
         idx: 18,
         updown: NodeAction::Up,
@@ -106,12 +94,6 @@ async fn test_catchup_cdn() {
         node_changes: vec![(10, catchup_nodes)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_millis(100_000),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         ..Default::default()
     };
@@ -127,12 +109,9 @@ async fn test_catchup_cdn() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_one_node() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -143,9 +122,9 @@ async fn test_catchup_one_node() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
-        idx: 18,
+        idx: 13,
         updown: NodeAction::Up,
     }];
     metadata.test_config.epoch_height = 0;
@@ -156,12 +135,6 @@ async fn test_catchup_one_node() {
         node_changes: vec![(10, catchup_nodes)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         // Make sure we keep committing rounds after the catchup, but not the full 50.
         num_successful_views: 22,
@@ -179,12 +152,9 @@ async fn test_catchup_one_node() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_in_view_sync() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -195,14 +165,14 @@ async fn test_catchup_in_view_sync() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![
         ChangeNode {
-            idx: 18,
+            idx: 13,
             updown: NodeAction::Up,
         },
         ChangeNode {
-            idx: 19,
+            idx: 12,
             updown: NodeAction::Up,
         },
     ];
@@ -216,12 +186,6 @@ async fn test_catchup_in_view_sync() {
         node_changes: vec![(10, catchup_nodes)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         ..Default::default()
     };
@@ -238,12 +202,9 @@ async fn test_catchup_in_view_sync() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_reload() {
-    use std::time::Duration;
-
     use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
         test_builder::{TestDescription, TimingData},
@@ -254,9 +215,9 @@ async fn test_catchup_reload() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
-        idx: 19,
+        idx: 13,
         updown: NodeAction::Up,
     }];
 
@@ -272,12 +233,6 @@ async fn test_catchup_reload() {
         node_changes: vec![(10, catchup_node)],
     };
 
-    metadata.completion_task_description =
-        CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-            TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
-            },
-        );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         // Make sure we keep committing rounds after the catchup, but not the full 50.
         num_successful_views: 22,
@@ -303,10 +258,10 @@ cross_tests!(
           next_view_timeout: 2000,
           ..Default::default()
       };
-      let mut metadata = TestDescription::default().set_num_nodes(20,7);
+      let mut metadata = TestDescription::default().set_num_nodes(14,7);
       let mut catchup_nodes = vec![];
 
-      for i in 0..20 {
+      for i in 0..14 {
           catchup_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -323,12 +278,6 @@ cross_tests!(
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
 
-      metadata.completion_task_description =
-          CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-              TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(60),
-              },
-          );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
@@ -358,10 +307,10 @@ cross_tests!(
           ..Default::default()
       };
       let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> =
-          TestDescription::default().set_num_nodes(20,1);
+          TestDescription::default().set_num_nodes(14,1);
 
       let mut catchup_nodes = vec![];
-      for i in 0..20 {
+      for i in 0..14 {
           catchup_nodes.push(ChangeNode {
               idx: i,
               updown: NodeAction::RestartDown(0),
@@ -378,12 +327,6 @@ cross_tests!(
       metadata.view_sync_properties =
           hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
 
-      metadata.completion_task_description =
-          CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-              TimeBasedCompletionTaskDescription {
-                  duration: Duration::from_secs(60),
-              },
-          );
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
@@ -450,7 +393,7 @@ cross_tests!(
           num_successful_views: 22,
           expected_view_failures: vec![12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34],
           possible_view_failures: vec![35],
-          decide_timeout: Duration::from_secs(120),
+          decide_timeout: Duration::from_secs(200),
           ..Default::default()
       };
 

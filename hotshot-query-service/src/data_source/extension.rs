@@ -28,8 +28,8 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
         FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
-        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, UpdateAvailabilityData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -309,9 +309,6 @@ where
         h: TransactionHash<Types>,
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.data_source.get_block_containing_transaction(h).await
-    }
-    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<Types>> {
-        self.data_source.get_state_cert(epoch).await
     }
 }
 

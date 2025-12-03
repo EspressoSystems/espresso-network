@@ -26,7 +26,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use util::{BoundedVecDeque, NamedSemaphore, NamedSemaphoreError};
 
 /// The data source trait. Is what we use to derive the response data for a request
@@ -565,7 +565,7 @@ impl<
         match permit {
             Ok(ref permit) => permit,
             Err(NamedSemaphoreError::PerKeyLimitReached) => {
-                warn!(
+                info!(
                     "Failed to process request from {}: too many requests from the same key are \
                      already being processed",
                     request_message.public_key
@@ -573,7 +573,7 @@ impl<
                 return;
             },
             Err(NamedSemaphoreError::GlobalLimitReached) => {
-                warn!(
+                info!(
                     "Failed to process request from {}: too many requests are already being \
                      processed",
                     request_message.public_key

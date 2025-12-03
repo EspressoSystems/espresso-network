@@ -4,19 +4,18 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Sender};
+use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
-use hotshot_utils::{
-    anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
-    ensure, error, line_info, log, warn,
-};
+use hotshot_utils::{anytrace::*, *};
 
 use crate::{
     data::Leaf2,
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
+    event::Event,
     stake_table::HSStakeTable,
     traits::{
+        block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         storage::{
@@ -24,7 +23,6 @@ use crate::{
             Storage, StoreDrbProgressFn, StoreDrbResultFn,
         },
     },
-    utils::root_block_in_epoch,
     PeerConfig,
 };
 
@@ -62,7 +60,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     store_drb_result_fn: StoreDrbResultFn<TYPES>,
 
     /// Callback function to select a DRB difficulty based on the view number of the seed
-    pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn<TYPES>>>>,
+    pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -102,6 +100,14 @@ where
         }
     }
 
+    pub async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
+        self.membership
+            .write()
+            .await
+            .set_external_channel(external_channel)
+            .await;
+    }
+
     /// Get a reference to the membership
     #[must_use]
     pub fn membership(&self) -> &Arc<RwLock<TYPES::Membership>> {
@@ -111,7 +117,7 @@ where
     /// Set the DRB difficulty selector
     pub async fn set_drb_difficulty_selector(
         &self,
-        drb_difficulty_selector: DrbDifficultySelectorFn<TYPES>,
+        drb_difficulty_selector: DrbDifficultySelectorFn,
     ) {
         let mut drb_difficulty_selector_writer = self.drb_difficulty_selector.write().await;
 
@@ -262,6 +268,8 @@ where
                 }
             };
         }
+        let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
+        tracing::warn!("Fetching stake tables for epochs: {epochs:?}");
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
@@ -294,6 +302,7 @@ where
         let root_leaf = match self.fetch_stake_table(epoch).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
+                tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
                 self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                     .await;
                 return;
@@ -307,6 +316,10 @@ where
         .await
         {
             Ok(drb_result) => {
+                tracing::warn!(
+                    ?drb_result,
+                    "DRB result for epoch {epoch:?} retrieved from peers. Updating membership."
+                );
                 self.membership
                     .write()
                     .await
@@ -314,18 +327,16 @@ where
             },
             Err(err) => {
                 tracing::warn!(
-                    "DRB result for epoch {} missing from membership. Beginning catchup to \
-                     recalculate it. Error: {}",
+                    "Recalculating missing DRB result for epoch {}. Catchup failed with error: {}",
                     epoch,
                     err
                 );
 
-                if let Err(err) = self.compute_drb_result(epoch, root_leaf).await {
-                    tracing::error!(
-                        "DRB calculation for epoch {} failed . Error: {}",
-                        epoch,
-                        err
-                    );
+                let result = self.compute_drb_result(epoch, root_leaf).await;
+
+                log!(result);
+
+                if let Err(err) = result {
                     self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
                         .await;
                 }
@@ -441,10 +452,7 @@ where
 
         // Get the epoch root headers and update our membership with them, finally sync them
         // Verification of the root is handled in get_epoch_root_and_drb
-        let Ok(root_leaf) = root_membership
-            .get_epoch_root(root_block_in_epoch(*root_epoch, self.epoch_height))
-            .await
-        else {
+        let Ok(root_leaf) = root_membership.get_epoch_root().await else {
             return Err(anytrace::error!(
                 "get epoch root leaf failed for epoch {root_epoch:?}"
             ));
@@ -452,7 +460,6 @@ where
 
         Membership::add_epoch_root(
             Arc::clone(&self.membership),
-            epoch,
             root_leaf.block_header().clone(),
         )
         .await
@@ -471,7 +478,7 @@ where
         let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
 
         if drb_calculation_map_lock.contains(&epoch) {
-            return Err(anytrace::warn!(
+            return Err(anytrace::debug!(
                 "DRB calculation for epoch {} already in progress",
                 epoch
             ));
@@ -495,7 +502,7 @@ where
             ));
         };
 
-        let drb_difficulty = drb_difficulty_selector(root_leaf.view_number()).await;
+        let drb_difficulty = drb_difficulty_selector(root_leaf.block_header().version()).await;
 
         let mut drb_seed_input = [0u8; 32];
         let len = drb_seed_input_vec.len().min(32);
@@ -584,13 +591,12 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<Leaf2<TYPES>> {
+    async fn get_epoch_root(&self) -> anyhow::Result<Leaf2<TYPES>> {
         let Some(epoch) = self.epoch else {
             anyhow::bail!("Cannot get root for None epoch");
         };
         <TYPES::Membership as Membership<TYPES>>::get_epoch_root(
             self.coordinator.membership.clone(),
-            block_height,
             epoch,
         )
         .await

@@ -32,6 +32,7 @@ use hotshot_types::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
     },
     traits::{
+        election::Membership,
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
@@ -104,6 +105,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
 {
     type Event = Event<TYPES>;
     type Error = Error;
@@ -111,12 +113,7 @@ where
     async fn handle_event(&mut self, (message, _id): (Self::Event, usize)) -> Result<()> {
         let Event { view_number, event } = message;
 
-        if let EventType::Decide {
-            leaf_chain,
-            qc: _,
-            block_size: _,
-        } = event
-        {
+        if let EventType::Decide { leaf_chain, .. } = event {
             let leaf = leaf_chain.first().unwrap().leaf.clone();
             if leaf.view_number() > self.last_decided_leaf.view_number() {
                 self.last_decided_leaf = leaf;
@@ -250,7 +247,18 @@ where
                                 };
 
                                 let storage = node.handle.storage().clone();
-                                let memberships = node.handle.membership_coordinator.clone();
+
+                                let membership = Arc::new(RwLock::new(
+                                    <TYPES as NodeType>::Membership::new::<I>(
+                                        node.handle.hotshot.config.known_nodes_with_stake.clone(),
+                                        node.handle.hotshot.config.known_da_nodes.clone(),
+                                        node.handle.storage().clone(),
+                                        generated_network.clone(),
+                                        node.handle.public_key().clone(),
+                                        node.handle.hotshot.config.epoch_height,
+                                    ),
+                                ));
+
                                 let config = node.handle.hotshot.config.clone();
 
                                 let next_epoch_high_qc = storage.next_epoch_high_qc_cloned().await;
@@ -315,7 +323,7 @@ where
                                     TestRunner::<TYPES, I, V, N>::add_node_with_config_and_channels(
                                         node_id,
                                         generated_network.clone(),
-                                        Arc::clone(memberships.membership()),
+                                        Arc::clone(&membership),
                                         initializer,
                                         config,
                                         validator_config,
@@ -386,6 +394,7 @@ where
                 let handles = self.handles.clone();
                 let fut = async move {
                     tracing::info!("Starting node {id} back up");
+                    node.network.wait_for_ready().await;
                     let handle = node.run_tasks().await;
 
                     // Create the node and add it to the state, so we can shut them

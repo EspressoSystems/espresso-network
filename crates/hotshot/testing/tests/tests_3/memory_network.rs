@@ -8,21 +8,17 @@
 use std::{sync::Arc, time::Duration};
 
 use hotshot::{
-    traits::{
-        election::static_committee::StaticCommittee,
-        implementations::{MasterMap, MemoryNetwork},
-    },
+    traits::implementations::{MasterMap, MemoryNetwork},
     types::SignatureKey,
 };
 use hotshot_example_types::{
-    block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
-    node_types::TestVersions,
-    state_types::{TestInstanceState, TestValidatedState},
+    block_types::TestTransaction,
+    node_types::{TestTypes, TestVersions},
 };
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::ViewNumber,
     message::{DataMessage, Message, MessageKind, UpgradeLock},
-    signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
+    signature_key::BLSPubKey,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
         node_implementation::{ConsensusTime, NodeType},
@@ -32,41 +28,12 @@ use rand::{rngs::StdRng, RngCore, SeedableRng};
 use tokio::time::timeout;
 use tracing::{instrument, trace};
 
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    Default,
-    Hash,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-pub struct Test;
-
-impl NodeType for Test {
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
-    type BlockHeader = TestBlockHeader;
-    type BlockPayload = TestBlockPayload;
-    type SignatureKey = BLSPubKey;
-    type Transaction = TestTransaction;
-    type ValidatedState = TestValidatedState;
-    type InstanceState = TestInstanceState;
-    type Membership = StaticCommittee<Test>;
-    type BuilderSignatureKey = BuilderKey;
-    type StateSignatureKey = SchnorrPubKey;
-}
-
 /// fake Eq
 /// we can't compare the votetokentype for equality, so we can't
 /// derive EQ on `VoteType<TYPES>` and thereby message
 /// we are only sending data messages, though so we compare key and
 /// data message
-fn fake_message_eq(message_1: Message<Test>, message_2: Message<Test>) {
+fn fake_message_eq(message_1: Message<TestTypes>, message_2: Message<TestTypes>) {
     assert_eq!(message_1.sender, message_2.sender);
     if let MessageKind::Data(DataMessage::SubmitTransaction(d_1, _)) = message_1.kind {
         if let MessageKind::Data(DataMessage::SubmitTransaction(d_2, _)) = message_2.kind {
@@ -86,7 +53,7 @@ fn pubkey() -> BLSPubKey {
 }
 
 /// create a message
-fn gen_messages(num_messages: u64, seed: u64, pk: BLSPubKey) -> Vec<Message<Test>> {
+fn gen_messages(num_messages: u64, seed: u64, pk: BLSPubKey) -> Vec<Message<TestTypes>> {
     let mut messages = Vec::new();
     for _ in 0..num_messages {
         // create a random transaction from seed
@@ -111,7 +78,7 @@ fn gen_messages(num_messages: u64, seed: u64, pk: BLSPubKey) -> Vec<Message<Test
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_spawn_single() {
-    let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
+    let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let _pub_key = pubkey();
 }
@@ -121,7 +88,7 @@ async fn memory_network_spawn_single() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn memory_network_spawn_double() {
-    let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
+    let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let _pub_key_1 = pubkey();
     let _pub_key_2 = pubkey();
@@ -135,7 +102,7 @@ async fn memory_network_direct_queue() {
     // Create some dummy messages
 
     // Make and connect the networking instances
-    let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
+    let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
 
     let pub_key_1 = pubkey();
@@ -144,9 +111,9 @@ async fn memory_network_direct_queue() {
     let pub_key_2 = pubkey();
     let network2 = MemoryNetwork::new(&pub_key_2, &group, &[Topic::Global], Option::None);
 
-    let first_messages: Vec<Message<Test>> = gen_messages(5, 100, pub_key_1);
+    let first_messages: Vec<Message<TestTypes>> = gen_messages(5, 100, pub_key_1);
 
-    let upgrade_lock = UpgradeLock::<Test, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
 
     // Test 1 -> 2
     // Send messages
@@ -168,7 +135,7 @@ async fn memory_network_direct_queue() {
         fake_message_eq(sent_message, deserialized_message);
     }
 
-    let second_messages: Vec<Message<Test>> = gen_messages(5, 200, pub_key_2);
+    let second_messages: Vec<Message<TestTypes>> = gen_messages(5, 200, pub_key_2);
 
     // Test 2 -> 1
     // Send messages
@@ -197,15 +164,15 @@ async fn memory_network_direct_queue() {
 #[instrument]
 async fn memory_network_broadcast_queue() {
     // Make and connect the networking instances
-    let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
+    let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     let pub_key_1 = pubkey();
     let network1 = MemoryNetwork::new(&pub_key_1, &group.clone(), &[Topic::Global], Option::None);
     let pub_key_2 = pubkey();
     let network2 = MemoryNetwork::new(&pub_key_2, &group, &[Topic::Da], Option::None);
 
-    let first_messages: Vec<Message<Test>> = gen_messages(5, 100, pub_key_1);
+    let first_messages: Vec<Message<TestTypes>> = gen_messages(5, 100, pub_key_1);
 
-    let upgrade_lock = UpgradeLock::<Test, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
 
     // Test 1 -> 2
     // Send messages
@@ -227,7 +194,7 @@ async fn memory_network_broadcast_queue() {
         fake_message_eq(sent_message, deserialized_message);
     }
 
-    let second_messages: Vec<Message<Test>> = gen_messages(5, 200, pub_key_2);
+    let second_messages: Vec<Message<TestTypes>> = gen_messages(5, 200, pub_key_2);
 
     // Test 2 -> 1
     // Send messages
@@ -258,7 +225,7 @@ async fn memory_network_broadcast_queue() {
 #[instrument]
 #[allow(deprecated)]
 async fn memory_network_test_in_flight_message_count() {
-    let group: Arc<MasterMap<<Test as NodeType>::SignatureKey>> = MasterMap::new();
+    let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
     trace!(?group);
     let pub_key_1 = pubkey();
     let network1 = MemoryNetwork::new(&pub_key_1, &group.clone(), &[Topic::Global], Option::None);
@@ -266,18 +233,18 @@ async fn memory_network_test_in_flight_message_count() {
     let network2 = MemoryNetwork::new(&pub_key_2, &group, &[Topic::Global], Option::None);
 
     // Create some dummy messages
-    let messages: Vec<Message<Test>> = gen_messages(5, 100, pub_key_1);
+    let messages: Vec<Message<TestTypes>> = gen_messages(5, 100, pub_key_1);
 
     assert_eq!(
-        TestableNetworkingImplementation::<Test>::in_flight_message_count(&network1),
+        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1),
         Some(0)
     );
     assert_eq!(
-        TestableNetworkingImplementation::<Test>::in_flight_message_count(&network2),
+        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
         Some(0)
     );
 
-    let upgrade_lock = UpgradeLock::<Test, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
 
     for (count, message) in messages.iter().enumerate() {
         let serialized_message = upgrade_lock.serialize(message).await.unwrap();
@@ -288,7 +255,7 @@ async fn memory_network_test_in_flight_message_count() {
             .unwrap();
         // network 2 has received `count` broadcast messages and `count + 1` direct messages
         assert_eq!(
-            TestableNetworkingImplementation::<Test>::in_flight_message_count(&network2),
+            TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
             Some(count + count + 1)
         );
 
@@ -302,39 +269,41 @@ async fn memory_network_test_in_flight_message_count() {
             .unwrap();
         // network 1 has received `count` broadcast messages
         assert_eq!(
-            TestableNetworkingImplementation::<Test>::in_flight_message_count(&network1),
+            TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1),
             Some(count + 1)
         );
 
         // network 2 has received `count + 1` broadcast messages and `count + 1` direct messages
         assert_eq!(
-            TestableNetworkingImplementation::<Test>::in_flight_message_count(&network2),
+            TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
             Some((count + 1) * 2)
         );
     }
 
-    while TestableNetworkingImplementation::<Test>::in_flight_message_count(&network1).unwrap() > 0
+    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1).unwrap()
+        > 0
     {
         network1.recv_message().await.unwrap();
     }
 
-    while TestableNetworkingImplementation::<Test>::in_flight_message_count(&network2).unwrap()
+    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2).unwrap()
         > messages.len()
     {
         network2.recv_message().await.unwrap();
     }
 
-    while TestableNetworkingImplementation::<Test>::in_flight_message_count(&network2).unwrap() > 0
+    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2).unwrap()
+        > 0
     {
         network2.recv_message().await.unwrap();
     }
 
     assert_eq!(
-        TestableNetworkingImplementation::<Test>::in_flight_message_count(&network1),
+        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1),
         Some(0)
     );
     assert_eq!(
-        TestableNetworkingImplementation::<Test>::in_flight_message_count(&network2),
+        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
         Some(0)
     );
 }

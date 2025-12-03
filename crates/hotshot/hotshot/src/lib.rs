@@ -16,12 +16,12 @@ use hotshot_types::{
     drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
     },
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use rand::Rng;
 use vbs::version::StaticVersionType;
@@ -245,7 +245,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         consensus_metrics: ConsensusMetricsValue,
@@ -266,8 +266,22 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let anchored_leaf = initializer.anchor_leaf;
         let instance_state = initializer.instance_state;
 
-        let (internal_tx, mut internal_rx) = internal_channel;
-        let (mut external_tx, mut external_rx) = external_channel;
+        let (internal_tx, internal_rx) = internal_channel;
+        let (mut external_tx, external_rx) = external_channel;
+
+        let mut internal_rx = internal_rx.new_receiver();
+
+        let mut external_rx = external_rx.new_receiver();
+
+        // Allow overflow on the internal channel as well. We don't want to block consensus if we
+        // have a slow receiver
+        internal_rx.set_overflow(true);
+        // Allow overflow on the external channel, otherwise sending to it may block.
+        external_rx.set_overflow(true);
+
+        membership_coordinator
+            .set_external_channel(external_rx.clone())
+            .await;
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
@@ -282,19 +296,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
 
+        let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
+            cert.data.new_version
+        } else {
+            V::Base::VERSION
+        };
+
         debug!("Setting DRB difficulty selector in membership");
-        let drb_difficulty_selector = drb_difficulty_selector(upgrade_lock.clone(), &config);
+        let drb_difficulty_selector = drb_difficulty_selector::<_, V>(&config);
 
         membership_coordinator
             .set_drb_difficulty_selector(drb_difficulty_selector)
             .await;
 
-        // Allow overflow on the external channel, otherwise sending to it may block.
-        external_rx.set_overflow(true);
-
-        // Allow overflow on the internal channel as well. We don't want to block consensus if we
-        // have a slow receiver
-        internal_rx.set_overflow(true);
+        for da_committee in &config.da_committees {
+            if current_version >= da_committee.start_version {
+                membership_coordinator
+                    .membership()
+                    .write()
+                    .await
+                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
+            }
+        }
 
         // Get the validated state from the initializer or construct an incomplete one from the
         // block header.
@@ -347,6 +370,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 Arc::new(PayloadWithMetadata { payload, metadata }),
             );
         }
+        let high_qc_block_number = initializer.high_qc.data.block_number;
 
         let consensus = Consensus::new(
             validated_state_map,
@@ -371,6 +395,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let consensus = Arc::new(RwLock::new(consensus));
 
         if let Some(epoch) = epoch {
+            tracing::info!(
+                "Triggering catchup for epoch {} and next epoch {}",
+                epoch,
+                epoch + 1
+            );
             // trigger catchup for the current and next epoch if needed
             let _ = membership_coordinator
                 .membership_for_epoch(Some(epoch))
@@ -378,6 +407,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             let _ = membership_coordinator
                 .membership_for_epoch(Some(epoch + 1))
                 .await;
+            // If we already have an epoch root, we can trigger catchup for the epoch
+            // which that root applies to.
+            if let Some(high_qc_block_number) = high_qc_block_number {
+                if is_ge_epoch_root(high_qc_block_number, config.epoch_height) {
+                    let _ = membership_coordinator
+                        .stake_table_for_epoch(Some(epoch + 2))
+                        .await;
+                }
+            }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
                 tracing::error!("Writing DRB result for epoch {}", epoch + 1);
@@ -494,13 +532,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 let (validated_state, state_delta) =
                     TYPES::ValidatedState::genesis(&self.instance_state);
 
-                let qc = Arc::new(
-                    QuorumCertificate2::genesis::<V>(
-                        &validated_state,
-                        self.instance_state.as_ref(),
-                    )
-                    .await,
-                );
+                let qc = QuorumCertificate2::genesis::<V>(
+                    &validated_state,
+                    self.instance_state.as_ref(),
+                )
+                .await;
 
                 broadcast_event(
                     Event {
@@ -513,7 +549,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                                 None,
                                 None,
                             )]),
-                            qc,
+                            committing_qc: Arc::new(CertificatePair::non_epoch_change(qc)),
+                            deciding_qc: None,
                             block_size: None,
                         },
                     },
@@ -1263,26 +1300,22 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     sorted_epoch_info.sort_by_key(|info| info.epoch);
     for epoch_info in sorted_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {
-            tracing::info!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
+            tracing::warn!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
 
-            Membership::add_epoch_root(
-                Arc::clone(membership),
-                epoch_info.epoch,
-                block_header.clone(),
-            )
-            .await
-            .unwrap_or_else(|err| {
-                // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
-                tracing::error!(
-                    "Failed to add epoch root for epoch {}: {err}",
-                    epoch_info.epoch
-                );
-            });
+            Membership::add_epoch_root(Arc::clone(membership), block_header.clone())
+                .await
+                .unwrap_or_else(|err| {
+                    // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
+                    tracing::error!(
+                        "Failed to add epoch root for epoch {}: {err}",
+                        epoch_info.epoch
+                    );
+                });
         }
     }
 
     for epoch_info in start_epoch_info {
-        tracing::info!("Calling add_drb_result for epoch {}", epoch_info.epoch);
+        tracing::warn!("Calling add_drb_result for epoch {}", epoch_info.epoch);
         membership
             .write()
             .await

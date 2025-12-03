@@ -16,7 +16,7 @@ use espresso_types::{
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
@@ -33,6 +33,7 @@ use hotshot_types::{
     data::ViewNumber,
     message::UpgradeLock,
     network::NetworkConfig,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
@@ -52,7 +53,6 @@ use surf_disco::Request;
 use tide_disco::error::ServerError;
 use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
-use tracing::warn;
 use url::Url;
 use vbs::version::StaticVersionType;
 
@@ -164,6 +164,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // is a lot cheaper than holding the read lock the entire time we are making requests (which
         // could be a while).
         let mut scores = { (*self.scores.read().await).clone() };
+        let mut logs = vec![format!("Fetching failed.\n")];
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
@@ -171,17 +172,30 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                 Ok(Ok(t)) => {
                     requests.insert(id, true);
                     res = Ok(t);
+                    logs = Vec::new();
                     break;
                 },
                 Ok(Err(err)) => {
-                    tracing::warn!(id, ?score, peer = %client.url, "error from peer: {err:#}");
+                    tracing::debug!(id, ?score, peer = %client.url, "error from peer: {err:#}");
+                    logs.push(format!(
+                        "Error from peer {} with id {id} and score {score:?}: {err:#}",
+                        client.url
+                    ));
                     requests.insert(id, false);
                 },
                 Err(_) => {
-                    tracing::warn!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
+                    tracing::debug!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
+                    logs.push(format!(
+                        "Error from peer {} with id {id} and score {score:?}: request timed out",
+                        client.url
+                    ));
                     requests.insert(id, false);
                 },
             }
+        }
+
+        if !logs.is_empty() {
+            tracing::warn!("{}", logs.join("\n"));
         }
 
         // Update client scores.
@@ -282,9 +296,9 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
                     .context(format!("response missing fee account {account}"))?;
-                proof
-                    .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for fee account {account}"))?;
+                proof.verify(&fee_merkle_tree_root).context(format!(
+                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -400,9 +414,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV2::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v2 reward account {account}, root: \
+                     {reward_merkle_tree_root} height {height} view {view}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -437,13 +452,30 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             for account in accounts {
                 let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
                     .context(format!("response missing reward account {account}"))?;
-                proof
-                    .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for reward account {account}"))?;
+                proof.verify(&reward_merkle_tree_root).context(format!(
+                    "invalid proof for v1 reward account {account}, root: \
+                     {reward_merkle_tree_root} height {height} view {view}"
+                ))?;
                 proofs.push(proof);
             }
 
             anyhow::Ok(proofs)
+        })
+        .await
+    }
+
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.fetch(retry, |client| async move {
+            client
+                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&format!(
+                    "catchup/{epoch}/state-cert"
+                ))
+                .send()
+                .await
         })
         .await
     }
@@ -518,6 +550,15 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
+    fn get_all_reward_accounts(
+        &self,
+        _height: u64,
+        _offset: u64,
+        _limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>> {
+        async { bail!("merklized state catchup is not supported for this data source") }
+    }
+
     /// Get the blocks Merkle tree frontier.
     ///
     /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
@@ -557,6 +598,7 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 }
+
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
 
 impl<T, S> CatchupStorage for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
@@ -585,6 +627,17 @@ where
     ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
         self.inner()
             .get_reward_accounts_v2(instance, height, view, accounts)
+            .await
+    }
+
+    async fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.inner()
+            .get_all_reward_accounts(height, offset, limit)
             .await
     }
 
@@ -688,9 +741,9 @@ where
         for account in accounts {
             let (proof, _) = FeeAccountProof::prove(&fee_merkle_tree_from_db, (*account).into())
                 .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&fee_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&fee_merkle_tree_root).context(format!(
+                "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
@@ -765,9 +818,9 @@ where
             let (proof, _) =
                 RewardAccountProofV2::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&reward_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&reward_merkle_tree_root).context(format!(
+                "invalid proof for v2 reward account {account}, root: {reward_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
@@ -796,13 +849,21 @@ where
             let (proof, _) =
                 RewardAccountProofV1::prove(&reward_merkle_tree_from_db, (*account).into())
                     .context(format!("response missing account {account}"))?;
-            proof
-                .verify(&reward_merkle_tree_root)
-                .context(format!("invalid proof for account {account}"))?;
+            proof.verify(&reward_merkle_tree_root).context(format!(
+                "invalid proof for v1 reward account {account}, root: {reward_merkle_tree_root}"
+            ))?;
             proofs.push(proof);
         }
 
         Ok(proofs)
+    }
+
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        _epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        bail!("state cert catchup not supported for SqlStateCatchup");
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -919,6 +980,14 @@ impl StateCatchup for NullStateCatchup {
         bail!("state catchup is disabled");
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        _epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        bail!("state catchup is disabled");
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -937,6 +1006,7 @@ impl StateCatchup for NullStateCatchup {
 #[derive(Clone)]
 pub struct ParallelStateCatchup {
     providers: Arc<Mutex<Vec<Arc<dyn StateCatchup>>>>,
+    backoff: BackoffParams,
 }
 
 impl ParallelStateCatchup {
@@ -944,6 +1014,7 @@ impl ParallelStateCatchup {
     pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
         Self {
             providers: Arc::new(Mutex::new(providers.to_vec())),
+            backoff: BackoffParams::disabled(),
         }
     }
 
@@ -1001,13 +1072,15 @@ impl ParallelStateCatchup {
             futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
         }
 
+        let mut logs = vec![format!("No providers returned a successful result.\n")];
         // Return the first successful result
         while let Some(result) = futures.next().await {
             // Unwrap the inner (join) result
             let result = match result {
                 Ok(res) => res,
                 Err(err) => {
-                    warn!("Failed to join on provider: {err:#}. Trying next provider...");
+                    tracing::debug!("Failed to join on provider: {err:#}.");
+                    logs.push(format!("Failed to join on provider: {err:#}."));
                     continue;
                 },
             };
@@ -1016,7 +1089,8 @@ impl ParallelStateCatchup {
             let result = match result {
                 Ok(res) => res,
                 Err(err) => {
-                    warn!("Failed to fetch data: {err:#}. Trying next provider...");
+                    tracing::debug!("Failed to fetch data: {err:#}.");
+                    logs.push(format!("Failed to fetch data: {err:#}."));
                     continue;
                 },
             };
@@ -1024,7 +1098,7 @@ impl ParallelStateCatchup {
             return Ok(result);
         }
 
-        Err(anyhow::anyhow!("no providers returned a successful result"))
+        Err(anyhow::anyhow!(logs.join("\n")))
     }
 }
 
@@ -1315,8 +1389,32 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        // Try fetching the state cert on the local providers first
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_state_cert(retry, epoch).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(move |provider| async move {
+            provider.try_fetch_state_cert(retry, epoch).await
+        })
+        .await
+    }
+
     fn backoff(&self) -> &BackoffParams {
-        unreachable!()
+        &self.backoff
     }
 
     fn name(&self) -> String {
@@ -1530,6 +1628,29 @@ impl StateCatchup for ParallelStateCatchup {
         }})
         .await
     }
+
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_state_cert(0, epoch).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(
+            move |provider| async move { provider.fetch_state_cert(epoch).await },
+        )
+        .await
+    }
+
     async fn remember_blocks_merkle_tree(
         &self,
         instance: &NodeState,

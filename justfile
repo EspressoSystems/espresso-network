@@ -41,9 +41,20 @@ clippy *args:
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
+check *args:
+    # postgres
+    cargo check {{args}}
+    # embedded-db
+    cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
+
 build profile="dev" features="":
+    # postgres
     cargo build --profile {{profile}} {{features}}
-    cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
+    # embedded-db 
+    cargo build --profile {{profile}} -p sequencer-sqlite -p espresso-dev-node {{features}}
+
+demo-native-fee *args: (build "test" "--no-default-features --features fee")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -54,8 +65,14 @@ demo-native-pos-base *args: (build "test" "--no-default-features --features pos"
 demo-native-drb-header-upgrade *args: (build "test" "--no-default-features --features pos,drb-and-header")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-drb-header *args: (build "test" "--no-default-features --features drb-and-header")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features --features fee,drb-and-header")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-da-committees *args: (build "test" "--no-default-features --features da-upgrade")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -79,9 +96,17 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
+# hotshot-testing: tested in hotshot.yml
+# sequencer-sqlite: no tests, enables embedded-db feature
+# slow-tests: slow and serial tests
+# espresso-dev-node: enables embedded-db
+nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node"
+
 nextest *args:
-    # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
-    cargo nextest run --locked --workspace --exclude sequencer-sqlite --exclude hotshot-testing --verbose {{args}}
+    cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
+
+nextest-archive archive-file *args:
+    cargo nextest archive --locked --workspace {{nextest_excludes}} --archive-file {{archive-file}} {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
@@ -91,9 +116,14 @@ test *args:
 
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile slow {{args}}
-    just nextest --profile slow {{args}}
+    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+
+build-dev-node *args:
+    cargo build -p espresso-dev-node {{args}}
+
+test-dev-node *args:
+    @echo 'Running espresso-dev-node integration tests'
+    cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
 test-all:
     @echo 'features: "embedded-db"'
@@ -102,6 +132,49 @@ test-all:
 
 test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
+
+# Run process-compose integration tests with minimal features
+# Examples: just test-demo pos-base, just test-demo drb-header-base
+test-demo test_name:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	case "{{test_name}}" in
+		base)
+			features="--no-default-features --features fee"
+			test="test_native_demo_base"
+			;;
+		pos-upgrade)
+			features="--no-default-features --features fee,pos"
+			test="test_native_demo_pos_upgrade"
+			;;
+		pos-base)
+			features="--no-default-features --features pos"
+			test="test_native_demo_pos_base"
+			;;
+		fee-to-drb-header-upgrade)
+			features="--no-default-features --features fee,drb-and-header"
+			test="test_native_demo_fee_to_drb_header_upgrade"
+			;;
+		drb-header-upgrade)
+			features="--no-default-features --features pos,drb-and-header"
+			test="test_native_demo_drb_header_upgrade"
+			;;
+		drb-header-base)
+			features="--no-default-features --features drb-and-header"
+			test="test_native_demo_drb_header_base"
+			;;
+		da-committees)
+			features="--no-default-features --features da-upgrade"
+			test="test_native_demo_drb_header_base"
+			;;
+		*)
+			echo "Unknown test: {{test_name}}"
+			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees"
+			exit 1
+			;;
+	esac
+	just build test "$features"
+	cargo nextest run -p tests $features --nocapture --profile integration -E "test(/$test\$/)"
 
 check-features *args:
     cargo hack check --each-feature {{args}}
@@ -150,7 +223,9 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^EspTokenV2$|^OpsTimelock$|^SafeExitTimelock$|^OwnableUpgradeable$|RewardClaim$|^RewardClaimPrototypeMock$"
+VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
+REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -173,7 +248,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken IRewardClaim; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken{,V2} IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 
@@ -234,19 +309,29 @@ gen-go-bindings:
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
-test-go:
+test-go *args:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
-    cd sdks/go && go test -v ./...
+    cd sdks/go && go test -v ./... {{args}}
 
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
 
 contracts-test-forge *args='-vv':
-    forge test --no-match-test "testFuzz_|invariant_" {{args}}
+    forge test --no-match-test "testFuzz_|invariant_|test_Network_" {{args}}
 
 contracts-test-fuzz *args='-vv':
     forge test --match-test testFuzz {{args}}
 
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
+
+contracts-test-network *args='-vv':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${ETHERSCAN_API_KEY:-}" ]; then
+        echo "Error: ETHERSCAN_API_KEY must be set to run network tests" >&2
+        echo "Set it in your environment or in .env file" >&2
+        exit 1
+    fi
+    forge test --match-test test_Network_ --jobs 1 {{args}}

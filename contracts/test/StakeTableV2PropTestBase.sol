@@ -83,6 +83,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 totalPendingWithdrawal;
         uint256 numPendingWithdrawals;
         uint256 numActiveDelegations;
+        uint256 activeStake;
     }
 
     // Actors can be validators and/or delegators
@@ -203,7 +204,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         StakeTable(payable(address(proxy))).upgradeToAndCall(
             address(stakeTableV2Impl),
             abi.encodeWithSignature(
-                "initializeV2(address,address,(address,uint16)[])", admin, admin, emptyCommissions
+                "initializeV2(address,address,uint256,(address,uint16)[])",
+                admin,
+                admin,
+                0,
+                emptyCommissions
             )
         );
 
@@ -261,7 +266,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             bytes memory schnorrSig
         ) = genDummyValidatorKeys(actor);
 
-        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000) {
+        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000, "") {
             trackRegisterValidator(actor);
             stats.any.registerValidator.ok++;
         } catch {
@@ -339,7 +344,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         ) = genDummyValidatorKeys(val);
 
         ivm.prank(val);
-        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000);
+        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000, "");
         trackRegisterValidator(val);
         stats.ok.createValidator.ok++;
 
@@ -374,6 +379,37 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
+    // Check if an undelegation exists and verify consistency between the undelegations
+    // mapping and getUndelegation function. Returns undelegation details if it exists.
+    function checkUndelegation(address val, address del)
+        internal
+        view
+        returns (bool exists, uint64 id, uint256 amount, uint256 unlocksAt)
+    {
+        (uint256 mappingAmount, uint256 mappingUnlocksAt) = stakeTable.undelegations(val, del);
+
+        if (mappingAmount > 0) {
+            try stakeTable.getUndelegation(val, del) returns (
+                uint64 _id, uint256 _amount, uint256 _unlocksAt
+            ) {
+                require(_amount == mappingAmount, "getUndelegation amount != mapping amount");
+                require(
+                    _unlocksAt == mappingUnlocksAt, "getUndelegation unlocksAt != mapping unlocksAt"
+                );
+                require(_amount > 0, "undelegation exists with zero amount");
+                return (true, _id, _amount, _unlocksAt);
+            } catch {
+                revert("getUndelegation reverted but mapping shows undelegation exists");
+            }
+        } else {
+            try stakeTable.getUndelegation(val, del) returns (uint64, uint256, uint256) {
+                revert("getUndelegation succeeded but mapping shows no undelegation");
+            } catch {
+                return (false, 0, 0, 0);
+            }
+        }
+    }
+
     function undelegateOk(uint256 actorIndex, uint256 valIndex, uint256 amount) public {
         // Use validators with delegations for higher success rate
         if (validators.staked.length() == 0) return;
@@ -385,8 +421,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         actor = validatorDelegators.at(actorIndex % validatorDelegators.length());
 
         // only one pending withdrawal is allowed at a time
-        (uint256 existingUndelegation,) = stakeTable.undelegations(validator, actor);
-        if (existingUndelegation > 0) return;
+        (bool exists,,,) = checkUndelegation(validator, actor);
+        if (exists) return;
 
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
 
@@ -417,6 +453,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function trackDelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated += amount;
+        testState.activeStake += amount;
         actors.trackedFunds[actorAddr].delegated += amount;
         validators.staked.add(val);
 
@@ -431,6 +468,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     function trackUndelegate(address actorAddr, address val, uint256 amount) internal {
         testState.totalDelegated -= amount;
         testState.totalPendingWithdrawal += amount;
+        testState.activeStake -= amount;
         actors.trackedFunds[actorAddr].delegated -= amount;
         actors.trackedFunds[actorAddr].pendingWithdrawal += amount;
         addPendingWithdrawal(actorAddr, val);
@@ -461,6 +499,9 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         validators.active.remove(val);
         validators.exited.add(val);
         validators.staked.remove(val);
+
+        (uint256 validatorDelegatedAmount,) = stakeTable.validators(val);
+        testState.activeStake -= validatorDelegatedAmount;
     }
 
     function trackClaimWithdrawal(address actorAddr, address val, uint256 undelegationAmount)
@@ -505,10 +546,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         address pendingActor = pendingActors.at(withdrawalIndex % pendingActors.length());
 
-        (uint256 undelegationAmount, uint256 unlocksAt) =
-            stakeTable.undelegations(val, pendingActor);
+        (bool exists,, uint256 undelegationAmount, uint256 unlocksAt) =
+            checkUndelegation(val, pendingActor);
+        if (!exists) return;
 
-        if (undelegationAmount == 0) return;
         if (block.timestamp < unlocksAt) {
             // Advance time by escrow period to enable withdrawal
             ivm.warp(block.timestamp + EXIT_ESCROW_PERIOD);
@@ -555,6 +596,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
     function getTestState() external view returns (TestState memory) {
         return testState;
+    }
+
+    function getActiveStake() external view returns (uint256) {
+        return testState.activeStake;
     }
 
     function getTotalSuccesses() external view returns (uint256) {
@@ -607,14 +652,15 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 unlocksAt = stakeTable.validatorExits(validator);
         if (unlocksAt == 0) return;
 
-        // Use actors set to pick a delegator - we'll try to find one with a delegation
-        if (actors.all.length() == 0) return;
+        // Use the delegators set for this validator to find an actual delegator
+        EnumerableSet.AddressSet storage validatorDelegators = delegators.delegators[validator];
+        if (validatorDelegators.length() == 0) return;
 
-        actor = actors.all.at(delegatorIndex % actors.all.length());
+        actor = validatorDelegators.at(delegatorIndex % validatorDelegators.length());
 
-        // Check if there's actually a delegation to claim
+        // Get the delegation amount - should always be > 0 since actor is in delegators set
         uint256 delegatedAmount = stakeTable.delegations(validator, actor);
-        if (delegatedAmount == 0) return;
+        require(delegatedAmount > 0, "delegator in set but has zero delegation");
 
         // Advance time if needed
         if (block.timestamp < unlocksAt) {
@@ -670,9 +716,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                 address val = validators.all.at(j);
 
                 // claim undelegation
-                (uint256 undelegationAmount,) = stakeTable.undelegations(val, del);
-
-                if (undelegationAmount > 0) {
+                (bool exists,, uint256 undelegationAmount,) = checkUndelegation(val, del);
+                if (exists) {
                     ivm.prank(del);
                     stakeTable.claimWithdrawal(val);
                     trackClaimWithdrawal(del, val, undelegationAmount);
@@ -705,9 +750,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             address del = actors.all.at(i);
             for (uint256 j = 0; j < validators.all.length(); j++) {
                 address val = validators.all.at(j);
-                (uint256 undelegationAmount,) = stakeTable.undelegations(val, del);
-
-                if (undelegationAmount > 0) {
+                (bool exists,, uint256 undelegationAmount,) = checkUndelegation(val, del);
+                if (exists) {
                     ivm.prank(del);
                     stakeTable.claimWithdrawal(val);
                     trackClaimWithdrawal(del, val, undelegationAmount);
@@ -732,6 +776,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         // Verify no pending withdrawals remain
         require(testState.totalPendingWithdrawal == 0, "No pending withdrawals should remain");
         require(testState.totalDelegated == 0, "No delegations should remain");
+
+        require(
+            testState.activeStake == 0, "Total validator stake should be zero after full withdrawal"
+        );
     }
 
     /// @dev Assert sum of delegated amounts to a validator equals validator.delegatedAmount
@@ -756,5 +804,13 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
                 validatorDelegatedAmount == sumOfDelegations, "Validator delegatedAmount mismatch"
             );
         }
+    }
+
+    /// @dev Assert that contract's activeStake matches our tracking
+    function assertStakeInvariants() public view {
+        require(
+            stakeTable.activeStake() == testState.activeStake,
+            "Contract activeStake does not match tracked activeStake"
+        );
     }
 }

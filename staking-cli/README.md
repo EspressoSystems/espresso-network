@@ -19,9 +19,11 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     - [Delegating](#delegating)
     - [Undelegating](#undelegating)
     - [Recovering funds after a validator exit](#recovering-funds-after-a-validator-exit)
+    - [Claiming staking rewards](#claiming-staking-rewards)
   - [Node operators](#node-operators)
     - [Registering a validator](#registering-a-validator)
     - [Updating your commission](#updating-your-commission)
+    - [Updating your metadata URL](#updating-your-metadata-url)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
 
@@ -66,6 +68,7 @@ Commands:
     account                Print the signer account address
     register-validator     Register to become a validator
     update-commission      Update a validator's commission rate
+    update-metadata-uri    Update a validator's metadata URL
     update-consensus-keys  Update a validators Espresso consensus signing keys
     deregister-validator   Deregister a validator
     approve                Approve stake table contract to move tokens
@@ -73,6 +76,8 @@ Commands:
     undelegate             Initiate a withdrawal of delegated funds from a validator
     claim-withdrawal       Claim withdrawal after an undelegation
     claim-validator-exit   Claim withdrawal after validator exit
+    claim-rewards          Claim staking rewards
+    unclaimed-rewards      Check unclaimed staking rewards
     token-balance          Check ESP token balance
     token-allowance        Check ESP token allowance of stake table contract
     transfer               Transfer ESP tokens
@@ -216,36 +221,61 @@ This section covers commands for stakers/delegators.
 
          staking-cli claim-validator-exit --validator-address 0x12...34
 
+### Claiming staking rewards
+
+Delegators and validators can earn staking rewards. To check and claim your rewards:
+
+1.  Check your unclaimed rewards:
+
+        staking-cli unclaimed-rewards
+
+    This will display the amount of unclaimed rewards in ESP tokens.
+
+2.  Claim your rewards:
+
+        staking-cli claim-rewards
+
+    This will transfer your unclaimed rewards to your wallet.
+
+Note: You need to set the `espresso_url` in your config file or pass `--espresso-url` flag to use these commands.
+
 ## Node operators
 
 This section covers commands for node operators.
 
 ### Registering a validator
 
-1.  Obtain your validator's BLS and state private keys and choose your commission in percent, with 2 decimals.
+1.  Obtain your validator's BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare a metadata URL.
 1.  Use the `register-validator` command to register your validator.
 
-        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99
+        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
 
     To avoid specifying the the keys on the command line they can be set via env vars
 
     ```
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
+    METADATA_URL=https://example.com/validator-metadata.json
     ```
 
     Alternatively, you can use pre-signed signatures:
 
-        staking-cli register-validator --node-signatures signatures.json --commission 4.99
+        staking-cli register-validator --node-signatures signatures.json --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
 
     You can specify the format for parsing node signatures from stdin or files:
 
-        staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99
+        staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
+
+    To register without a metadata URL (leaving it empty):
+
+        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --no-metadata-uri
 
 - Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
   register transaction consumes about 300k gas.
 - Each BLS (Espresso) and key can be registered only once.
 - The commission can be updated later using the `update-commission` command, subject to rate limits.
+- The metadata URL can be updated at any time using the `update-metadata-uri` command.
+- The metadata URL must be a valid URL (unless using --no-metadata-uri flag) and cannot exceed 2048 bytes.
 - Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
   different account indices (or mnemonics) must be used.
 
@@ -263,6 +293,27 @@ To update your commission:
 The commission value is in percent with up to 2 decimal points: from 0.00 to 100.00.
 
 Note: The minimum time interval and maximum increase are contract parameters that may be adjusted by governance.
+
+### Updating your metadata URL
+
+Validators can update their metadata URL at any time. The metadata URL is used to provide additional
+information about your validator but the official schema is yet to be decided.
+
+To update your metadata URL:
+
+    staking-cli update-metadata-uri --metadata-uri https://example.com/updated-metadata.json
+
+To clear your metadata URL (set it to empty):
+
+    staking-cli update-metadata-uri --no-metadata-uri
+
+The metadata URL:
+- Must be a valid URL (e.g., starting with `https://`) unless using --no-metadata-uri flag
+- Can be empty when using --no-metadata-uri flag
+- Cannot exceed 2048 bytes
+
+Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by
+listening to registration and update events.
 
 ### De-registering your validator
 
@@ -327,3 +378,32 @@ Format handling:
 - File extension auto-detection: `.json` and `.toml` files are automatically parsed in the correct format
 - Stdin defaults to JSON: `cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99`
 - Explicit format for stdin: `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
+
+### Native Demo Staking
+
+The `stake-for-demo` command is used to set up validators and delegators for testing purposes.
+
+    staking-cli stake-for-demo --num-validators 5
+
+Configuration options:
+
+- `--num-validators`: Number of validators to register (default: 5)
+- `--num-delegators-per-validator`: Number of delegators per validator (default: random 2-5, max: 100,000)
+- `--delegation-config`: Delegation configuration mode (default: variable-amounts)
+  - `equal-amounts`: All validators have equal delegation amounts
+  - `variable-amounts`: Variable delegation amounts per validator
+  - `multiple-delegators`: Multiple delegators per validator
+  - `no-self-delegation`: Validators do not self-delegate
+
+Environment variables:
+
+- `NUM_DELEGATORS_PER_VALIDATOR`: Set the number of delegators per validator
+- `DELEGATION_CONFIG`: Set the delegation configuration mode
+
+Example usage:
+
+    # Create 10 validators with 50 delegators each
+    staking-cli stake-for-demo --num-validators 10 --num-delegators-per-validator 50
+
+    # Using environment variables with native demo
+    env NUM_DELEGATORS_PER_VALIDATOR=1000 DELEGATION_CONFIG=no-self-delegation just demo-native-drb-header

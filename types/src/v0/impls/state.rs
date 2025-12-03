@@ -173,6 +173,11 @@ pub enum ProposalValidationError {
     NoEpochHeight,
     #[error("No First Epoch Configured")]
     NoFirstEpoch,
+    #[error("Total rewards mismatch: proposed header has {proposed} but actual is {actual}")]
+    TotalRewardsMismatch {
+        proposed: RewardAmount,
+        actual: RewardAmount,
+    },
 }
 
 impl StateDelta for Delta {}
@@ -455,14 +460,18 @@ impl<'a> Proposal<'a> {
     ///
     /// The tolerance is currently `12` seconds. This value may be moved to
     /// configuration in the future.
-    fn validate_timestamp_drift(&self, system_time: u64) -> Result<(), ProposalValidationError> {
+    fn validate_timestamp_drift(
+        &self,
+        system_time: OffsetDateTime,
+    ) -> Result<(), ProposalValidationError> {
         // TODO 12 seconds of tolerance should be enough for reasonably
         // configured nodes, but we should make this configurable.
-        let diff = self.header.timestamp().abs_diff(system_time);
+        let system_timestamp = system_time.unix_timestamp() as u64;
+        let diff = self.header.timestamp().abs_diff(system_timestamp);
         if diff > 12 {
             return Err(ProposalValidationError::InvalidTimestampDrift {
                 proposal: self.header.timestamp(),
-                system: system_time,
+                system: system_timestamp,
                 diff,
             });
         }
@@ -506,10 +515,20 @@ pub(crate) struct ValidatedTransition<'a> {
     expected_chain_config: ChainConfig,
     parent: &'a Header,
     proposal: Proposal<'a>,
+    total_rewards_distributed: Option<RewardAmount>,
+    version: Version,
+    validation_start_time: OffsetDateTime,
 }
 
 impl<'a> ValidatedTransition<'a> {
-    pub(crate) fn new(state: ValidatedState, parent: &'a Header, proposal: Proposal<'a>) -> Self {
+    pub(crate) fn new(
+        state: ValidatedState,
+        parent: &'a Header,
+        proposal: Proposal<'a>,
+        total_rewards_distributed: Option<RewardAmount>,
+        version: Version,
+        validation_start_time: OffsetDateTime,
+    ) -> Self {
         let expected_chain_config = state
             .chain_config
             .resolve()
@@ -519,6 +538,9 @@ impl<'a> ValidatedTransition<'a> {
             expected_chain_config,
             parent,
             proposal,
+            total_rewards_distributed,
+            version,
+            validation_start_time,
         }
     }
 
@@ -536,6 +558,7 @@ impl<'a> ValidatedTransition<'a> {
     /// self.validate_l1_finalized()?;
     /// self.validate_l1_head()?;
     /// self.validate_namespace_table()?;
+    /// self.validate_total_rewards_distributed()?;
     /// ```
     pub(crate) fn validate(self) -> Result<Self, ProposalValidationError> {
         self.validate_timestamp()?;
@@ -550,6 +573,7 @@ impl<'a> ValidatedTransition<'a> {
         self.validate_l1_finalized()?;
         self.validate_l1_head()?;
         self.validate_namespace_table()?;
+        self.validate_total_rewards_distributed()?;
 
         Ok(self)
     }
@@ -681,9 +705,8 @@ impl<'a> ValidatedTransition<'a> {
         self.proposal
             .validate_timestamp_non_dec(self.parent.timestamp())?;
 
-        // Validate timestamp hasn't drifted too much from system time.
-        let system_time: u64 = OffsetDateTime::now_utc().unix_timestamp() as u64;
-        self.proposal.validate_timestamp_drift(system_time)?;
+        self.proposal
+            .validate_timestamp_drift(self.validation_start_time)?;
 
         Ok(())
     }
@@ -745,6 +768,41 @@ impl<'a> ValidatedTransition<'a> {
             // Should be safe since `u32` will always fit in a `usize`.
             .validate(&PayloadByteLen(self.proposal.block_size as usize))
             .map_err(ProposalValidationError::from)
+    }
+
+    /// Validate that the total rewards distributed in the proposed header matches the actual distributed amount.
+    /// This field is only present in >= V4 version.
+    fn validate_total_rewards_distributed(&self) -> Result<(), ProposalValidationError> {
+        if self.version >= DrbAndHeaderUpgradeVersion::version() {
+            let Some(actual_total) = self.total_rewards_distributed else {
+                // This should never happen - if version >= V4, total_rewards_distributed must be Some
+                return Err(ProposalValidationError::TotalRewardsMismatch {
+                    proposed: self
+                        .proposal
+                        .header
+                        .total_reward_distributed()
+                        .unwrap_or_default(),
+                    actual: RewardAmount::from(0),
+                });
+            };
+
+            let proposed_total =
+                self.proposal
+                    .header
+                    .total_reward_distributed()
+                    .ok_or_else(|| ProposalValidationError::TotalRewardsMismatch {
+                        proposed: RewardAmount::from(0),
+                        actual: actual_total,
+                    })?;
+
+            if proposed_total != actual_total {
+                return Err(ProposalValidationError::TotalRewardsMismatch {
+                    proposed: proposed_total,
+                    actual: actual_total,
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -836,7 +894,7 @@ impl ValidatedState {
         proposed_header: &Header,
         version: Version,
         view_number: ViewNumber,
-    ) -> anyhow::Result<(Self, Delta)> {
+    ) -> anyhow::Result<(Self, Delta, Option<RewardAmount>)> {
         // Clone state to avoid mutation. Consumer can take update
         // through returned value.
         let mut validated_state = self.clone();
@@ -926,23 +984,29 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
-        if version >= EpochVersion::version() {
-            let reward_distributor = distribute_block_reward(
-                instance,
-                &mut validated_state,
-                parent_leaf,
-                view_number,
-                version,
-            )
-            .await?;
-            if let Some(reward_distributor) = reward_distributor {
-                reward_distributor
-                    .update_rewards_delta(&mut delta)
-                    .context("failed to update rewards delta")?;
-            }
-        }
+        // total_rewards_distributed is only present in >= V4
+        let total_rewards_distributed = if version < EpochVersion::version() {
+            None
+        } else if let Some(reward_distributor) = distribute_block_reward(
+            instance,
+            &mut validated_state,
+            parent_leaf,
+            view_number,
+            version,
+        )
+        .await?
+        {
+            reward_distributor
+                .update_rewards_delta(&mut delta)
+                .context("failed to update rewards delta")?;
 
-        Ok((validated_state, delta))
+            Some(reward_distributor.total_distributed())
+        } else {
+            // Version >= V4 but no rewards were distributed because epoch <= first epoch + 1
+            Some(Default::default())
+        };
+
+        Ok((validated_state, delta, total_rewards_distributed))
     }
 
     /// Updates the `ValidatedState` if a protocol upgrade has occurred.
@@ -960,6 +1024,7 @@ impl ValidatedState {
             UpgradeType::Fee { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
+            UpgradeType::Da { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1050,7 +1115,7 @@ async fn validate_next_stake_table_hash(
     let next_stake_table_hash = epoch_membership
         .stake_table_hash()
         .await
-        .ok_or(ProposalValidationError::NextStakeTableNotFound)?;
+        .ok_or(ProposalValidationError::NextStakeTableHashNotFound)?;
     let Some(proposed_next_stake_table_hash) = proposed_header.next_stake_table_hash() else {
         return Err(ProposalValidationError::NextStakeTableHashNotFound);
     };
@@ -1090,7 +1155,12 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        let (validated_state, delta) = self
+        // Preferably we would do all validation that does not require catchup first, but this would
+        // require some refactoring of the header validation code that is out of scope for now.
+        // Record the time when validation started to later use it to validate the timestamp drift.
+        let validation_start_time = OffsetDateTime::now_utc();
+
+        let (validated_state, delta, total_rewards_distributed) = self
             // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
             .apply_header(
                 instance,
@@ -1112,6 +1182,9 @@ impl HotShotState<SeqTypes> for ValidatedState {
             validated_state,
             parent_leaf.block_header(),
             Proposal::new(proposed_header, payload_byte_len),
+            total_rewards_distributed,
+            version,
+            validation_start_time,
         )
         .validate()?
         .wait_for_l1(&instance.l1_client)
@@ -1330,16 +1403,20 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeV1 {
 
 #[cfg(test)]
 mod test {
+    use std::{sync::Arc, time::Duration};
+
     use hotshot::traits::BlockPayload;
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
-    use hotshot_types::traits::signature_key::BuilderSignatureKey;
+    use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
+    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
-        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, v0_4, BlockSize, FeeAccountProof,
-        FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5,
+        BlockSize, FeeAccountProof, FeeMerkleProof, FeeVersion, Leaf, MaxSupportedVersion, Payload,
+        SequencerVersions, TimestampMillis, Transaction,
     };
 
     impl Transaction {
@@ -1382,6 +1459,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V5(parent) => Header::V5(v0_5::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1409,6 +1492,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V4(header) => Header::V4(v0_4::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V5(header) => Header::V5(v0_5::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1448,6 +1536,11 @@ mod test {
                     builder_signature: Some(sig),
                     ..parent.clone()
                 }),
+                Header::V5(parent) => Header::V5(v0_5::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..parent.clone()
+                }),
             }
         }
     }
@@ -1455,12 +1548,16 @@ mod test {
     impl<'a> ValidatedTransition<'a> {
         fn mock(instance: NodeState, parent: &'a Header, proposal: Proposal<'a>) -> Self {
             let expected_chain_config = instance.chain_config;
+            let validation_start_time = OffsetDateTime::now_utc();
 
             Self {
                 state: instance.genesis_state,
                 expected_chain_config,
                 parent,
                 proposal,
+                total_rewards_distributed: None,
+                version: Version { major: 0, minor: 1 },
+                validation_start_time,
             }
         }
     }
@@ -1740,7 +1837,7 @@ mod test {
         header.set_timestamp(timestamp - 13, timestamp_millis - 13_000);
         let proposal = Proposal::new(&header, block_size);
 
-        let err = proposal.validate_timestamp_drift(timestamp).unwrap_err();
+        let err = proposal.validate_timestamp_drift(time).unwrap_err();
         tracing::info!(%err, "task failed successfully");
         assert_eq!(
             ProposalValidationError::InvalidTimestampDrift {
@@ -1755,15 +1852,15 @@ mod test {
         let mut header = parent.clone();
         header.set_timestamp(timestamp, timestamp_millis);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(timestamp).unwrap();
+        proposal.validate_timestamp_drift(time).unwrap();
 
         header.set_timestamp(timestamp - 11, timestamp_millis - 11_000);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(timestamp).unwrap();
+        proposal.validate_timestamp_drift(time).unwrap();
 
         header.set_timestamp(timestamp - 12, timestamp_millis - 12_000);
         let proposal = Proposal::new(&header, block_size);
-        proposal.validate_timestamp_drift(timestamp).unwrap();
+        proposal.validate_timestamp_drift(time).unwrap();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2019,8 +2116,179 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
+            Header::V5(header) => Header::V5(v0_5::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
         };
 
         validate_builder_fee(&header).unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validate_total_rewards_distributed() {
+        let instance = NodeState::mock().with_genesis_version(Version { major: 0, minor: 4 });
+
+        let (payload, metadata) =
+            Payload::from_transactions([], &instance.genesis_state, &instance)
+                .await
+                .unwrap();
+
+        let header = Header::genesis::<SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 4>>>(
+            &instance,
+            payload.clone(),
+            &metadata,
+        );
+
+        let validated_state = ValidatedState::default();
+        let actual_total = RewardAmount::from(1000u64);
+        let block_size = 100u32;
+
+        let proposed_header = match header.clone() {
+            Header::V4(mut h) => {
+                h.total_reward_distributed = actual_total;
+                Header::V4(h)
+            },
+            _ => unreachable!("Expected V4 header"),
+        };
+
+        let validation_start_time = OffsetDateTime::now_utc();
+        let validated_transition = ValidatedTransition::new(
+            validated_state.clone(),
+            &header,
+            Proposal::new(&proposed_header, block_size),
+            Some(actual_total),
+            StaticVersion::<0, 4>::version(),
+            validation_start_time,
+        );
+
+        validated_transition
+            .validate_total_rewards_distributed()
+            .unwrap();
+
+        let wrong_total = RewardAmount::from(2000u64);
+        let proposed_header = match header.clone() {
+            Header::V4(mut h) => {
+                h.total_reward_distributed = wrong_total;
+                Header::V4(h)
+            },
+            _ => unreachable!("Expected V4 header"),
+        };
+
+        ValidatedTransition::new(
+            validated_state.clone(),
+            &header,
+            Proposal::new(&proposed_header, block_size),
+            Some(actual_total),
+            StaticVersion::<0, 4>::version(),
+            validation_start_time,
+        )
+        .validate_total_rewards_distributed()
+        .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_regression_slow_validation_timestamp_drift() {
+        let instance = NodeState::mock_v2();
+        let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
+
+        let validation_start_time = OffsetDateTime::now_utc();
+        let timestamp = validation_start_time.unix_timestamp() as u64;
+        let timestamp_millis = TimestampMillis::from_time(&validation_start_time).u64();
+
+        let mut header = parent.clone();
+        header.set_timestamp(timestamp, timestamp_millis);
+
+        std::thread::sleep(Duration::from_secs(13));
+
+        // Validation fails if we pass the current timestamp (emulates issue before fix)
+        let proposal_without_fix = Proposal::new(&header, block_size);
+        let err = ValidatedTransition::new(
+            instance.genesis_state.clone(),
+            &parent,
+            proposal_without_fix,
+            None,
+            MaxSupportedVersion::version(),
+            OffsetDateTime::now_utc(),
+        )
+        .validate_timestamp()
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ProposalValidationError::InvalidTimestampDrift { .. }
+        ));
+
+        // Validation succeeds if we pass a validation start timestamp
+        let proposal = Proposal::new(&header, block_size);
+        ValidatedTransition::new(
+            instance.genesis_state.clone(),
+            &parent,
+            proposal,
+            None,
+            MaxSupportedVersion::version(),
+            validation_start_time,
+        )
+        .validate_timestamp()
+        .unwrap();
+    }
+
+    // Checks that slow catchup does not cause timestamp drift validation to fail.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validate_and_apply_header_slow_catchup_succeeds() {
+        // Using v2 here because mock_v3 is lacking for epoch related validation to work.
+        let mut instance = NodeState::mock_v2();
+
+        let mut genesis_state = instance.genesis_state.clone();
+
+        // We need an element in the tree to forget it and trigger catchup.
+        genesis_state
+            .fee_merkle_tree
+            .update(FeeAccount::default(), FeeAmount::from(1u64))
+            .unwrap();
+        instance.genesis_state = genesis_state.clone();
+
+        let genesis = Leaf::genesis::<MockVersions>(&genesis_state, &instance).await;
+        let parent_leaf: Leaf2 = genesis.into();
+        let parent_header = parent_leaf.block_header().clone();
+
+        let mut expected_block_tree = genesis_state.block_merkle_tree.clone();
+        expected_block_tree.push(parent_header.commit()).unwrap();
+
+        let proposed_header = match parent_header {
+            Header::V2(header) => Header::V2(v0_2::Header {
+                height: header.height + 1,
+                timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
+                block_merkle_tree_root: expected_block_tree.commitment(),
+                chain_config: header.chain_config.commit().into(),
+                ..header
+            }),
+            _ => panic!("Expected V2 header"),
+        };
+
+        let slow_catchup =
+            MockStateCatchup::from_iter([(ViewNumber::new(0), Arc::new(genesis_state.clone()))])
+                .with_delay(Duration::from_secs(13));
+        instance.state_catchup = Arc::new(slow_catchup);
+
+        // Forget leaf to trigger catchup
+        genesis_state
+            .fee_merkle_tree
+            .forget(FeeAccount::default())
+            .expect_ok()
+            .unwrap();
+
+        genesis_state
+            .validate_and_apply_header(
+                &instance,
+                &parent_leaf,
+                &proposed_header,
+                0, /* payload_byte_len */
+                FeeVersion::version(),
+                0, /* view_number */
+            )
+            .await
+            .unwrap();
     }
 }

@@ -18,9 +18,7 @@ use crate::{
     },
     error::HotShotError,
     message::{convert_proposal, Proposal},
-    simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
-    },
+    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
     traits::{node_implementation::NodeType, ValidatedState},
 };
 
@@ -201,7 +199,12 @@ pub enum EventType<TYPES: NodeType> {
         ///
         /// Note that the QC for each additional leaf in the chain can be obtained from the leaf
         /// before it using
-        qc: Arc<QuorumCertificate2<TYPES>>,
+        committing_qc: Arc<CertificatePair<TYPES>>,
+        /// A QC signing the leaf corresponding to `qc`.
+        ///
+        /// Together with `qc`, this forms a 2-chain, which is sufficient for a light client to
+        /// verify that the leaf chain contained in this event is in fact decided.
+        deciding_qc: Option<Arc<CertificatePair<TYPES>>>,
         /// Optional information of the number of transactions in the block, for logging purposes.
         block_size: Option<u64>,
     },
@@ -266,8 +269,9 @@ impl<TYPES: NodeType> EventType<TYPES> {
             EventType::Error { error } => LegacyEventType::Error { error },
             EventType::Decide {
                 leaf_chain,
-                qc,
+                committing_qc: qc,
                 block_size,
+                ..
             } => LegacyEventType::Decide {
                 leaf_chain: Arc::new(
                     leaf_chain
@@ -276,7 +280,7 @@ impl<TYPES: NodeType> EventType<TYPES> {
                         .map(LeafInfo::to_legacy_unsafe)
                         .collect::<anyhow::Result<_, _>>()?,
                 ),
-                qc: Arc::new(qc.as_ref().clone().to_qc()),
+                qc: Arc::new(qc.qc().clone().to_qc()),
                 block_size,
             },
             EventType::ReplicaViewTimeout { view_number } => {

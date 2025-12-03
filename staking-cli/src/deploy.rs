@@ -1,38 +1,50 @@
 use std::time::Duration;
 
 use alloy::{
-    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
-    primitives::{utils::parse_ether, Address, U256},
+    network::{Ethereum, EthereumWallet},
+    primitives::{utils::parse_ether, Address, B256, U256},
     providers::{
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
         layers::AnvilProvider,
         utils::JoinedRecommendedFillers,
-        Provider as _, ProviderBuilder, RootProvider, WalletProvider,
+        ProviderBuilder, RootProvider, WalletProvider,
     },
-    rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
+    sol_types::SolValue as _,
 };
 use anyhow::Result;
 use espresso_contract_deployer::{
     build_signer, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table, Contract, Contracts,
 };
+use espresso_types::{
+    v0::v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+    },
+    v0_3::RewardAmount,
+    v0_4::REWARD_MERKLE_TREE_V2_HEIGHT,
+};
 use hotshot_contract_adapter::{
     sol_types::{
         EspToken::{self, EspTokenInstance},
-        StakeTable, StakeTableV2,
+        LightClientV3Mock, StakeTableV2,
     },
     stake_table::StakeTableContractVersion,
 };
 use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
+use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
+use warp::Filter;
 
 use crate::{
+    delegation::{approve, delegate, undelegate},
+    funding::{send_esp, send_eth},
     parse::Commission,
-    registration::{fetch_commission, register_validator},
+    receipt::ReceiptExt as _,
+    registration::{deregister_validator, fetch_commission, register_validator},
     signature::NodeSignatures,
     BLSKeyPair, DEV_MNEMONIC,
 };
@@ -50,6 +62,7 @@ pub struct TestSystem {
     pub deployer_address: Address,
     pub token: Address,
     pub stake_table: Address,
+    pub reward_claim: Option<Address>,
     pub exit_escrow_period: Duration,
     pub rpc_url: Url,
     pub bls_key_pair: BLSKeyPair,
@@ -86,11 +99,11 @@ impl TestSystem {
             }
         };
 
-        let rpc_url = format!("http://localhost:{port}").parse()?;
+        let rpc_url: Url = format!("http://localhost:{port}").parse()?;
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
         // mnemonic and the default signer is the first account.
-        let signer = build_signer(DEV_MNEMONIC.to_string(), 0);
+        let signer = build_signer(DEV_MNEMONIC, 0);
         assert_eq!(
             signer.address(),
             deployer_address,
@@ -111,6 +124,7 @@ impl TestSystem {
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
             .deployer(provider.clone())
+            .rpc_url(rpc_url.clone())
             .mock_light_client(true)
             .genesis_lc_state(genesis_state)
             .genesis_st_state(genesis_stake)
@@ -144,16 +158,19 @@ impl TestSystem {
         let token = contracts
             .address(Contract::EspTokenProxy)
             .expect("EspTokenProxy deployed");
+        let reward_claim = match stake_table_contract_version {
+            StakeTableContractVersion::V1 => None,
+            StakeTableContractVersion::V2 => contracts.address(Contract::RewardClaimProxy),
+        };
 
         let approval_amount = parse_ether("1000000")?;
         // Approve the stake table contract so it can transfer tokens to itself
-        let receipt = EspTokenInstance::new(token, &provider)
+        EspTokenInstance::new(token, &provider)
             .approve(stake_table, approval_amount)
             .send()
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
 
         let mut rng = StdRng::from_seed([42u8; 32]);
         let (_, bls_key_pair, state_key_pair) = Self::gen_keys(&mut rng);
@@ -164,6 +181,7 @@ impl TestSystem {
             deployer_address,
             token,
             stake_table,
+            reward_claim,
             exit_escrow_period,
             rpc_url,
             bls_key_pair,
@@ -190,67 +208,66 @@ impl TestSystem {
             &self.bls_key_pair.clone(),
             &self.state_key_pair.clone(),
         );
-        let receipt =
-            register_validator(&self.provider, self.stake_table, self.commission, payload).await?;
-        assert!(receipt.status());
+        let metadata_uri = "https://example.com/metadata".parse()?;
+        register_validator(
+            &self.provider,
+            self.stake_table,
+            self.commission,
+            metadata_uri,
+            payload,
+        )
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
     pub async fn deregister_validator(&self) -> Result<()> {
-        let stake_table = StakeTable::new(self.stake_table, &self.provider);
-        let receipt = stake_table
-            .deregisterValidator()
-            .send()
+        deregister_validator(&self.provider, self.stake_table)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
         Ok(())
     }
 
     pub async fn delegate(&self, amount: U256) -> Result<()> {
-        let stake_table = StakeTable::new(self.stake_table, &self.provider);
-        let receipt = stake_table
-            .delegate(self.deployer_address, amount)
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
+        delegate(
+            &self.provider,
+            self.stake_table,
+            self.deployer_address,
+            amount,
+        )
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
     pub async fn undelegate(&self, amount: U256) -> Result<()> {
-        let stake_table = StakeTable::new(self.stake_table, &self.provider);
-        let receipt = stake_table
-            .undelegate(self.deployer_address, amount)
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        assert!(receipt.status());
+        undelegate(
+            &self.provider,
+            self.stake_table,
+            self.deployer_address,
+            amount,
+        )
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
     pub async fn transfer_eth(&self, to: Address, amount: U256) -> Result<()> {
-        let tx = TransactionRequest::default().with_to(to).with_value(amount);
-        let receipt = self
-            .provider
-            .send_transaction(tx)
+        send_eth(&self.provider, to, amount)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
-        assert!(receipt.status());
         Ok(())
     }
 
     pub async fn transfer(&self, to: Address, amount: U256) -> Result<()> {
-        let token = EspToken::new(self.token, &self.provider);
-        token
-            .transfer(to, amount)
-            .send()
+        send_esp(&self.provider, self.token, to, amount)
             .await?
-            .get_receipt()
+            .assert_success()
             .await?;
         Ok(())
     }
@@ -290,15 +307,62 @@ impl TestSystem {
     }
 
     pub async fn approve(&self, amount: U256) -> Result<()> {
-        let token = EspToken::new(self.token, &self.provider);
-        token
-            .approve(self.stake_table, amount)
+        approve(&self.provider, self.token, self.stake_table, amount)
+            .await?
+            .assert_success()
+            .await?;
+        assert!(self.allowance(self.deployer_address).await? == amount);
+        Ok(())
+    }
+
+    pub async fn setup_reward_claim_mock(&self, balance: U256) -> Result<Url> {
+        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let light_client_addr = stake_table.lightClient().call().await?;
+        let light_client = LightClientV3Mock::new(light_client_addr, &self.provider);
+
+        let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+        let account = RewardAccountV2::from(self.deployer_address);
+        let amount = RewardAmount::from(balance);
+
+        tree.update(account, amount)?;
+
+        let commitment = tree.commitment();
+        let root = commitment.digest().into();
+
+        let auth_root_fields: [B256; 8] = [
+            root,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+        ];
+        let auth_root = alloy::primitives::keccak256(auth_root_fields.abi_encode());
+
+        light_client
+            .setAuthRoot(auth_root.into())
             .send()
             .await?
             .get_receipt()
             .await?;
-        assert!(self.allowance(self.deployer_address).await? == amount);
-        Ok(())
+
+        let query_data: RewardAccountQueryDataV2 = RewardAccountProofV2::prove(&tree, account.0)
+            .ok_or_else(|| anyhow::anyhow!("Failed to generate proof"))?
+            .into();
+        let claim_input = query_data.to_reward_claim_input()?;
+        let claim_input = std::sync::Arc::new(claim_input);
+
+        let port = portpicker::pick_unused_port().expect("No ports available");
+
+        let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String).map(
+            move |_block_height: u64, _address: String| warp::reply::json(&*claim_input.clone()),
+        );
+
+        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
+
+        Ok(format!("http://localhost:{}/", port).parse()?)
     }
 }
 
@@ -309,7 +373,7 @@ mod test {
     #[tokio::test]
     async fn test_deploy() -> Result<()> {
         let system = TestSystem::deploy().await?;
-        let stake_table = StakeTable::new(system.stake_table, &system.provider);
+        let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
         // sanity check that we can fetch the exit escrow period
         assert_eq!(
             stake_table.exitEscrowPeriod().call().await?,

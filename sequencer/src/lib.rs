@@ -4,12 +4,11 @@ pub mod context;
 pub mod genesis;
 mod proposal_fetcher;
 mod request_response;
+pub mod state_cert;
 
 mod external_event_handler;
 pub mod options;
 pub mod state_signature;
-
-mod restart_tests;
 
 mod message_compat_tests;
 
@@ -71,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersion, StaticVersionType};
 pub mod network;
 
-mod run;
+pub mod run;
 pub use run::main;
 
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
@@ -110,6 +109,10 @@ pub struct NetworkParams {
     pub cdn_endpoint: String,
     pub orchestrator_url: Url,
     pub state_relay_server_url: Url,
+
+    /// The URLs of the builders to use for submitting transactions
+    pub builder_urls: Vec<Url>,
+
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
     pub state_peers: Vec<Url>,
@@ -229,6 +232,7 @@ where
             "node_identity_general".into(),
             vec![
                 "name".into(),
+                "description".into(),
                 "company_name".into(),
                 "company_website".into(),
                 "operating_system".into(),
@@ -237,15 +241,16 @@ where
             ],
         )
         .create(vec![
-            identity.node_name.unwrap_or("".into()),
-            identity.company_name.unwrap_or("".into()),
+            identity.node_name.unwrap_or_default(),
+            identity.node_description.unwrap_or_default(),
+            identity.company_name.unwrap_or_default(),
             identity
                 .company_website
                 .map(|u| u.into())
-                .unwrap_or("".into()),
-            identity.operating_system.unwrap_or("".into()),
-            identity.node_type.unwrap_or("".into()),
-            identity.network_type.unwrap_or("".into()),
+                .unwrap_or_default(),
+            identity.operating_system.unwrap_or_default(),
+            identity.node_type.unwrap_or_default(),
+            identity.network_type.unwrap_or_default(),
         ]);
 
     // Expose Node Identity Location via the status/metrics API
@@ -255,15 +260,52 @@ where
             vec!["country".into(), "latitude".into(), "longitude".into()],
         )
         .create(vec![
-            identity.country_code.unwrap_or("".into()),
-            identity
-                .latitude
-                .map(|l| l.to_string())
-                .unwrap_or("".into()),
+            identity.country_code.unwrap_or_default(),
+            identity.latitude.map(|l| l.to_string()).unwrap_or_default(),
             identity
                 .longitude
                 .map(|l| l.to_string())
-                .unwrap_or("".into()),
+                .unwrap_or_default(),
+        ]);
+
+    // Expose icons for node dashboard via the status/metrics API
+    metrics
+        .text_family(
+            "node_identity_icon".into(),
+            vec![
+                "small_1x".into(),
+                "small_2x".into(),
+                "small_3x".into(),
+                "large_1x".into(),
+                "large_2x".into(),
+                "large_3x".into(),
+            ],
+        )
+        .create(vec![
+            identity
+                .icon_14x14_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
         ]);
 
     // Stick our public key in `metrics` so it is easily accessible via the status API.
@@ -371,6 +413,12 @@ where
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
     }
 
+    // Override the builder URLs in the network config with the ones from the command line
+    // if any were provided
+    if !network_params.builder_urls.is_empty() {
+        network_config.config.builder_urls = network_params.builder_urls.try_into().unwrap();
+    }
+
     let epoch_height = genesis.epoch_height.unwrap_or_default();
     let drb_difficulty = genesis.drb_difficulty.unwrap_or_default();
     let drb_upgrade_difficulty = genesis.drb_upgrade_difficulty.unwrap_or_default();
@@ -391,7 +439,7 @@ where
     network_config.config.stake_table_capacity = stake_table_capacity;
 
     if let Some(da_committees) = &genesis.da_committees {
-        tracing::warn!("setting da_committees from genesis");
+        tracing::warn!("setting da_committees from genesis: {da_committees:?}");
         network_config.config.da_committees = da_committees.clone();
     }
 
@@ -472,9 +520,20 @@ where
         .with_metrics(metrics)
         .connect(l1_params.urls)
         .with_context(|| "failed to create L1 client")?;
+
+    info!("Validating fee contract");
+
     genesis.validate_fee_contract(&l1_client).await?;
 
+    info!("Fee contract validated. Spawning L1 tasks");
+
     l1_client.spawn_tasks().await;
+
+    info!(
+        "L1 tasks spawned. Waiting for L1 genesis: {:?}",
+        genesis.l1_finalized
+    );
+
     let l1_genesis = match genesis.l1_finalized {
         L1Finalized::Block(b) => b,
         L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
@@ -484,6 +543,8 @@ where
                 .await
         },
     };
+
+    info!("L1 genesis found: {:?}", l1_genesis);
 
     let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
@@ -529,8 +590,14 @@ where
         l1_client.clone(),
         genesis.chain_config,
     );
+
+    info!("Spawning update loop");
+
     fetcher.spawn_update_loop().await;
+    info!("Update loop spawned. Fetching block reward");
+
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
+    info!("Block reward fetched: {:?}", block_reward);
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
@@ -539,7 +606,9 @@ where
         fetcher,
         epoch_height,
     );
+    info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+    info!("Stake reloaded");
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
@@ -568,10 +637,10 @@ where
 
     // Initialize the Libp2p network
     let network = {
+        info!("Initializing Libp2p network");
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
-            coordinator.membership().clone(),
             gossip_config,
             request_response_config,
             libp2p_bind_address,
@@ -588,6 +657,8 @@ where
                 network_params.libp2p_bind_address
             )
         })?;
+
+        info!("Libp2p network initialized");
 
         tracing::warn!("Waiting for at least one connection to be initialized");
         select! {
@@ -679,7 +750,7 @@ pub mod testing {
             implementations::{MasterMap, MemoryNetwork},
             BlockPayload,
         },
-        types::EventType::Decide,
+        types::EventType::{self, Decide},
     };
     use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
@@ -688,19 +759,21 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
+        data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey, EncodeBytes,
+            node_implementation::ConsensusTime as _, signature_key::BuilderSignatureKey,
+            EncodeBytes,
         },
         HotShotConfig, PeerConfig,
     };
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -916,6 +989,7 @@ pub mod testing {
                     let mut contracts = Contracts::new();
                     let args = DeployerArgsBuilder::default()
                         .deployer(deployer.clone())
+                        .rpc_url(self.l1_url.clone())
                         .mock_light_client(true)
                         .genesis_lc_state(genesis_state)
                         .genesis_st_state(genesis_stake)
@@ -943,15 +1017,19 @@ pub mod testing {
                     let st_addr = contracts
                         .address(Contract::StakeTableProxy)
                         .expect("StakeTableProxy address not found");
-                    setup_stake_table_contract_for_test(
+                    StakingTransactions::create(
                         self.l1_url.clone(),
                         &deployer,
                         st_addr,
                         validators,
+                        None,
                         DelegationConfig::default(),
                     )
                     .await
-                    .expect("stake table setup failed");
+                    .expect("stake table setup failed")
+                    .apply_all()
+                    .await
+                    .expect("send all txns failed");
 
                     Upgrade::pos_view_based(st_addr)
                 },
@@ -1057,7 +1135,9 @@ pub mod testing {
                 drb_upgrade_difficulty: 20,
             };
 
-            let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+            let anvil = Anvil::new()
+                .args(["--slots-in-an-epoch", "0", "--balance", "1000000"])
+                .spawn();
 
             let l1_client = L1Client::anvil(&anvil).expect("failed to create l1 client");
             let anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
@@ -1377,6 +1457,30 @@ pub mod testing {
                 }
             } else {
                 // Keep waiting
+            }
+        }
+    }
+
+    /// Waits until a node has reached the given target epoch (exclusive).
+    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    pub async fn wait_for_epochs(
+        events: &mut (impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>>
+                  + std::marker::Unpin),
+        epoch_height: u64,
+        target_epoch: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = leaf_chain[0].leaf.clone();
+                let epoch = leaf.epoch(epoch_height);
+                println!(
+                    "Node decided at height: {}, epoch: {epoch:?}",
+                    leaf.height(),
+                );
+
+                if epoch > Some(EpochNumber::new(target_epoch)) {
+                    break;
+                }
             }
         }
     }

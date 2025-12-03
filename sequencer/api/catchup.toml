@@ -106,7 +106,6 @@ Merkle proofs for each account can be extracted from this tree.
 """
 
 
-
 [route.reward_account_v2]
 PATH = ["/:height/:view/reward-account-v2/:address"]
 ":height" = "Integer"
@@ -130,4 +129,22 @@ used after V4 upgrade
 containing sub-trees for each of the requested accounts, which is
 a more condensed way to represent the union of account proofs for each requested account. Individual
 Merkle proofs for each account can be extracted from this tree.
+"""
+
+[route.reward_amounts]
+PATH = ["/:height/reward-amounts/:limit/:offset"]
+":height" = "Integer"
+":limit" = "Integer"
+":offset" = "Integer"
+METHOD = "GET"
+DOC = """
+Return all RewardMerkleTreeV2 accounts stored for the requested height, paginated by `:limit` and
+`:offset` (limit must be <= 10000). The response is a list of `(account, balance)`
+"""
+
+[route.state_cert]
+PATH = ["/:epoch/state-cert"]
+":epoch" = "Integer"
+DOC = """
+Get the light client state certificate for the specified epoch.
 """

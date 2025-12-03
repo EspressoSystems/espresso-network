@@ -15,9 +15,7 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{
-        EventKey, IndexedStake, RewardAmount, StakeTableEvent, StakeTableEventLegacy, Validator,
-    },
+    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
     Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
@@ -34,7 +32,7 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
@@ -47,8 +45,8 @@ use hotshot_types::{
 use itertools::Itertools;
 
 use crate::{
-    persistence::persistence_metrics::PersistenceMetricsValue, ViewNumber,
-    RECENT_STAKE_TABLES_LIMIT,
+    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
 
 /// Options for file system backed persistence.
@@ -366,13 +364,36 @@ impl Inner {
         Ok(())
     }
 
+    fn parse_decided_leaf(
+        &self,
+        bytes: &[u8],
+    ) -> anyhow::Result<(Leaf2, CertificatePair<SeqTypes>)> {
+        // Old versions of the software did not store the next epoch QC. Without knowing which
+        // version this file was created with, we can simply try parsing both ways and then
+        // reconstruct a certificate pair with or without the next epoch QC.
+        match bincode::deserialize(bytes) {
+            Ok((leaf, cert)) => Ok((leaf, cert)),
+            Err(err) => {
+                tracing::info!(
+                    "error parsing decided leaf, maybe file was created without next epoch QC? \
+                     {err}"
+                );
+                let (leaf, qc) =
+                    bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(bytes)
+                        .context("parsing decided leaf")?;
+                Ok((leaf, CertificatePair::non_epoch_change(qc)))
+            },
+        }
+    }
+
     /// Generate events based on persisted decided leaves.
     ///
     /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
     /// within these view ranges have been processed by the event consumer.
     async fn generate_decide_events(
-        &self,
+        &mut self,
         view: ViewNumber,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -386,9 +407,7 @@ impl Inner {
 
             let bytes =
                 fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
-            let (mut leaf, qc) =
-                bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(&bytes)
-                    .context(format!("parsing decided leaf {}", path.display()))?;
+            let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // Include the VID share if available.
             let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
@@ -397,7 +416,7 @@ impl Inner {
             }
 
             // Move the state cert to the finalized dir if it exists.
-            let state_cert = self.finalized_state_cert(v)?;
+            let state_cert = self.store_finalized_state_cert(v)?;
 
             // Fill in the full block payload using the DA proposals we had persisted.
             if let Some(proposal) = self.load_da_proposal(v)? {
@@ -420,7 +439,7 @@ impl Inner {
                 delta: Default::default(),
             };
 
-            leaves.insert(v, (info, qc));
+            leaves.insert(v, (info, cert));
         }
 
         // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
@@ -436,18 +455,31 @@ impl Inner {
 
         let mut intervals = vec![];
         let mut current_interval = None;
-        for (view, (leaf, qc)) in leaves {
+        for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
-            consumer
-                .handle_event(&Event {
-                    view_number: view,
-                    event: EventType::Decide {
-                        qc: Arc::new(qc),
-                        leaf_chain: Arc::new(vec![leaf]),
-                        block_size: None,
-                    },
-                })
-                .await?;
+
+            {
+                // Insert the deciding QC at the appropriate position, with the last decide event in the
+                // chain.
+                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                    (deciding_qc.view_number() == cert.view_number() + 1)
+                        .then_some(deciding_qc.clone())
+                } else {
+                    None
+                };
+
+                consumer
+                    .handle_event(&Event {
+                        view_number: view,
+                        event: EventType::Decide {
+                            committing_qc: Arc::new(cert),
+                            deciding_qc,
+                            leaf_chain: Arc::new(vec![leaf]),
+                            block_size: None,
+                        },
+                    })
+                    .await?;
+            }
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
                     // If we have a chain of consecutive leaves, extend the current interval of
@@ -517,15 +549,13 @@ impl Inner {
             for (_, path) in view_files(self.decided_leaf2_path())? {
                 let bytes =
                     fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
-                let (leaf2, qc2) =
-                    bincode::deserialize::<(Leaf2, QuorumCertificate2<SeqTypes>)>(&bytes)
-                        .context(format!("parsing decided leaf {}", path.display()))?;
+                let (leaf, cert) = self.parse_decided_leaf(&bytes)?;
                 if let Some((anchor_leaf, _)) = &anchor {
-                    if leaf2.view_number() > anchor_leaf.view_number() {
-                        anchor = Some((leaf2, qc2));
+                    if leaf.view_number() > anchor_leaf.view_number() {
+                        anchor = Some((leaf, cert.qc().clone()));
                     }
                 } else {
-                    anchor = Some((leaf2, qc2));
+                    anchor = Some((leaf, cert.qc().clone()));
                 }
             }
 
@@ -553,8 +583,8 @@ impl Inner {
         Ok(None)
     }
 
-    fn finalized_state_cert(
-        &self,
+    fn store_finalized_state_cert(
+        &mut self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let dir_path = self.state_cert_dir_path();
@@ -593,7 +623,15 @@ impl Inner {
             .join(epoch.to_string())
             .with_extension("txt");
 
-        fs::write(&finalized_file_path, &bytes).context(format!(
+        self.replace(
+            &finalized_file_path,
+            |_| Ok(true),
+            |mut file| {
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+        .context(format!(
             "finalizing light client state update certificate file for epoch {epoch:?}"
         ))?;
 
@@ -654,7 +692,8 @@ impl SequencerPersistence for Persistence {
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -676,13 +715,22 @@ impl SequencerPersistence for Persistence {
             let view = leaf.view_number().u64();
             let bytes = bincode::serialize(&(leaf, qc))?;
             let new_file = path.join(view.to_string()).with_extension("txt");
-            fs::write(new_file, bytes).context(format!("writing anchor leaf file {view}"))?;
+            inner
+                .replace(
+                    &new_file,
+                    |_| Ok(true),
+                    |mut file| {
+                        file.write_all(&bytes)?;
+                        Ok(())
+                    },
+                )
+                .context(format!("writing anchor leaf file {view}"))?;
 
             // Now we can remove the old file.
             fs::remove_file(&legacy_path).context("removing legacy anchor leaf file")?;
         }
 
-        for (info, qc2) in leaf_chain {
+        for (info, cert) in leaf_chain {
             let view = info.leaf.view_number().u64();
             let file_path = path.join(view.to_string()).with_extension("txt");
             inner.replace(
@@ -694,14 +742,17 @@ impl SequencerPersistence for Persistence {
                     Ok(false)
                 },
                 |mut file| {
-                    let bytes = bincode::serialize(&(&info.leaf.clone(), qc2))?;
+                    let bytes = bincode::serialize(&(&info.leaf, cert))?;
                     file.write_all(&bytes)?;
                     Ok(())
                 },
             )?;
         }
 
-        match inner.generate_decide_events(view, consumer).await {
+        match inner
+            .generate_decide_events(view, deciding_qc, consumer)
+            .await
+        {
             Err(err) => {
                 // Event processing failure is not an error, since by this point we have at least
                 // managed to persist the decided leaves successfully, and the event processing will
@@ -1183,7 +1234,7 @@ impl SequencerPersistence for Persistence {
                 .context(format!("parsing decided leaf {}", path.display()))?;
 
             let leaf2: Leaf2 = leaf.into();
-            let qc2 = qc.to_qc2();
+            let cert = CertificatePair::non_epoch_change(qc.to_qc2());
 
             let new_leaf_path = new_leaf_dir.join(view.to_string()).with_extension("txt");
 
@@ -1194,7 +1245,7 @@ impl SequencerPersistence for Persistence {
                     Ok(false)
                 },
                 |mut file| {
-                    let bytes = bincode::serialize(&(&leaf2.clone(), qc2))?;
+                    let bytes = bincode::serialize(&(&leaf2.clone(), cert))?;
                     file.write_all(&bytes)?;
                     Ok(())
                 },
@@ -1407,77 +1458,11 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn migrate_stake_table_events(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-
-        if inner.migrated.contains("stake_table_events") {
-            tracing::info!("stake_table_events already migrated");
-            return Ok(());
-        }
-
-        let dir_path = &inner.stake_table_dir_path();
-        let events_dir = dir_path.join("events");
-        let old_events_dir = dir_path.join("old_events");
-
-        if !events_dir.exists() {
-            inner.migrated.insert("stake_table_events".to_string());
-            inner.update_migration()?;
-            return Ok(());
-        };
-
-        fs::rename(&events_dir, &old_events_dir)?;
-        tracing::info!("Renamed {:?} to {:?}", events_dir, old_events_dir);
-
-        fs::create_dir_all(&events_dir)?;
-
-        tracing::warn!("migrating stake table events..");
-
-        for entry in fs::read_dir(&old_events_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if !path.is_file() {
-                continue;
-            }
-
-            // last_l1_finalized.bin is copied as-is
-            if path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s == "last_l1_finalized")
-                .unwrap_or(false)
-            {
-                let target = events_dir.join("last_l1_finalized").with_extension("bin");
-                fs::copy(&path, &target)?;
-                continue;
-            }
-
-            // Read legacy event
-            let file = File::open(&path).context("Failed to open legacy event file")?;
-            let reader = BufReader::new(file);
-            let legacy_event: StakeTableEventLegacy =
-                serde_json::from_reader(reader).context("Failed to deserialize legacy event")?;
-
-            let new_event: StakeTableEvent = legacy_event.into();
-
-            let target = events_dir.join(path.file_name().unwrap());
-            let file = File::create(&target).context("Failed to create new event file")?;
-            let writer = BufWriter::new(file);
-
-            serde_json::to_writer_pretty(writer, &new_event)
-                .context("Failed to serialize new event")?;
-        }
-
-        inner.migrated.insert("stake_table_events".to_string());
-        inner.update_migration()?;
-        tracing::warn!("successfully migrated stake table events");
-
-        Ok(())
-    }
-
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
-            if loaded_drb_input.iteration >= drb_input.iteration {
+            if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+                tracing::error!("Overwriting {loaded_drb_input:?} in storage with {drb_input:?}");
+            } else if loaded_drb_input.iteration >= drb_input.iteration {
                 anyhow::bail!(
                     "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
                     loaded_drb_input,
@@ -1486,7 +1471,7 @@ impl SequencerPersistence for Persistence {
             }
         }
 
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.drb_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create drb dir")?;
@@ -1497,10 +1482,20 @@ impl SequencerPersistence for Persistence {
         let file_path = dir_path
             .join(drb_input.epoch.to_string())
             .with_extension("bin");
-        fs::write(&file_path, drb_input_bytes).context(format!(
-            "writing epoch drb_input file for epoch {:?} at {:?}",
-            drb_input.epoch, file_path
-        ))
+
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                file.write_all(&drb_input_bytes).context(format!(
+                    "writing epoch drb_input file for epoch {:?} at {:?}",
+                    drb_input.epoch, file_path
+                ))
+            },
+        )
     }
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
@@ -1517,7 +1512,7 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.epoch_drb_result_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create epoch drb result dir")?;
@@ -1525,10 +1520,18 @@ impl SequencerPersistence for Persistence {
         let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        fs::write(file_path, drb_result_bytes)
-            .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
 
-        Ok(())
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                file.write_all(&drb_result_bytes)
+                    .context(format!("writing epoch drb result file for epoch {epoch:?}"))
+            },
+        )
     }
 
     async fn store_epoch_root(
@@ -1536,7 +1539,7 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.epoch_root_block_header_dir_path();
 
         fs::create_dir_all(dir_path.clone())
@@ -1546,9 +1549,18 @@ impl SequencerPersistence for Persistence {
             bincode::serialize(&block_header).context("serialize block header")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        fs::write(file_path, block_header_bytes).context(format!(
-            "writing epoch root block header file for epoch {epoch:?}"
-        ))?;
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |mut file| {
+                    file.write_all(&block_header_bytes)?;
+                    Ok(())
+                },
+            )
+            .context(format!(
+                "writing epoch root block header file for epoch {epoch:?}"
+            ))?;
 
         Ok(())
     }
@@ -1557,7 +1569,7 @@ impl SequencerPersistence for Persistence {
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         // let epoch = state_cert.epoch;
         let view = state_cert.light_client_state.view_number;
         let dir_path = inner.state_cert_dir_path();
@@ -1569,9 +1581,18 @@ impl SequencerPersistence for Persistence {
             .context("serialize light client state update certificate")?;
 
         let file_path = dir_path.join(view.to_string()).with_extension("txt");
-        fs::write(file_path, bytes).context(format!(
-            "writing light client state update certificate file for view {view:?}"
-        ))?;
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |mut file| {
+                    file.write_all(&bytes)?;
+                    Ok(())
+                },
+            )
+            .context(format!(
+                "writing light client state update certificate file for view {view:?}"
+            ))?;
 
         Ok(())
     }
@@ -1583,38 +1604,40 @@ impl SequencerPersistence for Persistence {
 
         let mut result = Vec::new();
 
-        if drb_dir_path.is_dir() {
-            for (epoch, path) in epoch_files(drb_dir_path)? {
-                let bytes = fs::read(&path)
-                    .context(format!("reading epoch drb result {}", path.display()))?;
-                let drb_result = bincode::deserialize::<DrbResult>(&bytes)
-                    .context(format!("parsing epoch drb result {}", path.display()))?;
+        if !drb_dir_path.is_dir() {
+            return Ok(Vec::new());
+        }
+        for (epoch, path) in epoch_files(drb_dir_path)? {
+            let bytes =
+                fs::read(&path).context(format!("reading epoch drb result {}", path.display()))?;
+            let drb_result = bincode::deserialize::<DrbResult>(&bytes)
+                .context(format!("parsing epoch drb result {}", path.display()))?;
 
-                let block_header_path = block_header_dir_path
-                    .join(epoch.to_string())
-                    .with_extension("txt");
-                let block_header = if block_header_path.is_file() {
-                    let bytes = fs::read(&block_header_path).context(format!(
-                        "reading epoch root block header {}",
-                        block_header_path.display()
-                    ))?;
-                    Some(
-                        bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes)
-                            .context(format!(
-                                "parsing epoch root block header {}",
-                                block_header_path.display()
-                            ))?,
-                    )
-                } else {
-                    None
-                };
+            let block_header_path = block_header_dir_path
+                .join(epoch.to_string())
+                .with_extension("txt");
+            let block_header = if block_header_path.is_file() {
+                let bytes = fs::read(&block_header_path).context(format!(
+                    "reading epoch root block header {}",
+                    block_header_path.display()
+                ))?;
+                Some(
+                    bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes).context(
+                        format!(
+                            "parsing epoch root block header {}",
+                            block_header_path.display()
+                        ),
+                    )?,
+                )
+            } else {
+                None
+            };
 
-                result.push(InitializerEpochInfo::<SeqTypes> {
-                    epoch,
-                    drb_result,
-                    block_header,
-                });
-            }
+            result.push(InitializerEpochInfo::<SeqTypes> {
+                epoch,
+                drb_result,
+                block_header,
+            });
         }
 
         result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
@@ -1673,6 +1696,68 @@ impl SequencerPersistence for Persistence {
         }
 
         Ok(result)
+    }
+
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.finalized_state_cert_dir_path();
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        if !file_path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&file_path).context(format!(
+            "reading light client state update certificate {}",
+            file_path.display()
+        ))?;
+
+        let cert = bincode::deserialize::<LightClientStateUpdateCertificateV2<SeqTypes>>(&bytes)
+            .or_else(|error| {
+                tracing::info!(
+                    %error,
+                    path = %file_path.display(),
+                    "Failed to deserialize LightClientStateUpdateCertificateV2"
+                );
+
+                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
+                    .map(Into::into)
+                    .with_context(|| {
+                        format!(
+                            "Failed to deserialize with v1 and v2. path='{}'. error: {error}",
+                            file_path.display()
+                        )
+                    })
+            })?;
+
+        Ok(Some(cert))
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.finalized_state_cert_dir_path();
+
+        fs::create_dir_all(&dir_path)
+            .context(format!("creating state cert dir {}", dir_path.display()))?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        let bytes = bincode::serialize(&cert)
+            .context("serializing light client state update certificate")?;
+
+        fs::write(&file_path, bytes).context(format!(
+            "writing light client state update certificate {}",
+            file_path.display()
+        ))?;
+
+        Ok(())
     }
 
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
@@ -1838,10 +1923,17 @@ impl MembershipPersistence for Persistence {
                 continue;
             }
 
-            let file = File::create(&file_path).context("Failed to create event file")?;
-            let writer = BufWriter::new(file);
+            inner
+                .replace(
+                    &file_path,
+                    |_| Ok(true),
+                    |file| {
+                        let writer = BufWriter::new(file);
 
-            serde_json::to_writer_pretty(writer, &event)
+                        serde_json::to_writer_pretty(writer, &event)?;
+                        Ok(())
+                    },
+                )
                 .context("Failed to write event to file")?;
         }
 
@@ -1971,7 +2063,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         all_validators: ValidatorMap,
     ) -> anyhow::Result<()> {
-        let inner = self.inner.read().await;
+        let mut inner = self.inner.write().await;
         let dir_path = inner.stake_table_dir_path();
         let validators_dir = dir_path.join("validators");
 
@@ -1982,12 +2074,20 @@ impl MembershipPersistence for Persistence {
         // Path = validators/epoch_<number>.json
         let file_path = validators_dir.join(format!("epoch_{epoch}.json"));
 
-        let file = File::create(&file_path)
-            .with_context(|| format!("Failed to create validator file: {file_path:?}"))?;
-        let writer = BufWriter::new(file);
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |file| {
+                    let writer = BufWriter::new(file);
 
-        serde_json::to_writer_pretty(writer, &all_validators)
-            .with_context(|| format!("Failed to serialize validators for epoch {epoch}"))?;
+                    serde_json::to_writer_pretty(writer, &all_validators).with_context(|| {
+                        format!("Failed to serialize validators for epoch {epoch}")
+                    })?;
+                    Ok(())
+                },
+            )
+            .with_context(|| format!("Failed to write validator file: {file_path:?}"))?;
 
         Ok(())
     }
@@ -2087,74 +2187,6 @@ impl DhtPersistentStorage for Persistence {
         Ok(records)
     }
 }
-/// Update a `NetworkConfig` that may have originally been persisted with an old version.
-fn migrate_network_config(
-    mut network_config: serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let config = network_config
-        .get_mut("config")
-        .context("missing field `config`")?
-        .as_object_mut()
-        .context("`config` must be an object")?;
-
-    if !config.contains_key("builder_urls") {
-        // When multi-builder support was added, the configuration field `builder_url: Url` was
-        // replaced by an array `builder_urls: Vec<Url>`. If the saved config has no `builder_urls`
-        // field, it is older than this change. Populate `builder_urls` with a singleton array
-        // formed from the old value of `builder_url`, and delete the no longer used `builder_url`.
-        let url = config
-            .remove("builder_url")
-            .context("missing field `builder_url`")?;
-        config.insert("builder_urls".into(), vec![url].into());
-    }
-
-    // HotShotConfig was upgraded to include parameters for proposing and voting on upgrades.
-    // Configs which were persisted before this upgrade may be missing these parameters. This
-    // migration initializes them with a default. By default, we use JS MAX_SAFE_INTEGER for the
-    // start parameters so that nodes will never do an upgrade, unless explicitly configured
-    // otherwise.
-    if !config.contains_key("start_proposing_view") {
-        config.insert("start_proposing_view".into(), 9007199254740991u64.into());
-    }
-    if !config.contains_key("stop_proposing_view") {
-        config.insert("stop_proposing_view".into(), 0.into());
-    }
-    if !config.contains_key("start_voting_view") {
-        config.insert("start_voting_view".into(), 9007199254740991u64.into());
-    }
-    if !config.contains_key("stop_voting_view") {
-        config.insert("stop_voting_view".into(), 0.into());
-    }
-    if !config.contains_key("start_proposing_time") {
-        config.insert("start_proposing_time".into(), 9007199254740991u64.into());
-    }
-    if !config.contains_key("stop_proposing_time") {
-        config.insert("stop_proposing_time".into(), 0.into());
-    }
-    if !config.contains_key("start_voting_time") {
-        config.insert("start_voting_time".into(), 9007199254740991u64.into());
-    }
-    if !config.contains_key("stop_voting_time") {
-        config.insert("stop_voting_time".into(), 0.into());
-    }
-
-    // HotShotConfig was upgraded to include an `epoch_height` parameter. Initialize with a default
-    // if missing.
-    if !config.contains_key("epoch_height") {
-        config.insert("epoch_height".into(), 0.into());
-    }
-
-    // HotShotConfig was upgraded to include `drb_difficulty` and `drb_upgrade_difficulty` parameters. Initialize with a default
-    // if missing.
-    if !config.contains_key("drb_difficulty") {
-        config.insert("drb_difficulty".into(), 0.into());
-    }
-    if !config.contains_key("drb_upgrade_difficulty") {
-        config.insert("drb_upgrade_difficulty".into(), 0.into());
-    }
-
-    Ok(network_config)
-}
 
 /// Get all paths under `dir` whose name is of the form <view number>.txt.
 fn view_files(
@@ -2211,16 +2243,9 @@ fn epoch_files(
 mod test {
     use std::marker::PhantomData;
 
-    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
-    use hotshot_contract_adapter::sol_types::{
-        ConsensusKeysUpdatedLegacy, ConsensusKeysUpdatedV2Legacy, DelegatedLegacy,
-        StakeTableV2::{Delegated, Undelegated},
-        UndelegatedLegacy, ValidatorExitLegacy, ValidatorRegisteredLegacy,
-        ValidatorRegisteredV2Legacy,
-    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{
@@ -2284,6 +2309,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
@@ -2306,6 +2332,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
@@ -2333,6 +2360,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
@@ -2355,6 +2383,7 @@ mod test {
                 "epoch_height": 0,
                 "drb_difficulty": 0,
                 "drb_upgrade_difficulty": 0,
+                "da_committees": [],
             }
         });
 
@@ -2715,148 +2744,6 @@ mod test {
             [(ViewNumber::new(1), quorum_proposal)]
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
-        );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stake_table_events_fs_migration() {
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-        let storage = opt.create().await.unwrap();
-
-        let inner = storage.inner.read().await;
-        let events_dir = inner.stake_table_dir_path().join("events");
-        drop(inner);
-        fs::create_dir_all(&events_dir).unwrap();
-        let validator = espresso_types::testing::TestValidator::random();
-        let delegator = Address::random();
-
-        let legacy_events: Vec<(u64, i64, StakeTableEventLegacy, StakeTableEvent)> = vec![
-            (
-                1,
-                1,
-                StakeTableEventLegacy::Register(ValidatorRegisteredLegacy {
-                    account: validator.account,
-                    blsVk: validator.bls_vk.into(),
-                    schnorrVk: validator.schnorr_vk.into(),
-                    commission: validator.commission,
-                }),
-                StakeTableEvent::Register((&validator).into()),
-            ),
-            (
-                1,
-                2,
-                StakeTableEventLegacy::RegisterV2(ValidatorRegisteredV2Legacy {
-                    account: validator.account,
-                    blsVK: validator.bls_vk.into(),
-                    schnorrVK: validator.schnorr_vk.into(),
-                    commission: validator.commission,
-                    blsSig: validator.bls_sig.into(),
-                    schnorrSig: validator.schnorr_sig.clone(),
-                }),
-                StakeTableEvent::RegisterV2((&validator).into()),
-            ),
-            (
-                1,
-                3,
-                StakeTableEventLegacy::KeyUpdate(ConsensusKeysUpdatedLegacy {
-                    account: validator.account,
-                    blsVK: validator.bls_vk.into(),
-                    schnorrVK: validator.schnorr_vk.into(),
-                }),
-                StakeTableEvent::KeyUpdate((&validator).into()),
-            ),
-            (
-                1,
-                4,
-                StakeTableEventLegacy::KeyUpdateV2(ConsensusKeysUpdatedV2Legacy {
-                    account: validator.account,
-                    blsVK: validator.bls_vk.into(),
-                    schnorrVK: validator.schnorr_vk.into(),
-                    blsSig: validator.bls_sig.into(),
-                    schnorrSig: validator.schnorr_sig.clone(),
-                }),
-                StakeTableEvent::KeyUpdateV2((&validator).into()),
-            ),
-            (
-                1,
-                5,
-                StakeTableEventLegacy::Deregister(ValidatorExitLegacy {
-                    validator: validator.account,
-                }),
-                StakeTableEvent::Deregister((&validator).into()),
-            ),
-            (
-                1,
-                6,
-                StakeTableEventLegacy::Delegate(DelegatedLegacy {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-                StakeTableEvent::Delegate(Delegated {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-            ),
-            (
-                1,
-                7,
-                StakeTableEventLegacy::Undelegate(UndelegatedLegacy {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-                StakeTableEvent::Undelegate(Undelegated {
-                    delegator,
-                    validator: validator.account,
-                    amount: U256::ZERO,
-                }),
-            ),
-        ];
-
-        // Write legacy JSON files (simulate old filesystem storage)
-        for (block, log_index, legacy_event, _) in &legacy_events {
-            let filename = format!("{block}_{log_index}.json");
-            let path = events_dir.join(filename);
-            let mut file = fs::File::create(&path).unwrap();
-            let json = serde_json::to_string_pretty(legacy_event).unwrap();
-            file.write_all(json.as_bytes()).unwrap();
-        }
-
-        let last_block = 1_u64;
-        let mut f = fs::File::create(events_dir.join("last_l1_finalized.bin")).unwrap();
-        f.write_all(&last_block.to_le_bytes()).unwrap();
-
-        // Run migration
-        storage.migrate_stake_table_events().await.unwrap();
-
-        // Verify all events are migrated
-        for (block, log_index, _, expected_event) in legacy_events {
-            let filename = format!("{block}_{log_index}.json");
-            let path = events_dir.join(filename);
-
-            let contents = fs::read_to_string(&path).unwrap();
-            let migrated_event: StakeTableEvent = serde_json::from_str(&contents).unwrap();
-
-            assert_eq!(
-                migrated_event, expected_event,
-                "event migrated incorrectly from legacy"
-            );
-        }
-
-        let finalized_path = events_dir.join("last_l1_finalized.bin");
-        assert!(
-            finalized_path.exists(),
-            "last_l1_finalized.bin is missing after migration"
-        );
-
-        let bytes = fs::read(&finalized_path).unwrap();
-        let migrated_last_block = u64::from_le_bytes(bytes.try_into().unwrap());
-        assert_eq!(
-            migrated_last_block, last_block,
-            "last_l1_finalized.bin did not preserve last finalized block"
         );
     }
 }

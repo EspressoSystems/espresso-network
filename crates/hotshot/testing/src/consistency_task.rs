@@ -16,6 +16,7 @@ use hotshot_types::{
     event::{Event, EventType},
     message::UpgradeLock,
     traits::node_implementation::{ConsensusTime, NodeType, Versions},
+    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
@@ -384,7 +385,13 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
     /// Handles an event from one of multiple receivers.
     async fn handle_event(&mut self, (message, id): (Self::Event, usize)) -> Result<()> {
         if let Event {
-            event: EventType::Decide { leaf_chain, .. },
+            event:
+                EventType::Decide {
+                    leaf_chain,
+                    committing_qc,
+                    deciding_qc,
+                    ..
+                },
             ..
         } = message
         {
@@ -397,6 +404,23 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
                 std::mem::swap(&mut self.timeout_task, &mut timeout_task);
 
                 timeout_task.abort();
+            }
+
+            match deciding_qc {
+                Some(deciding_qc) => {
+                    let last_leaf = &leaf_chain[0].leaf;
+                    ensure!(committing_qc.view_number() == last_leaf.view_number());
+                    ensure!(committing_qc.leaf_commit() == last_leaf.commit());
+                    ensure!(deciding_qc.view_number() == committing_qc.view_number() + 1);
+                },
+                None => {
+                    // Once we hit the epoch upgrade, every subsequent decide should come with a QC
+                    // chain proving its own finality.
+                    ensure!(
+                        committing_qc.epoch().is_none(),
+                        "expected 2nd deciding QC for post-epochs decide"
+                    );
+                },
             }
 
             for leaf_info in leaf_chain.iter().rev() {

@@ -1,5 +1,3 @@
-// TODO(Chengyu): this mock ledger is still under development.
-
 use std::collections::HashMap;
 
 use alloy::primitives::{FixedBytes, U256};

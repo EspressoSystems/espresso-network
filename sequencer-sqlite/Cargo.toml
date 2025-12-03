@@ -9,7 +9,8 @@ edition = "2021"
 fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]
 drb-and-header = ["sequencer/drb-and-header"]
-default = ["fee", "pos", "drb-and-header"]
+da-upgrade = ["sequencer/da-upgrade"]
+default = ["fee", "pos", "drb-and-header", "da-upgrade"]
 
 [dependencies]
 anyhow = { workspace = true }

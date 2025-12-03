@@ -32,10 +32,11 @@ use derive_more::{Deref, DerefMut};
 use futures::{future::Future, stream::TryStreamExt};
 use hotshot_types::{
     data::VidShare,
+    simple_certificate::CertificatePair,
     traits::{
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         EncodeBytes,
     },
 };
@@ -58,11 +59,10 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryDataV2,
-        VidCommonQueryData,
+        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
+        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
@@ -498,7 +498,11 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
 {
-    async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
+    async fn insert_leaf_with_qc_chain(
+        &mut self,
+        leaf: LeafQueryData<Types>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
+    ) -> anyhow::Result<()> {
         let height = leaf.height();
 
         // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
@@ -560,6 +564,17 @@ where
             )],
         )
         .await?;
+
+        let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
+        if height + 1 >= block_height {
+            // If this is the latest leaf we know about, also store it's QC chain so that we can
+            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
+            // is unnecessary, since we can prove it is an ancestor of some later, finalized
+            // leaf.)
+            let qcs = serde_json::to_value(&qc_chain)?;
+            self.upsert("latest_qc_chain", ["id", "qcs"], ["id"], [(1i32, qcs)])
+                .await?;
+        }
 
         Ok(())
     }
@@ -665,38 +680,6 @@ where
             )
             .await
         }
-    }
-
-    async fn insert_state_cert(
-        &mut self,
-        state_cert: StateCertQueryDataV2<Types>,
-    ) -> anyhow::Result<()> {
-        let height = state_cert.height();
-
-        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring state cert which is already pruned"
-                );
-                return Ok(());
-            }
-        }
-        let epoch = state_cert.0.epoch.u64();
-        let bytes = bincode::serialize(&state_cert.0).context("failed to serialize state cert")?;
-        // Directly upsert the state cert to the finalized_state_cert table because
-        // this is called only when the corresponding leaf is decided.
-        self.upsert(
-            "finalized_state_cert",
-            ["epoch", "state_cert"],
-            ["epoch"],
-            [(epoch as i64, bytes)],
-        )
-        .await?;
-        Ok(())
     }
 }
 

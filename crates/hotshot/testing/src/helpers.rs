@@ -67,7 +67,10 @@ pub async fn build_system_handle<
     Sender<Arc<HotShotEvent<TYPES>>>,
     Receiver<Arc<HotShotEvent<TYPES>>>,
     Arc<TestNodeKeyMap>,
-) {
+)
+where
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+{
     let builder: TestDescription<TYPES, I, V> = TestDescription::default_multiple_rounds();
 
     let launcher = builder.gen_launcher().map_hotshot_config(|hotshot_config| {
@@ -91,7 +94,10 @@ pub async fn build_system_handle_from_launcher<
     Sender<Arc<HotShotEvent<TYPES>>>,
     Receiver<Arc<HotShotEvent<TYPES>>>,
     Arc<TestNodeKeyMap>,
-) {
+)
+where
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+{
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
     let storage = (launcher.resource_generators.storage)(node_id);
     let hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
@@ -126,9 +132,13 @@ pub async fn build_system_handle_from_launcher<
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
 
-    let memberships = Arc::new(RwLock::new(TYPES::Membership::new(
+    let memberships = Arc::new(RwLock::new(TYPES::Membership::new::<I>(
         hotshot_config.known_nodes_with_stake.clone(),
         hotshot_config.known_da_nodes.clone(),
+        storage.clone(),
+        network.clone(),
+        public_key.clone(),
+        launcher.metadata.test_config.epoch_height,
     )));
 
     let coordinator =

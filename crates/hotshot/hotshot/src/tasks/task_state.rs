@@ -248,6 +248,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             consensus_metrics,
             first_epoch: None,
             stake_table_capacity: handle.hotshot.config.stake_table_capacity,
+            da_committees: handle.hotshot.config.da_committees.clone(),
         }
     }
 }

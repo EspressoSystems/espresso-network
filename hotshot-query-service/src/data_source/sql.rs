@@ -19,7 +19,7 @@ pub use sql::Transaction;
 
 use super::{
     fetching,
-    storage::sql::{self, SqlStorage},
+    storage::sql::{self, SqlStorage, StorageConnectionType},
     AvailabilityProvider, FetchingDataSource,
 };
 pub use crate::include_migrations;
@@ -311,7 +311,10 @@ where
     /// [`build`](fetching::Builder::build). For a convenient constructor that uses the default
     /// fetching options, see [`Config::connect`].
     pub async fn connect(config: Config, provider: P) -> Result<Builder<Types, P>, Error> {
-        Ok(Self::builder(SqlStorage::connect(config).await?, provider))
+        Ok(Self::builder(
+            SqlStorage::connect(config, StorageConnectionType::Query).await?,
+            provider,
+        ))
     }
 }
 
@@ -422,7 +425,7 @@ mod test {
         .await;
         let common =
             VidCommonQueryData::new(leaf.header().clone(), crate::VidCommon::V0(disperse.common));
-        ds.append(BlockInfo::new(leaf, None, Some(common.clone()), None, None))
+        ds.append(BlockInfo::new(leaf, None, Some(common.clone()), None))
             .await
             .unwrap();
 

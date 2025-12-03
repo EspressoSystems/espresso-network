@@ -26,14 +26,17 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "espresso-dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
+    "light-client",
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
     "sequencer",
     "sequencer-sqlite",
+    "slow-tests",
     "staking-cli",
     "tests",
     "types",
@@ -41,7 +44,7 @@ members = [
     "vid",
 ]
 
-# All crates except sequencer-sqlite, to avoid turning on embedded-db feature
+# All crates except sequencer-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
@@ -73,6 +76,7 @@ default-members = [
     "request-response",
     "sdks/crypto-helper",
     "sequencer",
+    "slow-tests",
     "staking-cli",
     "tests",
     "types",
@@ -87,7 +91,13 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
 [workspace.dependencies]
-alloy = { version = "1.0", features = ["provider-ws", "json-rpc", "signer-mnemonic", "node-bindings", "getrandom"] }
+alloy = { version = "1.0", features = [
+    "provider-ws",
+    "json-rpc",
+    "signer-mnemonic",
+    "node-bindings",
+    "getrandom",
+] }
 anyhow = "^1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
@@ -170,12 +180,17 @@ hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
 
+espresso-types = { path = "types" }
+light-client = { path = "light-client" }
+
 # VID import
 vid = { path = "vid", features = ["parallel", "keccak256"] }
 
 bytesize = "1.3"
 # committable = "0.2"
-committable = { git = "https://github.com/EspressoSystems/commit.git", features = ["ark-serialize"] }
+committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
+    "ark-serialize",
+] }
 derivative = "2.2"
 itertools = "0.12"
 jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.2", features = [
@@ -239,9 +254,12 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 tagged-base64 = "0.4.1"
 tempfile = "3.10"
-test-log = { version = "0.2", features = ["color", "trace"], default-features = false }
-thiserror = "1.0.69"
-tide-disco = "0.9.4"
+test-log = { version = "0.2", features = [
+    "color",
+    "trace",
+], default-features = false }
+thiserror = "2"
+tide-disco = "0.9"
 time = "0.3"
 toml = "0.8"
 tracing = "0.1"
@@ -251,6 +269,13 @@ vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
+
+# Push CDN imports
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch1", package = "cdn-broker", features = [
+    "global-permits",
+] }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch1", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch1", package = "cdn-marshal" }
 
 [workspace.lints.clippy]
 # may prevent accidental deadlocks from holding guards over match statments
@@ -282,6 +307,8 @@ opt-level = 0
 [profile.test.package.hotshot-testing]
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
+opt-level = 3
+[profile.test.package.jf-merkle-tree]
 opt-level = 3
 
 # Geared towards building our docker images for local development

@@ -4,35 +4,30 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::time::Duration;
-
-use hotshot_example_types::node_types::{
-    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes, TestTypesEpochCatchupTypes,
+use hotshot_example_types::{
+    membership::static_committee::StaticStakeTable,
+    node_types::{
+        EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypesEpochCatchupTypes,
+    },
 };
 use hotshot_macros::cross_tests;
-use hotshot_testing::{
-    block_builder::SimpleBuilderImplementation,
-    completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
-    test_builder::TestDescription,
-};
+use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
+use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_epoch_success,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [
-        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypes>,
+        TestTypesEpochCatchupTypes<
+        StaticStakeTable<
+            BLSPubKey,
+            SchnorrPubKey,
+        >,
+        >,
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
     Metadata: {
-        TestDescription {
-            // allow more time to pass in CI
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                                             TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(60),
-                                             },
-                                         ),
-            ..TestDescription::default().set_num_nodes(14, 14)
-        }
+        TestDescription::default().set_num_nodes(14, 14)
     },
 );

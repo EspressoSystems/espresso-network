@@ -63,6 +63,11 @@ contract LightClientV3Mock is LCV3 {
         blocksPerEpoch = newBlocksPerEpoch;
     }
 
+    /// @dev Directly set the authRoot for testing reward claim verification
+    function setAuthRoot(uint256 newAuthRoot) public {
+        authRoot = newAuthRoot;
+    }
+
     // generated and copied from `cargo run --bin gen-vk-contract --release -- --mock`
     function _getVk() public pure override returns (IPlonkVerifier.VerifyingKey memory vk) {
         assembly {

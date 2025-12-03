@@ -29,10 +29,8 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    simple_certificate::CertificatePair,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::OptionExt;
@@ -51,7 +49,7 @@ use crate::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, VidCommonQueryData,
         },
-        NamespaceId, StateCertQueryDataV2,
+        NamespaceId,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
@@ -64,7 +62,6 @@ use crate::{
 const CACHED_LEAVES_COUNT: usize = 100;
 const CACHED_BLOCKS_COUNT: usize = 100;
 const CACHED_VID_COMMON_COUNT: usize = 100;
-const CACHED_STATE_CERT_COUNT: usize = 5;
 
 #[derive(custom_debug::Debug)]
 pub struct FileSystemStorageInner<Types>
@@ -85,7 +82,7 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
-    state_cert_storage: LedgerLog<StateCertQueryDataV2<Types>>,
+    latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -217,11 +214,7 @@ where
                 leaf_storage: LedgerLog::create(loader, "leaves", CACHED_LEAVES_COUNT)?,
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
-                state_cert_storage: LedgerLog::create(
-                    loader,
-                    "state_cert",
-                    CACHED_STATE_CERT_COUNT,
-                )?,
+                latest_qc_chain: None,
             }),
             metrics: Default::default(),
         })
@@ -244,11 +237,6 @@ where
             loader,
             "vid_common",
             CACHED_VID_COMMON_COUNT,
-        )?;
-        let state_cert_storage = LedgerLog::<StateCertQueryDataV2<Types>>::open(
-            loader,
-            "state_cert",
-            CACHED_STATE_CERT_COUNT,
         )?;
 
         let mut index_by_block_hash = HashMap::new();
@@ -297,8 +285,8 @@ where
                 leaf_storage,
                 block_storage,
                 vid_storage,
-                state_cert_storage,
                 top_storage: None,
+                latest_qc_chain: None,
             }),
             metrics: Default::default(),
         })
@@ -310,7 +298,6 @@ where
         inner.leaf_storage.skip_version()?;
         inner.block_storage.skip_version()?;
         inner.vid_storage.skip_version()?;
-        inner.state_cert_storage.skip_version()?;
         if let Some(store) = &mut inner.top_storage {
             store.commit_version()?;
         }
@@ -365,7 +352,6 @@ where
         self.leaf_storage.revert_version().unwrap();
         self.block_storage.revert_version().unwrap();
         self.vid_storage.revert_version().unwrap();
-        self.state_cert_storage.revert_version().unwrap();
     }
 }
 
@@ -400,7 +386,6 @@ where
         self.inner.leaf_storage.commit_version().await?;
         self.inner.block_storage.commit_version().await?;
         self.inner.vid_storage.commit_version().await?;
-        self.inner.state_cert_storage.commit_version().await?;
         if let Some(store) = &mut self.inner.top_storage {
             store.commit_version()?;
         }
@@ -648,15 +633,6 @@ where
         // `from` itself if we can, or fail.
         self.get_leaf((from as usize).into()).await
     }
-
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
-        self.inner
-            .state_cert_storage
-            .iter()
-            .nth(epoch as usize)
-            .context(NotFoundSnafu)?
-            .context(MissingSnafu)
-    }
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>
@@ -665,7 +641,11 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
 {
-    async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
+    async fn insert_leaf_with_qc_chain(
+        &mut self,
+        leaf: LeafQueryData<Types>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
+    ) -> anyhow::Result<()> {
         self.inner
             .leaf_storage
             .insert(leaf.height() as usize, leaf.clone())?;
@@ -687,6 +667,21 @@ where
             .entry(leaf.header().timestamp())
             .or_default()
             .push(leaf.height());
+
+        if leaf.height() + 1 >= (self.inner.leaf_storage.iter().len() as u64) {
+            // If this is the latest leaf we know about, also store it's QC chain so that we can
+            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
+            // is unnecessary, since we can prove it is an ancestor of some later, finalized
+            // leaf.)
+            if let Some(qc_chain) = qc_chain {
+                self.inner.latest_qc_chain = Some(qc_chain);
+            } else {
+                // Since we have a new latest leaf, we have to updated latest QC chain even if we
+                // don't actually have a QC chain to store.
+                self.inner.latest_qc_chain = None;
+            }
+        }
+
         Ok(())
     }
 
@@ -721,16 +716,6 @@ where
             .insert(common.height() as usize, (common, share))?;
         Ok(())
     }
-
-    async fn insert_state_cert(
-        &mut self,
-        state_cert: StateCertQueryDataV2<Types>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .state_cert_storage
-            .insert(state_cert.0.epoch.u64() as usize, state_cert)?;
-        Ok(())
-    }
 }
 
 /// Update an index mapping hashes of objects to their positions in the ledger.
@@ -757,7 +742,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    T: Revert + Deref<Target = FileSystemStorageInner<Types>> + Send,
+    T: Revert + Deref<Target = FileSystemStorageInner<Types>> + Send + Sync,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
         Ok(self.inner.leaf_storage.iter().len())
@@ -893,6 +878,10 @@ where
         }
 
         Ok(res)
+    }
+
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
+        Ok(self.inner.latest_qc_chain.clone())
     }
 }
 

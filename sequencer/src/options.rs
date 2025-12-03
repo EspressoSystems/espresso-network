@@ -239,6 +239,10 @@ pub struct Options {
     )]
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
 
+    /// The URL of the builders to use for submitting transactions
+    #[clap(long, env = "ESPRESSO_SEQUENCER_BUILDER_URLS", value_delimiter = ',')]
+    pub builder_urls: Vec<Url>,
+
     /// URL of the Light Client State Relay Server
     #[clap(
         long,
@@ -404,6 +408,8 @@ pub struct Identity {
 
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME")]
     pub node_name: Option<String>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_DESCRIPTION")]
+    pub node_description: Option<String>,
 
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME")]
     pub company_name: Option<String>,
@@ -415,6 +421,19 @@ pub struct Identity {
     pub node_type: Option<String>,
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NETWORK_TYPE")]
     pub network_type: Option<String>,
+
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_1x")]
+    pub icon_14x14_1x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_2x")]
+    pub icon_14x14_2x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_3x")]
+    pub icon_14x14_3x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_1x")]
+    pub icon_24x24_1x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_2x")]
+    pub icon_24x24_2x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_3x")]
+    pub icon_24x24_3x: Option<Url>,
 }
 
 /// get_default_node_type returns the current public facing binary name and
@@ -524,6 +543,9 @@ impl ModuleArgs {
                 SequencerModule::Explorer(m) => {
                     curr = m.add(&mut modules.explorer, &mut provided)?
                 },
+                SequencerModule::LightClient(m) => {
+                    curr = m.add(&mut modules.light_client, &mut provided)?
+                },
             }
         }
 
@@ -558,6 +580,7 @@ module!("catchup", api::options::Catchup, requires: "http");
 module!("config", api::options::Config, requires: "http");
 module!("hotshot-events", api::options::HotshotEvents, requires: "http");
 module!("explorer", api::options::Explorer, requires: "http", "storage-sql");
+module!("light-client", api::options::LightClient, requires: "http", "storage-sql");
 
 #[derive(Clone, Debug, Args)]
 struct Module<Options: ModuleInfo> {
@@ -638,6 +661,13 @@ enum SequencerModule {
     ///
     /// This module requires the http and storage-sql modules to be started.
     Explorer(Module<api::options::Explorer>),
+    /// Run the light client API module.
+    ///
+    /// This module provides data and proofs necessary for an untrusting light client to retrieve
+    /// and verify Espresso data from this server.
+    ///
+    /// This module requires the http and storage-sql modules to be started.
+    LightClient(Module<api::options::LightClient>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -652,4 +682,5 @@ pub struct Modules {
     pub config: Option<api::options::Config>,
     pub hotshot_events: Option<api::options::HotshotEvents>,
     pub explorer: Option<api::options::Explorer>,
+    pub light_client: Option<api::options::LightClient>,
 }

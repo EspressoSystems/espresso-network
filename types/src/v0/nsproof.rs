@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     v0::{NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction},
     v0_1::ADVZNsProof,
-    v0_3::{AvidMNsProof, AvidMNsProofV1},
+    v0_3::{AvidMIncorrectEncodingNsProof, AvidMNsProof},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,8 +27,8 @@ pub enum NsProof {
     V0(ADVZNsProof),
     /// V1 proof for AvidM, contains only correct encoding proof
     V1(AvidMNsProof),
-    /// V1_1 proof for AvidM, contains both correct and incorrect encoding proofs
-    V1_1(AvidMNsProofV1),
+    /// Incorrect encoding proof for AvidM (only supported after API version 1.1)
+    V1IncorrectEncoding(AvidMIncorrectEncodingNsProof),
 }
 
 impl NsProof {
@@ -36,19 +36,6 @@ impl NsProof {
         match common {
             VidCommon::V0(common) => Some(NsProof::V0(ADVZNsProof::new(payload, index, common)?)),
             VidCommon::V1(common) => Some(NsProof::V1(AvidMNsProof::new(payload, index, common)?)),
-        }
-    }
-
-    pub fn v1_1_new_with_correct_encoding(
-        payload: &Payload,
-        index: &NsIndex,
-        common: &VidCommon,
-    ) -> Option<NsProof> {
-        match common {
-            VidCommon::V1(common) => Some(NsProof::V1_1(AvidMNsProofV1::new_correct_encoding(
-                payload, index, common,
-            )?)),
-            _ => None,
         }
     }
 
@@ -60,9 +47,9 @@ impl NsProof {
         common: &VidCommon,
     ) -> Option<NsProof> {
         match common {
-            VidCommon::V1(common) => Some(NsProof::V1_1(AvidMNsProofV1::new_incorrect_encoding(
-                shares, ns_table, index, commit, common,
-            )?)),
+            VidCommon::V1(common) => Some(NsProof::V1IncorrectEncoding(
+                AvidMIncorrectEncodingNsProof::new(shares, ns_table, index, commit, common)?,
+            )),
             _ => None,
         }
     }
@@ -76,7 +63,9 @@ impl NsProof {
         match (self, common) {
             (Self::V0(proof), VidCommon::V0(common)) => proof.verify(ns_table, commit, common),
             (Self::V1(proof), VidCommon::V1(common)) => proof.verify(ns_table, commit, common),
-            (Self::V1_1(proof), VidCommon::V1(common)) => proof.verify(ns_table, commit, common),
+            (Self::V1IncorrectEncoding(proof), VidCommon::V1(common)) => {
+                proof.verify(ns_table, commit, common)
+            },
             _ => {
                 tracing::error!("Incompatible version of VidCommon and NsProof.");
                 None
@@ -87,10 +76,10 @@ impl NsProof {
     pub fn export_all_txs(&self, ns_id: &NamespaceId) -> Vec<Transaction> {
         match self {
             Self::V0(proof) => proof.export_all_txs(ns_id),
-            Self::V1(AvidMNsProof(proof)) | Self::V1_1(AvidMNsProofV1::CorrectEncoding(proof)) => {
+            Self::V1(AvidMNsProof(proof)) => {
                 NsPayload::from_bytes_slice(&proof.ns_payload).export_all_txs(ns_id)
             },
-            Self::V1_1(AvidMNsProofV1::IncorrectEncoding(_)) => vec![],
+            Self::V1IncorrectEncoding(_) => vec![],
         }
     }
 }

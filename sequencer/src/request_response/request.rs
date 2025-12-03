@@ -6,11 +6,11 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeMerkleTree, Leaf2,
 };
-use hotshot_types::data::VidShare;
+use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2};
 use request_response::{request::Request as RequestTrait, Serializable};
 use serde::{Deserialize, Serialize};
 
-use crate::api::BlocksFrontier;
+use crate::{api::BlocksFrontier, SeqTypes};
 
 // Some type aliases for readability
 type Height = u64;
@@ -35,6 +35,8 @@ pub enum Request {
     RewardAccountsV1(Height, ViewNumber, Vec<RewardAccountV1>),
     /// A request for the VID share at the given block height
     VidShare(Height, RequestId),
+    /// A request for the state certificate at a given epoch
+    StateCert(u64),
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -55,6 +57,8 @@ pub enum Response {
     RewardAccountsV1(RewardMerkleTreeV1),
     /// A response for a VID share at the given block height
     VidShare(VidShare),
+    /// A response for a state certificate at a given epoch
+    StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response

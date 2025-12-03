@@ -8,7 +8,7 @@
 
 /// Provides trait to create task states from a `SystemContextHandle`
 pub mod task_state;
-use std::{collections::BTreeMap, fmt::Debug, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 
 use async_broadcast::{broadcast, RecvError};
 use async_lock::RwLock;
@@ -140,7 +140,6 @@ pub fn add_network_message_task<
         internal_event_stream: handle.internal_event_stream.0.clone(),
         external_event_stream: handle.output_event_stream.0.clone(),
         public_key: handle.public_key().clone(),
-        transactions_cache: lru::LruCache::new(NonZeroUsize::new(100_000).unwrap()),
         upgrade_lock: upgrade_lock.clone(),
         id: handle.hotshot.id,
     };
@@ -268,7 +267,9 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
         handle.add_task(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(ConsensusTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
+        if cfg!(feature = "stats") {
+            handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
+        }
     }
     add_queue_len_task(handle);
     #[cfg(feature = "rewind")]

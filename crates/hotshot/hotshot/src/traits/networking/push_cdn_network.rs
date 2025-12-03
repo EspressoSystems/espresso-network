@@ -142,18 +142,29 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 /// Uses the real protocols and a Redis discovery client.
 pub struct ProductionDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> RunDef for ProductionDef<K> {
-    type User = UserDef<K>;
+    type User = UserDefQuic<K>;
+    type User2 = UserDefTcp<K>;
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
 }
 
 /// The user definition for the Push CDN.
-/// Uses the TCP+TLS protocol and untrusted middleware.
-pub struct UserDef<K: SignatureKey + 'static>(PhantomData<K>);
-impl<K: SignatureKey + 'static> ConnectionDef for UserDef<K> {
+/// Uses the Quic protocol and untrusted middleware.
+/// RM TODO: Remove this, switching to TCP singularly when everyone has updated
+pub struct UserDefQuic<K: SignatureKey + 'static>(PhantomData<K>);
+impl<K: SignatureKey + 'static> ConnectionDef for UserDefQuic<K> {
     type Scheme = WrappedSignatureKey<K>;
     type Protocol = Quic;
+    type MessageHook = NoMessageHook;
+}
+
+/// The user definition for the Push CDN.
+/// Uses the TCP protocol and untrusted middleware.
+pub struct UserDefTcp<K: SignatureKey + 'static>(PhantomData<K>);
+impl<K: SignatureKey + 'static> ConnectionDef for UserDefTcp<K> {
+    type Scheme = WrappedSignatureKey<K>;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -173,7 +184,7 @@ impl<K: SignatureKey> ConnectionDef for BrokerDef<K> {
 pub struct ClientDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey> ConnectionDef for ClientDef<K> {
     type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -181,7 +192,8 @@ impl<K: SignatureKey> ConnectionDef for ClientDef<K> {
 /// Uses the real protocols, but with an embedded discovery client.
 pub struct TestingDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> RunDef for TestingDef<K> {
-    type User = UserDef<K>;
+    type User = UserDefQuic<K>;
+    type User2 = UserDefTcp<K>;
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;
@@ -262,6 +274,17 @@ impl<K: SignatureKey + 'static> PushCdnNetwork<K> {
     /// - If we fail to serialize the message
     /// - If we fail to send the broadcast message.
     async fn broadcast_message(&self, message: Vec<u8>, topic: Topic) -> Result<(), NetworkError> {
+        // If the message should also go to us, add it to the internal queue
+        if self
+            .client
+            .subscribed_topics
+            .read()
+            .await
+            .contains(&(topic.clone() as u8))
+        {
+            self.internal_queue.lock().push_back(message.clone());
+        }
+
         // If we're paused, don't send the message
         #[cfg(feature = "hotshot-testing")]
         if self.is_paused.load(Ordering::Relaxed) {
@@ -505,6 +528,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
         if self.is_paused.load(Ordering::Relaxed) {
             return Ok(());
         }
+
+        // Broadcast the message
         self.broadcast_message(message, topic.into())
             .await
             .inspect_err(|_e| {
@@ -528,6 +553,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
         if self.is_paused.load(Ordering::Relaxed) {
             return Ok(());
         }
+
+        // Broadcast the message
         self.broadcast_message(message, Topic::Da)
             .await
             .inspect_err(|_e| {

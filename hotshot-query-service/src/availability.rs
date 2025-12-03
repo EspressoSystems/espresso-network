@@ -734,33 +734,6 @@ where
             })
         }
         .boxed()
-    })?
-    .at("get_state_cert", move |req, state| {
-        async move {
-            let epoch = req.integer_param("epoch")?;
-            let fetch = state
-                .read(|state| state.get_state_cert(epoch).boxed())
-                .await;
-            fetch
-                .with_timeout(timeout)
-                .await
-                .context(FetchStateCertSnafu { epoch })
-                .map(StateCertQueryDataV1::from)
-        }
-        .boxed()
-    })?
-    .at("get_state_cert_v2", move |req, state| {
-        async move {
-            let epoch = req.integer_param("epoch")?;
-            let fetch = state
-                .read(|state| state.get_state_cert(epoch).boxed())
-                .await;
-            fetch
-                .with_timeout(timeout)
-                .await
-                .context(FetchStateCertSnafu { epoch })
-        }
-        .boxed()
     })?;
     Ok(api)
 }
@@ -828,10 +801,7 @@ mod test {
     use committable::Committable;
     use futures::future::FutureExt;
     use hotshot_example_types::node_types::EpochsTestVersions;
-    use hotshot_types::{
-        data::Leaf2, simple_certificate::QuorumCertificate2,
-        traits::node_implementation::ConsensusTime,
-    };
+    use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
     use portpicker::pick_unused_port;
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
@@ -1070,31 +1040,38 @@ mod test {
                         .hash()
                 );
 
-                // We can also get the transaction with proof omitted.
-                assert_eq!(
-                    txn.hash(),
-                    client
-                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
-                            "transaction/{}/{}/proof",
-                            i, j.position
-                        ))
-                        .send()
-                        .await
-                        .unwrap()
-                        .hash()
-                );
-                assert_eq!(
-                    txn.hash(),
-                    client
-                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
-                            "transaction/hash/{}/proof",
-                            txn.hash()
-                        ))
-                        .send()
-                        .await
-                        .unwrap()
-                        .hash()
-                );
+                let tx_with_proof = client
+                    .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                        "transaction/{}/{}/proof",
+                        i, j.position
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.hash(), tx_with_proof.hash());
+                assert!(tx_with_proof.proof().verify(
+                    block.metadata(),
+                    txn.transaction(),
+                    &block.payload_hash(),
+                    common.common()
+                ));
+
+                // Similar to above, but by hash
+                let tx_with_proof = client
+                    .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                        "transaction/hash/{}/proof",
+                        txn.hash()
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.hash(), tx_with_proof.hash());
+                assert!(tx_with_proof.proof().verify(
+                    block.metadata(),
+                    txn.transaction(),
+                    &block.payload_hash(),
+                    common.common()
+                ));
             }
 
             let block_range: Vec<BlockQueryData<MockTypes>> = client
@@ -1526,16 +1503,6 @@ mod test {
             }
         }
 
-        for epoch in 1..4 {
-            let state_cert: StateCertQueryDataV2<MockTypes> = client
-                .get(&format!("state-cert-v2/{epoch}"))
-                .send()
-                .await
-                .unwrap();
-            tracing::info!("state-cert: {state_cert:?}");
-            assert_eq!(state_cert.0.epoch.u64(), epoch);
-        }
-
         network.shut_down().await;
     }
 
@@ -1656,7 +1623,7 @@ mod test {
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         data_source
-            .append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
+            .append(BlockInfo::new(leaf, Some(block.clone()), None, None))
             .await
             .unwrap();
 

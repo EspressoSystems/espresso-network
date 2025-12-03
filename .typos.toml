@@ -15,7 +15,15 @@ extend-exclude = [
   "crates/hotshot/types/src/light_client.rs",
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
+  "sequencer/src/genesis.rs",
   "data/insta_snapshots",
+  "data/initial_stake_table.toml",
+  "data/initial_staging_stake_table.toml",
+  "data/genesis/staging.toml",
+  "data/genesis/staging-proposer.toml",
+  "data/genesis/staging-new.toml",
+  "data/genesis/demo-da-committees.toml",
+  "tests/proof_of_stake.rs",
 ]
 
 [default.extend-words]

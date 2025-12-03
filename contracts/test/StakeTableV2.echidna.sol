@@ -32,4 +32,14 @@ contract StakeTableV2EchidnaTest is StakeTableV2PropTestBase {
 
     // Note: Unlike Foundry invariant tests, Echidna doesn't support post-test cleanup.
     // The withdrawAllFunds() verification is only available in the Foundry test suite.
+
+    /// @dev Total validator stake should equal sum of all active delegated amounts
+    function echidna_activeStakeMatchesTracked() public view returns (bool) {
+        return stakeTable.activeStake() == testState.activeStake;
+    }
+
+    /// @dev Total validator stake should not exceed contract token balance
+    function echidna_activeStakeNotExceedsContractTokenBalance() public view returns (bool) {
+        return stakeTable.activeStake() <= stakeTable.token().balanceOf(address(stakeTable));
+    }
 }

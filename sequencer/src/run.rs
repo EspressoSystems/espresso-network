@@ -29,6 +29,44 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
+        #[cfg(all(feature = "fee", feature = "da-upgrade"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => run(
+            genesis,
+            modules,
+            opt,
+            SequencerVersions::<espresso_types::FeeVersion, espresso_types::DaUpgradeVersion>::new(
+            ),
+        )
+        .await,
+        #[cfg(all(feature = "drb-and-header", feature = "da-upgrade"))]
+        (
+            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
+            espresso_types::DaUpgradeVersion::VERSION,
+        ) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                    espresso_types::DaUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
+        #[cfg(feature = "da-upgrade")]
+        (espresso_types::DaUpgradeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DaUpgradeVersion,
+                    espresso_types::DaUpgradeVersion,
+                >::new(),
+            )
+            .await
+        },
         #[cfg(all(feature = "pos", feature = "drb-and-header"))]
         (
             espresso_types::EpochVersion::VERSION,
@@ -158,7 +196,7 @@ where
     Ok(())
 }
 
-pub(crate) async fn init_with_storage<S, V>(
+pub async fn init_with_storage<S, V>(
     genesis: Genesis,
     modules: Modules,
     opt: Options,
@@ -181,6 +219,7 @@ where
         libp2p_bind_address: opt.libp2p_bind_address,
         libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
         orchestrator_url: opt.orchestrator_url,
+        builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
         private_staking_key,
@@ -244,6 +283,9 @@ where
             }
             if let Some(explorer) = modules.explorer {
                 http_opt = http_opt.explorer(explorer);
+            }
+            if let Some(light_client) = modules.light_client {
+                http_opt = http_opt.light_client(light_client);
             }
             if let Some(config) = modules.config {
                 http_opt = http_opt.config(config);

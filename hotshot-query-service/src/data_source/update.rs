@@ -28,13 +28,14 @@ use hotshot_types::{
         advz::advz_scheme,
         avidm::{init_avidm_param, AvidMScheme},
     },
+    vote::HasViewNumber,
 };
 use jf_advz::VidScheme;
 
 use crate::{
     availability::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
-        StateCertQueryDataV2, UpdateAvailabilityData, VidCommonQueryData,
+        UpdateAvailabilityData, VidCommonQueryData,
     },
     Header, Payload, VidCommon,
 };
@@ -79,9 +80,15 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn update(&self, event: &Event<Types>) -> Result<(), u64> {
-        if let EventType::Decide { leaf_chain, qc, .. } = &event.event {
+        if let EventType::Decide {
+            leaf_chain,
+            committing_qc,
+            deciding_qc,
+            ..
+        } = &event.event
+        {
             // `qc` justifies the first (most recent) leaf...
-            let qcs = once((**qc).clone())
+            let qcs = once(committing_qc.qc().clone())
                 // ...and each leaf in the chain justifies the subsequent leaf (its parent) through
                 // `leaf.justify_qc`.
                 .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc()))
@@ -95,7 +102,7 @@ where
                 LeafInfo {
                     leaf: leaf2,
                     vid_share,
-                    state_cert,
+                    state_cert: _,
                     ..
                 },
             ) in qcs.zip(leaf_chain.iter().rev())
@@ -108,7 +115,7 @@ where
                         tracing::error!(
                             height,
                             ?leaf2,
-                            ?qc,
+                            ?committing_qc,
                             "inconsistent leaf; cannot append leaf information: {err:#}"
                         );
                         return Err(leaf2.block_header().block_number());
@@ -159,16 +166,15 @@ where
                     tracing::info!(height, "VID not available at decide");
                 }
 
-                if let Err(err) = self
-                    .append(BlockInfo::new(
-                        leaf_data,
-                        block_data,
-                        vid_common,
-                        vid_share,
-                        state_cert.clone().map(StateCertQueryDataV2),
-                    ))
-                    .await
-                {
+                let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
+                if let Some(deciding_qc) = deciding_qc {
+                    if committing_qc.view_number() == info.leaf.leaf().view_number() {
+                        let qc_chain =
+                            [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
+                        info = info.with_qc_chain(qc_chain);
+                    }
+                }
+                if let Err(err) = self.append(info).await {
                     tracing::error!(height, "failed to append leaf information: {err:#}");
                     return Err(leaf2.block_header().block_number());
                 }

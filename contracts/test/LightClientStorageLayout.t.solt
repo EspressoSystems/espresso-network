@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: Unlicensed
+
+/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file, no-console */
+
+pragma solidity ^0.8.0;
+
+// Libraries
+import "forge-std/Test.sol";
+import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
+import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+
+// Target contract
+import { LightClient as LC } from "../src/LightClient.sol";
+import { LightClientV2 as LCV2 } from "../src/LightClientV2.sol";
+import { PlonkVerifierV3 as PV3 } from "../src/libraries/PlonkVerifierV3.sol";
+import { LightClientV3 as LCV3 } from "../src/LightClientV3.sol";
+import { LightClientV3Mock as LCV3Mock } from "./mocks/LightClientV3Mock.sol";
+import { BN254 } from "bn254/BN254.sol";
+
+/// @dev Storage layout compatibility tests for LightClient contracts
+contract LightClientStorageLayoutTest is Test {
+    
+    function test_StorageLayout_IsCompatible_V1V2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "LightClient";
+        cmds[3] = "LightClientV2";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "true");
+    }
+    
+    function test_StorageLayout_IsCompatible_V2V3() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "LightClientV2";
+        cmds[3] = "LightClientV3";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "true");
+    }
+    
+    function test_StorageLayout_IsCompatible_V1V3() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "LightClient";
+        cmds[3] = "LightClientV3";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "true");
+    }
+    
+    function test_StorageLayout_IsIncompatibleIfFieldIsMissing() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "LightClient";
+        cmds[3] = "LightClientMissingFieldTest";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "false");
+    }
+    
+    function test_StorageLayout_IsIncompatibleIfFieldsAreReordered() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "LightClient";
+        cmds[3] = "LightClientFieldsReorderedTest";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "false");
+    }
+    
+    function test_StorageLayout_IsIncompatibleBetweenDiffContracts() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "LightClient";
+        cmds[3] = "StakeTable";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "false");
+    }
+    
+    /// @dev Test against deployed contract on mainnet
+    /// @notice This test should be run with --fork-url mainnet
+    function test_StorageLayout_CompatibleWithDeployedMainnet() public {
+        // Skip if not forking mainnet
+        if (block.chainid != 1) {
+            vm.skip(true);
+        }
+        
+        // Deployed LightClientV2 on mainnet (example address)
+        address deployedContract = 0x303872BB82a191771321d4828888920100d0b3e4;
+        
+        // Get storage layout from deployed contract
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout-deployed.js";
+        cmds[2] = vm.toString(deployedContract);
+        cmds[3] = "LightClientV3";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "true");
+    }
+    
+    /// @dev Test against deployed contract on Sepolia
+    /// @notice This test should be run with --fork-url sepolia
+    function test_StorageLayout_CompatibleWithDeployedSepolia() public {
+        // Skip if not forking Sepolia
+        if (block.chainid != 11155111) {
+            vm.skip(true);
+        }
+        
+        // Deployed LightClientV2 on Sepolia
+        address deployedContract = 0x303872BB82a191771321d4828888920100d0b3e4;
+        
+        // Get storage layout from deployed contract
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout-deployed.js";
+        cmds[2] = vm.toString(deployedContract);
+        cmds[3] = "LightClientV3";
+        
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        assertEq(result, "true");
+    }
+}
+
+/// @dev Test contract with missing field to test storage incompatibility
+contract LightClientMissingFieldTest is Test {
+    // Import the same structs as LightClient
+    struct LightClientState {
+        uint64 viewNum;
+        uint64 blockHeight;
+        BN254.ScalarField blockCommRoot;
+    }
+
+    struct StakeTableState {
+        uint256 threshold;
+        BN254.ScalarField blsKeyComm;
+        BN254.ScalarField schnorrKeyComm;
+        BN254.ScalarField amountComm;
+    }
+
+    struct StateHistoryCommitment {
+        uint64 l1BlockHeight;
+        uint64 l1BlockTimestamp;
+        LightClientState state;
+    }
+
+    // Storage variables - missing some fields from original LightClient
+    StakeTableState public genesisStakeTableState;
+    LightClientState public genesisState;
+    LightClientState public finalizedState;
+    address public permissionedProver;
+    uint32 public stateHistoryRetentionPeriod;
+    uint64 public stateHistoryFirstIndex;
+    StateHistoryCommitment[] public stateHistoryCommitments;
+    // Missing field: permissionedProverRequired (bool)
+}
+
+/// @dev Test contract with reordered fields to test storage incompatibility
+contract LightClientFieldsReorderedTest is Test {
+    // Import the same structs as LightClient
+    struct LightClientState {
+        uint64 viewNum;
+        uint64 blockHeight;
+        BN254.ScalarField blockCommRoot;
+    }
+
+    struct StakeTableState {
+        uint256 threshold;
+        BN254.ScalarField blsKeyComm;
+        BN254.ScalarField schnorrKeyComm;
+        BN254.ScalarField amountComm;
+    }
+
+    struct StateHistoryCommitment {
+        uint64 l1BlockHeight;
+        uint64 l1BlockTimestamp;
+        LightClientState state;
+    }
+
+    // Storage variables - reordered from original LightClient
+    LightClientState public finalizedState;  // moved up
+    StakeTableState public genesisStakeTableState;
+    LightClientState public genesisState;
+    address public permissionedProver;
+    uint32 public stateHistoryRetentionPeriod;
+    uint64 public stateHistoryFirstIndex;
+    StateHistoryCommitment[] public stateHistoryCommitments;
+}

@@ -17,7 +17,9 @@ use std::{ops::RangeBounds, sync::Arc};
 use async_lock::Mutex;
 use async_trait::async_trait;
 use futures::future::Future;
-use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
+use hotshot_types::{
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
+};
 
 use super::{
     pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
@@ -28,8 +30,7 @@ use super::{
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
-        VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::{
         storage::{PayloadMetadata, VidCommonMetadata},
@@ -463,11 +464,6 @@ where
             .await?;
         self.inner.first_available_leaf(from).await
     }
-
-    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryDataV2<Types>> {
-        self.maybe_fail_read(FailableAction::GetStateCert).await?;
-        self.inner.get_state_cert(epoch).await
-    }
 }
 
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
@@ -477,9 +473,13 @@ where
     Payload<Types>: QueryablePayload<Types>,
     T: UpdateAvailabilityStorage<Types> + Send + Sync,
 {
-    async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
+    async fn insert_leaf_with_qc_chain(
+        &mut self,
+        leaf: LeafQueryData<Types>,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
+    ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_leaf(leaf).await
+        self.inner.insert_leaf_with_qc_chain(leaf, qc_chain).await
     }
 
     async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
@@ -494,14 +494,6 @@ where
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_vid(common, share).await
-    }
-
-    async fn insert_state_cert(
-        &mut self,
-        state_cert: StateCertQueryDataV2<Types>,
-    ) -> anyhow::Result<()> {
-        self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_state_cert(state_cert).await
     }
 }
 
@@ -569,6 +561,11 @@ where
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.get_header_window(start, end, limit).await
+    }
+
+    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.latest_qc_chain().await
     }
 }
 

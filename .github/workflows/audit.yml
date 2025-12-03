@@ -17,6 +17,9 @@ on:
   schedule:
     - cron: "0 0 * * *"
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   security_audit:
     runs-on: ubuntu-latest

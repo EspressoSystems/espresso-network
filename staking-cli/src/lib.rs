@@ -5,12 +5,13 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
 pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
+use metadata::MetadataUri;
 use parse::Commission;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
@@ -19,12 +20,17 @@ use url::Url;
 pub mod claim;
 pub mod delegation;
 pub mod demo;
+pub mod funding;
 pub mod info;
 pub mod l1;
+pub mod metadata;
+pub mod output;
 pub mod parse;
+pub mod receipt;
 pub mod registration;
 pub mod signature;
 
+#[cfg(feature = "testing")]
 pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -47,6 +53,10 @@ pub struct Config {
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
+
+    /// Espresso sequencer API URL for reward claims.
+    #[clap(long, env = "ESPRESSO_URL")]
+    pub espresso_url: Option<Url>,
 
     #[clap(flatten)]
     pub signer: SignerConfig,
@@ -137,6 +147,30 @@ impl ValidSignerConfig {
     }
 }
 
+#[derive(ClapArgs, Debug, Clone)]
+#[group(required = true, multiple = false)]
+pub struct MetadataUriArgs {
+    #[clap(long, env = "METADATA_URI")]
+    metadata_uri: Option<String>,
+
+    #[clap(long, env = "NO_METADATA_URI")]
+    no_metadata_uri: bool,
+}
+
+impl TryFrom<MetadataUriArgs> for MetadataUri {
+    type Error = anyhow::Error;
+
+    fn try_from(args: MetadataUriArgs) -> Result<Self> {
+        if args.no_metadata_uri {
+            Ok(MetadataUri::empty())
+        } else if let Some(uri_str) = args.metadata_uri {
+            uri_str.parse()
+        } else {
+            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
+        }
+    }
+}
+
 impl Default for Commands {
     fn default() -> Self {
         Commands::StakeTable {
@@ -211,6 +245,9 @@ pub enum Commands {
         /// The commission to charge delegators
         #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
         commission: Commission,
+
+        #[clap(flatten)]
+        metadata_uri_args: MetadataUriArgs,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -224,6 +261,11 @@ pub enum Commands {
         /// The new commission rate to set
         #[clap(long, value_parser = parse::parse_commission, env = "NEW_COMMISSION")]
         new_commission: Commission,
+    },
+    /// Update validator metadata URL.
+    UpdateMetadataUri {
+        #[clap(flatten)]
+        metadata_uri_args: MetadataUriArgs,
     },
     /// Approve stake table contract to move tokens
     Approve {
@@ -256,6 +298,14 @@ pub enum Commands {
         #[clap(long)]
         validator_address: Address,
     },
+    /// Claim staking rewards.
+    ClaimRewards,
+    /// Check unclaimed staking rewards.
+    UnclaimedRewards {
+        /// The address to check.
+        #[clap(long)]
+        address: Option<Address>,
+    },
     /// Check ESP token balance.
     TokenBalance {
         /// The address to check.
@@ -286,7 +336,14 @@ pub enum Commands {
         #[clap(long, default_value_t = 5)]
         num_validators: u16,
 
-        #[arg(long, value_enum, default_value_t = DelegationConfig::default())]
+        /// The number of delegators to create per validator.
+        ///
+        /// If not specified, a random number (2-5) of delegators is created per validator.
+        /// Must be <= 100,000.
+        #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
+        num_delegators_per_validator: Option<u64>,
+
+        #[arg(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = DelegationConfig::default())]
         delegation_config: DelegationConfig,
     },
     /// Export validator node signatures for address validation.

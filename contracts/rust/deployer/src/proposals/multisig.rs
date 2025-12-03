@@ -10,18 +10,20 @@ use alloy::{
     providers::Provider,
 };
 use anyhow::{anyhow, Context, Result};
+use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
     EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
     LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
     StakeTableV2,
 };
+use url::Url;
 
 use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS};
 
 #[derive(Clone)]
 pub struct TransferOwnershipParams {
     pub new_owner: Address,
-    pub rpc_url: String,
+    pub rpc_url: Url,
     pub safe_addr: Address,
     pub use_hardware_wallet: bool,
     pub dry_run: bool,
@@ -46,7 +48,7 @@ pub async fn call_transfer_ownership_script(
         .arg("--new-owner")
         .arg(params.new_owner.to_string())
         .arg("--rpc-url")
-        .arg(params.rpc_url)
+        .arg(params.rpc_url.to_string())
         .arg("--safe-address")
         .arg(params.safe_addr.to_string())
         .arg("--dry-run")
@@ -83,7 +85,8 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
         Contract::LightClientProxy
         | Contract::FeeContractProxy
         | Contract::EspTokenProxy
-        | Contract::StakeTableProxy => {
+        | Contract::StakeTableProxy
+        | Contract::RewardClaimProxy => {
             let addr = contracts
                 .address(contract)
                 .ok_or_else(|| anyhow!("{contract} (multisig owner) not found, can't upgrade"))?;
@@ -162,9 +165,8 @@ pub async fn call_upgrade_proxy_script(
     init_data: String,
     rpc_url: String,
     safe_addr: Address,
-    dry_run: Option<bool>,
+    dry_run: bool,
 ) -> anyhow::Result<String> {
-    let dry_run = dry_run.unwrap_or(false);
     tracing::info!("Dry run: {}", dry_run);
     tracing::info!(
         "Attempting to send the upgrade proposal to multisig: {}",
@@ -212,7 +214,7 @@ pub async fn verify_node_js_files() -> Result<()> {
         String::from("0x"),
         String::from("https://sepolia.infura.io/v3/"),
         Address::random(),
-        Some(true),
+        true,
     )
     .await?;
     tracing::info!("Node.js files verified successfully");
@@ -241,13 +243,9 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     params: LightClientV2UpgradeParams,
     is_mock: bool,
     rpc_url: String,
-    dry_run: Option<bool>,
+    dry_run: bool,
 ) -> Result<String> {
     let expected_major_version: u8 = 2;
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
 
     let proxy_addr = contracts
         .address(Contract::LightClientProxy)
@@ -348,7 +346,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         init_data.to_string(),
         rpc_url,
         owner_addr,
-        Some(dry_run),
+        dry_run,
     )
     .await?;
 
@@ -387,13 +385,9 @@ pub async fn upgrade_light_client_v3_multisig_owner(
     contracts: &mut Contracts,
     is_mock: bool,
     rpc_url: String,
-    dry_run: Option<bool>,
+    dry_run: bool,
 ) -> Result<String> {
     let expected_major_version: u8 = 3;
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
 
     let proxy_addr = contracts
         .address(Contract::LightClientProxy)
@@ -492,7 +486,7 @@ pub async fn upgrade_light_client_v3_multisig_owner(
         init_data.to_string(),
         rpc_url,
         owner_addr,
-        Some(dry_run),
+        dry_run,
     )
     .await?;
 
@@ -525,13 +519,8 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
     rpc_url: String,
-    dry_run: Option<bool>,
+    dry_run: bool,
 ) -> Result<String> {
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
-
     let proxy_addr = contracts
         .address(Contract::EspTokenProxy)
         .ok_or_else(|| anyhow!("EspTokenProxy (multisig owner) not found, can't upgrade"))?;
@@ -557,8 +546,14 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         Address::random()
     };
 
-    // no reinitializer so empty init data
-    let init_data = "0x".to_string();
+    let reward_claim_addr = contracts
+        .address(Contract::RewardClaimProxy)
+        .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
+    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+    let init_data = proxy_as_v2
+        .initializeV2(reward_claim_addr)
+        .calldata()
+        .to_owned();
 
     // invoke upgrade on proxy via the safeSDK
     let result = call_upgrade_proxy_script(
@@ -567,19 +562,32 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         init_data.to_string(),
         rpc_url,
         owner_addr,
-        Some(dry_run),
+        dry_run,
     )
     .await?;
 
-    tracing::info!("No init data to be signed");
+    tracing::info!(
+        %reward_claim_addr,
+        "Data to be signed: Function: initializeV2 Arguments:"
+    );
+
     if !dry_run {
         tracing::info!(
-                "EspTokenProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-                owner_addr
-            );
+            "EspTokenProxy upgrade proposal sent. Send this link to the signers to \
+                 sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            owner_addr
+        );
     }
 
     Ok(result)
+}
+
+#[derive(Clone, Debug)]
+pub struct StakeTableV2UpgradeParams {
+    pub rpc_url: String,
+    pub multisig_address: Address,
+    pub pauser: Address,
+    pub dry_run: bool,
 }
 
 /// Upgrade the stake table proxy to use StakeTableV2.
@@ -592,14 +600,12 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 /// This function can only be called on a real network supported by the safeSDK
 pub async fn upgrade_stake_table_v2_multisig_owner(
     provider: impl Provider,
+    l1_client: L1Client,
     contracts: &mut Contracts,
-    rpc_url: String,
-    multisig_address: Address,
-    pauser: Address,
-    dry_run: Option<bool>,
+    params: StakeTableV2UpgradeParams,
 ) -> Result<()> {
     tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
-    let dry_run = dry_run.unwrap_or(false);
+    let dry_run = params.dry_run;
     let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
@@ -608,9 +614,10 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     let owner = proxy.owner().call().await?;
     let owner_addr = owner;
 
-    if owner_addr != multisig_address {
+    if owner_addr != params.multisig_address {
         anyhow::bail!(
-            "Proxy not owned by multisig. expected: {multisig_address:#x}, got: {owner_addr:#x}"
+            "Proxy not owned by multisig. expected: {:#x}, got: {owner_addr:#x}",
+            params.multisig_address
         );
     }
     if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
@@ -619,8 +626,9 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     }
     // TODO: check if owner is a SAFE multisig
 
-    let (_init_commissions, init_data) =
-        crate::prepare_stake_table_v2_upgrade(&provider, proxy_addr, pauser, owner_addr).await?;
+    let (_init_commissions, _init_active_stake, init_data) =
+        crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, params.pauser, owner_addr)
+            .await?;
 
     let stake_table_v2_addr = contracts
         .deploy(
@@ -634,9 +642,9 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
         proxy_addr,
         stake_table_v2_addr,
         init_data.unwrap_or_default().to_string(),
-        rpc_url,
+        params.rpc_url,
         owner_addr,
-        Some(dry_run),
+        dry_run,
     )
     .await
     .context("Calling upgrade proxy script failed")?;

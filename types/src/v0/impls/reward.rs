@@ -80,8 +80,8 @@ impl FromStringOrInteger for RewardAmount {
     }
 
     fn from_string(s: String) -> anyhow::Result<Self> {
-        // For backwards compatibility, we have an ad hoc parser for WEI amounts represented as hex
-        // strings.
+        // For backwards compatibility, we have an ad hoc parser for WEI amounts
+        // represented as hex strings.
         if let Some(s) = s.strip_prefix("0x") {
             return Ok(Self(s.parse()?));
         }
@@ -436,7 +436,7 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
             bail!("Invalid proof: unexpected path length: {}", path.len());
         };
 
-        let siblings: Vec<B256> = proof
+        let siblings: [B256; REWARD_MERKLE_TREE_V2_HEIGHT] = proof
             .proof
             .iter()
             .enumerate()
@@ -474,15 +474,12 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
                 }
                 _ => None,
             })
-            .collect();
+            .collect::<Vec<B256>>().try_into().map_err(|err: Vec<_>| {
+                panic!("Invalid proof length: {:?}, this should never happen", err.len())
+            })
+            .unwrap();
 
-        let siblings_len = siblings.len();
-        let array: [B256; REWARD_MERKLE_TREE_V2_HEIGHT] = siblings.try_into().map_err(|_| {
-            anyhow::anyhow!(
-                "Expected exactly {REWARD_MERKLE_TREE_V2_HEIGHT} siblings, got {siblings_len}"
-            )
-        })?;
-        Ok(array.into())
+        Ok(siblings.into())
     }
 }
 
@@ -924,6 +921,8 @@ pub async fn get_leader_and_fetch_missing_rewards(
         .leader(view, Some(epoch))
         .context(format!("leader for epoch {epoch:?} not found"))?;
 
+    tracing::debug!("Selected leader: {leader} for view {view} and epoch {epoch}");
+
     let validator = membership
         .get_validator_config(&epoch, leader)
         .context("validator not found")?;
@@ -976,12 +975,13 @@ pub async fn get_leader_and_fetch_missing_rewards(
         }
     } else {
         let missing_reward_accts = validated_state.forgotten_reward_accounts_v2(reward_accounts);
-
+        let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
         if !missing_reward_accts.is_empty() {
             tracing::warn!(
                 parent_height,
                 ?parent_view,
                 ?missing_reward_accts,
+                %reward_merkle_tree_root,
                 "fetching missing reward accounts from peers"
             );
 
@@ -991,7 +991,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
                     instance_state,
                     parent_height,
                     parent_view,
-                    validated_state.reward_merkle_tree_v2.commitment(),
+                    reward_merkle_tree_root,
                     missing_reward_accts,
                 )
                 .await?;
@@ -1016,8 +1016,8 @@ pub mod tests {
 
     #[test]
     fn test_reward_calculation_sanity_checks() {
-        // This test verifies that the total rewards distributed match the block reward.
-        // Due to rounding effects in distribution, the validator may receive a slightly higher amount
+        // This test verifies that the total rewards distributed match the block reward. Due to
+        // rounding effects in distribution, the validator may receive a slightly higher amount
         // because the remainder after delegator distribution is sent to the validator.
 
         let validator = Validator::mock();

@@ -5,11 +5,20 @@ use alloy::{
 use derive_more::{From, Into};
 use serde::{Deserialize, Serialize};
 
+// Defined in espresso-types, but we don't want to depend on the crate just for this constant
+pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160;
+pub const OTHER_AUTH_ROOT_INPUTS_LEN: usize = 7;
+
+type RewardAuthDataRaw = (
+    [B256; REWARD_MERKLE_TREE_V2_HEIGHT],
+    [B256; OTHER_AUTH_ROOT_INPUTS_LEN],
+);
+
 #[derive(Clone, Debug, Eq, PartialEq, From)]
-pub struct RewardProofSiblings([B256; 160]);
+pub struct RewardProofSiblings([B256; REWARD_MERKLE_TREE_V2_HEIGHT]);
 
 #[derive(Clone, Debug, Eq, PartialEq, From, Default)]
-pub struct RewardAuthRootInputs([B256; 7]);
+pub struct RewardAuthRootInputs([B256; OTHER_AUTH_ROOT_INPUTS_LEN]);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RewardAuthData {
@@ -18,16 +27,20 @@ pub struct RewardAuthData {
 }
 
 impl RewardAuthData {
-    pub fn new(siblings: RewardProofSiblings, auth_root_inputs: RewardAuthRootInputs) -> Self {
+    /// Create reward auth data from proof siblings.
+    ///
+    /// Auth root inputs (other than the reward merkle tree root) are currently
+    /// all zero placeholder values.
+    pub fn new(siblings: RewardProofSiblings) -> Self {
         RewardAuthData {
             siblings,
-            auth_root_inputs,
+            auth_root_inputs: Default::default(),
         }
     }
 }
 
-impl From<([B256; 160], [B256; 7])> for RewardAuthData {
-    fn from((siblings, auth_root_inputs): ([B256; 160], [B256; 7])) -> Self {
+impl From<RewardAuthDataRaw> for RewardAuthData {
+    fn from((siblings, auth_root_inputs): RewardAuthDataRaw) -> Self {
         RewardAuthData {
             siblings: siblings.into(),
             auth_root_inputs: auth_root_inputs.into(),
@@ -39,7 +52,7 @@ impl TryFrom<RewardAuthDataEncoded> for RewardAuthData {
     type Error = alloy::sol_types::Error;
 
     fn try_from(value: RewardAuthDataEncoded) -> Result<Self, Self::Error> {
-        let decoded: ([B256; 160], [B256; 7]) = SolValue::abi_decode(&value.0)?;
+        let decoded: RewardAuthDataRaw = SolValue::abi_decode(&value.0)?;
         Ok(decoded.into())
     }
 }
@@ -65,22 +78,30 @@ pub struct RewardClaimInput {
 
 #[cfg(test)]
 mod tests {
+    use std::array::from_fn;
+
     use serde_json;
 
     use super::*;
 
-    fn test_input() -> RewardClaimInput {
-        let siblings = RewardProofSiblings([B256::random(); 160]);
-        let auth_root_inputs = RewardAuthRootInputs([B256::random(); 7]);
-        RewardClaimInput {
-            lifetime_rewards: B256::random().into(),
-            auth_data: RewardAuthData::new(siblings, auth_root_inputs).into(),
+    impl RewardAuthData {
+        fn random() -> Self {
+            (from_fn(|_| B256::random()), from_fn(|_| B256::random())).into()
+        }
+    }
+
+    impl RewardClaimInput {
+        fn random() -> Self {
+            Self {
+                lifetime_rewards: B256::random().into(),
+                auth_data: RewardAuthData::random().into(),
+            }
         }
     }
 
     #[test]
     fn test_reward_claim_input_roundtrip_json() {
-        let original = test_input();
+        let original = RewardClaimInput::random();
         let json = serde_json::to_string(&original).unwrap();
         let decoded: RewardClaimInput = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, original);
@@ -88,17 +109,16 @@ mod tests {
 
     #[test]
     fn test_decode_abi_auth_data() {
-        let original = test_input();
+        let original = RewardClaimInput::random();
         let auth_data = RewardAuthData::try_from(original.auth_data.clone()).unwrap();
         let json = serde_json::to_string(&original).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let auth_str = value.get("auth_data").unwrap().as_str().unwrap();
         assert!(auth_str.starts_with("0x"));
 
-        // The auth data is sent "as-is" to the reward claim contract and need
-        // to ABI decode to the inner types in order for the contract to process
-        // them.
-        let (siblings, auth_root_inputs): ([B256; 160], [B256; 7]) =
+        // The auth data is sent "as-is" to the reward claim contract and needs to ABI decode to the
+        // inner types in order for the contract to process thenm.
+        let (siblings, auth_root_inputs): RewardAuthDataRaw =
             SolValue::abi_decode(&alloy::hex::decode(&auth_str[2..]).unwrap()).unwrap();
         assert_eq!(siblings, auth_data.siblings.0);
         assert_eq!(auth_root_inputs, auth_data.auth_root_inputs.0);

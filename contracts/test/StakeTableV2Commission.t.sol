@@ -13,6 +13,7 @@ import { PausableUpgradeable } from
     "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { StakeTable as S } from "../src/StakeTable.sol";
 
 contract StakeTableV2CommissionTest is Test {
@@ -31,7 +32,7 @@ contract StakeTableV2CommissionTest is Test {
         address admin = baseProxy.owner();
         StakeTableV2.InitialCommission[] memory emptyCommissions;
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, admin, emptyCommissions
+            StakeTableV2.initializeV2.selector, pauser, admin, 0, emptyCommissions
         );
         baseProxy.upgradeToAndCall(address(new StakeTableV2()), initData);
         proxy = StakeTableV2(address(baseProxy));
@@ -142,7 +143,7 @@ contract StakeTableV2CommissionTest is Test {
 
     function test_CommissionUpdate_DecreaseMaxDelta() public {
         address validator = makeAddr("validator");
-        uint16 maxCommission = 10000;
+        uint16 maxCommission = proxy.MAX_COMMISSION_BPS();
         stakeTableUpgradeTest.registerValidatorOnStakeTableV2(
             validator, "123", maxCommission, proxy
         );
@@ -182,25 +183,31 @@ contract StakeTableV2CommissionTest is Test {
         vm.stopPrank();
     }
 
-    function test_SetMinCommissionUpdateInterval_RevertWhenNotOwner() public {
+    function test_SetMinCommissionUpdateInterval_RevertWhenNotAdmin() public {
         address notAdmin = makeAddr("notAdmin");
         uint256 newInterval = 14 days;
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
 
         vm.startPrank(notAdmin);
         vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
+            )
         );
         proxy.setMinCommissionUpdateInterval(newInterval);
         vm.stopPrank();
     }
 
-    function test_SetMaxCommissionIncrease_RevertWhenNotOwner() public {
+    function test_SetMaxCommissionIncrease_RevertWhenNotAdmin() public {
         address notAdmin = makeAddr("notAdmin");
         uint16 newMaxIncrease = 1000;
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
 
         vm.startPrank(notAdmin);
         vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
+            )
         );
         proxy.setMaxCommissionIncrease(newMaxIncrease);
         vm.stopPrank();
@@ -211,6 +218,7 @@ contract StakeTableV2CommissionTest is Test {
         // should fail
         assertEq(proxy.minCommissionIncreaseInterval(), 7 days);
         assertEq(proxy.maxCommissionIncrease(), 500);
+        assertEq(proxy.MAX_COMMISSION_BPS(), 10000);
     }
 
     function test_InitializeV2_RevertWhenInitialValidatorNotRegistered() public {
@@ -227,7 +235,7 @@ contract StakeTableV2CommissionTest is Test {
             StakeTableV2.InitialCommission({ validator: validator, commission: 500 });
 
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), wrongCommissions
+            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), 0, wrongCommissions
         );
 
         vm.startPrank(upgradeTest.admin());
@@ -254,7 +262,7 @@ contract StakeTableV2CommissionTest is Test {
             StakeTableV2.InitialCommission({ validator: validator, commission: 500 });
 
         bytes memory initData = abi.encodeWithSelector(
-            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), duplicateCommissions
+            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), 0, duplicateCommissions
         );
 
         vm.startPrank(upgradeTest.admin());
@@ -263,6 +271,38 @@ contract StakeTableV2CommissionTest is Test {
             abi.encodeWithSelector(StakeTableV2.CommissionAlreadyInitialized.selector, validator)
         );
         baseProxy.upgradeToAndCall(address(implV2), initData);
+        vm.stopPrank();
+    }
+
+    function test_UndelegatedV2_EmitsEventWithUnlocksAt() public {
+        address validator = makeAddr("validator");
+        address delegator = makeAddr("delegator");
+        uint256 delegateAmount = 1 ether;
+
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+
+        deal(address(stakeTableUpgradeTest.token()), delegator, delegateAmount);
+
+        vm.startPrank(delegator);
+        stakeTableUpgradeTest.token().approve(address(proxy), delegateAmount);
+        proxy.delegate(validator, delegateAmount);
+
+        uint256 expectedUnlocksAt = block.timestamp + proxy.exitEscrowPeriod();
+        vm.expectEmit();
+        emit StakeTableV2.UndelegatedV2(delegator, validator, 1, delegateAmount, expectedUnlocksAt);
+        proxy.undelegate(validator, delegateAmount);
+        vm.stopPrank();
+    }
+
+    function test_ValidatorExitV2_EmitsEventWithUnlocksAt() public {
+        address validator = makeAddr("validator");
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+
+        vm.startPrank(validator);
+        uint256 expectedUnlocksAt = block.timestamp + proxy.exitEscrowPeriod();
+        vm.expectEmit();
+        emit StakeTableV2.ValidatorExitV2(validator, expectedUnlocksAt);
+        proxy.deregisterValidator();
         vm.stopPrank();
     }
 }

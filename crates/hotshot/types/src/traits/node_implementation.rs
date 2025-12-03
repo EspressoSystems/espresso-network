@@ -190,8 +190,6 @@ pub trait NodeType:
     + Hash
     + PartialEq
     + Eq
-    + PartialOrd
-    + Ord
     + Default
     + serde::Serialize
     + for<'de> Deserialize<'de>
