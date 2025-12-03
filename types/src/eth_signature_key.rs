@@ -17,7 +17,7 @@ use alloy::{
     },
 };
 use alloy_compat::ethers_serde;
-use derive_more::*;
+use derive_more::{Debug, Deref, From, Into};
 use hotshot_types::traits::signature_key::{BuilderSignatureKey, PrivateSignatureKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
