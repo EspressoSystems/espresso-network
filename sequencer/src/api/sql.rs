@@ -619,8 +619,8 @@ async fn load_v1_reward_accounts<Mode: TransactionMode>(
     let merkle_root = header.reward_merkle_tree_root().unwrap_left();
     let mut snapshot = RewardMerkleTreeV1::from_commitment(merkle_root);
 
-    // Create a bounded join set with 20 concurrent tasks
-    let mut join_set = BoundedJoinSet::new(20);
+    // Create a bounded join set with 10 concurrent tasks
+    let mut join_set = BoundedJoinSet::new(10);
 
     // Create a map from task ID to account
     let mut task_id_to_account = HashMap::new();
@@ -723,8 +723,8 @@ async fn load_v2_reward_accounts<Mode: TransactionMode>(
     let merkle_root = header.reward_merkle_tree_root().unwrap_right();
     let mut snapshot = RewardMerkleTreeV2::from_commitment(merkle_root);
 
-    // Create a bounded join set with 20 concurrent tasks
-    let mut join_set = BoundedJoinSet::new(20);
+    // Create a bounded join set with 10 concurrent tasks
+    let mut join_set = BoundedJoinSet::new(10);
 
     // Create a map from task ID to account
     let mut task_id_to_account = HashMap::new();

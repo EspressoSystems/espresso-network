@@ -5154,7 +5154,7 @@ mod test {
         let ds = SqlStorage::connect(Config::try_from(&node_0_persistence).unwrap())
             .await
             .unwrap();
-        let mut tx = ds.write().await?;
+        let mut tx = ds.read().await?;
 
         let (state, leaf) = reconstruct_state(
             &instance,
