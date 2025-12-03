@@ -1,6 +1,6 @@
 //! Prometheus metrics for the staking UI service.
 
-use prometheus::{Encoder, Gauge, Opts, Registry, TextEncoder};
+use prometheus::{Encoder, Gauge, IntGaugeVec, Opts, Registry, TextEncoder};
 
 /// Prometheus metrics for the staking UI service.
 #[derive(Clone, Debug)]
@@ -109,6 +109,23 @@ impl PrometheusMetrics {
             current_epoch,
             active_validators,
         }
+    }
+
+    /// Expose version information via metrics.
+    pub fn register_version_info(&self) -> prometheus::Result<()> {
+        let version_info = IntGaugeVec::new(
+            Opts::new("version", "The version of this binary"),
+            &["rev", "desc", "timestamp"],
+        )?;
+        self.registry.register(Box::new(version_info.clone()))?;
+        version_info
+            .get_metric_with_label_values(&[
+                env!("VERGEN_GIT_SHA"),
+                env!("VERGEN_GIT_DESCRIBE"),
+                env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
+            ])?
+            .set(1);
+        Ok(())
     }
 }
 

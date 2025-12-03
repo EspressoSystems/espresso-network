@@ -5,7 +5,8 @@ use clap::{Parser, ValueEnum};
 use futures::{FutureExt, future::try_join_all};
 use log_panics::BacktraceMode;
 use staking_ui_service::{
-    Result, app,
+    Error, Result, app,
+    error::ResultExt,
     input::{
         espresso::{
             self,
@@ -117,6 +118,7 @@ impl Options {
             .map_err(|err| err.context("connecting to Espresso query service"))?;
 
         let metrics = PrometheusMetrics::new();
+        metrics.register_version_info().context(Error::internal)?;
 
         // Create server state.
         let l1 = Arc::new(RwLock::new(

@@ -78,6 +78,10 @@ sequencer = { git = "https://github.com/EspressoSystems/espresso-network.git", f
 ], optional = true }
 staking-cli = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
 
+[build-dependencies]
+anyhow = "1"
+vergen = { version = "8", features = ["build", "git", "gitcl"] }
+
 [dev-dependencies]
 # Enable our own `testing` feature when building tests.
 staking-ui-service = { path = ".", features = ["testing"] }
