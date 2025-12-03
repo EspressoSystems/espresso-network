@@ -153,7 +153,7 @@
 <a href=#153 id=153 data-nosnippet>153</a>        </span><span class="kw">for </span>topic <span class="kw">in </span>subscribed_topics {
 <a href=#154 id=154 data-nosnippet>154</a>            master_map
 <a href=#155 id=155 data-nosnippet>155</a>                .subscribed_map
-<a href=#156 id=156 data-nosnippet>156</a>                .entry(topic.clone())
+<a href=#156 id=156 data-nosnippet>156</a>                .entry(<span class="kw-2">*</span>topic)
 <a href=#157 id=157 data-nosnippet>157</a>                .or_default()
 <a href=#158 id=158 data-nosnippet>158</a>                .push((pub_key.clone(), mn.clone()));
 <a href=#159 id=159 data-nosnippet>159</a>        }
