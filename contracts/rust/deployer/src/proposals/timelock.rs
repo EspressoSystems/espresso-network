@@ -98,6 +98,9 @@ impl TimelockContract {
                 let tx_hash = *pending_tx.tx_hash();
                 tracing::info!(%tx_hash, "waiting for tx to be mined");
                 let receipt = pending_tx.get_receipt().await?;
+                if !receipt.inner.is_success() {
+                    anyhow::bail!("tx failed: {:?}", receipt);
+                }
                 Ok(receipt)
             },
             TimelockContract::SafeExitTimelock(timelock_addr) => {
@@ -115,6 +118,9 @@ impl TimelockContract {
                 let tx_hash = *pending_tx.tx_hash();
                 tracing::info!(%tx_hash, "waiting for tx to be mined");
                 let receipt = pending_tx.get_receipt().await?;
+                if !receipt.inner.is_success() {
+                    anyhow::bail!("tx failed: {:?}", receipt);
+                }
                 Ok(receipt)
             },
         }
@@ -203,6 +209,9 @@ impl TimelockContract {
                 let tx_hash = *pending_tx.tx_hash();
                 tracing::info!(%tx_hash, "waiting for tx to be mined");
                 let receipt = pending_tx.get_receipt().await?;
+                if !receipt.inner.is_success() {
+                    anyhow::bail!("tx failed: {:?}", receipt);
+                }
                 Ok(receipt)
             },
             TimelockContract::SafeExitTimelock(timelock_addr) => {
@@ -219,6 +228,9 @@ impl TimelockContract {
                 let tx_hash = *pending_tx.tx_hash();
                 tracing::info!(%tx_hash, "waiting for tx to be mined");
                 let receipt = pending_tx.get_receipt().await?;
+                if !receipt.inner.is_success() {
+                    anyhow::bail!("tx failed: {:?}", receipt);
+                }
                 Ok(receipt)
             },
         }
@@ -238,6 +250,9 @@ impl TimelockContract {
                 let tx_hash = *pending_tx.tx_hash();
                 tracing::info!(%tx_hash, "waiting for tx to be mined");
                 let receipt = pending_tx.get_receipt().await?;
+                if !receipt.inner.is_success() {
+                    anyhow::bail!("tx failed: {:?}", receipt);
+                }
                 Ok(receipt)
             },
             TimelockContract::SafeExitTimelock(timelock_addr) => {
@@ -248,6 +263,9 @@ impl TimelockContract {
                 let tx_hash = *pending_tx.tx_hash();
                 tracing::info!(%tx_hash, "waiting for tx to be mined");
                 let receipt = pending_tx.get_receipt().await?;
+                if !receipt.inner.is_success() {
+                    anyhow::bail!("tx failed: {:?}", receipt);
+                }
                 Ok(receipt)
             },
         }

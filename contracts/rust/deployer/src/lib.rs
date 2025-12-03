@@ -326,6 +326,9 @@ impl Contracts {
         let tx_hash = *pending_tx.tx_hash();
         tracing::info!(%tx_hash, "waiting for tx to be mined");
         let receipt = pending_tx.get_receipt().await?;
+        if !receipt.inner.is_success() {
+            anyhow::bail!("Deployment transaction failed: {:?}", receipt);
+        }
         tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
         let addr = receipt
             .contract_address
