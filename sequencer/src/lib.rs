@@ -659,6 +659,7 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use std::{
+        cmp::max,
         collections::{BTreeMap, HashMap},
         time::Duration,
     };
@@ -946,7 +947,7 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
-                        .exit_escrow_period(U256::from(172800))
+                        .exit_escrow_period(U256::from(max(blocks_per_epoch * 15 + 100, 172800)))
                         .multisig_pauser(self.signer.address())
                         .token_name("Espresso".to_string())
                         .token_symbol("ESP".to_string())

@@ -98,7 +98,7 @@ pub trait ChainConfigPersistence: Sized + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
+    use std::{cmp::max, collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
     use alloy::{
         network::EthereumWallet,
