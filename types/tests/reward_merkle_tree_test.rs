@@ -105,7 +105,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .blocks_per_epoch(100)
         .epoch_start_block(1)
         .multisig_pauser(deployer_address)
-        .exit_escrow_period(U256::from(250))
+        .exit_escrow_period(U256::from(172800))
         .token_name("Espresso".to_string())
         .token_symbol("ESP".to_string())
         .initial_token_supply(U256::from(3590000000u64))
