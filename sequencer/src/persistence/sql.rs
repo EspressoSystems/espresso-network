@@ -32,7 +32,7 @@ use hotshot_query_service::{
             pruning::PrunerCfg,
             sql::{
                 include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, Read, SqlStorage,
-                Transaction, TransactionMode, Write,
+                StorageConnectionType, Transaction, TransactionMode, Write,
             },
         },
         Transaction as _, VersionedDataSource,
@@ -247,6 +247,12 @@ pub struct Options {
     )]
     pub(crate) min_connections: u32,
 
+    /// Allows setting a different maximum number of connections for query operations.
+    /// Default value of None implies using the min_connections value.
+    #[cfg(not(feature = "embedded-db"))]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MIN_CONNECTIONS", default_value = None)]
+    pub(crate) query_min_connections: Option<u32>,
+
     /// The maximum number of database connections to maintain at any time.
     ///
     /// Once `max` connections are in use simultaneously, further attempts to acquire a connection
@@ -257,6 +263,12 @@ pub struct Options {
         default_value = "25"
     )]
     pub(crate) max_connections: u32,
+
+    /// Allows setting a different maximum number of connections for query operations.
+    /// Default value of None implies using the max_connections value.
+    #[cfg(not(feature = "embedded-db"))]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
+    pub(crate) query_max_connections: Option<u32>,
 
     /// Sets the batch size for the types migration.
     /// Determines how many `(leaf, vid)` rows are selected from the old types table
@@ -393,6 +405,15 @@ impl TryFrom<&Options> for Config {
         cfg = cfg.max_connections(opt.max_connections);
         cfg = cfg.idle_connection_timeout(opt.idle_connection_timeout);
         cfg = cfg.min_connections(opt.min_connections);
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            cfg =
+                cfg.query_max_connections(opt.query_max_connections.unwrap_or(opt.max_connections));
+            cfg =
+                cfg.query_min_connections(opt.query_min_connections.unwrap_or(opt.min_connections));
+        }
+
         cfg = cfg.connection_timeout(opt.connection_timeout);
         cfg = cfg.slow_statement_threshold(opt.slow_statement_threshold);
         cfg = cfg.statement_timeout(opt.statement_timeout);
@@ -621,7 +642,7 @@ impl PersistenceOptions for Options {
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
         let persistence = Persistence {
-            db: SqlStorage::connect(config).await?,
+            db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
             gc_opt: self.consensus_pruning,
             internal_metrics: PersistenceMetricsValue::default(),
         };
@@ -631,7 +652,11 @@ impl PersistenceOptions for Options {
     }
 
     async fn reset(self) -> anyhow::Result<()> {
-        SqlStorage::connect(Config::try_from(&self)?.reset_schema()).await?;
+        SqlStorage::connect(
+            Config::try_from(&self)?.reset_schema(),
+            StorageConnectionType::Sequencer,
+        )
+        .await?;
         Ok(())
     }
 }
