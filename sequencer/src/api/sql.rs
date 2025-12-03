@@ -295,7 +295,7 @@ impl CatchupStorage for SqlStorage {
         }
 
         // get the latest balance for each account.
-        // use DISTINCT ON with index (idx, created DESC) for Postgres
+        // use DISTINCT ON for Postgres
         // use ROW_NUMBER() as DISTINCT ON is not supported for SQLite
         #[cfg(not(feature = "embedded-db"))]
         let query = format!(
@@ -313,7 +313,7 @@ impl CatchupStorage for SqlStorage {
                  SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
              rn
                    FROM {}
-                  WHERE created <= $1 AND idx IS NOT NULL AND entry IS NOT NULL
+                  WHERE created <= $1 AND idx IS NOT NULL
              ) sub
              WHERE rn = 1
              ORDER BY idx
