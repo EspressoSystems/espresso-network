@@ -12,9 +12,11 @@ import "../../src/interfaces/IRewardClaim.sol";
 // - Tests verifying limit exceeded should exceed by exactly 1 wei for precision
 contract RewardClaimRateLimitTest is RewardClaimMockTest {
     function checkLimitEnforced(address user, uint256 lifetimeRewards) internal {
+        uint256 totalClaimedBefore = rewardClaim.totalClaimed();
         vm.prank(user);
         vm.expectRevert(IRewardClaim.DailyLimitExceeded.selector);
         rewardClaim.claimRewards(lifetimeRewards, "");
+        assertEq(rewardClaim.totalClaimed(), totalClaimedBefore);
     }
 
     function test_Claim_WithinLimit() public {
@@ -63,12 +65,18 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         claim(DAILY_LIMIT * 2);
     }
 
+    function test_Claim_TotalClaimedTracked() public {
+        assertEq(0, rewardClaim.totalClaimed());
+        claim(1);
+        assertEq(1, rewardClaim.totalClaimed());
+    }
+
     function test_SetDailyLimit_IncreasesCapacity() public {
         claim(DAILY_LIMIT);
         checkLimitEnforced(claimer, DAILY_LIMIT + 1);
 
         uint256 basisPoints = 200; // 2%
-        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / rewardClaim.BPS_DENOMINATOR();
         vm.prank(owner);
         rewardClaim.setDailyLimit(basisPoints);
 
@@ -92,7 +100,7 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         claim(DAILY_LIMIT);
 
         uint256 basisPoints = 50; // 0.5%
-        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / rewardClaim.BPS_DENOMINATOR();
         vm.prank(owner);
         rewardClaim.setDailyLimit(basisPoints);
 
@@ -117,5 +125,17 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         vm.prank(claimer);
         vm.expectRevert();
         rewardClaim.claimRewards(amount, "");
+    }
+
+    function test_BpsDenominator() public view {
+        assertEq(rewardClaim.BPS_DENOMINATOR(), 10000);
+    }
+
+    function test_DefaultDailyLimit() public view {
+        uint256 expectedBps = 100; // 1%
+        uint256 expectedLimit =
+            (espToken.totalSupply() * expectedBps) / rewardClaim.BPS_DENOMINATOR();
+        assertEq(rewardClaim.lastSetDailyLimitBasisPoints(), expectedBps);
+        assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
     }
 }

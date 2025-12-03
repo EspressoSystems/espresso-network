@@ -32,4 +32,7 @@ interface IRewardClaim {
 
     /// @notice Check amount of rewards claimed by a user
     function claimedRewards(address claimer) external view returns (uint256);
+
+    /// @notice Total amount claimed by all users
+    function totalClaimed() external view returns (uint256);
 }
