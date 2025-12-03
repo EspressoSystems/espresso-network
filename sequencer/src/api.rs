@@ -2554,7 +2554,7 @@ mod test {
         },
         data_source::{
             sql::Config,
-            storage::{sql::query, SqlStorage},
+            storage::{sql::query, SqlStorage, StorageConnectionType},
             Transaction as _, VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
@@ -5151,9 +5151,12 @@ mod test {
         let leaf = leaf_query_data.leaf();
         let to_view = leaf.view_number() + 1;
 
-        let ds = SqlStorage::connect(Config::try_from(&node_0_persistence).unwrap())
-            .await
-            .unwrap();
+        let ds = SqlStorage::connect(
+            Config::try_from(&node_0_persistence).unwrap(),
+            StorageConnectionType::Sequencer,
+        )
+        .await
+        .unwrap();
         let mut tx = ds.write().await?;
 
         let (state, leaf) =
@@ -6675,7 +6678,11 @@ mod test {
     async fn test_get_all_reward_accounts_multiple_cases() -> anyhow::Result<()> {
         let storage = SqlDataSource::create_storage().await;
         let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(Config::try_from(&sql_options)?).await?;
+        let db = SqlStorage::connect(
+            Config::try_from(&sql_options)?,
+            StorageConnectionType::Sequencer,
+        )
+        .await?;
 
         let validated_state = ValidatedState::default();
         let instance_state =
@@ -6821,7 +6828,11 @@ mod test {
     async fn test_get_all_reward_accounts_check_state_height() -> anyhow::Result<()> {
         let storage = SqlDataSource::create_storage().await;
         let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(Config::try_from(&sql_options)?).await?;
+        let db = SqlStorage::connect(
+            Config::try_from(&sql_options)?,
+            StorageConnectionType::Sequencer,
+        )
+        .await?;
 
         let validated_state = ValidatedState::default();
         let instance_state =
