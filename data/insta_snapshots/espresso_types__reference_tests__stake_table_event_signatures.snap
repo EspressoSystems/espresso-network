@@ -1,0 +1,25 @@
+---
+source: types/src/reference_tests.rs
+assertion_line: 737
+expression: signatures
+---
+- - ValidatorRegistered
+  - "ValidatorRegistered(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16)"
+- - ValidatorRegisteredV2
+  - "ValidatorRegisteredV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16,(uint256,uint256),bytes,string)"
+- - ValidatorExit
+  - ValidatorExit(address)
+- - ValidatorExitV2
+  - "ValidatorExitV2(address,uint256)"
+- - Delegated
+  - "Delegated(address,address,uint256)"
+- - Undelegated
+  - "Undelegated(address,address,uint256)"
+- - UndelegatedV2
+  - "UndelegatedV2(address,address,uint64,uint256,uint256)"
+- - ConsensusKeysUpdated
+  - "ConsensusKeysUpdated(address,(uint256,uint256,uint256,uint256),(uint256,uint256))"
+- - ConsensusKeysUpdatedV2
+  - "ConsensusKeysUpdatedV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),(uint256,uint256),bytes)"
+- - CommissionUpdated
+  - "CommissionUpdated(address,uint256,uint16,uint16)"
