@@ -127,9 +127,12 @@ struct Options {
     )]
     ledger: bool,
 
-    /// Option to deploy fee contracts
+    /// Option to deploy fee contracts, (Backward compatibility: --deploy-fee is an alias for --deploy-fee-v1)
     #[clap(long, default_value = "false")]
     deploy_fee: bool,
+    /// Option to deploy fee contracts
+    #[clap(long, default_value = "false")]
+    deploy_fee_v1: bool,
     /// Option to deploy LightClient V1 and proxy
     #[clap(long, default_value = "false")]
     deploy_light_client_v1: bool,
@@ -139,21 +142,27 @@ struct Options {
     /// Option to upgrade to LightClient V3
     #[clap(long, default_value = "false")]
     upgrade_light_client_v3: bool,
-    /// Option to deploy esp token
+    /// Option to deploy esp token (Backward compatibility: --deploy-esp-token is an alias for --deploy-esp-token-v1)
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
+    /// Option to deploy esp token v1
+    #[clap(long, default_value = "false")]
+    deploy_esp_token_v1: bool,
     /// Option to upgrade esp token v2
     #[clap(long, default_value = "false")]
     upgrade_esp_token_v2: bool,
-    /// Option to deploy StakeTable V1 and proxy
+    /// Option to deploy StakeTable V1 and proxy (Backward compatibility: --deploy-stake-table is an alias for --deploy-stake-table-v1)
     #[clap(long, default_value = "false")]
     deploy_stake_table: bool,
+    /// Option to deploy StakeTable V1
+    #[clap(long, default_value = "false")]
+    deploy_stake_table_v1: bool,
     /// Option to upgrade to StakeTable V2
     #[clap(long, default_value = "false")]
     upgrade_stake_table_v2: bool,
-    /// Option to deploy RewardClaim proxy
+    /// Option to deploy RewardClaimV1 proxy
     #[clap(long, default_value = "false")]
-    deploy_reward_claim: bool,
+    deploy_reward_claim_v1: bool,
     /// Option to deploy ops timelock
     #[clap(long, default_value = "false")]
     deploy_ops_timelock: bool,
@@ -616,7 +625,7 @@ async fn main() -> anyhow::Result<()> {
         args_builder.timelock_operation_value(timelock_operation_value);
     }
 
-    if opt.deploy_esp_token {
+    if opt.deploy_esp_token || opt.deploy_esp_token_v1 {
         let token_recipient = opt
             .initial_token_grant_recipient
             .expect("Must provide --initial-token-grant-recipient when deploying esp token");
@@ -684,11 +693,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Then deploy other contracts
-    if opt.deploy_fee {
+    if opt.deploy_fee || opt.deploy_fee_v1 {
         args.deploy(&mut contracts, Contract::FeeContractProxy)
             .await?;
     }
-    if opt.deploy_esp_token {
+    if opt.deploy_esp_token || opt.deploy_esp_token_v1 {
         args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
     }
     if opt.deploy_light_client_v1 {
@@ -702,14 +711,14 @@ async fn main() -> anyhow::Result<()> {
         args.deploy(&mut contracts, Contract::LightClientV3).await?;
     }
     // Deploy RewardClaimProxy before upgrading EspTokenV2, as the upgrade requires it
-    if opt.deploy_reward_claim {
+    if opt.deploy_reward_claim_v1 {
         args.deploy(&mut contracts, Contract::RewardClaimProxy)
             .await?;
     }
     if opt.upgrade_esp_token_v2 {
         args.deploy(&mut contracts, Contract::EspTokenV2).await?;
     }
-    if opt.deploy_stake_table {
+    if opt.deploy_stake_table || opt.deploy_stake_table_v1 {
         args.deploy(&mut contracts, Contract::StakeTableProxy)
             .await?;
     }
