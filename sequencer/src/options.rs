@@ -364,7 +364,9 @@ impl Options {
 
     pub fn private_keys(&self) -> anyhow::Result<(BLSPrivKey, StateSignKey)> {
         if let Some(path) = &self.key_file {
-            let vars = dotenvy::from_path_iter(path)?.collect::<Result<HashMap<_, _>, _>>()?;
+            let vars = dotenvy::from_path_iter(path)
+                .with_context(|| format!("failed to read key file: {}", path.display()))?
+                .collect::<Result<HashMap<_, _>, _>>()?;
             let staking = TaggedBase64::parse(
                 vars.get("ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY")
                     .context("key file missing ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY")?,
