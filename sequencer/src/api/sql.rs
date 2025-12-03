@@ -122,7 +122,7 @@ impl RewardAccountProofDataSource for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            let (tree, _) = load_v1_reward_accounts(&self, &mut tx, height, &[account])
+            let (tree, _) = load_v1_reward_accounts(self, &mut tx, height, &[account])
                 .await
                 .with_context(|| {
                     format!("failed to load v1 reward account {account:?} at height {height}")
@@ -162,7 +162,7 @@ impl RewardAccountProofDataSource for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            let (tree, _) = load_v2_reward_accounts(&self, &mut tx, height, &[account])
+            let (tree, _) = load_v2_reward_accounts(self, &mut tx, height, &[account])
                 .await
                 .with_context(|| {
                     format!("failed to load v2 reward account {account:?} at height {height}")
@@ -205,7 +205,7 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_v1_reward_accounts(&self, &mut tx, height, accounts).await
+            load_v1_reward_accounts(self, &mut tx, height, accounts).await
         } else {
             let accounts: Vec<_> = accounts
                 .iter()
@@ -215,7 +215,7 @@ impl CatchupStorage for SqlStorage {
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
             let (state, leaf) = reconstruct_state(
                 instance,
-                &self,
+                self,
                 &mut tx,
                 block_height - 1,
                 view,
@@ -249,13 +249,13 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_v2_reward_accounts(&self, &mut tx, height, accounts).await
+            load_v2_reward_accounts(self, &mut tx, height, accounts).await
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
             let (state, leaf) = reconstruct_state(
                 instance,
-                &self,
+                self,
                 &mut tx,
                 block_height - 1,
                 view,
@@ -363,7 +363,7 @@ impl CatchupStorage for SqlStorage {
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
             let (state, leaf) = reconstruct_state(
                 instance,
-                &self,
+                self,
                 &mut tx,
                 block_height - 1,
                 view,
@@ -401,7 +401,7 @@ impl CatchupStorage for SqlStorage {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
             let (state, _) =
-                reconstruct_state(instance, &self, &mut tx, block_height - 1, view, &[], &[])
+                reconstruct_state(instance, self, &mut tx, block_height - 1, view, &[], &[])
                     .await?;
             match state.block_merkle_tree.lookup(height - 1) {
                 LookupResult::Ok(_, proof) => Ok(proof),
@@ -629,7 +629,7 @@ async fn load_v1_reward_accounts<Mode: TransactionMode>(
     for account in accounts {
         // Clone things we will need in the closure
         let db_clone = db.clone();
-        let account_clone = account.clone();
+        let account_clone = *account;
         let header_height = header.height();
 
         // Create the closure that will get the path for the account
@@ -733,7 +733,7 @@ async fn load_v2_reward_accounts<Mode: TransactionMode>(
     for account in accounts {
         // Clone things we will need in the closure
         let db_clone = db.clone();
-        let account_clone = account.clone();
+        let account_clone = *account;
         let header_height = header.height();
 
         // Create the closure that will get the path for the account
