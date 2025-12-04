@@ -6657,7 +6657,8 @@ mod test {
             .iter()
             .map(|(addr, amt)| (*addr, *amt))
             .collect();
-        expected.sort_by_key(|(acct, _)| *acct);
+        // Results are sorted by account address descending
+        expected.sort_by_key(|(acct, _)| std::cmp::Reverse(*acct));
 
         tracing::info!("expected accounts = {expected:?}");
         let limit = expected.len().min(10_000) as u64;
@@ -6811,16 +6812,16 @@ mod test {
         }
 
         // Test pagination
-        // results are sorted by account address
+        // results are sorted by account address descending
         let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
         assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account1, RewardAmount::from(1500u64)));
-        assert_eq!(result_limit_2[1], (account2, RewardAmount::from(2500u64)));
+        assert_eq!(result_limit_2[0], (account4, RewardAmount::from(4000u64)));
+        assert_eq!(result_limit_2[1], (account3, RewardAmount::from(3000u64)));
 
         let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
         assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account3, RewardAmount::from(3000u64)));
-        assert_eq!(result_offset_2[1], (account4, RewardAmount::from(4000u64)));
+        assert_eq!(result_offset_2[0], (account2, RewardAmount::from(2500u64)));
+        assert_eq!(result_offset_2[1], (account1, RewardAmount::from(1500u64)));
 
         Ok(())
     }
