@@ -558,6 +558,25 @@ pub async fn main() -> Result<()> {
                 return Ok(());
             },
         },
+        Commands::StakeForDemo {
+            num_validators,
+            num_delegators_per_validator,
+            delegation_config,
+        } => {
+            tracing::warn!(
+                "stake-for-demo is deprecated and will be removed in a future release. Use `demo \
+                 stake` instead."
+            );
+            stake_for_demo(
+                &config,
+                num_validators,
+                num_delegators_per_validator,
+                delegation_config,
+            )
+            .await
+            .unwrap();
+            return Ok(());
+        },
         Commands::Transfer { amount, to } => {
             let amount_esp = format_ether(amount);
             tracing::info!("Transferring {amount_esp} ESP to {to}");

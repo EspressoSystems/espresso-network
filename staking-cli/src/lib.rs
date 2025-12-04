@@ -329,6 +329,20 @@ pub enum Commands {
     },
     /// Demo commands for testing and development
     Demo(demo::Demo),
+    /// [DEPRECATED] Use `demo stake` instead. Register validators and create delegators for demo.
+    #[clap(hide = true)]
+    StakeForDemo {
+        /// The number of validators to register.
+        #[clap(long, default_value_t = 5)]
+        num_validators: u16,
+
+        /// The number of delegators to create per validator.
+        #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
+        num_delegators_per_validator: Option<u64>,
+
+        #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = demo::DelegationConfig::default())]
+        delegation_config: demo::DelegationConfig,
+    },
     /// Export validator node signatures for address validation.
     ExportNodeSignatures {
         /// The Ethereum address to sign.
