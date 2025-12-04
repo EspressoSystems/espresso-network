@@ -190,6 +190,7 @@ struct Options {
     /// Which timelock is used depends on the contract:
     /// - FeeContract, LightClient, StakeTable → OpsTimelock (shorter delay for critical ops)
     /// - EspToken, RewardClaim → SafeExitTimelock (longer delay for token operations)
+    ///
     /// Requires timelocks to be deployed first (--deploy-ops-timelock, --deploy-safe-exit-timelock).
     /// If not set, ownership goes to multisig (if --use-multisig) or deployer account.
     #[clap(long, default_value = "false")]
