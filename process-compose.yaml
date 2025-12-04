@@ -180,12 +180,12 @@ processes:
     availability: *run-forever
 
   prover-one-shot:
-    # to avoid interfering so much with other work, "nice" the state prover process
-    command: env RUST_LOG=INFO,hotshot_state_prover=DEBUG state-prover
+    # "nice" this compute heavy process to reduce load
+    command: nice state-prover
     environment:
-      - MNEMONIC=${ESPRESSO_SEQUENCER_ETH_MNEMONIC}
       - RAYON_NUM_THREADS=${PROVER_RAYON_NUM_THREADS}
       - ESPRESSO_STATE_PROVER_ONESHOT_RETRIES=1
+      - RUST_LOG=${RUST_LOG},hotshot_state_prover=DEBUG
     depends_on:
       sequencer0:
         condition: process_healthy
