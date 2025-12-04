@@ -81,6 +81,8 @@ impl TestSystemExt for TestSystem {
 }
 
 /// Creates a new command to run the staking-cli binary.
+// https://github.com/rust-lang/rust/issues/148426
+#[allow(deprecated)]
 pub fn base_cmd() -> Command {
     Command::cargo_bin("staking-cli").unwrap()
 }
