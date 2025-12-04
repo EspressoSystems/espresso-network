@@ -310,27 +310,28 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
 
-  prover-service:
+  prover-one-shot:
     image: ghcr.io/espressosystems/espresso-sequencer/prover-service:${DOCKER_TAG:-main}
-    ports:
-      - "$ESPRESSO_PROVER_SERVICE_PORT:$ESPRESSO_PROVER_SERVICE_PORT"
+    # "nice" this compute heavy process to reduce load
+    command: nice state-prover
+    deploy:
+      restart_policy:
+        condition: any
+        delay: ${ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS}s
     environment:
-      - ESPRESSO_PROVER_SERVICE_PORT
       - ESPRESSO_STATE_RELAY_SERVER_URL=http://state-relay-server:${ESPRESSO_STATE_RELAY_SERVER_PORT}
       - ESPRESSO_SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
-      - ESPRESSO_STATE_PROVER_UPDATE_INTERVAL
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
-      - ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI
-      - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
+      - ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX
+      - ESPRESSO_STATE_PROVER_ONESHOT_RETRIES=1
       - RAYON_NUM_THREADS=$PROVER_RAYON_NUM_THREADS
-      - RUST_LOG
+      - RUST_LOG=INFO,hotshot_state_prover=DEBUG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
-      - RAYON_NUM_THREADS
     depends_on:
       sequencer0:
         condition: service_healthy
@@ -338,8 +339,6 @@ services:
         condition: service_healthy
       demo-l1-network:
         condition: service_healthy
-      deploy-sequencer-contracts:
-        condition: service_completed_successfully
       deploy-prover-contracts:
         condition: service_completed_successfully
 

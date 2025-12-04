@@ -24,7 +24,8 @@ use hotshot_query_service::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
             sql::{query_as, Db, TransactionMode, Write},
-            AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            AvailabilityStorage, MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage,
+            SqlStorage,
         },
         VersionedDataSource,
     },
@@ -274,6 +275,16 @@ impl CatchupStorage for SqlStorage {
             "requested height {height} is not yet available (latest block height: {block_height})"
         );
 
+        let merklized_state_height = tx
+            .get_last_state_height()
+            .await
+            .context("getting merklized state height")? as u64;
+        ensure!(
+            height <= merklized_state_height,
+            "requested height {height} is not yet available. latest merklized state height: \
+             {merklized_state_height}"
+        );
+
         let header = tx
             .get_header(BlockId::<SeqTypes>::from(height as usize))
             .await
@@ -283,27 +294,40 @@ impl CatchupStorage for SqlStorage {
             return Ok(Vec::new());
         }
 
-        // get the latest balance for each account
-        // We use ROW_NUMBER() to rank entries by created height per account,
-        // then select only the most recent entry (rn = 1) for each account.
-        let rows = query_as::<(Value, Value)>(&format!(
+        // get the latest balance for each account.
+        // use DISTINCT ON for Postgres
+        // use ROW_NUMBER() as DISTINCT ON is not supported for SQLite
+        #[cfg(not(feature = "embedded-db"))]
+        let query = format!(
+            "SELECT DISTINCT ON (idx) idx, entry
+               FROM {}
+              WHERE idx IS NOT NULL AND created <= $1
+              ORDER BY idx DESC, created DESC
+              LIMIT $2 OFFSET $3",
+            RewardMerkleTreeV2::state_type()
+        );
+
+        #[cfg(feature = "embedded-db")]
+        let query = format!(
             "SELECT idx, entry FROM (
                  SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
              rn
                    FROM {}
-                  WHERE created <= $1 AND idx IS NOT NULL AND entry IS NOT NULL
+                  WHERE created <= $1 AND idx IS NOT NULL
              ) sub
              WHERE rn = 1
-             ORDER BY idx
+             ORDER BY idx DESC
              LIMIT $2 OFFSET $3",
             RewardMerkleTreeV2::state_type()
-        ))
-        .bind(height as i64)
-        .bind(limit as i64)
-        .bind(offset as i64)
-        .fetch_all(tx.as_mut())
-        .await
-        .context("loading reward accounts from storage")?;
+        );
+
+        let rows = query_as::<(Value, Value)>(&query)
+            .bind(height as i64)
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(tx.as_mut())
+            .await
+            .context("loading reward accounts from storage")?;
 
         let mut accounts = Vec::new();
         for (idx, entry) in rows {
