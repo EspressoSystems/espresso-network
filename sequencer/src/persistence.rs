@@ -111,7 +111,7 @@ mod tests {
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
         traits::{
@@ -1554,7 +1554,10 @@ mod tests {
             .genesis_st_state(genesis_stake)
             .blocks_per_epoch(blocks_per_epoch)
             .epoch_start_block(1)
-            .exit_escrow_period(U256::from(max(blocks_per_epoch * 15 + 100, 172800)))
+            .exit_escrow_period(U256::from(max(
+                blocks_per_epoch * 15 + 100,
+                DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+            )))
             .multisig_pauser(network_config.signer().address())
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())

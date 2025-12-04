@@ -17,6 +17,7 @@ use anyhow::Result;
 use espresso_contract_deployer::{
     build_signer, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table, Contract, Contracts,
+    DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
 };
 use espresso_types::{
     v0::v0_4::{
@@ -79,7 +80,7 @@ impl TestSystem {
     pub async fn deploy_version(
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
-        let exit_escrow_period = Duration::from_secs(172800);
+        let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         // Sporadically the provider builder fails with a timeout inside alloy.
         // Retry a few times.
         let mut attempts = 0;

@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use espresso_contract_deployer::{
     self as deployer, network_config::light_client_genesis_from_stake_table, Contract, Contracts,
-    DeployedContracts, HttpProviderWithWallet,
+    DeployedContracts, HttpProviderWithWallet, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
 };
 use espresso_dev_node::{
     AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
@@ -500,7 +500,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // deploy permissionless stake table
-            let exit_escrow_period = U256::from(172800); // 2 days
+            let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
             let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
                 &provider,
                 contracts,
