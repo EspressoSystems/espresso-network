@@ -17,7 +17,7 @@ use ark_std::{
     vec::Vec,
 };
 use bitvec::prelude::*;
-use digest::generic_array::GenericArray;
+use generic_array::GenericArray;
 use jf_signature::{AggregateableSignatureSchemes, SignatureError};
 use serde::{Deserialize, Serialize};
 use typenum::U32;
