@@ -511,6 +511,9 @@ mod test {
         future::{join, FutureExt},
         stream::StreamExt,
     };
+    // generic-array 0.14.x is deprecated, but VidCommitment requires this version
+    // for From<Output<H>> impl in jf-merkle-tree
+    #[allow(deprecated)]
     use generic_array::GenericArray;
     use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
     use hotshot_types::traits::node_implementation::Versions;
@@ -1434,6 +1437,8 @@ mod test {
         );
     }
 
+    // Uses deprecated generic-array 0.14.x via digest, required for VidCommitment compatibility
+    #[allow(deprecated)]
     fn random_vid_commit() -> VidCommitment {
         let mut bytes = [0; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
