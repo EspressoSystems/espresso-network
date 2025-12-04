@@ -19,7 +19,8 @@ use hotshot_types::{
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
+        node_implementation::Versions, signature_key::StateSignatureKey,
+        storage::EpochStateStorage,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };

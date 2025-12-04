@@ -142,7 +142,7 @@ where
     )));
 
     let coordinator =
-        EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height, &storage);
+        EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height, storage.clone());
     let node_key_map = launcher.metadata.build_node_key_map();
 
     let (c, s, r) = SystemContext::init(
