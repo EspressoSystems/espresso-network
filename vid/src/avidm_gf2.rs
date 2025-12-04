@@ -78,6 +78,7 @@ impl AvidmGf2Share {
     Clone,
     Copy,
     Debug,
+    Default,
     Hash,
     CanonicalSerialize,
     CanonicalDeserialize,
@@ -96,6 +97,14 @@ pub struct AvidmGf2Commit {
 impl AsRef<[u8]> for AvidmGf2Commit {
     fn as_ref(&self) -> &[u8] {
         self.commit.as_ref()
+    }
+}
+
+impl AsRef<[u8; 32]> for AvidmGf2Commit {
+    fn as_ref(&self) -> &[u8; 32] {
+        <Self as AsRef<[u8]>>::as_ref(self)
+            .try_into()
+            .expect("AvidmGf2Commit is always 32 bytes")
     }
 }
 
