@@ -27,7 +27,7 @@ use hotshot_types::{
 use staking_cli::{
     claim::{claim_reward, claim_validator_exit, claim_withdrawal, unclaimed_rewards},
     delegation::{approve, delegate, undelegate},
-    demo::stake_for_demo,
+    demo::{churn_for_demo, delegate_for_demo, stake_for_demo, undelegate_for_demo, DemoCommands},
     info::{display_stake_table, fetch_token_address, stake_table_info},
     output::{output_error, output_success},
     registration::{
@@ -455,23 +455,108 @@ pub async fn main() -> Result<()> {
             tracing::info!("Claiming rewards from {espresso_url}");
             claim_reward(&provider, stake_table_addr, espresso_url, account).await
         },
-        Commands::StakeForDemo {
-            num_validators,
-            num_delegators_per_validator,
-            delegation_config,
-        } => {
-            tracing::info!(
-                "Staking for demo with {num_validators} validators and config {delegation_config}"
-            );
-            stake_for_demo(
-                &config,
+        Commands::Demo(ref demo) => match &demo.command {
+            DemoCommands::Stake {
                 num_validators,
                 num_delegators_per_validator,
                 delegation_config,
-            )
-            .await
-            .unwrap();
-            return Ok(());
+            } => {
+                tracing::info!(
+                    "Staking for demo with {num_validators} validators and config \
+                     {delegation_config}"
+                );
+                stake_for_demo(
+                    &config,
+                    *num_validators,
+                    *num_delegators_per_validator,
+                    *delegation_config,
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
+            DemoCommands::Delegate {
+                validators,
+                delegator_start_index,
+                num_delegators,
+                min_amount,
+                max_amount,
+                batch_size,
+                delay,
+            } => {
+                tracing::info!(
+                    "Mass delegating {} delegators to {} validators",
+                    num_delegators,
+                    validators.len()
+                );
+                delegate_for_demo(
+                    &config,
+                    validators.clone(),
+                    *delegator_start_index,
+                    *num_delegators,
+                    *min_amount,
+                    *max_amount,
+                    *batch_size,
+                    *delay,
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
+            DemoCommands::Undelegate {
+                validators,
+                delegator_start_index,
+                num_delegators,
+                batch_size,
+                delay,
+            } => {
+                tracing::info!(
+                    "Mass undelegating {} delegators from {} validators",
+                    num_delegators,
+                    validators.len()
+                );
+                undelegate_for_demo(
+                    &config,
+                    validators.clone(),
+                    *delegator_start_index,
+                    *num_delegators,
+                    *batch_size,
+                    *delay,
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
+            DemoCommands::Churn {
+                validator_start_index,
+                num_validators,
+                delegator_start_index,
+                num_delegators,
+                min_amount,
+                max_amount,
+                delay,
+            } => {
+                tracing::info!(
+                    "Starting churn with {} validators and {} delegators",
+                    num_validators,
+                    num_delegators
+                );
+                churn_for_demo(
+                    &config,
+                    staking_cli::demo::ChurnParams {
+                        validator_start_index: *validator_start_index,
+                        num_validators: *num_validators,
+                        delegator_start_index: *delegator_start_index,
+                        num_delegators: *num_delegators,
+                        min_amount: *min_amount,
+                        max_amount: *max_amount,
+                        delay: *delay,
+                    },
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
         },
         Commands::Transfer { amount, to } => {
             let amount_esp = format_ether(amount);

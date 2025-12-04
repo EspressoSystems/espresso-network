@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
+    time::Duration,
 };
 
 use alloy::{
@@ -16,10 +17,11 @@ use alloy::{
     transports::{http::Http, TransportError},
 };
 use anyhow::Result;
-use clap::ValueEnum;
+use clap::{Args, Subcommand, ValueEnum};
 use espresso_contract_deployer::{build_provider, build_signer, HttpProviderWithWallet};
+use espresso_types::parse_duration;
 use futures_util::future;
-use hotshot_contract_adapter::sol_types::EspToken;
+use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -65,6 +67,111 @@ pub enum CreateTransactionsError {
     Commission(#[from] ParseCommissionError),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct Demo {
+    #[command(subcommand)]
+    pub command: DemoCommands,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DemoCommands {
+    /// Register validators and create delegators for demo
+    Stake {
+        /// The number of validators to register.
+        #[clap(long, default_value_t = 5)]
+        num_validators: u16,
+
+        /// The number of delegators to create per validator.
+        #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
+        num_delegators_per_validator: Option<u64>,
+
+        #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = DelegationConfig::default())]
+        delegation_config: DelegationConfig,
+    },
+    /// Mass delegate to existing validators
+    Delegate {
+        /// Comma-separated validator addresses to delegate to
+        #[clap(long, value_delimiter = ',')]
+        validators: Vec<Address>,
+
+        /// Starting index for delegator generation
+        #[clap(long)]
+        delegator_start_index: u64,
+
+        /// Number of delegators to create
+        #[clap(long)]
+        num_delegators: u64,
+
+        /// Minimum delegation amount (ESP)
+        #[clap(long, value_parser = parse_ether)]
+        min_amount: U256,
+
+        /// Maximum delegation amount (ESP)
+        #[clap(long, value_parser = parse_ether)]
+        max_amount: U256,
+
+        /// Number of transactions to submit per batch
+        #[clap(long)]
+        batch_size: Option<usize>,
+
+        /// Delay between batches (requires --batch-size)
+        #[clap(long, value_parser = parse_duration, requires = "batch_size")]
+        delay: Option<Duration>,
+    },
+    /// Mass undelegate from validators
+    Undelegate {
+        /// Comma-separated validator addresses to undelegate from
+        #[clap(long, value_delimiter = ',')]
+        validators: Vec<Address>,
+
+        /// Starting index for delegator generation
+        #[clap(long)]
+        delegator_start_index: u64,
+
+        /// Number of delegators
+        #[clap(long)]
+        num_delegators: u64,
+
+        /// Number of transactions to submit per batch
+        #[clap(long)]
+        batch_size: Option<usize>,
+
+        /// Delay between batches (requires --batch-size)
+        #[clap(long, value_parser = parse_duration, requires = "batch_size")]
+        delay: Option<Duration>,
+    },
+    /// Continuous delegation/undelegation activity
+    Churn {
+        /// Starting mnemonic index for validators
+        #[clap(long, default_value_t = 20)]
+        validator_start_index: u32,
+
+        /// Number of validators to target
+        #[clap(long)]
+        num_validators: u16,
+
+        /// Starting index for delegator generation
+        #[clap(long)]
+        delegator_start_index: u64,
+
+        /// Number of delegators in the pool
+        #[clap(long)]
+        num_delegators: u64,
+
+        /// Minimum delegation amount (ESP)
+        #[clap(long, value_parser = parse_ether)]
+        min_amount: U256,
+
+        /// Maximum delegation amount (ESP)
+        #[clap(long, value_parser = parse_ether)]
+        max_amount: U256,
+
+        /// Delay between operations
+        #[clap(long, value_parser = parse_duration, default_value = "1s")]
+        delay: Duration,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -632,6 +739,16 @@ impl StakingTransactions<HttpProviderWithWallet> {
     }
 }
 
+const DELEGATOR_SEED: u64 = 42;
+
+pub fn generate_delegator_signer(index: u64) -> PrivateKeySigner {
+    let seed = DELEGATOR_SEED.wrapping_add(index);
+    let mut seed_bytes = [0u8; 32];
+    seed_bytes[..8].copy_from_slice(&seed.to_le_bytes());
+    let mut rng = ChaCha20Rng::from_seed(seed_bytes);
+    PrivateKeySigner::random_with(&mut rng)
+}
+
 /// Register validators, and delegate to themselves for demo purposes.
 ///
 /// The environment variables used only for this function but not for the normal staking CLI are
@@ -699,6 +816,419 @@ pub async fn stake_for_demo(
     .await?;
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn delegate_for_demo(
+    config: &Config,
+    validators: Vec<Address>,
+    delegator_start_index: u64,
+    num_delegators: u64,
+    min_amount: U256,
+    max_amount: U256,
+    batch_size: Option<usize>,
+    delay: Option<Duration>,
+) -> Result<()> {
+    tracing::info!("mass delegating to {} validators", validators.len());
+
+    let grant_recipient = build_provider(
+        config.signer.mnemonic.clone().unwrap(),
+        config.signer.account_index.unwrap(),
+        config.rpc_url.clone(),
+        None,
+    );
+
+    let token_address =
+        fetch_token_address(config.rpc_url.clone(), config.stake_table_address).await?;
+
+    let fund_amount_esp = max_amount + parse_ether("100").unwrap();
+    let fund_amount_eth = parse_ether("10").unwrap();
+
+    let shared_client = RpcClient::new(Http::new(config.rpc_url.clone()), true);
+    let funder_provider = ProviderBuilder::new()
+        .wallet(grant_recipient.wallet().clone())
+        .connect_client(shared_client.clone());
+
+    let seed_offset = DELEGATOR_SEED.wrapping_add(delegator_start_index);
+    let mut rng = ChaCha20Rng::seed_from_u64(seed_offset);
+
+    struct DelegatorInfo {
+        signer: PrivateKeySigner,
+        validator: Address,
+        amount: U256,
+    }
+
+    let mut delegators = Vec::with_capacity(num_delegators as usize);
+    for i in 0..num_delegators {
+        let delegator_index = delegator_start_index + i;
+        let delegator_signer = generate_delegator_signer(delegator_index);
+        let validator = validators[(i as usize) % validators.len()];
+
+        let delegation_amount = if min_amount == max_amount {
+            min_amount
+        } else {
+            let range = max_amount - min_amount;
+            let random_offset = U256::from(rng.gen_range(0..=u128::MAX)) % range;
+            min_amount + random_offset
+        };
+
+        tracing::info!(
+            "delegator {} (index {}) -> validator {}: {} ESP",
+            delegator_signer.address(),
+            delegator_index,
+            validator,
+            format_ether(delegation_amount)
+        );
+
+        delegators.push(DelegatorInfo {
+            signer: delegator_signer,
+            validator,
+            amount: delegation_amount,
+        });
+    }
+
+    let delegator_providers: HashMap<Address, _> = delegators
+        .iter()
+        .map(|d| {
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(d.signer.clone()))
+                .connect_client(shared_client.clone());
+            (d.signer.address(), provider)
+        })
+        .collect();
+
+    tracing::info!("phase 1/4: funding ETH");
+    let batch_size_val = batch_size.unwrap_or(delegators.len());
+    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
+        if batch_idx > 0 {
+            if let Some(delay_duration) = delay {
+                tokio::time::sleep(delay_duration).await;
+            }
+        }
+        let pending: Vec<_> = future::try_join_all(
+            chunk
+                .iter()
+                .map(|d| send_eth(&funder_provider, d.signer.address(), fund_amount_eth)),
+        )
+        .await?;
+        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
+    }
+
+    tracing::info!("phase 2/4: funding ESP");
+    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
+        if batch_idx > 0 {
+            if let Some(delay_duration) = delay {
+                tokio::time::sleep(delay_duration).await;
+            }
+        }
+        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|d| {
+            send_esp(
+                &funder_provider,
+                token_address,
+                d.signer.address(),
+                fund_amount_esp,
+            )
+        }))
+        .await?;
+        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
+    }
+
+    tracing::info!("phase 3/4: approvals");
+    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
+        if batch_idx > 0 {
+            if let Some(delay_duration) = delay {
+                tokio::time::sleep(delay_duration).await;
+            }
+        }
+        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|d| {
+            let provider = delegator_providers.get(&d.signer.address()).unwrap();
+            approve(
+                provider,
+                token_address,
+                config.stake_table_address,
+                d.amount,
+            )
+        }))
+        .await?;
+        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
+    }
+
+    tracing::info!("phase 4/4: delegations");
+    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
+        if batch_idx > 0 {
+            if let Some(delay_duration) = delay {
+                tokio::time::sleep(delay_duration).await;
+            }
+        }
+        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|d| {
+            let provider = delegator_providers.get(&d.signer.address()).unwrap();
+            delegate(provider, config.stake_table_address, d.validator, d.amount)
+        }))
+        .await?;
+        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
+    }
+
+    tracing::info!("completed mass delegation");
+    Ok(())
+}
+
+pub async fn undelegate_for_demo(
+    config: &Config,
+    validators: Vec<Address>,
+    delegator_start_index: u64,
+    num_delegators: u64,
+    batch_size: Option<usize>,
+    delay: Option<Duration>,
+) -> Result<()> {
+    tracing::info!("mass undelegating from {} validators", validators.len());
+
+    let shared_client = RpcClient::new(Http::new(config.rpc_url.clone()), true);
+    let query_provider = ProviderBuilder::new().connect_client(shared_client.clone());
+
+    let stake_table = StakeTableV2::new(config.stake_table_address, &query_provider);
+
+    struct UndelegationInfo {
+        signer: PrivateKeySigner,
+        validator: Address,
+        amount: U256,
+    }
+
+    let mut undelegations = Vec::new();
+    for i in 0..num_delegators {
+        let delegator_index = delegator_start_index + i;
+        let delegator_signer = generate_delegator_signer(delegator_index);
+        let delegator_address = delegator_signer.address();
+
+        for validator in &validators {
+            let delegation_amount = stake_table
+                .delegations(*validator, delegator_address)
+                .call()
+                .await?;
+
+            if delegation_amount.is_zero() {
+                continue;
+            }
+
+            tracing::info!(
+                "undelegating delegator {} (index {}) from validator {}: {} ESP",
+                delegator_address,
+                delegator_index,
+                validator,
+                format_ether(delegation_amount)
+            );
+
+            undelegations.push(UndelegationInfo {
+                signer: delegator_signer.clone(),
+                validator: *validator,
+                amount: delegation_amount,
+            });
+        }
+    }
+
+    if undelegations.is_empty() {
+        tracing::info!("no delegations to undelegate");
+        return Ok(());
+    }
+
+    let delegator_providers: HashMap<Address, _> = undelegations
+        .iter()
+        .map(|u| {
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(u.signer.clone()))
+                .connect_client(shared_client.clone());
+            (u.signer.address(), provider)
+        })
+        .collect();
+
+    tracing::info!("undelegating {} delegations", undelegations.len());
+    let batch_size_val = batch_size.unwrap_or(undelegations.len());
+    for (batch_idx, chunk) in undelegations.chunks(batch_size_val).enumerate() {
+        if batch_idx > 0 {
+            if let Some(delay_duration) = delay {
+                tokio::time::sleep(delay_duration).await;
+            }
+        }
+        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|u| {
+            let provider = delegator_providers.get(&u.signer.address()).unwrap();
+            crate::delegation::undelegate(
+                provider,
+                config.stake_table_address,
+                u.validator,
+                u.amount,
+            )
+        }))
+        .await?;
+        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
+    }
+
+    tracing::info!("completed mass undelegation");
+    Ok(())
+}
+
+pub struct ChurnParams {
+    pub validator_start_index: u32,
+    pub num_validators: u16,
+    pub delegator_start_index: u64,
+    pub num_delegators: u64,
+    pub min_amount: U256,
+    pub max_amount: U256,
+    pub delay: Duration,
+}
+
+pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> {
+    let ChurnParams {
+        validator_start_index,
+        num_validators,
+        delegator_start_index,
+        num_delegators,
+        min_amount,
+        max_amount,
+        delay,
+    } = params;
+    tracing::info!(
+        "starting churn with {} validators and {} delegators",
+        num_validators,
+        num_delegators
+    );
+
+    let mnemonic = config.signer.mnemonic.clone().unwrap();
+    let mut validator_addresses = Vec::new();
+    for i in 0..num_validators {
+        let signer = build_signer(mnemonic.clone(), validator_start_index + i as u32);
+        validator_addresses.push(signer.address());
+    }
+
+    let grant_recipient = build_provider(
+        mnemonic.clone(),
+        config.signer.account_index.unwrap(),
+        config.rpc_url.clone(),
+        None,
+    );
+
+    let token_address =
+        fetch_token_address(config.rpc_url.clone(), config.stake_table_address).await?;
+    let fund_amount_esp = max_amount + parse_ether("100").unwrap();
+    let fund_amount_eth = parse_ether("10").unwrap();
+
+    let shared_client = RpcClient::new(Http::new(config.rpc_url.clone()), true);
+    let funder_provider = ProviderBuilder::new()
+        .wallet(grant_recipient.wallet().clone())
+        .connect_client(shared_client.clone());
+
+    tracing::info!("funding {} delegators", num_delegators);
+    for i in 0..num_delegators {
+        let delegator_index = delegator_start_index + i;
+        let delegator_signer = generate_delegator_signer(delegator_index);
+        let delegator_address = delegator_signer.address();
+
+        send_eth(&funder_provider, delegator_address, fund_amount_eth)
+            .await?
+            .assert_success()
+            .await?;
+        send_esp(
+            &funder_provider,
+            token_address,
+            delegator_address,
+            fund_amount_esp,
+        )
+        .await?
+        .assert_success()
+        .await?;
+
+        let delegator_provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(delegator_signer))
+            .connect_client(shared_client.clone());
+
+        approve(
+            &delegator_provider,
+            token_address,
+            config.stake_table_address,
+            fund_amount_esp,
+        )
+        .await?
+        .assert_success()
+        .await?;
+    }
+
+    let query_provider = ProviderBuilder::new().connect_client(shared_client.clone());
+    let stake_table = StakeTableV2::new(config.stake_table_address, &query_provider);
+
+    let mut rng = ChaCha20Rng::seed_from_u64(DELEGATOR_SEED);
+
+    tracing::info!("starting continuous churn loop");
+    loop {
+        let delegator_index = delegator_start_index + rng.gen_range(0..num_delegators);
+        let delegator_signer = generate_delegator_signer(delegator_index);
+        let delegator_address = delegator_signer.address();
+
+        let mut has_delegation = false;
+        for validator in &validator_addresses {
+            let delegation_amount = stake_table
+                .delegations(*validator, delegator_address)
+                .call()
+                .await?;
+            if !delegation_amount.is_zero() {
+                has_delegation = true;
+                tracing::info!(
+                    "churn: undelegating delegator {} (index {}) from validator {}: {} ESP",
+                    delegator_address,
+                    delegator_index,
+                    validator,
+                    format_ether(delegation_amount)
+                );
+
+                let delegator_provider = ProviderBuilder::new()
+                    .wallet(EthereumWallet::from(delegator_signer.clone()))
+                    .connect_client(shared_client.clone());
+
+                crate::delegation::undelegate(
+                    &delegator_provider,
+                    config.stake_table_address,
+                    *validator,
+                    delegation_amount,
+                )
+                .await?
+                .assert_success()
+                .await?;
+                break;
+            }
+        }
+
+        if !has_delegation {
+            let validator = validator_addresses[rng.gen_range(0..validator_addresses.len())];
+            let delegation_amount = if min_amount == max_amount {
+                min_amount
+            } else {
+                let range = max_amount - min_amount;
+                let random_offset = U256::from(rng.gen_range(0..=u128::MAX)) % range;
+                min_amount + random_offset
+            };
+
+            tracing::info!(
+                "churn: delegating delegator {} (index {}) to validator {}: {} ESP",
+                delegator_address,
+                delegator_index,
+                validator,
+                format_ether(delegation_amount)
+            );
+
+            let delegator_provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(delegator_signer))
+                .connect_client(shared_client.clone());
+
+            delegate(
+                &delegator_provider,
+                config.stake_table_address,
+                validator,
+                delegation_amount,
+            )
+            .await?
+            .assert_success()
+            .await?;
+        }
+
+        tokio::time::sleep(delay).await;
+    }
 }
 
 #[cfg(test)]

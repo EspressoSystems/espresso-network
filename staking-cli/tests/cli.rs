@@ -395,7 +395,7 @@ async fn test_cli_stake_for_demo_default_num_validators(
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo").assert().success();
+    cmd.arg("demo").arg("stake").assert().success();
     Ok(())
 }
 
@@ -406,7 +406,8 @@ async fn test_cli_stake_for_demo_three_validators(
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo")
+    cmd.arg("demo")
+        .arg("stake")
         .arg("--num-validators")
         .arg("3")
         .assert()
@@ -429,7 +430,8 @@ async fn stake_for_demo_delegation_config_helper(
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo")
+    cmd.arg("demo")
+        .arg("stake")
         .arg("--delegation-config")
         .arg(config.to_string())
         .assert()

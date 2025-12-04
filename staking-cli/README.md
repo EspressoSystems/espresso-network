@@ -26,6 +26,8 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     - [Updating your metadata URL](#updating-your-metadata-url)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
+    - [Exporting Node Signatures](#exporting-node-signatures)
+    - [Demo Commands](#demo-commands)
 
 <!-- markdown-toc end -->
 
@@ -82,7 +84,7 @@ Commands:
     token-allowance        Check ESP token allowance of stake table contract
     transfer               Transfer ESP tokens
     export-node-signatures       Export validator node signatures for address validation
-    stake-for-demo         Register the validators and delegates for the local demo
+    demo                   Demo commands for testing (stake, delegate, undelegate, churn)
     help                   Print this message or the help of the given subcommand(s)
 
 Options:
@@ -379,13 +381,17 @@ Format handling:
 - Stdin defaults to JSON: `cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99`
 - Explicit format for stdin: `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
 
-### Native Demo Staking
+### Demo Commands
 
-The `stake-for-demo` command is used to set up validators and delegators for testing purposes.
+The `demo` subcommand provides tools for testing and demonstration purposes.
 
-    staking-cli stake-for-demo --num-validators 5
+#### `demo stake`
 
-Configuration options:
+Register validators and create delegators for testing (formerly `stake-for-demo`).
+
+    staking-cli demo stake --num-validators 5
+
+Options:
 
 - `--num-validators`: Number of validators to register (default: 5)
 - `--num-delegators-per-validator`: Number of delegators per validator (default: random 2-5, max: 100,000)
@@ -395,15 +401,73 @@ Configuration options:
   - `multiple-delegators`: Multiple delegators per validator
   - `no-self-delegation`: Validators do not self-delegate
 
-Environment variables:
+Example:
 
-- `NUM_DELEGATORS_PER_VALIDATOR`: Set the number of delegators per validator
-- `DELEGATION_CONFIG`: Set the delegation configuration mode
+    staking-cli demo stake --num-validators 10 --num-delegators-per-validator 50
 
-Example usage:
+#### `demo delegate`
 
-    # Create 10 validators with 50 delegators each
-    staking-cli stake-for-demo --num-validators 10 --num-delegators-per-validator 50
+Mass delegate to existing validators with deterministic delegator generation.
 
-    # Using environment variables with native demo
-    env NUM_DELEGATORS_PER_VALIDATOR=1000 DELEGATION_CONFIG=no-self-delegation just demo-native-drb-header
+    staking-cli demo delegate \
+      --validators 0xAAA,0xBBB,0xCCC \
+      --delegator-start-index 0 \
+      --num-delegators 100 \
+      --min-amount 100 \
+      --max-amount 500
+
+Options:
+
+- `--validators`: Comma-separated validator addresses to delegate to
+- `--delegator-start-index`: Starting index for deterministic delegator generation
+- `--num-delegators`: Number of delegators to create
+- `--min-amount`: Minimum delegation amount in ESP
+- `--max-amount`: Maximum delegation amount in ESP
+- `--batch-size`: Number of transactions to submit per batch (default: all at once)
+- `--delay`: Delay between batches (e.g., "1s", "500ms"); requires `--batch-size`
+
+Delegators are distributed round-robin across validators.
+
+#### `demo undelegate`
+
+Mass undelegate from validators. Queries on-chain delegation amounts and undelegates everything.
+
+    staking-cli demo undelegate \
+      --validators 0xAAA,0xBBB \
+      --delegator-start-index 0 \
+      --num-delegators 100
+
+Options:
+
+- `--validators`: Comma-separated validator addresses to undelegate from
+- `--delegator-start-index`: Starting index for delegator generation
+- `--num-delegators`: Number of delegators
+- `--batch-size`: Number of transactions to submit per batch (default: all at once)
+- `--delay`: Delay between batches (e.g., "1s", "500ms"); requires `--batch-size`
+
+Skips delegators with zero delegation to a validator.
+
+#### `demo churn`
+
+Continuous delegation/undelegation activity forever. Useful for testing stake table changes.
+
+    staking-cli demo churn \
+      --validator-start-index 20 \
+      --num-validators 5 \
+      --delegator-start-index 0 \
+      --num-delegators 50 \
+      --min-amount 100 \
+      --max-amount 500 \
+      --delay 2s
+
+Options:
+
+- `--validator-start-index`: Starting mnemonic index for validators (default: 20)
+- `--num-validators`: Number of validators to target
+- `--delegator-start-index`: Starting index for delegator generation
+- `--num-delegators`: Number of delegators in the pool
+- `--min-amount`: Minimum delegation amount in ESP
+- `--max-amount`: Maximum delegation amount in ESP
+- `--delay`: Delay between operations (default: "1s")
+
+The churn loop picks random delegators and either delegates (if idle) or undelegates (if delegated).
