@@ -18,6 +18,14 @@ trait DemoTestExt {
     async fn get_delegation(&self, validator: Address, delegator: Address) -> Result<U256>;
 
     async fn setup_validators(&self, count: usize) -> Result<Vec<Address>>;
+
+    async fn assert_delegations(
+        &self,
+        validator: Address,
+        start_index: u64,
+        num_delegators: u64,
+        expected: U256,
+    ) -> Result<()>;
 }
 
 impl DemoTestExt for TestSystem {
@@ -70,6 +78,24 @@ impl DemoTestExt for TestSystem {
         }
 
         Ok(validators)
+    }
+
+    async fn assert_delegations(
+        &self,
+        validator: Address,
+        start_index: u64,
+        num_delegators: u64,
+        expected: U256,
+    ) -> Result<()> {
+        for i in start_index..start_index + num_delegators {
+            let delegator = generate_delegator_signer(i);
+            let delegation = self.get_delegation(validator, delegator.address()).await?;
+            assert_eq!(
+                delegation, expected,
+                "delegator {i} should have {expected} delegation"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -865,6 +891,10 @@ async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
             .success();
 
         system
+            .assert_delegations(validators[0], 0, num_delegators, parse_ether("100")?)
+            .await?;
+
+        system
             .cmd(Signer::Mnemonic)
             .timeout(Duration::from_secs(5))
             .arg("demo")
@@ -880,21 +910,97 @@ async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
             .assert()
             .success();
 
-        for i in 0..num_delegators {
-            let delegator = generate_delegator_signer(i);
-            let delegation = system
-                .get_delegation(validators[0], delegator.address())
-                .await?;
-            assert_eq!(
-                delegation,
-                U256::ZERO,
-                "delegator {} should have 0 delegation after undelegate",
-                i
-            );
-        }
+        system
+            .assert_delegations(validators[0], 0, num_delegators, U256::ZERO)
+            .await?;
 
         Ok(())
     })
     .await
     .map_err(|_| anyhow::anyhow!("test timed out - batching may be broken"))?
+}
+
+#[test_log::test(tokio::test)]
+async fn test_demo_multiple_delegator_batches() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let validators = system.setup_validators(1).await?;
+    let validator_addrs = validators[0].to_string();
+
+    let num_delegators = 3u64;
+    let amount = "100";
+
+    // First batch: delegators 0, 1, 2
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("delegate")
+        .arg("--validators")
+        .arg(&validator_addrs)
+        .arg("--delegator-start-index")
+        .arg("0")
+        .arg("--num-delegators")
+        .arg(num_delegators.to_string())
+        .arg("--min-amount")
+        .arg(amount)
+        .arg("--max-amount")
+        .arg(amount)
+        .assert()
+        .success();
+
+    system
+        .assert_delegations(validators[0], 0, num_delegators, parse_ether(amount)?)
+        .await?;
+
+    // Second batch: delegators 3, 4, 5
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("delegate")
+        .arg("--validators")
+        .arg(&validator_addrs)
+        .arg("--delegator-start-index")
+        .arg("3")
+        .arg("--num-delegators")
+        .arg(num_delegators.to_string())
+        .arg("--min-amount")
+        .arg(amount)
+        .arg("--max-amount")
+        .arg(amount)
+        .assert()
+        .success();
+
+    system
+        .assert_delegations(validators[0], 3, num_delegators, parse_ether(amount)?)
+        .await?;
+
+    // Verify first batch still has delegations
+    system
+        .assert_delegations(validators[0], 0, num_delegators, parse_ether(amount)?)
+        .await?;
+
+    // Undelegate only second batch
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("undelegate")
+        .arg("--validators")
+        .arg(&validator_addrs)
+        .arg("--delegator-start-index")
+        .arg("3")
+        .arg("--num-delegators")
+        .arg(num_delegators.to_string())
+        .assert()
+        .success();
+
+    // Second batch should be zero
+    system
+        .assert_delegations(validators[0], 3, num_delegators, U256::ZERO)
+        .await?;
+
+    // First batch should still have delegations
+    system
+        .assert_delegations(validators[0], 0, num_delegators, parse_ether(amount)?)
+        .await?;
+
+    Ok(())
 }
