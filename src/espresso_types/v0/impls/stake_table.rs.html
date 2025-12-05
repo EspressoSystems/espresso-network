@@ -1688,7 +1688,7 @@
 <a href=#1688 id=1688 data-nosnippet>1688</a>                .context(<span class="string">"Stake table not found"</span>)<span class="question-mark">?
 <a href=#1689 id=1689 data-nosnippet>1689</a>                </span>.into();
 <a href=#1690 id=1690 data-nosnippet>1690</a>
-<a href=#1691 id=1691 data-nosnippet>1691</a>            <span class="kw">let </span>success_threshold = <span class="self">self</span>.success_threshold(<span class="prelude-val">Some</span>(<span class="kw-2">*</span>epoch));
+<a href=#1691 id=1691 data-nosnippet>1691</a>            <span class="kw">let </span>success_threshold = <span class="self">self</span>.success_threshold(<span class="prelude-val">Some</span>(EpochNumber::new(previous_epoch)));
 <a href=#1692 id=1692 data-nosnippet>1692</a>
 <a href=#1693 id=1693 data-nosnippet>1693</a>            <span class="kw">let </span>root_height = header.height().checked_sub(epoch_height).context(
 <a href=#1694 id=1694 data-nosnippet>1694</a>                <span class="string">"Epoch height is greater than block height. cannot compute previous epoch root \
