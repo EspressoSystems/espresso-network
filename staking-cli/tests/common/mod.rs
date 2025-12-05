@@ -15,13 +15,15 @@ pub trait TestSystemExt {
     /// Create a base staking-cli command configured for this test system
     fn cmd(&self, signer: Signer) -> Command;
 
-    // method is used, but somehow flagged as unused
+    // methods are used in cli.rs but not in demo.rs, flagged as unused per-binary
     #[allow(dead_code)]
     /// Create an export-node-signatures command with system keys and address
     fn export_node_signatures_cmd(&self) -> Result<Command>;
 
+    #[allow(dead_code)]
     fn bls_private_key_str(&self) -> Result<String>;
 
+    #[allow(dead_code)]
     fn state_private_key_str(&self) -> Result<String>;
 }
 
