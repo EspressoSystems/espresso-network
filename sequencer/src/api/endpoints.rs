@@ -179,13 +179,7 @@ where
                     state
                         .load_v1_reward_account_proof(height, account)
                         .await
-                        .map_err(|err| merklized_state::Error::Custom {
-                            message: format!(
-                                "failed to load v1 reward account {address} at height {height}: \
-                                 {err}"
-                            ),
-                            status: StatusCode::NOT_FOUND,
-                        })
+                        .map_err(Into::into)
                 }
                 .boxed()
             })?;
@@ -205,13 +199,7 @@ where
                     state
                         .load_v2_reward_account_proof(height, account)
                         .await
-                        .map_err(|err| merklized_state::Error::Custom {
-                            message: format!(
-                                "failed to load v2 reward account {address} at height {height}: \
-                                 {err}"
-                            ),
-                            status: StatusCode::NOT_FOUND,
-                        })
+                        .map_err(Into::into)
                 }
                 .boxed()
             })?;
@@ -230,13 +218,7 @@ where
                     let proof = state
                         .load_v2_reward_account_proof(height, account)
                         .await
-                        .map_err(|err| merklized_state::Error::Custom {
-                            message: format!(
-                                "failed to load v2 reward account {address} at height {height}: \
-                                 {err}"
-                            ),
-                            status: StatusCode::NOT_FOUND,
-                        })?;
+                        .map_err(|err: crate::api::AccountProofError| err)?;
 
                     // Auth root inputs (other than the reward merkle tree root) are currently
                     // all zero placeholder values. This may be extended in the future.
