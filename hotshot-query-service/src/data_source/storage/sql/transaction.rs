@@ -49,10 +49,12 @@ use sqlx::{
 };
 use tokio::time::sleep;
 
+#[cfg(not(feature = "embedded-db"))]
+use super::queries::state::batch_insert_hashes;
 use super::{
     queries::{
         self,
-        state::{build_hash_batch_insert, Node},
+        state::{build_hash_batch_insert, collect_nodes_from_proof, Node},
         DecodeError,
     },
     Database, Db,
@@ -855,6 +857,67 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         }
 
         Node::upsert(name, nodes.into_iter().map(|(n, ..)| n), self).await?;
+
+        Ok(())
+    }
+
+    async fn insert_merkle_nodes_batch(
+        &mut self,
+        proofs: Vec<(
+            MerkleProof<State::Entry, State::Key, State::T, ARITY>,
+            Vec<usize>,
+        )>,
+        block_number: u64,
+    ) -> anyhow::Result<()> {
+        if proofs.is_empty() {
+            return Ok(());
+        }
+
+        let name = State::state_type();
+        let block_number = block_number as i64;
+
+        let mut all_nodes = Vec::new();
+        let mut all_hashes = HashSet::new();
+
+        for (proof, traversal_path) in &proofs {
+            collect_nodes_from_proof(proof, traversal_path, &mut all_nodes, &mut all_hashes)?;
+        }
+
+        let hashes: Vec<Vec<u8>> = all_hashes.into_iter().collect();
+
+        #[cfg(not(feature = "embedded-db"))]
+        let nodes_hash_ids: HashMap<Vec<u8>, i32> = batch_insert_hashes(hashes, self).await?;
+
+        #[cfg(feature = "embedded-db")]
+        let nodes_hash_ids: HashMap<Vec<u8>, i32> = {
+            let (query, sql) = build_hash_batch_insert(&hashes)?;
+            query
+                .query_as(&sql)
+                .fetch(self.as_mut())
+                .try_collect()
+                .await?
+        };
+
+        for (node, children, hash) in &mut all_nodes {
+            node.created = block_number;
+            node.hash_id = *nodes_hash_ids.get(&*hash).ok_or(QueryError::Error {
+                message: "Missing node hash".to_string(),
+            })?;
+
+            if let Some(children) = children {
+                let children_hashes = children
+                    .iter()
+                    .map(|c| nodes_hash_ids.get(c).copied())
+                    .collect::<Option<Vec<i32>>>()
+                    .ok_or(QueryError::Error {
+                        message: "Missing child hash".to_string(),
+                    })?;
+
+                node.children = Some(children_hashes.into());
+            }
+        }
+
+        Node::upsert(name, all_nodes.into_iter().map(|(n, ..)| n), self).await?;
 
         Ok(())
     }
