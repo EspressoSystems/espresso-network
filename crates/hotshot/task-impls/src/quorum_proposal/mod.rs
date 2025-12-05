@@ -492,6 +492,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         );
                     }
 
+                    tracing::warn!(
+                        "Received a QC for view {view_number}",
+                        view_number = qc.view_number()
+                    );
+
                     let qc_epoch = qc.data.epoch;
                     let is_eqc = qc
                         .data
@@ -631,6 +636,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             },
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 let view_number = proposal.data.view_number();
+
+                tracing::warn!(
+                    "Preliminarily validated a proposal for view {view_number}",
+                    view_number = view_number
+                );
 
                 // All nodes get the latest proposed view as a proxy of `cur_view` of old.
                 if !self.update_latest_proposed_view(view_number).await {
