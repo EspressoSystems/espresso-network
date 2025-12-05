@@ -357,6 +357,161 @@ pub(crate) fn build_hash_batch_insert(
     Ok((query, sql))
 }
 
+/// Batch insert hashes using UNNEST for large batches (postgres only).
+/// Returns a map from hash bytes to their database IDs.
+#[cfg(not(feature = "embedded-db"))]
+pub(crate) async fn batch_insert_hashes(
+    hashes: Vec<Vec<u8>>,
+    tx: &mut Transaction<Write>,
+) -> QueryResult<HashMap<Vec<u8>, i32>> {
+    use futures::stream::TryStreamExt;
+
+    if hashes.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // Use UNNEST-based batch insert (more efficient and avoids parameter limits)
+    let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
+               UPDATE SET value = EXCLUDED.value RETURNING value, id";
+
+    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
+        .bind(&hashes)
+        .fetch(tx.as_mut())
+        .try_collect()
+        .await
+        .map_err(|e| QueryError::Error {
+            message: format!("batch hash insert failed: {e}"),
+        })?;
+
+    Ok(result)
+}
+
+/// Collects nodes and hashes from a merkle proof into the provided collections.
+/// This allows batching multiple proofs together before inserting into the database.
+/// Returns a tuple of (node, optional_children_hashes, node_hash) for each node in the proof.
+pub(crate) fn collect_nodes_from_proof<Entry, Key, T, const ARITY: usize>(
+    proof: &MerkleProof<Entry, Key, T, ARITY>,
+    traversal_path: &[usize],
+    nodes: &mut Vec<(Node, Option<Vec<Vec<u8>>>, Vec<u8>)>,
+    hashes: &mut HashSet<Vec<u8>>,
+) -> QueryResult<()>
+where
+    Entry: jf_merkle_tree_compat::Element + serde::Serialize,
+    Key: jf_merkle_tree_compat::Index + serde::Serialize,
+    T: jf_merkle_tree_compat::NodeValue,
+{
+    let pos = &proof.pos;
+    let path = &proof.proof;
+
+    let mut trav_path = traversal_path.iter().map(|n| *n as i32);
+
+    for node in path.iter() {
+        match node {
+            MerkleNode::Empty => {
+                let index = serde_json::to_value(pos.clone()).map_err(|e| QueryError::Error {
+                    message: format!("malformed merkle position: {e}"),
+                })?;
+                let node_path: Vec<i32> = trav_path.clone().rev().collect();
+                nodes.push((
+                    Node {
+                        path: node_path.into(),
+                        idx: Some(index),
+                        ..Default::default()
+                    },
+                    None,
+                    [0_u8; 32].to_vec(),
+                ));
+                hashes.insert([0_u8; 32].to_vec());
+            },
+            MerkleNode::ForgettenSubtree { .. } => {
+                return Err(QueryError::Error {
+                    message: "Node in the Merkle path contains a forgotten subtree".into(),
+                });
+            },
+            MerkleNode::Leaf { value, pos, elem } => {
+                let mut leaf_commit = Vec::new();
+                value
+                    .serialize_compressed(&mut leaf_commit)
+                    .map_err(|e| QueryError::Error {
+                        message: format!("malformed merkle leaf commitment: {e}"),
+                    })?;
+
+                let node_path: Vec<i32> = trav_path.clone().rev().collect();
+
+                let index = serde_json::to_value(pos.clone()).map_err(|e| QueryError::Error {
+                    message: format!("malformed merkle position: {e}"),
+                })?;
+                let entry = serde_json::to_value(elem).map_err(|e| QueryError::Error {
+                    message: format!("malformed merkle element: {e}"),
+                })?;
+
+                nodes.push((
+                    Node {
+                        path: node_path.into(),
+                        idx: Some(index),
+                        entry: Some(entry),
+                        ..Default::default()
+                    },
+                    None,
+                    leaf_commit.clone(),
+                ));
+
+                hashes.insert(leaf_commit);
+            },
+            MerkleNode::Branch { value, children } => {
+                let mut branch_hash = Vec::new();
+                value
+                    .serialize_compressed(&mut branch_hash)
+                    .map_err(|e| QueryError::Error {
+                        message: format!("malformed merkle branch hash: {e}"),
+                    })?;
+
+                let mut children_bitvec = BitVec::new();
+                let mut children_values = Vec::new();
+                for child in children {
+                    let child = child.as_ref();
+                    match child {
+                        MerkleNode::Empty => {
+                            children_bitvec.push(false);
+                        },
+                        MerkleNode::Branch { value, .. }
+                        | MerkleNode::Leaf { value, .. }
+                        | MerkleNode::ForgettenSubtree { value } => {
+                            let mut hash = Vec::new();
+                            value.serialize_compressed(&mut hash).map_err(|e| {
+                                QueryError::Error {
+                                    message: format!("malformed merkle node hash: {e}"),
+                                }
+                            })?;
+
+                            children_values.push(hash);
+                            children_bitvec.push(true);
+                        },
+                    }
+                }
+
+                let node_path: Vec<i32> = trav_path.clone().rev().collect();
+                nodes.push((
+                    Node {
+                        path: node_path.into(),
+                        children: None,
+                        children_bitvec: Some(children_bitvec),
+                        ..Default::default()
+                    },
+                    Some(children_values.clone()),
+                    branch_hash.clone(),
+                ));
+                hashes.insert(branch_hash);
+                hashes.extend(children_values);
+            },
+        }
+
+        trav_path.next();
+    }
+
+    Ok(())
+}
+
 // Represents a row in a state table
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Node {
@@ -409,6 +564,13 @@ impl Node {
         nodes: impl IntoIterator<Item = Self>,
         tx: &mut Transaction<Write>,
     ) -> anyhow::Result<()> {
+        let nodes: Vec<_> = nodes.into_iter().collect();
+
+        // Use UNNEST-based batch insert for postgres (more efficient and avoids parameter limits)
+        #[cfg(not(feature = "embedded-db"))]
+        return Self::upsert_batch_unnest(name, nodes, tx).await;
+
+        #[cfg(feature = "embedded-db")]
         tx.upsert(
             name,
             [
@@ -443,6 +605,78 @@ impl Node {
             }),
         )
         .await
+    }
+
+    #[cfg(not(feature = "embedded-db"))]
+    async fn upsert_batch_unnest(
+        name: &str,
+        nodes: Vec<Self>,
+        tx: &mut Transaction<Write>,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        if nodes.is_empty() {
+            return Ok(());
+        }
+
+        // Deduplicate nodes by (path, created) - keep the last occurrence
+        // This is required because UNNEST + ON CONFLICT cannot handle duplicates in the same batch
+        let mut seen: HashMap<(String, i64), usize> = HashMap::new();
+        let mut deduped_nodes: Vec<Self> = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            let key = (node.path.to_string(), node.created);
+            if let Some(idx) = seen.get(&key) {
+                deduped_nodes[*idx] = node;
+            } else {
+                seen.insert(key, deduped_nodes.len());
+                deduped_nodes.push(node);
+            }
+        }
+
+        let mut paths: Vec<JsonValue> = Vec::with_capacity(deduped_nodes.len());
+        let mut createds: Vec<i64> = Vec::with_capacity(deduped_nodes.len());
+        let mut hash_ids: Vec<i32> = Vec::with_capacity(deduped_nodes.len());
+        let mut childrens: Vec<Option<JsonValue>> = Vec::with_capacity(deduped_nodes.len());
+        let mut children_bitvecs: Vec<Option<BitVec>> = Vec::with_capacity(deduped_nodes.len());
+        let mut idxs: Vec<Option<JsonValue>> = Vec::with_capacity(deduped_nodes.len());
+        let mut entries: Vec<Option<JsonValue>> = Vec::with_capacity(deduped_nodes.len());
+
+        for node in deduped_nodes {
+            paths.push(node.path);
+            createds.push(node.created);
+            hash_ids.push(node.hash_id);
+            childrens.push(node.children);
+            children_bitvecs.push(node.children_bitvec);
+            idxs.push(node.idx);
+            entries.push(node.entry);
+        }
+
+        let sql = format!(
+            r#"
+            INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            ON CONFLICT (path, created) DO UPDATE SET
+                hash_id = EXCLUDED.hash_id,
+                children = EXCLUDED.children,
+                children_bitvec = EXCLUDED.children_bitvec,
+                idx = EXCLUDED.idx,
+                entry = EXCLUDED.entry
+            "#
+        );
+
+        sqlx::query(&sql)
+            .bind(&paths)
+            .bind(&createds)
+            .bind(&hash_ids)
+            .bind(&childrens)
+            .bind(&children_bitvecs)
+            .bind(&idxs)
+            .bind(&entries)
+            .execute(tx.as_mut())
+            .await
+            .context("batch upsert with UNNEST failed")?;
+
+        Ok(())
     }
 }
 
