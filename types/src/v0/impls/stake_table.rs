@@ -1688,7 +1688,7 @@ impl EpochCommittees {
                 .context("Stake table not found")?
                 .into();
 
-            let success_threshold = self.success_threshold(Some(*epoch));
+            let success_threshold = self.success_threshold(Some(EpochNumber::new(previous_epoch)));
 
             let root_height = header.height().checked_sub(epoch_height).context(
                 "Epoch height is greater than block height. cannot compute previous epoch root \

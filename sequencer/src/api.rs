@@ -1227,7 +1227,7 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
-    use std::time::Duration;
+    use std::{cmp::max, time::Duration};
 
     use alloy::{
         network::EthereumWallet,
@@ -1237,7 +1237,7 @@ pub mod test_helpers {
     use committable::Committable;
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
@@ -1470,7 +1470,10 @@ pub mod test_helpers {
                 .genesis_st_state(genesis_stake)
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
-                .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
+                .exit_escrow_period(U256::from(max(
+                    blocks_per_epoch * 15 + 100,
+                    DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+                )))
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
@@ -5157,12 +5160,19 @@ mod test {
         )
         .await
         .unwrap();
-        let mut tx = ds.write().await?;
+        let mut tx = ds.read().await?;
 
-        let (state, leaf) =
-            reconstruct_state(&instance, &mut tx, node_block_height - 1, to_view, &[], &[])
-                .await
-                .unwrap();
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &ds,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(leaf.view_number(), to_view);
         assert!(
             state
@@ -5176,6 +5186,7 @@ mod test {
         // Reconstruct fee state
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
@@ -5203,6 +5214,7 @@ mod test {
 
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
@@ -5247,6 +5259,7 @@ mod test {
 
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
