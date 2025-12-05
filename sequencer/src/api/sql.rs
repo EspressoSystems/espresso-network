@@ -120,27 +120,33 @@ impl RewardAccountProofDataSource for SqlStorage {
             "cannot get accounts for height {height}: no blocks available"
         );
 
-        // Check if we have the desired state snapshot. If so, we can load the desired accounts
-        // directly.
-        if height < block_height {
-            let (tree, _) = load_v1_reward_accounts(self, height, &[account])
-                .await
-                .with_context(|| {
-                    format!("failed to load v1 reward account {account:?} at height {height}")
-                })?;
+        ensure!(
+            height < block_height,
+            "requested height {height} is not yet available. latest block height: {block_height}"
+        );
 
-            let (proof, balance) = RewardAccountProofV1::prove(&tree, account.into())
-                .with_context(|| {
-                    format!("reward account {account:?} not available at height {height}")
-                })?;
+        let merklized_state_height = tx
+            .get_last_state_height()
+            .await
+            .context("getting merklized state height")? as u64;
+        ensure!(
+            height <= merklized_state_height,
+            "requested height {height} is not yet available. latest merklized state height: \
+             {merklized_state_height}"
+        );
 
-            Ok(RewardAccountQueryDataV1 { balance, proof })
-        } else {
-            bail!(
-                "requested height {height} is not yet available (latest block height: \
-                 {block_height})"
-            );
-        }
+        let (tree, _) = load_v1_reward_accounts(self, height, &[account])
+            .await
+            .with_context(|| {
+                format!("failed to load v1 reward account {account:?} at height {height}")
+            })?;
+
+        let (proof, balance) =
+            RewardAccountProofV1::prove(&tree, account.into()).with_context(|| {
+                format!("reward account {account:?} not available at height {height}")
+            })?;
+
+        Ok(RewardAccountQueryDataV1 { balance, proof })
     }
 
     async fn load_v2_reward_account_proof(
@@ -160,27 +166,33 @@ impl RewardAccountProofDataSource for SqlStorage {
             "cannot get accounts for height {height}: no blocks available"
         );
 
-        // Check if we have the desired state snapshot. If so, we can load the desired accounts
-        // directly.
-        if height < block_height {
-            let (tree, _) = load_v2_reward_accounts(self, height, &[account])
-                .await
-                .with_context(|| {
-                    format!("failed to load v2 reward account {account:?} at height {height}")
-                })?;
+        ensure!(
+            height < block_height,
+            "requested height {height} is not yet available. latest block height: {block_height}"
+        );
 
-            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
-                .with_context(|| {
-                    format!("reward account {account:?} not available at height {height}")
-                })?;
+        let merklized_state_height = tx
+            .get_last_state_height()
+            .await
+            .context("getting merklized state height")? as u64;
+        ensure!(
+            height <= merklized_state_height,
+            "requested height {height} is not yet available. latest merklized state height: \
+             {merklized_state_height}"
+        );
 
-            Ok(RewardAccountQueryDataV2 { balance, proof })
-        } else {
-            bail!(
-                "requested height {height} is not yet available (latest block height: \
-                 {block_height})"
-            );
-        }
+        let (tree, _) = load_v2_reward_accounts(self, height, &[account])
+            .await
+            .with_context(|| {
+                format!("failed to load v2 reward account {account:?} at height {height}")
+            })?;
+
+        let (proof, balance) =
+            RewardAccountProofV2::prove(&tree, account.into()).with_context(|| {
+                format!("reward account {account:?} not available at height {height}")
+            })?;
+
+        Ok(RewardAccountQueryDataV2 { balance, proof })
     }
 }
 impl CatchupStorage for SqlStorage {
