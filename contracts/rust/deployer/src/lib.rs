@@ -3708,16 +3708,20 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_get_timelock_for_contract() -> Result<()> {
-        // TODO: Enhance this test to verify on-chain state
-        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+    async fn test_derive_timelock_address_from_contracts() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::{get_timelock_for_contract, TimelockContract};
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
         let delay = U256::from(0);
         let provider_wallet = provider.get_accounts().await?[0];
         let proposers = vec![provider_wallet];
         let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
 
-        // Deploy OpsTimelock
+        // Deploy both timelocks first
         let ops_timelock_addr = deploy_ops_timelock(
             &provider,
             &mut contracts,
@@ -3728,7 +3732,6 @@ mod tests {
         )
         .await?;
 
-        // Deploy SafeExitTimelock
         let safe_exit_timelock_addr = deploy_safe_exit_timelock(
             &provider,
             &mut contracts,
@@ -3739,14 +3742,161 @@ mod tests {
         )
         .await?;
 
-        // FeeContractProxy with OpsTimelock
-        let timelock =
-            derive_timelock_address_from_contract_type(Contract::FeeContractProxy, &contracts)?;
-        assert_eq!(timelock, ops_timelock_addr);
+        //  Use DeployerArgsBuilder to deploy FeeContractProxy with use_timelock_owner
+        // This tests the actual deployment code path and verifies it chooses OpsTimelock
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args = args_builder.build()?;
 
-        let timelock =
-            derive_timelock_address_from_contract_type(Contract::EspTokenProxy, &contracts)?;
-        assert_eq!(timelock, safe_exit_timelock_addr);
+        // Deploy FeeContractProxy - it should automatically use OpsTimelock
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+
+        // Verify derivation function returns correct timelock
+        let fee_contract_derived_timelock =
+            derive_timelock_address_from_contract_type(Contract::FeeContractProxy, &contracts)?;
+        assert_eq!(fee_contract_derived_timelock, ops_timelock_addr);
+
+        // Verify on-chain that FeeContractProxy has OpsTimelock as owner
+        let fee_contract_addr = contracts
+            .address(Contract::FeeContractProxy)
+            .expect("FeeContractProxy should be deployed");
+        let fee_contract = FeeContract::new(fee_contract_addr, &provider);
+        let actual_owner = fee_contract.owner().call().await?;
+        assert_eq!(
+            actual_owner, ops_timelock_addr,
+            "FeeContractProxy should have OpsTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::FeeContractProxy, fee_contract_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::OpsTimelock(addr) => {
+                assert_eq!(
+                    addr, ops_timelock_addr,
+                    "Queried timelock should match deployed OpsTimelock"
+                );
+                assert_eq!(
+                    addr, fee_contract_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "FeeContractProxy should use OpsTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        //  Deploy RewardsClaimProxy - it should automatically use SafeExitTimelock
+        let _esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = admin;
+
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            true, // is_mock = true
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        let mut args_builder2 = DeployerArgsBuilder::default();
+        args_builder2
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args2 = args_builder2.build()?;
+
+        args2
+            .deploy(&mut contracts, Contract::RewardClaimProxy)
+            .await?;
+
+        // Verify derivation
+        let reward_claim_derived_timelock =
+            derive_timelock_address_from_contract_type(Contract::RewardClaimProxy, &contracts)?;
+        assert_eq!(reward_claim_derived_timelock, safe_exit_timelock_addr);
+
+        // Verify on-chain
+        let reward_claim_addr = contracts
+            .address(Contract::RewardClaimProxy)
+            .expect("RewardClaimProxy should be deployed");
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let actual_owner = reward_claim.currentAdmin().call().await?;
+        assert_eq!(
+            actual_owner, safe_exit_timelock_addr,
+            "RewardClaimProxy should have SafeExitTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::RewardClaimProxy, reward_claim_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::SafeExitTimelock(addr) => {
+                assert_eq!(
+                    addr, safe_exit_timelock_addr,
+                    "Queried timelock should match deployed SafeExitTimelock"
+                );
+                assert_eq!(
+                    addr, reward_claim_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "RewardClaimProxy should use SafeExitTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        // Error case - missing timelock
+        let empty_contracts = Contracts::new();
+        let result = derive_timelock_address_from_contract_type(
+            Contract::FeeContractProxy,
+            &empty_contracts,
+        );
+        assert!(
+            result.is_err(),
+            "Should error when timelock is missing from contracts map"
+        );
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("not found") || error_msg.contains("OpsTimelock"),
+            "Error should mention missing timelock, got: {}",
+            error_msg
+        );
+
+        // Error case - invalid contract type
+        let result =
+            derive_timelock_address_from_contract_type(Contract::PlonkVerifier, &contracts);
+        assert!(result.is_err(), "Should error for invalid contract type");
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Invalid contract type"),
+            "Error should mention invalid contract type, got: {}",
+            error_msg
+        );
+
         Ok(())
     }
 }

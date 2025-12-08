@@ -298,6 +298,7 @@ pub fn derive_timelock_address_from_contract_type(
     })
 }
 
+// Get the timelock for a contract by querying the contract owner or current admin
 pub async fn get_timelock_for_contract(
     provider: &impl Provider,
     contract_type: Contract,
