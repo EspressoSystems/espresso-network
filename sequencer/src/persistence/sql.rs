@@ -15,10 +15,12 @@ use derive_more::derive::{From, Into};
 use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
+    v0::traits::{
+        EpochState, EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup,
+    },
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
-    StakeTableHash, ValidatorMap,
+    StakeTableHash, StakeTableMetadata, ValidatorMap,
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -2413,18 +2415,15 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_epoch_state(&self, epoch: EpochNumber) -> anyhow::Result<Option<EpochState>> {
         let result = self
             .db
             .read()
             .await?
             .fetch_optional(
                 query(
-                    "SELECT stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
-                     epoch = $1",
+                    "SELECT stake, block_reward, stake_table_hash, drb_result, block_header FROM \
+                     epoch_drb_and_root WHERE epoch = $1 AND stake is NOT NULL",
                 )
                 .bind(epoch.u64() as i64),
             )
@@ -2432,9 +2431,13 @@ impl MembershipPersistence for Persistence {
 
         result
             .map(|row| {
-                let stake_table_bytes: Vec<u8> = row.get("stake");
-                let reward_bytes: Option<Vec<u8>> = row.get("block_reward");
-                let stake_table_hash_bytes: Option<Vec<u8>> = row.get("stake_table_hash");
+                let stake_table_bytes: Vec<u8> = row.try_get("stake")?;
+                let reward_bytes: Option<Vec<u8>> = row.try_get("block_reward")?;
+                let stake_table_hash_bytes: Option<Vec<u8>> = row.try_get("stake_table_hash")?;
+                let drb_result_bytes: Option<Vec<u8>> = row.try_get("drb_result").unwrap_or(None);
+                let block_header_bytes: Option<Vec<u8>> =
+                    row.try_get("block_header").unwrap_or(None);
+
                 let stake_table = bincode::deserialize(&stake_table_bytes)
                     .context("deserializing stake table")?;
                 let reward: Option<RewardAmount> = reward_bytes
@@ -2443,8 +2446,20 @@ impl MembershipPersistence for Persistence {
                 let stake_table_hash: Option<StakeTableHash> = stake_table_hash_bytes
                     .map(|b| bincode::deserialize(&b).context("deserializing stake table hash"))
                     .transpose()?;
+                let drb_result: Option<DrbResult> = drb_result_bytes
+                    .map(|b| bincode::deserialize(&b).context("deserializing drb_result"))
+                    .transpose()?;
+                let block_header = block_header_bytes
+                    .map(|b| bincode::deserialize(&b).context("deserializing block_header"))
+                    .transpose()?;
 
-                Ok((stake_table, reward, stake_table_hash))
+                Ok(EpochState {
+                    stake_table,
+                    block_reward: reward,
+                    stake_table_hash,
+                    drb_result,
+                    block_header,
+                })
             })
             .transpose()
     }
@@ -2484,8 +2499,11 @@ impl MembershipPersistence for Persistence {
 
                     Ok((
                         EpochNumber::new(id as u64),
-                        (stake_table, block_reward),
-                        stake_table_hash,
+                        stake_table,
+                        StakeTableMetadata {
+                            block_reward,
+                            stake_table_hash,
+                        },
                     ))
                 },
             )
@@ -2494,7 +2512,7 @@ impl MembershipPersistence for Persistence {
         Ok(Some(stakes?))
     }
 
-    async fn store_stake(
+    async fn store_epoch_state(
         &self,
         epoch: EpochNumber,
         stake: ValidatorMap,

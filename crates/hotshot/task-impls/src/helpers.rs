@@ -42,7 +42,7 @@ use hotshot_types::{
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
         },
-        storage::Storage,
+        storage::{EpochStateStorage, Storage},
         BlockPayload, ValidatedState,
     },
     utils::{
