@@ -1692,6 +1692,12 @@ impl EpochCommittees {
             let prev_ts = match self.get_header(EpochNumber::new(next_epoch)) {
                 Some(header) => header.timestamp_millis_internal(),
                 None => {
+                    tracing::info!(
+                        "Calculating rewards for epoch {}, we have no root leaf header for epoch \
+                         - 1. Fetching from peers",
+                        epoch
+                    );
+
                     let root_height = header.height().checked_sub(epoch_height).context(
                         "Epoch height is greater than block height. cannot compute previous epoch \
                          root height",
