@@ -155,9 +155,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     );
                     // deployer is the timelock owner
                     if use_timelock_owner {
-                        let timelock_addr = contracts
-                            .address(Contract::OpsTimelock)
-                            .expect("fail to get OpsTimelock address");
+                        let timelock_addr =
+                            derive_timelock_address_from_contract_type(target, contracts)?;
                         crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
                     }
                 } else if let Some(multisig) = self.multisig {
@@ -216,9 +215,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             // - No emergency updates are expected for token functionality
                             // - SafeExitTimelock provides sufficient security for token operations
                             tracing::info!("Transferring ownership to SafeExitTimelock");
-                            let timelock_addr = contracts
-                                .address(Contract::SafeExitTimelock)
-                                .expect("fail to get SafeExitTimelock address");
+                            let timelock_addr =
+                                derive_timelock_address_from_contract_type(target, contracts)?;
                             crate::transfer_ownership(provider, target, addr, timelock_addr)
                                 .await?;
                         }
@@ -339,9 +337,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
-                            let timelock_addr = contracts
-                                .address(Contract::OpsTimelock)
-                                .expect("fail to get OpsTimelock address");
+                            let timelock_addr =
+                                derive_timelock_address_from_contract_type(target, contracts)?;
                             crate::transfer_ownership(provider, target, addr, timelock_addr)
                                 .await?;
                         }
@@ -405,18 +402,18 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 } else {
                     // Pick admin from config. StakeTable uses OpsTimelock for faster
                     // emergency updates since it handles critical staking ops.
-                    let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
-                        if use_timelock_owner {
-                            contracts
-                                .address(Contract::OpsTimelock)
-                                .expect("fail to get OpsTimelock address")
-                        } else {
-                            admin // deployer
-                        }
-                    } else if let Some(multisig) = self.multisig {
-                        multisig
-                    } else {
-                        admin // deployer
+                    let admin = match self.use_timelock_owner {
+                        Some(true) => {
+                            derive_timelock_address_from_contract_type(target, contracts)?
+                        },
+                        Some(false) => admin, // deployer
+                        None => {
+                            if let Some(multisig) = self.multisig {
+                                multisig
+                            } else {
+                                admin // deployer
+                            }
+                        },
                     };
 
                     tracing::info!("Upgrading StakeTableV2 with admin: {:?}", admin);
@@ -496,21 +493,16 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                 // RewardClaim uses SafeExitTimelock (longer delay) since it can mint tokens
                 // and users need time to react to upgrades. Can be paused in emergencies.
-                let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    if use_timelock_owner {
-                        contracts
-                            .address(Contract::SafeExitTimelock)
-                            .expect("fail to get SafeExitTimelock address")
-                    } else {
-                        self.safe_exit_timelock_admin.context(
-                            "SafeExitTimelock contract address must be set when using \
-                             --use-timelock-owner flag",
-                        )?
-                    }
-                } else if let Some(multisig) = self.multisig {
-                    multisig
-                } else {
-                    admin
+                let admin = match self.use_timelock_owner {
+                    Some(true) => derive_timelock_address_from_contract_type(target, contracts)?,
+                    Some(false) => admin, // deployer
+                    None => {
+                        if let Some(multisig) = self.multisig {
+                            multisig
+                        } else {
+                            admin // deployer
+                        }
+                    },
                 };
 
                 tracing::info!("Deploying RewardClaimProxy with admin: {:?}", admin);

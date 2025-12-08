@@ -3810,7 +3810,7 @@ mod tests {
         let admin = provider.get_accounts().await?[0];
         let prover = admin;
 
-        let lc_proxy_addr = deploy_light_client_proxy(
+        let _lc_proxy_addr = deploy_light_client_proxy(
             &provider,
             &mut contracts,
             true, // is_mock = true
