@@ -571,40 +571,46 @@ impl Node {
         return Self::upsert_batch_unnest(name, nodes, tx).await;
 
         #[cfg(feature = "embedded-db")]
-        tx.upsert(
-            name,
-            [
-                "path",
-                "created",
-                "hash_id",
-                "children",
-                "children_bitvec",
-                "idx",
-                "entry",
-            ],
-            ["path", "created"],
-            nodes.into_iter().map(|n| {
-                #[cfg(feature = "embedded-db")]
-                let children_bitvec: Option<String> = n
-                    .children_bitvec
-                    .clone()
-                    .map(|b| b.iter().map(|bit| if bit { '1' } else { '0' }).collect());
+        {
+            for node_chunk in nodes.chunks(100) {
+                let rows: Vec<_> = node_chunk
+                    .iter()
+                    .map(|n| {
+                        let children_bitvec: Option<String> = n
+                            .children_bitvec
+                            .clone()
+                            .map(|b| b.iter().map(|bit| if bit { '1' } else { '0' }).collect());
 
-                #[cfg(not(feature = "embedded-db"))]
-                let children_bitvec = n.children_bitvec.clone();
+                        (
+                            n.path.clone(),
+                            n.created,
+                            n.hash_id,
+                            n.children.clone(),
+                            children_bitvec,
+                            n.idx.clone(),
+                            n.entry.clone(),
+                        )
+                    })
+                    .collect();
 
-                (
-                    n.path.clone(),
-                    n.created,
-                    n.hash_id,
-                    n.children.clone(),
-                    children_bitvec,
-                    n.idx.clone(),
-                    n.entry.clone(),
+                tx.upsert(
+                    name,
+                    [
+                        "path",
+                        "created",
+                        "hash_id",
+                        "children",
+                        "children_bitvec",
+                        "idx",
+                        "entry",
+                    ],
+                    ["path", "created"],
+                    rows,
                 )
-            }),
-        )
-        .await
+                .await?;
+            }
+            Ok(())
+        }
     }
 
     #[cfg(not(feature = "embedded-db"))]
