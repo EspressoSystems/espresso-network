@@ -19,7 +19,10 @@ use anyhow::Result;
 use clap::ValueEnum;
 use espresso_contract_deployer::{build_provider, build_signer, HttpProviderWithWallet};
 use futures_util::future;
-use hotshot_contract_adapter::sol_types::EspToken;
+use hotshot_contract_adapter::{
+    sol_types::{EspToken, StakeTableV2},
+    stake_table::StakeTableContractVersion,
+};
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -57,6 +60,8 @@ pub enum CreateTransactionsError {
         need: String,
         recipients: usize,
     },
+    #[error("delegation amount {amount} ESP is below minimum of {min} ESP")]
+    DelegationBelowMinimum { amount: String, min: String },
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
@@ -527,6 +532,20 @@ impl StakingTransactions<HttpProviderWithWallet> {
             }
         }
 
+        let st = StakeTableV2::new(stake_table, &token_holder_provider);
+        let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
+        if let StakeTableContractVersion::V2 = version {
+            let min_delegate_amount = st.minDelegateAmount().call().await?;
+            for delegator in &delegator_info {
+                if delegator.delegate_amount < min_delegate_amount {
+                    return Err(CreateTransactionsError::DelegationBelowMinimum {
+                        amount: format_ether(delegator.delegate_amount),
+                        min: format_ether(min_delegate_amount),
+                    });
+                }
+            }
+        }
+
         let mut funding = VecDeque::new();
 
         let eth_recipients: HashSet<Address> = validator_info
@@ -906,6 +925,37 @@ mod test {
             Failure::Esp => assert_matches!(err, CreateTransactionsError::InsufficientEsp { .. }),
             Failure::Eth => assert_matches!(err, CreateTransactionsError::InsufficientEth { .. }),
         };
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_delegation_below_minimum() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+
+        // Set min delegate amount higher than the demo amounts (100-500 ESP range)
+        let high_min = parse_ether("2000")?;
+        system.set_min_delegate_amount(high_min).await?;
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = vec![TestSystem::gen_keys(&mut rng)];
+
+        // create() only prepares transactions, it doesn't send any, so returning
+        // an error here guarantees no transactions were broadcast
+        let result = StakingTransactions::create(
+            system.rpc_url.clone(),
+            &system.provider,
+            system.stake_table,
+            keys,
+            None,
+            DelegationConfig::EqualAmounts,
+        )
+        .await;
+
+        assert_matches!(
+            result,
+            Err(CreateTransactionsError::DelegationBelowMinimum { .. })
+        );
 
         Ok(())
     }

@@ -1013,3 +1013,48 @@ async fn test_cli_all_operations_manual_inspect(
 
     Ok(())
 }
+
+#[test_log::test(tokio::test)]
+async fn test_cli_delegate_below_minimum() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    // Set min delegate amount to 100 ESP
+    let high_min = parse_ether("100")?;
+    system.set_min_delegate_amount(high_min).await?;
+
+    // Try to delegate less than the minimum
+    let amount = "50";
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("delegate")
+        .arg("--validator-address")
+        .arg(system.deployer_address.to_string())
+        .arg("--amount")
+        .arg(amount)
+        .assert()
+        .failure()
+        .stderr(str::contains("below minimum"))
+        .stderr(str::contains("100"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_stake_for_demo_below_minimum() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    // Set min delegate amount higher than the demo amounts (100-500 ESP range)
+    let high_min = parse_ether("2000")?;
+    system.set_min_delegate_amount(high_min).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-for-demo")
+        .assert()
+        .failure()
+        .stderr(str::contains("below minimum"))
+        .stderr(str::contains("2000"));
+
+    Ok(())
+}
