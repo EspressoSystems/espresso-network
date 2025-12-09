@@ -14,9 +14,8 @@ const LIGHT_CLIENT_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_
 const FEE_CONTRACT_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS";
 const REWARD_CLAIM_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS";
 const MULTISIG_ADDRESS: &str = "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS";
-const OPS_TIMELOCK_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_OPS_TIMELOCK_PROXY_ADDRESS";
-const SAFE_EXIT_TIMELOCK_PROXY_ADDRESS: &str =
-    "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_PROXY_ADDRESS";
+const OPS_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS";
+const SAFE_EXIT_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS";
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DeploymentAddresses {
@@ -60,16 +59,60 @@ pub fn load_addresses_from_env_file(path: Option<&Path>) -> Result<DeploymentAdd
         })
     }
 
-    Ok(DeploymentAddresses {
+    let addresses = DeploymentAddresses {
         stake_table_proxy: parse_address(&env_map, STAKE_TABLE_PROXY_ADDRESS),
         esp_token_proxy: parse_address(&env_map, ESP_TOKEN_PROXY_ADDRESS),
         light_client_proxy: parse_address(&env_map, LIGHT_CLIENT_PROXY_ADDRESS),
         fee_contract_proxy: parse_address(&env_map, FEE_CONTRACT_PROXY_ADDRESS),
         reward_claim_proxy: parse_address(&env_map, REWARD_CLAIM_PROXY_ADDRESS),
         multisig: parse_address(&env_map, MULTISIG_ADDRESS),
-        ops_timelock: parse_address(&env_map, OPS_TIMELOCK_PROXY_ADDRESS),
-        safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_PROXY_ADDRESS),
-    })
+        ops_timelock: parse_address(&env_map, OPS_TIMELOCK_ADDRESS),
+        safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_ADDRESS),
+    };
+
+    let contracts = [
+        (
+            "light_client",
+            LIGHT_CLIENT_PROXY_ADDRESS,
+            addresses.light_client_proxy,
+        ),
+        (
+            "stake_table",
+            STAKE_TABLE_PROXY_ADDRESS,
+            addresses.stake_table_proxy,
+        ),
+        (
+            "esp_token",
+            ESP_TOKEN_PROXY_ADDRESS,
+            addresses.esp_token_proxy,
+        ),
+        (
+            "fee_contract",
+            FEE_CONTRACT_PROXY_ADDRESS,
+            addresses.fee_contract_proxy,
+        ),
+        (
+            "reward_claim",
+            REWARD_CLAIM_PROXY_ADDRESS,
+            addresses.reward_claim_proxy,
+        ),
+        ("multisig", MULTISIG_ADDRESS, addresses.multisig),
+        ("ops_timelock", OPS_TIMELOCK_ADDRESS, addresses.ops_timelock),
+        (
+            "safe_exit_timelock",
+            SAFE_EXIT_TIMELOCK_ADDRESS,
+            addresses.safe_exit_timelock,
+        ),
+    ];
+
+    for (name, env_var, addr) in contracts {
+        match addr {
+            Some(a) => tracing::info!("{}: {} (from {})", name, a, env_var),
+            None => tracing::info!("{}: not configured (missing {})", name, env_var),
+        }
+    }
+
+    Ok(addresses)
 }
 
 pub async fn collect_deployment_info(
