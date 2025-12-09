@@ -31,7 +31,7 @@ jobs:
     name: Build test artifacts (postgres)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@v2
         with:
@@ -57,7 +57,7 @@ jobs:
         run: just nextest-archive nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: nextest-archive-postgres
           if-no-files-found: error
@@ -67,7 +67,7 @@ jobs:
     name: Build test artifacts (sqlite)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@v2
         with:
@@ -93,7 +93,7 @@ jobs:
         run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing"
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: nextest-archive-sqlite
           if-no-files-found: error
@@ -103,7 +103,7 @@ jobs:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
@@ -120,7 +120,7 @@ jobs:
         timeout-minutes: 60
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-binaries
           if-no-files-found: error
@@ -149,7 +149,7 @@ jobs:
     name: Build sequencer-sqlite test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
@@ -166,7 +166,7 @@ jobs:
         timeout-minutes: 30
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-binaries-sqlite
           if-no-files-found: error
@@ -178,7 +178,7 @@ jobs:
     name: Build espresso-dev-node test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
@@ -195,7 +195,7 @@ jobs:
         timeout-minutes: 30
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-binaries-dev-node
           if-no-files-found: error
@@ -210,7 +210,7 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: taiki-e/install-action@nextest
 
@@ -224,7 +224,7 @@ jobs:
           command: yarn
 
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: nextest-archive-postgres
 
@@ -243,7 +243,7 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
@@ -259,7 +259,7 @@ jobs:
           command: yarn
 
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: nextest-archive-sqlite
 
@@ -273,7 +273,7 @@ jobs:
   test-go-sdk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
@@ -312,7 +312,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@nextest
       - uses: ./.github/actions/install-process-compose
@@ -320,7 +320,7 @@ jobs:
           version: v1.75.2
 
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
 
       - name: Move files
         run: |
@@ -359,7 +359,7 @@ jobs:
 
       - name: Upload process compose logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: process-compose-logs-integration-v${{ matrix.test-name  }}
           path: ${{ env.NATIVE_DEMO_LOGS }}
@@ -369,7 +369,7 @@ jobs:
     needs: [build-test-bins, build-test-bins-sqlite]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
@@ -378,7 +378,7 @@ jobs:
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.
       - name: Download archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
 
       - name: Move files
         run: |
@@ -406,7 +406,7 @@ jobs:
 
       - name: Upload process compose logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: process-compose-logs-test-demo-native
           path: ${{ env.PC_LOG_FILE }}
