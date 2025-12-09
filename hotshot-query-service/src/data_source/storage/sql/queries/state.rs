@@ -583,7 +583,7 @@ impl Node {
 
         #[cfg(feature = "embedded-db")]
         {
-            for node_chunk in nodes.chunks(100) {
+            for node_chunk in nodes.chunks(20) {
                 let rows: Vec<_> = node_chunk
                     .iter()
                     .map(|n| {

@@ -739,7 +739,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         #[cfg(feature = "embedded-db")]
         let nodes_hash_ids: HashMap<Vec<u8>, i32> = {
             let mut hash_ids: HashMap<Vec<u8>, i32> = HashMap::with_capacity(hashes.len());
-            for hash_chunk in hashes.chunks(100) {
+            for hash_chunk in hashes.chunks(20) {
                 let (query, sql) = build_hash_batch_insert(hash_chunk)?;
                 let chunk_ids: HashMap<Vec<u8>, i32> = query
                     .query_as(&sql)
