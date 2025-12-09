@@ -134,6 +134,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Total stake in active (not marked for exit) validators in the contract
     uint256 public activeStake;
 
+    /// @notice min delegate amount
+    uint256 public minDelegateAmount;
+
     /// @notice Commission tracking for each validator
     mapping(address validator => CommissionTracking tracking) public commissionTracking;
 
@@ -244,6 +247,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param metadataUri The new metadata URI
     event MetadataUriUpdated(address indexed validator, string metadataUri);
 
+    /// @notice The minimum delegate amount is updated
+    /// @param newMinDelegateAmount The new minimum delegate amount in wei
+    event MinDelegateAmountUpdated(uint256 newMinDelegateAmount);
+
     // === Errors ===
 
     /// The Schnorr signature is invalid (either the wrong length or the wrong key)
@@ -282,6 +289,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// The metadata URI exceeds maximum allowed length
     error InvalidMetadataUriLength();
+
+    /// The delegate amount is too small
+    error DelegateAmountTooSmall();
 
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
@@ -335,6 +345,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // Initialize undelegation IDs to start at 1 (0 is reserved for V1 undelegations)
         nextUndelegationId = 1;
+
+        // Initialize min delegate amount to 1 ESP token
+        minDelegateAmount = 1 ether;
 
         // initialize commissions (if the contract under upgrade has existing state)
         _initializeCommissions(initialCommissions);
@@ -498,6 +511,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         if (amount == 0) {
             revert ZeroAmount();
+        }
+
+        if (amount < minDelegateAmount) {
+            revert DelegateAmountTooSmall();
         }
 
         uint256 allowance = token.allowance(delegator, address(this));
@@ -887,6 +904,17 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         BN254.G1Point memory
     ) external pure override {
         revert DeprecatedFunction();
+    }
+
+    /// @notice Set the minimum delegate amount
+    /// @param newMinDelegateAmount The new minimum delegate amount in wei
+    function setMinDelegateAmount(uint256 newMinDelegateAmount)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        minDelegateAmount = newMinDelegateAmount;
+        emit MinDelegateAmountUpdated(newMinDelegateAmount);
     }
 
     /// @notice Authorize an upgrade to a new implementation

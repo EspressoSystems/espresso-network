@@ -520,6 +520,19 @@
   },
   {
     "type": "function",
+    "name": "minDelegateAmount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "owner",
     "inputs": [],
     "outputs": [
@@ -803,6 +816,19 @@
     "inputs": [
       {
         "name": "newInterval",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMinDelegateAmount",
+    "inputs": [
+      {
+        "name": "newMinDelegateAmount",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1436,6 +1462,19 @@
   },
   {
     "type": "event",
+    "name": "MinDelegateAmountUpdated",
+    "inputs": [
+      {
+        "name": "newMinDelegateAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "OwnershipTransferred",
     "inputs": [
       {
@@ -1977,6 +2016,11 @@
   {
     "type": "error",
     "name": "DefaultAdminCannotBeRevoked",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DelegateAmountTooSmall",
     "inputs": []
   },
   {
