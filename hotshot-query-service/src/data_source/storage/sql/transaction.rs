@@ -19,17 +19,18 @@
 //! transaction.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     marker::PhantomData,
     time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context};
-use ark_serialize::CanonicalSerialize;
 use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
-use futures::{future::Future, stream::TryStreamExt};
+use futures::future::Future;
+#[cfg(feature = "embedded-db")]
+use futures::stream::TryStreamExt;
 use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
@@ -41,21 +42,19 @@ use hotshot_types::{
     },
 };
 use itertools::Itertools;
-use jf_merkle_tree_compat::prelude::{MerkleNode, MerkleProof};
+use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
-use sqlx::{
-    pool::Pool, query_builder::Separated, types::BitVec, Encode, Execute, FromRow, QueryBuilder,
-    Type,
-};
+use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
 use tokio::time::sleep;
 
 #[cfg(not(feature = "embedded-db"))]
 use super::queries::state::batch_insert_hashes;
+#[cfg(feature = "embedded-db")]
+use super::queries::state::build_hash_batch_insert;
 use super::{
     queries::{
         self,
-        state::{build_hash_batch_insert, collect_nodes_from_proof, Node},
-        DecodeError,
+        state::{collect_nodes_from_proofs, Node},
     },
     Database, Db,
 };
@@ -707,158 +706,13 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         traversal_path: Vec<usize>,
         block_number: u64,
     ) -> anyhow::Result<()> {
-        let pos = proof.pos;
-        let path = proof.proof;
-
-        let name = State::state_type();
-        let block_number = block_number as i64;
-
-        let mut traversal_path = traversal_path.iter().map(|n| *n as i32);
-
-        // All the nodes are collected here, They depend on the hash ids which are returned after
-        // hashes are upserted in the db
-        let mut nodes = Vec::new();
-        let mut hashset = HashSet::new();
-
-        for node in path.iter() {
-            match node {
-                MerkleNode::Empty => {
-                    let index = serde_json::to_value(pos.clone())
-                        .decode_error("malformed merkle position")?;
-                    // The node path represents the sequence of nodes from the root down to a specific node.
-                    // Therefore, the traversal path needs to be reversed
-                    // The root node path is an empty array.
-                    let node_path = traversal_path.clone().rev().collect();
-                    nodes.push((
-                        Node {
-                            path: node_path,
-                            idx: Some(index),
-                            ..Default::default()
-                        },
-                        None,
-                        [0_u8; 32].to_vec(),
-                    ));
-                    hashset.insert([0_u8; 32].to_vec());
-                },
-                MerkleNode::ForgettenSubtree { .. } => {
-                    bail!("Node in the Merkle path contains a forgetten subtree");
-                },
-                MerkleNode::Leaf { value, pos, elem } => {
-                    let mut leaf_commit = Vec::new();
-                    // Serialize the leaf node hash value into a vector
-                    value
-                        .serialize_compressed(&mut leaf_commit)
-                        .decode_error("malformed merkle leaf commitment")?;
-
-                    let path = traversal_path.clone().rev().collect();
-
-                    let index = serde_json::to_value(pos.clone())
-                        .decode_error("malformed merkle position")?;
-                    let entry =
-                        serde_json::to_value(elem).decode_error("malformed merkle element")?;
-
-                    nodes.push((
-                        Node {
-                            path,
-                            idx: Some(index),
-                            entry: Some(entry),
-                            ..Default::default()
-                        },
-                        None,
-                        leaf_commit.clone(),
-                    ));
-
-                    hashset.insert(leaf_commit);
-                },
-                MerkleNode::Branch { value, children } => {
-                    // Get hash
-                    let mut branch_hash = Vec::new();
-                    value
-                        .serialize_compressed(&mut branch_hash)
-                        .decode_error("malformed merkle branch hash")?;
-
-                    // We only insert the non-empty children in the children field of the table
-                    // BitVec is used to separate out Empty children positions
-                    let mut children_bitvec = BitVec::new();
-                    let mut children_values = Vec::new();
-                    for child in children {
-                        let child = child.as_ref();
-                        match child {
-                            MerkleNode::Empty => {
-                                children_bitvec.push(false);
-                            },
-                            MerkleNode::Branch { value, .. }
-                            | MerkleNode::Leaf { value, .. }
-                            | MerkleNode::ForgettenSubtree { value } => {
-                                let mut hash = Vec::new();
-                                value
-                                    .serialize_compressed(&mut hash)
-                                    .decode_error("malformed merkle node hash")?;
-
-                                children_values.push(hash);
-                                // Mark the entry as 1 in bitvec to indicate a non-empty child
-                                children_bitvec.push(true);
-                            },
-                        }
-                    }
-
-                    // insert internal node
-                    let path = traversal_path.clone().rev().collect();
-                    nodes.push((
-                        Node {
-                            path,
-                            children: None,
-                            children_bitvec: Some(children_bitvec),
-                            ..Default::default()
-                        },
-                        Some(children_values.clone()),
-                        branch_hash.clone(),
-                    ));
-                    hashset.insert(branch_hash);
-                    hashset.extend(children_values);
-                },
-            }
-
-            // advance the traversal path for the internal nodes at each iteration
-            // The final node would be the Root node where this iterator is exhausted
-            traversal_path.next();
-        }
-        // We build a hashset to avoid duplicate entries
-        let hashes = hashset.into_iter().collect::<Vec<Vec<u8>>>();
-
-        // insert all the hashes into database
-        // It returns all the ids inserted in the order they were inserted
-        // We use the hash ids to insert all the nodes
-        let (query, sql) = build_hash_batch_insert(&hashes)?;
-        let nodes_hash_ids: HashMap<Vec<u8>, i32> = query
-            .query_as(&sql)
-            .fetch(self.as_mut())
-            .try_collect()
-            .await?;
-
-        // Updates the node fields
-        for (node, children, hash) in &mut nodes {
-            node.created = block_number;
-            node.hash_id = *nodes_hash_ids.get(&*hash).ok_or(QueryError::Error {
-                message: "Missing node hash".to_string(),
-            })?;
-
-            if let Some(children) = children {
-                let children_hashes = children
-                    .iter()
-                    .map(|c| nodes_hash_ids.get(c).copied())
-                    .collect::<Option<Vec<i32>>>()
-                    .ok_or(QueryError::Error {
-                        message: "Missing child hash".to_string(),
-                    })?;
-
-                node.children = Some(children_hashes.into());
-            }
-        }
-
-        Node::upsert(name, nodes.into_iter().map(|(n, ..)| n), self).await?;
-
-        Ok(())
+        let proofs = vec![(proof, traversal_path)];
+        UpdateStateData::<Types, State, ARITY>::insert_merkle_nodes_batch(
+            self,
+            proofs,
+            block_number,
+        )
+        .await
     }
 
     async fn insert_merkle_nodes_batch(
@@ -876,13 +730,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         let name = State::state_type();
         let block_number = block_number as i64;
 
-        let mut all_nodes = Vec::new();
-        let mut all_hashes = HashSet::new();
-
-        for (proof, traversal_path) in &proofs {
-            collect_nodes_from_proof(proof, traversal_path, &mut all_nodes, &mut all_hashes)?;
-        }
-
+        let (mut all_nodes, all_hashes) = collect_nodes_from_proofs(&proofs)?;
         let hashes: Vec<Vec<u8>> = all_hashes.into_iter().collect();
 
         #[cfg(not(feature = "embedded-db"))]

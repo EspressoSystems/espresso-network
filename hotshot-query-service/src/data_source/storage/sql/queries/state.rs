@@ -342,6 +342,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
 }
 
 // TODO: create a generic upsert function with retries that returns the column
+#[cfg(feature = "embedded-db")]
 pub(crate) fn build_hash_batch_insert(
     hashes: &[Vec<u8>],
 ) -> QueryResult<(QueryBuilder<'_>, String)> {
@@ -385,130 +386,136 @@ pub(crate) async fn batch_insert_hashes(
     Ok(result)
 }
 
-/// Collects nodes and hashes from a merkle proof into the provided collections.
-/// This allows batching multiple proofs together before inserting into the database.
-/// Returns a tuple of (node, optional_children_hashes, node_hash) for each node in the proof.
-pub(crate) fn collect_nodes_from_proof<Entry, Key, T, const ARITY: usize>(
-    proof: &MerkleProof<Entry, Key, T, ARITY>,
-    traversal_path: &[usize],
-    nodes: &mut Vec<NodeWithHashes>,
-    hashes: &mut HashSet<Vec<u8>>,
-) -> QueryResult<()>
+/// Type alias for a merkle proof with its traversal path.
+pub(crate) type ProofWithPath<Entry, Key, T, const ARITY: usize> =
+    (MerkleProof<Entry, Key, T, ARITY>, Vec<usize>);
+
+/// Collects nodes and hashes from merkle proofs.
+/// Returns (nodes, hashes) for batch insertion.
+pub(crate) fn collect_nodes_from_proofs<Entry, Key, T, const ARITY: usize>(
+    proofs: &[ProofWithPath<Entry, Key, T, ARITY>],
+) -> QueryResult<(Vec<NodeWithHashes>, HashSet<Vec<u8>>)>
 where
     Entry: jf_merkle_tree_compat::Element + serde::Serialize,
     Key: jf_merkle_tree_compat::Index + serde::Serialize,
     T: jf_merkle_tree_compat::NodeValue,
 {
-    let pos = &proof.pos;
-    let path = &proof.proof;
+    let mut nodes = Vec::new();
+    let mut hashes = HashSet::new();
 
-    let mut trav_path = traversal_path.iter().map(|n| *n as i32);
+    for (proof, traversal_path) in proofs {
+        let pos = &proof.pos;
+        let path = &proof.proof;
+        let mut trav_path = traversal_path.iter().map(|n| *n as i32);
 
-    for node in path.iter() {
-        match node {
-            MerkleNode::Empty => {
-                let index = serde_json::to_value(pos.clone()).map_err(|e| QueryError::Error {
-                    message: format!("malformed merkle position: {e}"),
-                })?;
-                let node_path: Vec<i32> = trav_path.clone().rev().collect();
-                nodes.push((
-                    Node {
-                        path: node_path.into(),
-                        idx: Some(index),
-                        ..Default::default()
-                    },
-                    None,
-                    [0_u8; 32].to_vec(),
-                ));
-                hashes.insert([0_u8; 32].to_vec());
-            },
-            MerkleNode::ForgettenSubtree { .. } => {
-                return Err(QueryError::Error {
-                    message: "Node in the Merkle path contains a forgotten subtree".into(),
-                });
-            },
-            MerkleNode::Leaf { value, pos, elem } => {
-                let mut leaf_commit = Vec::new();
-                value
-                    .serialize_compressed(&mut leaf_commit)
-                    .map_err(|e| QueryError::Error {
-                        message: format!("malformed merkle leaf commitment: {e}"),
+        for node in path.iter() {
+            match node {
+                MerkleNode::Empty => {
+                    let index =
+                        serde_json::to_value(pos.clone()).map_err(|e| QueryError::Error {
+                            message: format!("malformed merkle position: {e}"),
+                        })?;
+                    let node_path: Vec<i32> = trav_path.clone().rev().collect();
+                    nodes.push((
+                        Node {
+                            path: node_path.into(),
+                            idx: Some(index),
+                            ..Default::default()
+                        },
+                        None,
+                        [0_u8; 32].to_vec(),
+                    ));
+                    hashes.insert([0_u8; 32].to_vec());
+                },
+                MerkleNode::ForgettenSubtree { .. } => {
+                    return Err(QueryError::Error {
+                        message: "Node in the Merkle path contains a forgotten subtree".into(),
+                    });
+                },
+                MerkleNode::Leaf { value, pos, elem } => {
+                    let mut leaf_commit = Vec::new();
+                    value.serialize_compressed(&mut leaf_commit).map_err(|e| {
+                        QueryError::Error {
+                            message: format!("malformed merkle leaf commitment: {e}"),
+                        }
                     })?;
 
-                let node_path: Vec<i32> = trav_path.clone().rev().collect();
+                    let node_path: Vec<i32> = trav_path.clone().rev().collect();
 
-                let index = serde_json::to_value(pos.clone()).map_err(|e| QueryError::Error {
-                    message: format!("malformed merkle position: {e}"),
-                })?;
-                let entry = serde_json::to_value(elem).map_err(|e| QueryError::Error {
-                    message: format!("malformed merkle element: {e}"),
-                })?;
-
-                nodes.push((
-                    Node {
-                        path: node_path.into(),
-                        idx: Some(index),
-                        entry: Some(entry),
-                        ..Default::default()
-                    },
-                    None,
-                    leaf_commit.clone(),
-                ));
-
-                hashes.insert(leaf_commit);
-            },
-            MerkleNode::Branch { value, children } => {
-                let mut branch_hash = Vec::new();
-                value
-                    .serialize_compressed(&mut branch_hash)
-                    .map_err(|e| QueryError::Error {
-                        message: format!("malformed merkle branch hash: {e}"),
+                    let index =
+                        serde_json::to_value(pos.clone()).map_err(|e| QueryError::Error {
+                            message: format!("malformed merkle position: {e}"),
+                        })?;
+                    let entry = serde_json::to_value(elem).map_err(|e| QueryError::Error {
+                        message: format!("malformed merkle element: {e}"),
                     })?;
 
-                let mut children_bitvec = BitVec::new();
-                let mut children_values = Vec::new();
-                for child in children {
-                    let child = child.as_ref();
-                    match child {
-                        MerkleNode::Empty => {
-                            children_bitvec.push(false);
+                    nodes.push((
+                        Node {
+                            path: node_path.into(),
+                            idx: Some(index),
+                            entry: Some(entry),
+                            ..Default::default()
                         },
-                        MerkleNode::Branch { value, .. }
-                        | MerkleNode::Leaf { value, .. }
-                        | MerkleNode::ForgettenSubtree { value } => {
-                            let mut hash = Vec::new();
-                            value.serialize_compressed(&mut hash).map_err(|e| {
-                                QueryError::Error {
-                                    message: format!("malformed merkle node hash: {e}"),
-                                }
-                            })?;
+                        None,
+                        leaf_commit.clone(),
+                    ));
 
-                            children_values.push(hash);
-                            children_bitvec.push(true);
-                        },
+                    hashes.insert(leaf_commit);
+                },
+                MerkleNode::Branch { value, children } => {
+                    let mut branch_hash = Vec::new();
+                    value.serialize_compressed(&mut branch_hash).map_err(|e| {
+                        QueryError::Error {
+                            message: format!("malformed merkle branch hash: {e}"),
+                        }
+                    })?;
+
+                    let mut children_bitvec = BitVec::new();
+                    let mut children_values = Vec::new();
+                    for child in children {
+                        let child = child.as_ref();
+                        match child {
+                            MerkleNode::Empty => {
+                                children_bitvec.push(false);
+                            },
+                            MerkleNode::Branch { value, .. }
+                            | MerkleNode::Leaf { value, .. }
+                            | MerkleNode::ForgettenSubtree { value } => {
+                                let mut hash = Vec::new();
+                                value.serialize_compressed(&mut hash).map_err(|e| {
+                                    QueryError::Error {
+                                        message: format!("malformed merkle node hash: {e}"),
+                                    }
+                                })?;
+
+                                children_values.push(hash);
+                                children_bitvec.push(true);
+                            },
+                        }
                     }
-                }
 
-                let node_path: Vec<i32> = trav_path.clone().rev().collect();
-                nodes.push((
-                    Node {
-                        path: node_path.into(),
-                        children: None,
-                        children_bitvec: Some(children_bitvec),
-                        ..Default::default()
-                    },
-                    Some(children_values.clone()),
-                    branch_hash.clone(),
-                ));
-                hashes.insert(branch_hash);
-                hashes.extend(children_values);
-            },
+                    let node_path: Vec<i32> = trav_path.clone().rev().collect();
+                    nodes.push((
+                        Node {
+                            path: node_path.into(),
+                            children: None,
+                            children_bitvec: Some(children_bitvec),
+                            ..Default::default()
+                        },
+                        Some(children_values.clone()),
+                        branch_hash.clone(),
+                    ));
+                    hashes.insert(branch_hash);
+                    hashes.extend(children_values);
+                },
+            }
+
+            trav_path.next();
         }
-
-        trav_path.next();
     }
 
-    Ok(())
+    Ok((nodes, hashes))
 }
 
 // Represents a row in a state table
