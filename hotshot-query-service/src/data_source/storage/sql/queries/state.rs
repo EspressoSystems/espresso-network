@@ -17,6 +17,7 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(not(feature = "embedded-db"))]
 use anyhow::Context;
 use ark_serialize::CanonicalDeserialize;
 use async_trait::async_trait;
