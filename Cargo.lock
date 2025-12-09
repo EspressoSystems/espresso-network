@@ -10832,6 +10832,7 @@ dependencies = [
  "rstest",
  "sequencer",
  "serde",
+ "serde_json",
  "staking-cli",
  "surf-disco",
  "tempfile",

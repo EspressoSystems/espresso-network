@@ -1026,8 +1026,6 @@ pub(crate) mod impl_testable_data_source {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
-
     use alloy::primitives::Address;
     use espresso_types::{
         v0_3::RewardAmount,
@@ -1473,52 +1471,5 @@ mod tests {
             .unwrap(),);
         }
         tracing::info!("Height 3: Verified 10 non-membership proofs");
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_batch_insertion_100k_accounts() {
-        let db = TmpDb::init().await;
-        let opt = tmp_options(&db);
-        let cfg = Config::try_from(&opt).expect("failed to create config from options");
-        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
-            .await
-            .expect("failed to connect to storage");
-
-        let num_accounts = 100_000usize;
-
-        let accounts: Vec<RewardAccountV2> = (0..num_accounts).map(make_reward_account).collect();
-
-        tracing::info!("Starting tree update for {} accounts", num_accounts);
-        let tree_update_start = Instant::now();
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        for (i, account) in accounts.iter().enumerate() {
-            let reward_amount = RewardAmount::from(((i + 1) * 100) as u64);
-            reward_tree.update(*account, reward_amount).unwrap();
-            if (i + 1) % 10_000 == 0 {
-                tracing::info!("tree_update: {}/{}", i + 1, num_accounts);
-            }
-        }
-        let tree_update_duration = tree_update_start.elapsed();
-        tracing::info!("tree_update complete: {:?}", tree_update_duration);
-
-        let mut tx = storage.write().await.unwrap();
-        insert_test_header(&mut tx, 1, &reward_tree).await;
-
-        tracing::info!("Starting batch insert for {} accounts", num_accounts);
-        let batch_insert_start = Instant::now();
-        batch_insert_proofs(&mut tx, &reward_tree, &accounts, 1).await;
-        let batch_insert_duration = batch_insert_start.elapsed();
-        tracing::info!("batch_insert complete: {:?}", batch_insert_duration);
-
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::set_last_state_height(&mut tx, 1)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-
-        tracing::info!(
-            "100k accounts: tree_update={:?}, batch_insert={:?}",
-            tree_update_duration,
-            batch_insert_duration
-        );
     }
 }
