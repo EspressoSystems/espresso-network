@@ -636,27 +636,20 @@ impl Node {
 
         // Deduplicate nodes by (path, created) - keep the last occurrence
         // This is required because UNNEST + ON CONFLICT cannot handle duplicates in the same batch
-        let mut seen: HashMap<(String, i64), usize> = HashMap::new();
-        let mut deduped_nodes: Vec<Self> = Vec::with_capacity(nodes.len());
+        let mut deduped = HashMap::new();
         for node in nodes {
-            let key = (node.path.to_string(), node.created);
-            if let Some(idx) = seen.get(&key) {
-                deduped_nodes[*idx] = node;
-            } else {
-                seen.insert(key, deduped_nodes.len());
-                deduped_nodes.push(node);
-            }
+            deduped.insert((node.path.to_string(), node.created), node);
         }
 
-        let mut paths: Vec<JsonValue> = Vec::with_capacity(deduped_nodes.len());
-        let mut createds: Vec<i64> = Vec::with_capacity(deduped_nodes.len());
-        let mut hash_ids: Vec<i32> = Vec::with_capacity(deduped_nodes.len());
-        let mut childrens: Vec<Option<JsonValue>> = Vec::with_capacity(deduped_nodes.len());
-        let mut children_bitvecs: Vec<Option<BitVec>> = Vec::with_capacity(deduped_nodes.len());
-        let mut idxs: Vec<Option<JsonValue>> = Vec::with_capacity(deduped_nodes.len());
-        let mut entries: Vec<Option<JsonValue>> = Vec::with_capacity(deduped_nodes.len());
+        let mut paths = Vec::with_capacity(deduped.len());
+        let mut createds = Vec::with_capacity(deduped.len());
+        let mut hash_ids = Vec::with_capacity(deduped.len());
+        let mut childrens = Vec::with_capacity(deduped.len());
+        let mut children_bitvecs = Vec::with_capacity(deduped.len());
+        let mut idxs = Vec::with_capacity(deduped.len());
+        let mut entries = Vec::with_capacity(deduped.len());
 
-        for node in deduped_nodes {
+        for node in deduped.into_values() {
             paths.push(node.path);
             createds.push(node.created);
             hash_ids.push(node.hash_id);
