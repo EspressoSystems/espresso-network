@@ -12,6 +12,7 @@ use futures::{future::poll_fn, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteEx
 use hotshot_types::traits::signature_key::SignatureKey;
 use libp2p::{
     core::{
+        connection::ConnectedPoint,
         muxing::StreamMuxerExt,
         transport::{DialOpts, TransportEvent},
         StreamMuxer,
@@ -25,14 +26,11 @@ use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::warn;
 
+use crate::network::quic::Connection;
+
 /// The maximum size of an authentication message. This is used to prevent
 /// DoS attacks by sending large messages.
 const MAX_AUTH_MESSAGE_SIZE: usize = 1024;
-
-/// The timeout for the authentication handshake. This is used to prevent
-/// attacks that keep connections open indefinitely by half-finishing the
-/// handshake.
-const AUTH_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A wrapper for a `Transport` that bidirectionally associates (and verifies)
 /// the corresponding consensus keys.
@@ -160,70 +158,173 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
             // Wait for the original future to resolve
             let mut stream = original_future.await?;
 
-            // Time out the authentication block
-            timeout(AUTH_HANDSHAKE_TIMEOUT, async {
-                // Open a substream for the handshake.
-                // The handshake order depends on whether the connection is incoming or outgoing.
-                let mut substream = if outgoing {
-                    poll_fn(|cx| stream.as_connection().poll_outbound_unpin(cx)).await?
+            // Open a substream for the handshake.
+            // The handshake order depends on whether the connection is incoming or outgoing.
+            let mut substream = if outgoing {
+                poll_fn(|cx| stream.as_connection().poll_outbound_unpin(cx)).await?
+            } else {
+                poll_fn(|cx| stream.as_connection().poll_inbound_unpin(cx)).await?
+            };
+
+            // Conditionally authenticate depending on whether we specified an auth message
+            if let Some(auth_message) = auth_message.as_ref() {
+                if outgoing {
+                    // If the connection is outgoing, authenticate with the remote peer first
+                    Self::authenticate_with_remote_peer(&mut substream, auth_message)
+                        .await
+                        .map_err(|e| {
+                            warn!("Failed to authenticate with remote peer: {e:?}");
+                            IoError::other(e)
+                        })?;
+
+                    // Verify the remote peer's authentication
+                    Self::verify_peer_authentication(
+                        &mut substream,
+                        stream.as_peer_id(),
+                        consensus_key_to_pid_map,
+                    )
+                    .await
+                    .map_err(|e| {
+                        warn!("Failed to verify remote peer: {e:?}");
+                        IoError::other(e)
+                    })?;
                 } else {
-                    poll_fn(|cx| stream.as_connection().poll_inbound_unpin(cx)).await?
-                };
+                    // If it is incoming, verify the remote peer's authentication first
+                    Self::verify_peer_authentication(
+                        &mut substream,
+                        stream.as_peer_id(),
+                        consensus_key_to_pid_map,
+                    )
+                    .await
+                    .map_err(|e| {
+                        warn!("Failed to verify remote peer: {e:?}");
+                        IoError::other(e)
+                    })?;
 
-                // Conditionally authenticate depending on whether we specified an auth message
-                if let Some(auth_message) = auth_message.as_ref() {
-                    if outgoing {
-                        // If the connection is outgoing, authenticate with the remote peer first
-                        Self::authenticate_with_remote_peer(&mut substream, auth_message)
-                            .await
-                            .map_err(|e| {
-                                warn!("Failed to authenticate with remote peer: {e:?}");
-                                IoError::other(e)
-                            })?;
-
-                        // Verify the remote peer's authentication
-                        Self::verify_peer_authentication(
-                            &mut substream,
-                            stream.as_peer_id(),
-                            consensus_key_to_pid_map,
-                        )
+                    // Authenticate with the remote peer
+                    Self::authenticate_with_remote_peer(&mut substream, auth_message)
                         .await
                         .map_err(|e| {
-                            warn!("Failed to verify remote peer: {e:?}");
+                            warn!("Failed to authenticate with remote peer: {e:?}");
                             IoError::other(e)
                         })?;
-                    } else {
-                        // If it is incoming, verify the remote peer's authentication first
-                        Self::verify_peer_authentication(
-                            &mut substream,
-                            stream.as_peer_id(),
-                            consensus_key_to_pid_map,
-                        )
-                        .await
-                        .map_err(|e| {
-                            warn!("Failed to verify remote peer: {e:?}");
-                            IoError::other(e)
-                        })?;
-
-                        // Authenticate with the remote peer
-                        Self::authenticate_with_remote_peer(&mut substream, auth_message)
-                            .await
-                            .map_err(|e| {
-                                warn!("Failed to authenticate with remote peer: {e:?}");
-                                IoError::other(e)
-                            })?;
-                    }
                 }
+            }
 
-                Ok(stream)
-            })
-            .await
-            .map_err(|e| {
-                warn!("Timed out performing authentication handshake: {e:?}");
-                IoError::new(IoErrorKind::TimedOut, e)
-            })?
+            Ok(stream)
         })
     }
+}
+
+/// Prove to the remote peer that we are in the stake table by sending
+/// them our authentication message.
+///
+/// # Errors
+/// - If we fail to write the message to the stream
+pub async fn authenticate_with_remote_peer<W: AsyncWrite + Unpin>(
+    stream: &mut W,
+    auth_message: &[u8],
+) -> AnyhowResult<()> {
+    // Write the length-delimited message
+    write_length_delimited(stream, auth_message).await?;
+
+    Ok(())
+}
+
+/// Verify that the remote peer is:
+/// - In the stake table
+/// - Sending us a valid authentication message
+/// - Sending us a valid signature
+/// - Matching the peer ID we expect
+///
+/// # Errors
+/// If the peer fails verification. This can happen if:
+/// - We fail to read the message from the stream
+/// - The message is too large
+/// - The message is invalid
+/// - The peer is not in the stake table
+/// - The signature is invalid
+pub async fn verify_peer_authentication<R: AsyncReadExt + Unpin, S: SignatureKey + 'static>(
+    stream: &mut R,
+    required_peer_id: &PeerId,
+    consensus_key_to_pid_map: Arc<Mutex<BiMap<S, PeerId>>>,
+) -> AnyhowResult<()> {
+    // Read the length-delimited message from the remote peer
+    let message = read_length_delimited(stream, MAX_AUTH_MESSAGE_SIZE).await?;
+
+    // Deserialize the authentication message
+    let auth_message: AuthMessage<S> =
+        bincode::deserialize(&message).with_context(|| "Failed to deserialize auth message")?;
+
+    // Verify the signature on the public keys
+    let public_key = auth_message
+        .validate()
+        .with_context(|| "Failed to verify authentication message")?;
+
+    // Deserialize the `PeerId`
+    let peer_id = PeerId::from_bytes(&auth_message.peer_id_bytes)
+        .with_context(|| "Failed to deserialize peer ID")?;
+
+    // Verify that the peer ID is the same as the remote peer
+    if peer_id != *required_peer_id {
+        return Err(anyhow::anyhow!("Peer ID mismatch"));
+    }
+
+    // If we got here, the peer is authenticated. Add the consensus key to the map
+    consensus_key_to_pid_map.lock().insert(public_key, peer_id);
+
+    Ok(())
+}
+
+pub async fn handshake<S: SignatureKey + 'static>(
+    (peer_id, mut connection): (PeerId, Connection),
+    connected_point: ConnectedPoint,
+    auth_message: Option<Vec<u8>>,
+    consensus_key_to_pid_map: Arc<Mutex<BiMap<S, PeerId>>>,
+) -> Result<(PeerId, Connection), crate::network::quic::Error> {
+    if let Some(auth_message) = auth_message.as_ref() {
+        match connected_point {
+            ConnectedPoint::Dialer { .. } => {
+                let mut stream = poll_fn(|cx| connection.poll_outbound_unpin(cx)).await?;
+                if let Err(e) = authenticate_with_remote_peer(&mut stream, auth_message).await {
+                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                    warn!("Failed to authenticate with remote peer: {e:?}");
+                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                }
+
+                // Verify the remote peer's authentication
+                if let Err(e) =
+                    verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map)
+                        .await
+                {
+                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                    warn!("Failed to verify remote peer: {e:?}");
+                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                }
+            },
+            ConnectedPoint::Listener { .. } => {
+                let mut stream = poll_fn(|cx| connection.poll_inbound_unpin(cx)).await?;
+                // If it is incoming, verify the remote peer's authentication first
+                if let Err(e) =
+                    verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map)
+                        .await
+                {
+                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                    warn!("Failed to verify remote peer: {e:?}");
+                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                }
+
+                // Authenticate with the remote peer
+                if let Err(e) = authenticate_with_remote_peer(&mut stream, auth_message).await {
+                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                    warn!("Failed to authenticate with remote peer: {e:?}");
+                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                };
+            },
+        }
+    }
+
+    Ok((peer_id, connection))
 }
 
 /// The deserialized form of an authentication message that is sent to the remote peer
@@ -344,64 +445,19 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<libp2p::core::transport::TransportEvent<Self::ListenerUpgrade, Self::Error>>
     {
-        match self.as_mut().project().inner.poll(cx) {
-            Poll::Ready(event) => Poll::Ready(match event {
-                // If we have an incoming connection, we need to perform the authentication handshake
-                TransportEvent::Incoming {
-                    listener_id,
+        // Clone the necessary fields
+        let auth_message = Arc::clone(&self.auth_message);
+
+        self.as_mut().project().inner.poll(cx).map(|event| {
+            event.map_upgrade(|upgrade| {
+                Self::gen_handshake(
                     upgrade,
-                    local_addr,
-                    send_back_addr,
-                } => {
-                    // Clone the necessary fields
-                    let auth_message = Arc::clone(&self.auth_message);
-
-                    // Generate the handshake upgrade future (inbound)
-                    let auth_upgrade = Self::gen_handshake(
-                        upgrade,
-                        false,
-                        auth_message,
-                        Arc::clone(&self.consensus_key_to_pid_map),
-                    );
-
-                    // Return the new event
-                    TransportEvent::Incoming {
-                        listener_id,
-                        upgrade: auth_upgrade,
-                        local_addr,
-                        send_back_addr,
-                    }
-                },
-
-                // We need to re-map the other events because we changed the type of the upgrade
-                TransportEvent::AddressExpired {
-                    listener_id,
-                    listen_addr,
-                } => TransportEvent::AddressExpired {
-                    listener_id,
-                    listen_addr,
-                },
-                TransportEvent::ListenerClosed {
-                    listener_id,
-                    reason,
-                } => TransportEvent::ListenerClosed {
-                    listener_id,
-                    reason,
-                },
-                TransportEvent::ListenerError { listener_id, error } => {
-                    TransportEvent::ListenerError { listener_id, error }
-                },
-                TransportEvent::NewAddress {
-                    listener_id,
-                    listen_addr,
-                } => TransportEvent::NewAddress {
-                    listener_id,
-                    listen_addr,
-                },
-            }),
-
-            Poll::Pending => Poll::Pending,
-        }
+                    false,
+                    auth_message,
+                    Arc::clone(&self.consensus_key_to_pid_map),
+                )
+            })
+        })
     }
 
     /// The below functions just pass through to the inner transport, but we had
