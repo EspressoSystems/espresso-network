@@ -9,6 +9,7 @@ import { StakeTable } from "../src/StakeTable.sol";
 import { StakeTableV2 } from "../src/StakeTableV2.sol";
 import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
 import { EspToken } from "../src/EspToken.sol";
+import { IAccessControl } from "openzeppelin-contracts/contracts/access/IAccessControl.sol";
 
 contract StakeTableV2DelegationTest is Test {
     StakeTableUpgradeV2Test public stakeTableUpgradeTest;
@@ -182,5 +183,57 @@ contract StakeTableV2DelegationTest is Test {
 
         assertDelegateSuccess(delegator, validator, 100 ether);
         assertDelegateSuccess(delegator2, validator, 200 ether);
+    }
+
+    function test_SetMinDelegateAmount_Success() public {
+        uint256 newMinAmount = 2 ether;
+
+        vm.startPrank(stakeTableUpgradeTest.admin());
+        vm.expectEmit(true, false, false, true);
+        emit StakeTableV2.MinDelegateAmountUpdated(newMinAmount);
+        proxy.setMinDelegateAmount(newMinAmount);
+
+        assertEq(proxy.minDelegateAmount(), newMinAmount);
+        vm.stopPrank();
+    }
+
+    function test_SetMinDelegateAmount_RevertWhenNotAdmin() public {
+        address notAdmin = makeAddr("notAdmin");
+        uint256 newMinAmount = 2 ether;
+        bytes32 adminRole = proxy.DEFAULT_ADMIN_ROLE();
+
+        vm.startPrank(notAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
+            )
+        );
+        proxy.setMinDelegateAmount(newMinAmount);
+        vm.stopPrank();
+    }
+
+    function test_SetMinDelegateAmount_ThenDelegateWithNewMinimum() public {
+        uint256 newMinAmount = 2 ether;
+
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+        deal(address(stakeTableUpgradeTest.token()), delegator, newMinAmount * 2);
+
+        // Update minimum to 2 ether
+        vm.startPrank(stakeTableUpgradeTest.admin());
+        proxy.setMinDelegateAmount(newMinAmount);
+        vm.stopPrank();
+
+        // Should succeed with new minimum
+        vm.startPrank(delegator);
+        stakeTableUpgradeTest.token().approve(address(proxy), newMinAmount);
+        proxy.delegate(validator, newMinAmount);
+        vm.stopPrank();
+
+        // Should fail with amount below new minimum
+        vm.startPrank(delegator);
+        stakeTableUpgradeTest.token().approve(address(proxy), newMinAmount - 1);
+        vm.expectRevert(StakeTableV2.DelegateAmountTooSmall.selector);
+        proxy.delegate(validator, newMinAmount - 1);
+        vm.stopPrank();
     }
 }
