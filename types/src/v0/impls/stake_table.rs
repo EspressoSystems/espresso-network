@@ -165,6 +165,9 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
             )),
+            StakeTableV2Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MinDelegateAmountUpdated({v:?})"
+            )),
         }
     }
 }
