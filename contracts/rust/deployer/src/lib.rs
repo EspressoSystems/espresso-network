@@ -1866,9 +1866,21 @@ mod tests {
         }
 
         let delegators = [
-            (accounts[0], validators[0].account, U256::from(1000)),
-            (accounts[1], validators[1].account, U256::from(1000)),
-            (accounts[2], validators[0].account, U256::from(10_000)),
+            (
+                accounts[0],
+                validators[0].account,
+                parse_ether("10").unwrap(),
+            ),
+            (
+                accounts[1],
+                validators[1].account,
+                parse_ether("10").unwrap(),
+            ),
+            (
+                accounts[2],
+                validators[0].account,
+                parse_ether("100").unwrap(),
+            ),
         ];
 
         let token = EspToken::new(token_addr, &provider);
@@ -1912,8 +1924,16 @@ mod tests {
         assert!(receipt.status());
 
         let undelegations = [
-            (accounts[0], validators[0].account, U256::from(500)),
-            (accounts[2], validators[0].account, U256::from(300)),
+            (
+                accounts[0],
+                validators[0].account,
+                parse_ether("5").unwrap(),
+            ),
+            (
+                accounts[2],
+                validators[0].account,
+                parse_ether("3").unwrap(),
+            ),
         ];
 
         for (delegator_addr, validator_addr, amount) in undelegations.iter() {
