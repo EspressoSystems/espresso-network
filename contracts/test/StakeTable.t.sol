@@ -1338,8 +1338,8 @@ contract StakeTableUpgradeV2Test is Test {
         address defaultAdmin = proxy.owner();
         vm.startPrank(defaultAdmin);
         vm.expectEmit(false, false, false, true, address(proxy));
-        emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
-        proxy.updateExitEscrowPeriod(200 seconds);
+        emit StakeTableV2.ExitEscrowPeriodUpdated(2 days);
+        proxy.updateExitEscrowPeriod(2 days);
         vm.stopPrank();
     }
 
@@ -1356,7 +1356,7 @@ contract StakeTableUpgradeV2Test is Test {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, notAdmin, adminRole
             )
         );
-        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        StakeTableV2(proxy).updateExitEscrowPeriod(2 days);
         vm.stopPrank();
     }
 
@@ -2853,10 +2853,10 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         address user = makeAddr("user");
         vm.startPrank(user);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxy.delegate(makeAddr("validator"), 100);
+        proxy.delegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxy.undelegate(makeAddr("validator"), 100);
+        proxy.undelegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         proxy.claimValidatorExit(makeAddr("validator"));
@@ -2897,10 +2897,10 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         //it will revert because the validator doesn't exist but that proves that the functions are
         // callable
         vm.expectRevert(S.ValidatorInactive.selector);
-        proxy.delegate(makeAddr("validator"), 100);
+        proxy.delegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(S.ValidatorInactive.selector);
-        proxy.undelegate(makeAddr("validator"), 100);
+        proxy.undelegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(S.ValidatorNotExited.selector);
         proxy.claimValidatorExit(makeAddr("validator"));
