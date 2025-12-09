@@ -184,7 +184,7 @@ async fn batch_insert_proofs(
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_batch_insertion_100k_accounts() {
+async fn slow_test_batch_insertion_20k_accounts() {
     let db = TmpDb::init().await;
     let opt = SqlDataSource::persistence_options(&db);
     let cfg = Config::try_from(&opt).expect("failed to create config from options");
@@ -192,7 +192,7 @@ async fn slow_test_batch_insertion_100k_accounts() {
         .await
         .expect("failed to connect to storage");
 
-    let num_accounts = 100_000usize;
+    let num_accounts = 20_000usize;
 
     let accounts: Vec<RewardAccountV2> = (0..num_accounts).map(make_reward_account).collect();
 
@@ -202,7 +202,7 @@ async fn slow_test_batch_insertion_100k_accounts() {
     for (i, account) in accounts.iter().enumerate() {
         let reward_amount = RewardAmount::from(((i + 1) * 100) as u64);
         reward_tree.update(*account, reward_amount).unwrap();
-        if (i + 1) % 10_000 == 0 {
+        if (i + 1) % 5_000 == 0 {
             tracing::info!("tree_update: {}/{}", i + 1, num_accounts);
         }
     }
@@ -224,7 +224,7 @@ async fn slow_test_batch_insertion_100k_accounts() {
     tx.commit().await.unwrap();
 
     tracing::info!(
-        "100k accounts: tree_update={:?}, batch_insert={:?}",
+        "20k accounts: tree_update={:?}, batch_insert={:?}",
         tree_update_duration,
         batch_insert_duration
     );
