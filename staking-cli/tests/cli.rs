@@ -345,7 +345,7 @@ async fn test_cli_undelegate(#[case] version: StakeTableContractVersion) -> Resu
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
-    let amount = U256::from(123);
+    let amount = parse_ether("1.23")?;
     system.register_validator().await?;
     system.delegate(amount).await?;
     system.undelegate(amount).await?;
@@ -368,7 +368,7 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
-    let amount = U256::from(123);
+    let amount = parse_ether("1.23")?;
     system.register_validator().await?;
     system.delegate(amount).await?;
     system.deregister_validator().await?;

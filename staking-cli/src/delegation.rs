@@ -66,6 +66,7 @@ pub async fn undelegate(
 
 #[cfg(test)]
 mod test {
+    use alloy::primitives::utils::parse_ether;
     use hotshot_contract_adapter::{
         sol_types::StakeTableV2, stake_table::StakeTableContractVersion,
     };
@@ -83,7 +84,7 @@ mod test {
         system.register_validator().await?;
         let validator_address = system.deployer_address;
 
-        let amount = U256::from(123);
+        let amount = parse_ether("1.23")?;
         let receipt = delegate(
             &system.provider,
             system.stake_table,
@@ -107,7 +108,7 @@ mod test {
     #[tokio::test]
     async fn test_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
-        let amount = U256::from(123);
+        let amount = parse_ether("1.23")?;
         system.register_validator().await?;
         system.delegate(amount).await?;
 
