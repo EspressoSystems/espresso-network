@@ -111,6 +111,20 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Maximum commission in basis points (100% = 10000 bps)
     uint16 public constant MAX_COMMISSION_BPS = 10000;
 
+    /// @notice Minimum exit escrow period (2 days)
+    /// @dev This is a technical minimum bound enforced by the contract. Setting the exit escrow
+    /// period
+    /// to this minimum does not guarantee safety. The actual exit escrow period must be set such
+    /// that the contract holds funds long enough until they are no longer staked in Espresso,
+    /// allowing sufficient time for validators to exit the active validator set and for slashing
+    /// evidence to be submitted. Governance should set a value appropriate for Espresso network
+    /// parameters (e.g., blocksPerEpoch, blockTime, and epoch duration) to ensure security.
+    uint64 public constant MIN_EXIT_ESCROW_PERIOD = 2 days;
+
+    /// @notice Maximum exit escrow period (14 days)
+    /// @dev Reasonable upper bound to prevent excessive lockup periods
+    uint64 public constant MAX_EXIT_ESCROW_PERIOD = 14 days;
+
     /// @notice Minimum time interval between commission increases (in seconds)
     uint256 public minCommissionIncreaseInterval;
 
@@ -787,21 +801,25 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Update the exit escrow period
     /// @param newExitEscrowPeriod The new exit escrow period
     /// @dev This function ensures that the exit escrow period is within the valid range
-    /// @dev This function is not pausable so that governance can perform emergency updates in the
-    /// presence of system
+    /// (MIN_EXIT_ESCROW_PERIOD
+    /// to MAX_EXIT_ESCROW_PERIOD). However, governance MUST set a value that ensures funds are held
+    /// until they are no longer staked in Espresso, accounting for validator exit time and slashing
+    /// evidence submission windows. This function is not pausable so that governance can perform
+    /// emergency updates in the
+    /// presence of system upgrades.
     function updateExitEscrowPeriod(uint64 newExitEscrowPeriod)
         external
         virtual
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
-            // block
-        uint64 maxExitEscrowPeriod = 86400 * 14; // 14 days
-
-        if (newExitEscrowPeriod < minExitEscrowPeriod || newExitEscrowPeriod > maxExitEscrowPeriod)
-        {
+        // check if the new exit escrow period is within the valid range
+        if (
+            newExitEscrowPeriod < MIN_EXIT_ESCROW_PERIOD
+                || newExitEscrowPeriod > MAX_EXIT_ESCROW_PERIOD
+        ) {
             revert ExitEscrowPeriodInvalid();
         }
+
         exitEscrowPeriod = newExitEscrowPeriod;
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
     }

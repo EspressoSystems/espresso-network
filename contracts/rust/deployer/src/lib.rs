@@ -110,6 +110,8 @@ pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
 const LIBRARY_PLACEHOLDER_ADDRESS: &str = "ffffffffffffffffffffffffffffffffffffffff";
 /// `stateHistoryRetentionPeriod` in LightClient.sol as the maximum retention period in seconds
 pub const MAX_HISTORY_RETENTION_SECONDS: u32 = 864000;
+/// Default exit escrow period for stake table (2 days in seconds)
+pub const DEFAULT_EXIT_ESCROW_PERIOD_SECONDS: u64 = 172800;
 
 /// Set of predeployed contracts.
 #[derive(Clone, Debug, Parser)]
@@ -1826,7 +1828,7 @@ mod tests {
         )
         .await?;
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -2430,7 +2432,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -2489,7 +2491,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -2600,7 +2602,7 @@ mod tests {
         )
         .await?;
 
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -3179,7 +3181,7 @@ mod tests {
                     &mut contracts,
                     token_addr,
                     lc_proxy_addr,
-                    U256::from(1000u64),
+                    U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS),
                     admin,
                 )
                 .await?
@@ -3421,7 +3423,7 @@ mod tests {
         .await?;
 
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -3458,7 +3460,7 @@ mod tests {
         .await?;
 
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,

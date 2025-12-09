@@ -1688,7 +1688,7 @@ impl EpochCommittees {
                 .context("Stake table not found")?
                 .into();
 
-            let success_threshold = self.success_threshold(Some(*epoch));
+            let success_threshold = self.success_threshold(Some(EpochNumber::new(previous_epoch)));
 
             let root_height = header.height().checked_sub(epoch_height).context(
                 "Epoch height is greater than block height. cannot compute previous epoch root \
@@ -1968,7 +1968,7 @@ impl EpochCommittees {
 ///         0.03 / sqrt(2 * p),            if 0.01 < p <= 1
 ///     }
 ///
-fn calculate_proportion_staked_and_reward_rate(
+pub fn calculate_proportion_staked_and_reward_rate(
     total_stake: &BigDecimal,
     total_supply: &BigDecimal,
 ) -> anyhow::Result<(BigDecimal, BigDecimal)> {
