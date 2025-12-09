@@ -148,18 +148,20 @@
 <a href=#148 id=148 data-nosnippet>148</a>    </span>EpochAlreadyStarted(u64),
 <a href=#149 id=149 data-nosnippet>149</a>    <span class="doccomment">/// Internal error when generating the SNARK proof: {0}
 <a href=#150 id=150 data-nosnippet>150</a>    </span>DeprecatedPlonkError(jf_plonk_compat::errors::PlonkError),
-<a href=#151 id=151 data-nosnippet>151</a>}
-<a href=#152 id=152 data-nosnippet>152</a>
-<a href=#153 id=153 data-nosnippet>153</a><span class="kw">impl </span>From&lt;PlonkError&gt; <span class="kw">for </span>ProverError {
-<a href=#154 id=154 data-nosnippet>154</a>    <span class="kw">fn </span>from(err: PlonkError) -&gt; <span class="self">Self </span>{
-<a href=#155 id=155 data-nosnippet>155</a>        <span class="self">Self</span>::PlonkError(err)
-<a href=#156 id=156 data-nosnippet>156</a>    }
-<a href=#157 id=157 data-nosnippet>157</a>}
-<a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a><span class="kw">impl </span>std::error::Error <span class="kw">for </span>ProverError {}
+<a href=#151 id=151 data-nosnippet>151</a>    <span class="doccomment">/// Local stake table doesn't match the stake table state on contract: expected {0}, got {1}
+<a href=#152 id=152 data-nosnippet>152</a>    </span>StakeTableMismatch(StakeTableState, StakeTableState),
+<a href=#153 id=153 data-nosnippet>153</a>}
+<a href=#154 id=154 data-nosnippet>154</a>
+<a href=#155 id=155 data-nosnippet>155</a><span class="kw">impl </span>From&lt;PlonkError&gt; <span class="kw">for </span>ProverError {
+<a href=#156 id=156 data-nosnippet>156</a>    <span class="kw">fn </span>from(err: PlonkError) -&gt; <span class="self">Self </span>{
+<a href=#157 id=157 data-nosnippet>157</a>        <span class="self">Self</span>::PlonkError(err)
+<a href=#158 id=158 data-nosnippet>158</a>    }
+<a href=#159 id=159 data-nosnippet>159</a>}
 <a href=#160 id=160 data-nosnippet>160</a>
-<a href=#161 id=161 data-nosnippet>161</a><span class="kw">impl </span>From&lt;jf_plonk_compat::errors::PlonkError&gt; <span class="kw">for </span>ProverError {
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="kw">fn </span>from(err: jf_plonk_compat::errors::PlonkError) -&gt; <span class="self">Self </span>{
-<a href=#163 id=163 data-nosnippet>163</a>        <span class="self">Self</span>::DeprecatedPlonkError(err)
-<a href=#164 id=164 data-nosnippet>164</a>    }
-<a href=#165 id=165 data-nosnippet>165</a>}</code></pre></div></section></main></body></html>
+<a href=#161 id=161 data-nosnippet>161</a><span class="kw">impl </span>std::error::Error <span class="kw">for </span>ProverError {}
+<a href=#162 id=162 data-nosnippet>162</a>
+<a href=#163 id=163 data-nosnippet>163</a><span class="kw">impl </span>From&lt;jf_plonk_compat::errors::PlonkError&gt; <span class="kw">for </span>ProverError {
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">fn </span>from(err: jf_plonk_compat::errors::PlonkError) -&gt; <span class="self">Self </span>{
+<a href=#165 id=165 data-nosnippet>165</a>        <span class="self">Self</span>::DeprecatedPlonkError(err)
+<a href=#166 id=166 data-nosnippet>166</a>    }
+<a href=#167 id=167 data-nosnippet>167</a>}</code></pre></div></section></main></body></html>
