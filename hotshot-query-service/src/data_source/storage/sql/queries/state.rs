@@ -17,6 +17,7 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Context;
 use ark_serialize::CanonicalDeserialize;
 use async_trait::async_trait;
 use futures::stream::TryStreamExt;
@@ -364,8 +365,6 @@ pub(crate) async fn batch_insert_hashes(
     hashes: Vec<Vec<u8>>,
     tx: &mut Transaction<Write>,
 ) -> QueryResult<HashMap<Vec<u8>, i32>> {
-    use futures::stream::TryStreamExt;
-
     if hashes.is_empty() {
         return Ok(HashMap::new());
     }
@@ -392,7 +391,7 @@ pub(crate) async fn batch_insert_hashes(
 pub(crate) fn collect_nodes_from_proof<Entry, Key, T, const ARITY: usize>(
     proof: &MerkleProof<Entry, Key, T, ARITY>,
     traversal_path: &[usize],
-    nodes: &mut Vec<(Node, Option<Vec<Vec<u8>>>, Vec<u8>)>,
+    nodes: &mut Vec<NodeWithHashes>,
     hashes: &mut HashSet<Vec<u8>>,
 ) -> QueryResult<()>
 where
@@ -524,6 +523,10 @@ pub(crate) struct Node {
     pub(crate) entry: Option<JsonValue>,
 }
 
+/// Type alias for node data with optional children hashes and node hash.
+/// Used during batch collection before database insertion.
+pub(crate) type NodeWithHashes = (Node, Option<Vec<Vec<u8>>>, Vec<u8>);
+
 #[cfg(feature = "embedded-db")]
 impl From<sqlx::sqlite::SqliteRow> for Node {
     fn from(row: sqlx::sqlite::SqliteRow) -> Self {
@@ -619,8 +622,6 @@ impl Node {
         nodes: Vec<Self>,
         tx: &mut Transaction<Write>,
     ) -> anyhow::Result<()> {
-        use anyhow::Context;
-
         if nodes.is_empty() {
             return Ok(());
         }

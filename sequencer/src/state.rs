@@ -143,17 +143,9 @@ async fn store_state_update(
             let proof = match fee_merkle_tree.universal_lookup(*delta) {
                 LookupResult::Ok(_, proof) => proof,
                 LookupResult::NotFound(proof) => proof,
-                LookupResult::NotInMemory => {
-                    return Err(anyhow::anyhow!(
-                        "missing merkle path for fee account {delta}"
-                    ))
-                },
+                LookupResult::NotInMemory => bail!("missing merkle path for fee account {delta}"),
             };
-            let path: Vec<usize> =
-                <FeeAccount as ToTraversalPath<{ FeeMerkleTree::ARITY }>>::to_traversal_path(
-                    delta,
-                    fee_merkle_tree.height(),
-                );
+            let path = FeeAccount::to_traversal_path(delta, fee_merkle_tree.height());
             Ok((proof, path))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
@@ -194,21 +186,19 @@ async fn store_state_update(
         let reward_proofs: Vec<_> = rewards_delta
             .iter()
             .map(|delta| {
-                let proof =
-                    match reward_merkle_tree_v1.universal_lookup(RewardAccountV1::from(*delta)) {
-                        LookupResult::Ok(_, proof) => proof,
-                        LookupResult::NotFound(proof) => proof,
-                        LookupResult::NotInMemory => {
-                            return Err(anyhow::anyhow!(
-                                "missing merkle path for reward account {delta}"
-                            ))
-                        },
-                    };
-                let path: Vec<usize> = <RewardAccountV1 as ToTraversalPath<
-                    { RewardMerkleTreeV1::ARITY },
-                >>::to_traversal_path(
-                    &(*delta).into(), reward_merkle_tree_v1.height()
-                );
+                let key = RewardAccountV1::from(*delta);
+                let proof = match reward_merkle_tree_v1.universal_lookup(key) {
+                    LookupResult::Ok(_, proof) => proof,
+                    LookupResult::NotFound(proof) => proof,
+                    LookupResult::NotInMemory => {
+                        bail!("missing merkle path for reward account {delta}")
+                    },
+                };
+                let path = <RewardAccountV1 as ToTraversalPath<
+                        { RewardMerkleTreeV1::ARITY },
+                    >>::to_traversal_path(
+                        &key, reward_merkle_tree_v1.height()
+                    );
                 Ok((proof, path))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -233,16 +223,14 @@ async fn store_state_update(
                     LookupResult::Ok(_, proof) => proof,
                     LookupResult::NotFound(proof) => proof,
                     LookupResult::NotInMemory => {
-                        return Err(anyhow::anyhow!(
-                            "missing merkle path for reward account {delta}"
-                        ))
+                        bail!("missing merkle path for reward account {delta}")
                     },
                 };
-                let path: Vec<usize> = <RewardAccountV2 as ToTraversalPath<
-                    { RewardMerkleTreeV2::ARITY },
-                >>::to_traversal_path(
-                    delta, reward_merkle_tree_v2.height()
-                );
+                let path = <RewardAccountV2 as ToTraversalPath<
+                        { RewardMerkleTreeV2::ARITY },
+                    >>::to_traversal_path(
+                        delta, reward_merkle_tree_v2.height()
+                    );
                 Ok((proof, path))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
