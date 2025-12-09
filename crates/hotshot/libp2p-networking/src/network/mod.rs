@@ -187,12 +187,12 @@ pub async fn gen_transport<T: NodeType>(
         )
     });
 
-    // Add timeouts
-    let transport = {
-        {
-            TransportTimeout::new(transport, AUTH_HANDSHAKE_TIMEOUT)
-        }
-    };
+//    // Add timeouts
+//    let transport = {
+//        {
+//            TransportTimeout::new(transport, AUTH_HANDSHAKE_TIMEOUT)
+//        }
+//    };
 
     // Support DNS resolution
     let transport = {

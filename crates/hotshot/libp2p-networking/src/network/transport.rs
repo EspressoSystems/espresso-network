@@ -32,6 +32,11 @@ use crate::network::quic::Connection;
 /// DoS attacks by sending large messages.
 const MAX_AUTH_MESSAGE_SIZE: usize = 1024;
 
+/// The timeout for the authentication handshake. This is used to prevent
+/// attacks that keep connections open indefinitely by half-finishing the
+/// handshake.
+const AUTH_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A wrapper for a `Transport` that bidirectionally associates (and verifies)
 /// the corresponding consensus keys.
 #[pin_project]
@@ -287,7 +292,7 @@ pub async fn handshake<S: SignatureKey + 'static>(
             ConnectedPoint::Dialer { .. } => {
                 let mut stream = poll_fn(|cx| connection.poll_outbound_unpin(cx)).await?;
                 if let Err(e) = authenticate_with_remote_peer(&mut stream, auth_message).await {
-                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
                     warn!("Failed to authenticate with remote peer: {e:?}");
                     return Err(libp2p::quic::Error::Io(IoError::other(e)));
                 }
@@ -297,7 +302,7 @@ pub async fn handshake<S: SignatureKey + 'static>(
                     verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map)
                         .await
                 {
-                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
                     warn!("Failed to verify remote peer: {e:?}");
                     return Err(libp2p::quic::Error::Io(IoError::other(e)));
                 }
@@ -309,14 +314,14 @@ pub async fn handshake<S: SignatureKey + 'static>(
                     verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map)
                         .await
                 {
-                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
                     warn!("Failed to verify remote peer: {e:?}");
                     return Err(libp2p::quic::Error::Io(IoError::other(e)));
                 }
 
                 // Authenticate with the remote peer
                 if let Err(e) = authenticate_with_remote_peer(&mut stream, auth_message).await {
-                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
                     warn!("Failed to authenticate with remote peer: {e:?}");
                     return Err(libp2p::quic::Error::Io(IoError::other(e)));
                 };
