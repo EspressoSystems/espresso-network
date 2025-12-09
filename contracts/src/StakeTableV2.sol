@@ -293,9 +293,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The delegate amount is too small
     error DelegateAmountTooSmall();
 
-    /// The undelegate amount is too small
-    error UndelegateAmountTooSmall();
-
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
     constructor() {
@@ -548,10 +545,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         if (amount == 0) {
             revert ZeroAmount();
-        }
-
-        if (amount < minDelegateAmount) {
-            revert UndelegateAmountTooSmall();
         }
 
         if (undelegations[validator][delegator].amount != 0) {

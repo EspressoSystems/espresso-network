@@ -2206,11 +2206,6 @@
   },
   {
     "type": "error",
-    "name": "UndelegateAmountTooSmall",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "UndelegationAlreadyExists",
     "inputs": []
   },

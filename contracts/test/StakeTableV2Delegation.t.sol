@@ -110,6 +110,24 @@ contract StakeTableV2DelegationTest is Test {
         proxy.delegate(validator, 100 ether);
     }
 
+    function test_RevertWhen_DelegateBelowMinimumAmount() public {
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "100", 500, proxy);
+
+        uint256 minAmount = proxy.minDelegateAmount();
+        uint256 belowMin = minAmount - 1;
+
+        vm.prank(delegator);
+        vm.expectRevert(StakeTableV2.DelegateAmountTooSmall.selector);
+        proxy.delegate(validator, belowMin);
+    }
+
+    function test_Delegate_ExactlyMinimumAmount() public {
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "100", 500, proxy);
+
+        uint256 minAmount = proxy.minDelegateAmount();
+        assertDelegateSuccess(delegator, validator, minAmount);
+    }
+
     function assertDelegateSuccess(address _delegator, address _validator, uint256 amount)
         internal
     {
