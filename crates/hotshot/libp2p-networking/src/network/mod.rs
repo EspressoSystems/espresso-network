@@ -176,35 +176,17 @@ pub async fn gen_transport<T: NodeType>(
     let transport = {
         let mut config = quic::Config::new(&identity);
         config.handshake_timeout = std::time::Duration::from_secs(20);
-        QuicTransport::new(config)
-    };
-//    .and_then(|output, connected_point| {
-//        crate::network::transport::handshake(
-//            output,
-//            connected_point,
-//            auth_message,
-//            consensus_key_to_pid_map,
-//        )
-//    });
-
-    // Require authentication against the stake table
-    let transport: ConsensusKeyAuthentication<_, T::SignatureKey, _> =
-        ConsensusKeyAuthentication::new(transport, auth_message, consensus_key_to_pid_map);
-
-//    // Add timeouts
-//    let transport = {
-//        {
-//            TransportTimeout::new(transport, AUTH_HANDSHAKE_TIMEOUT)
-//        }
-//    };
-
-    // Support DNS resolution
-    let transport = {
-        {
-            DnsTransport::system(transport)
-        }
+        DnsTransport::system(QuicTransport::new(config))
+            .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?
     }
-    .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?;
+    .and_then(|output, connected_point| {
+        crate::network::transport::handshake(
+            output,
+            connected_point,
+            auth_message,
+            consensus_key_to_pid_map,
+        )
+    });
 
     Ok(transport
         .map(|(peer_id, connection), _| (peer_id, StreamMuxerBox::new(connection)))

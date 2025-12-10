@@ -291,39 +291,85 @@ pub async fn handshake<S: SignatureKey + 'static>(
         match connected_point {
             ConnectedPoint::Dialer { .. } => {
                 let mut stream = poll_fn(|cx| connection.poll_outbound_unpin(cx)).await?;
-                if let Err(e) = authenticate_with_remote_peer(&mut stream, auth_message).await {
-//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
-                    warn!("Failed to authenticate with remote peer: {e:?}");
-                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                match timeout(
+                    AUTH_HANDSHAKE_TIMEOUT,
+                    authenticate_with_remote_peer(&mut stream, auth_message),
+                )
+                .await
+                {
+                    Ok(Err(e)) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to authenticate with remote peer: {e:?}");
+                        return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                    },
+                    Err(e) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to authenticate with remote peer: timeout");
+                        return Err(libp2p::quic::Error::Io(IoError::other("timeout")));
+                    },
+                    _ => {},
                 }
 
                 // Verify the remote peer's authentication
-                if let Err(e) =
-                    verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map)
-                        .await
+                match timeout(
+                    AUTH_HANDSHAKE_TIMEOUT,
+                    verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map),
+                )
+                .await
                 {
-//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
-                    warn!("Failed to verify remote peer: {e:?}");
-                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                    Ok(Err(e)) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to verify remote peer: {e:?}");
+                        return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                    },
+                    Err(e) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to verify remote peer: timeout");
+                        return Err(libp2p::quic::Error::Io(IoError::other("timeout")));
+                    },
+                    _ => {},
                 }
             },
             ConnectedPoint::Listener { .. } => {
                 let mut stream = poll_fn(|cx| connection.poll_inbound_unpin(cx)).await?;
                 // If it is incoming, verify the remote peer's authentication first
-                if let Err(e) =
-                    verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map)
-                        .await
+                match timeout(
+                    AUTH_HANDSHAKE_TIMEOUT,
+                    verify_peer_authentication(&mut stream, &peer_id, consensus_key_to_pid_map),
+                )
+                .await
                 {
-//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
-                    warn!("Failed to verify remote peer: {e:?}");
-                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                    Ok(Err(e)) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to verify remote peer: {e:?}");
+                        return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                    },
+                    Err(e) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to verify remote peer: timeout");
+                        return Err(libp2p::quic::Error::Io(IoError::other("timeout")));
+                    },
+                    _ => {},
                 }
 
                 // Authenticate with the remote peer
-                if let Err(e) = authenticate_with_remote_peer(&mut stream, auth_message).await {
-//                    poll_fn(|cx| connection.poll_close_unpin(cx)).await;
-                    warn!("Failed to authenticate with remote peer: {e:?}");
-                    return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                match timeout(
+                    AUTH_HANDSHAKE_TIMEOUT,
+                    authenticate_with_remote_peer(&mut stream, auth_message),
+                )
+                .await
+                {
+                    Ok(Err(e)) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to authenticate with remote peer: {e:?}");
+                        return Err(libp2p::quic::Error::Io(IoError::other(e)));
+                    },
+                    Err(e) => {
+                        poll_fn(|cx| connection.poll_close_unpin(cx)).await;
+                        warn!("Failed to authenticate with remote peer: timeout");
+                        return Err(libp2p::quic::Error::Io(IoError::other("timeout")));
+                    },
+                    _ => {},
                 };
             },
         }
