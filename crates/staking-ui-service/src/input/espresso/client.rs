@@ -1,14 +1,15 @@
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
+use bigdecimal::{BigDecimal, ToPrimitive};
 use bitvec::vec::BitVec;
 use clap::Parser;
 use espresso_types::{
-    Leaf2, SeqTypes, ValidatorMap, config::PublicNetworkConfig, parse_duration, v0_3::RewardAmount,
-    v0_4::RewardAccountV2,
+    Leaf2, SeqTypes, ValidatorMap, calculate_proportion_staked_and_reward_rate,
+    config::PublicNetworkConfig, parse_duration, v0_3::RewardAmount, v0_4::RewardAccountV2,
 };
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt, stream};
 use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
-use hotshot_types::utils::epoch_from_block_number;
+use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use surf_disco::{Client, Url};
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
@@ -16,9 +17,9 @@ use vbs::version::StaticVersion;
 
 use crate::{
     Error, Result,
-    error::ensure,
+    error::{ResultExt, ensure},
     input::espresso::EspressoClient,
-    types::common::{Address, ESPTokenAmount},
+    types::common::{Address, ESPTokenAmount, Ratio},
 };
 
 /// The version used for serialized messages from the query service.
@@ -54,11 +55,15 @@ pub struct QueryServiceClient {
     epoch_start_block: u64,
     epoch_height: u64,
     stream_timeout: Duration,
+    initial_token_supply: ESPTokenAmount,
 }
 
 impl QueryServiceClient {
     /// Connect to a query service at the given base URL.
-    pub async fn new(opt: QueryServiceOptions) -> Result<Self> {
+    pub async fn new(
+        opt: QueryServiceOptions,
+        initial_token_supply: ESPTokenAmount,
+    ) -> Result<Self> {
         let inner = Client::new(opt.url);
 
         // Get the epoch height. We need this for multiple endpoints, and it never changes, so we
@@ -70,6 +75,7 @@ impl QueryServiceClient {
             epoch_height: config.hotshot_config().blocks_per_epoch(),
             epoch_start_block: config.hotshot_config().epoch_start_block(),
             stream_timeout: opt.stream_timeout,
+            initial_token_supply,
         })
     }
 
@@ -203,6 +209,38 @@ impl EspressoClient for QueryServiceClient {
         Ok(nodes)
     }
 
+    #[instrument(skip(self))]
+    async fn apr_for_epoch(&self, epoch: u64, total_staked: ESPTokenAmount) -> Result<Ratio> {
+        // Get the epoch root header.
+        let root = self
+            .leaf(root_block_in_epoch(epoch - 2, self.epoch_height))
+            .await?;
+
+        // Figure out the total token supply.
+        let rewards_distributed =
+            root.block_header()
+                .total_reward_distributed()
+                .ok_or_else(|| {
+                    Error::internal()
+                        .context("total reward distributed not available for epoch root {epoch}")
+                })?;
+        let total_supply = self.initial_token_supply + rewards_distributed.0;
+
+        let total_staked_bd = BigDecimal::from_str(&total_staked.to_string())
+            .context(|| Error::internal().context("cannot convert total staked to decimal"))?;
+        let total_supply_bd = BigDecimal::from_str(&total_supply.to_string())
+            .context(|| Error::internal().context("cannot convert total supply to decimal"))?;
+        tracing::debug!(%total_staked_bd, %total_supply_bd, "calculating reward rate");
+        let (_, apr_bd) =
+            calculate_proportion_staked_and_reward_rate(&total_staked_bd, &total_supply_bd)?;
+        tracing::debug!(%apr_bd, "reward rate");
+        let apr = apr_bd
+            .to_f32()
+            .ok_or_else(|| Error::internal().context("cannot convert APR to f32"))?;
+
+        Ok(apr.into())
+    }
+
     async fn block_reward(&self, epoch: u64) -> Result<ESPTokenAmount> {
         let reward: Option<RewardAmount> = self
             .inner
@@ -305,7 +343,7 @@ mod test {
 
     use crate::input::espresso::{
         State,
-        testing::{EPOCH_HEIGHT, MemoryStorage, start_pos_network},
+        testing::{DEFAULT_TOKEN_SUPPLY, EPOCH_HEIGHT, MemoryStorage, start_pos_network},
     };
     use crate::metrics::PrometheusMetrics;
 
@@ -342,7 +380,9 @@ mod test {
         let (mut network, _, _storage) = start_pos_network(port).await;
 
         let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
-        let client = QueryServiceClient::new(opt).await.unwrap();
+        let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
+            .await
+            .unwrap();
 
         // Wait for epochs to start and check that the client returns the correct starting epoch
         // number.
@@ -386,7 +426,9 @@ mod test {
             let mut network = TestNetwork::new(config, V::new()).await;
 
             let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
-            let client = QueryServiceClient::new(opt).await.unwrap();
+            let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
+                .await
+                .unwrap();
             assert_eq!(client.epoch_height().await.unwrap(), epoch_height);
 
             network.stop_consensus().await;
@@ -411,7 +453,9 @@ mod test {
         let network = TestNetwork::new(config, V::new()).await;
 
         let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
-        let client = QueryServiceClient::new(opt).await.unwrap();
+        let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
+            .await
+            .unwrap();
 
         let leaf = network.server.decided_leaf().await;
         assert_eq!(leaf, client.leaf(leaf.height()).await.unwrap());
@@ -446,7 +490,9 @@ mod test {
             // and we want it to recover and finish quickly.
             stream_timeout: Duration::from_secs(1),
         };
-        let client = QueryServiceClient::new(opt).await.unwrap();
+        let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
+            .await
+            .unwrap();
         let mut leaves = client.leaves(1);
 
         // Stream a few leaves before shutting down.
@@ -522,7 +568,9 @@ mod test {
             .unwrap();
 
         let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
-        let client = QueryServiceClient::new(opt).await.unwrap();
+        let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
+            .await
+            .unwrap();
         let state = Arc::new(RwLock::new(
             State::new(
                 MemoryStorage::default(),

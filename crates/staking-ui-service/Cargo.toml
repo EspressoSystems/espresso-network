@@ -31,6 +31,7 @@ alloy = { version = "1.0", features = [
 ] }
 anyhow = "1"
 async-lock = "3.0"
+bigdecimal = "0.4.8"
 bitvec = "1"
 clap = { version = "4.4", features = ["derive", "env"] }
 cld = "0.5"

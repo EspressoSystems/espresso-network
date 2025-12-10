@@ -29,7 +29,7 @@ use crate::{
     error::ensure,
     metrics::PrometheusMetrics,
     types::{
-        common::{ActiveNodeSetEntry, Address, ESPTokenAmount, EpochAndBlock},
+        common::{ActiveNodeSetEntry, Address, ESPTokenAmount, EpochAndBlock, Ratio},
         global::{ActiveNodeSetDiff, ActiveNodeSetSnapshot, ActiveNodeSetUpdate},
     },
 };
@@ -343,7 +343,10 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         let new_epoch = height % self.epoch_height == 1;
         if new_epoch {
             tracing::info!(current_epoch, "starting new epoch");
-            diff.push(ActiveNodeSetDiff::NewEpoch(epoch.active_nodes().collect()));
+            diff.push(ActiveNodeSetDiff::NewEpoch {
+                nodes: epoch.active_nodes().collect(),
+                apr: epoch.apr(),
+            });
         }
 
         // Update leader and voter statistics.
@@ -485,6 +488,9 @@ struct EpochState {
     /// The block reward amount for this epoch
     block_reward: ESPTokenAmount,
 
+    /// The target block reward APR for this epoch.
+    apr: Ratio,
+
     /// The post-processed stake table, used for the leader election function.
     // It is safe to ignore this field in comparisons
     #[derivative(PartialEq(compare_with = "Self::committee_eq"))]
@@ -512,6 +518,7 @@ impl EpochState {
         nodes: ValidatorMap,
         drb_result: DrbResult,
         block_reward: ESPTokenAmount,
+        apr: Ratio,
     ) -> Self {
         // Get active node addresses.
         let active_nodes = nodes.keys().copied().collect::<Vec<_>>();
@@ -537,6 +544,7 @@ impl EpochState {
         Self {
             number,
             block_reward,
+            apr,
             committee,
             active_nodes,
             node_index,
@@ -585,8 +593,16 @@ impl EpochState {
             ))
         })?;
 
-        let block_reward = espresso.block_reward(epoch).await?;
-        let state = Self::new(epoch, stake_table, drb_result, block_reward);
+        let block_reward = espresso
+            .block_reward(epoch)
+            .await
+            .map_err(|err| err.context("fetching block reward for epoch"))?;
+        let total_staked = stake_table.values().map(|node| node.stake).sum();
+        let apr = espresso
+            .apr_for_epoch(epoch, total_staked)
+            .await
+            .map_err(|err| err.context("fetching APR for epoch"))?;
+        let state = Self::new(epoch, stake_table, drb_result, block_reward, apr);
 
         Ok(state)
     }
@@ -656,6 +672,11 @@ impl EpochState {
         self.number
     }
 
+    /// The target APR for this epoch.
+    fn apr(&self) -> Ratio {
+        self.apr
+    }
+
     /// Compare randomized committees _in the context of an [`EpochState`].
     ///
     /// This comparison works by comparing the DRB results in each committee _only_. This works because
@@ -707,10 +728,13 @@ pub trait EspressoPersistence {
 /// stored in a different format to support incremental updating. For example, we store both the
 /// numerator and denominator of participation rates, rather than just the rate itself, so that we
 /// can incrementally update rates just by incrementing the numerator.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ActiveNodeSet {
     /// The Espresso block at which this node set was active.
     pub espresso_block: EpochAndBlock,
+
+    /// The block reward APR for this epoch.
+    pub apr: Ratio,
 
     /// The nodes in the set, plus statistics.
     pub nodes: Vec<ActiveNode>,
@@ -733,6 +757,7 @@ impl ActiveNodeSet {
 
         ActiveNodeSetSnapshot {
             espresso_block: self.espresso_block,
+            apr: self.apr,
             nodes: self
                 .nodes
                 .into_iter()
@@ -790,6 +815,13 @@ pub trait EspressoClient: Clone + Send + Sync {
         epoch: u64,
     ) -> impl Send + Future<Output = Result<ValidatorMap>>;
 
+    /// Fetch or calculate the rewards APR for the requested epoch.
+    fn apr_for_epoch(
+        &self,
+        epoch: u64,
+        total_staked: ESPTokenAmount,
+    ) -> impl Send + Future<Output = Result<Ratio>>;
+
     /// Fetch a leaf.
     fn leaf(&self, height: u64) -> impl Send + Future<Output = Result<Leaf2>>;
 
@@ -814,7 +846,9 @@ pub trait EspressoClient: Clone + Send + Sync {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::input::espresso::testing::{MockEspressoClient, fake_drb_result};
+    use crate::input::espresso::testing::{
+        DEFAULT_TOKEN_SUPPLY, MockEspressoClient, fake_drb_result,
+    };
 
     use crate::input::espresso::client::{QueryServiceClient, QueryServiceOptions};
     use crate::persistence::sql::{Persistence, PersistenceOptions};
@@ -857,6 +891,7 @@ mod test {
                     block: last_leaf.height(),
                     timestamp: last_leaf.block_header().timestamp_millis(),
                 },
+                apr: espresso.apr(),
                 nodes,
             },
             Default::default(),
@@ -935,6 +970,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_handle_leaf_epoch_change() {
         let mut espresso = MockEspressoClient::new(3).await;
+        let apr = espresso.apr();
         let first_epoch = espresso.current_epoch() + 1;
         let epoch_height = espresso.epoch_height();
         let prev_stake_table = espresso
@@ -1024,7 +1060,10 @@ mod test {
                     timestamp: last_leaf.block_header().timestamp_millis()
                 },
                 diff: vec![
-                    ActiveNodeSetDiff::NewEpoch(stake_table),
+                    ActiveNodeSetDiff::NewEpoch {
+                        nodes: stake_table,
+                        apr,
+                    },
                     ActiveNodeSetDiff::NewBlock {
                         leader: epoch.leader(last_leaf.view_number()),
                         failed_leaders: vec![],
@@ -1070,6 +1109,7 @@ mod test {
                     block: last_leaf.height(),
                     timestamp: last_leaf.block_header().timestamp_millis(),
                 },
+                apr: espresso.apr(),
                 nodes,
             },
             Default::default(),
@@ -1381,10 +1421,12 @@ mod test {
         tracing::info!("Started Espresso network on port {espresso_port}");
 
         let espresso_url = format!("http://localhost:{espresso_port}");
-        let espresso_client =
-            QueryServiceClient::new(QueryServiceOptions::new(espresso_url.parse().unwrap()))
-                .await
-                .expect("Failed to create Espresso client");
+        let espresso_client = QueryServiceClient::new(
+            QueryServiceOptions::new(espresso_url.parse().unwrap()),
+            DEFAULT_TOKEN_SUPPLY,
+        )
+        .await
+        .expect("Failed to create Espresso client");
 
         let current_epoch = espresso_client.wait_for_epochs().await;
         tracing::info!("Epochs started, current epoch: {current_epoch}");
@@ -1722,6 +1764,10 @@ mod test {
 
         async fn stake_table_for_epoch(&self, epoch: u64) -> Result<ValidatorMap> {
             self.inner.stake_table_for_epoch(epoch).await
+        }
+
+        async fn apr_for_epoch(&self, epoch: u64, total_staked: ESPTokenAmount) -> Result<Ratio> {
+            self.inner.apr_for_epoch(epoch, total_staked).await
         }
 
         async fn block_reward(&self, epoch: u64) -> Result<ESPTokenAmount> {

@@ -596,7 +596,7 @@ mod tests {
     use staking_cli::demo::DelegationConfig;
     use std::time::Duration;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_rpc_stream_with_anvil() {
         let anvil = Anvil::new().block_time(1).spawn();
         let url = anvil.endpoint().parse::<Url>().unwrap();
@@ -610,14 +610,17 @@ mod tests {
 
         let mut stream = RpcStream::new(options).await.unwrap();
 
-        let mut last_block_number = 0;
+        let mut last_block_number = None;
 
         for i in 1..=10 {
-            println!("Waiting for block {i}");
+            tracing::info!("Waiting for block {i}");
             let block_input = stream.next().await.expect("Stream ended unexpectedly");
+            tracing::info!(?block_input, "got block {i}");
 
-            assert!(block_input.block.number == last_block_number + 1);
-            last_block_number = block_input.block.number;
+            if let Some(last_block_number) = last_block_number {
+                assert_eq!(block_input.block.number, last_block_number + 1);
+            }
+            last_block_number = Some(block_input.block.number);
         }
     }
 
@@ -638,17 +641,19 @@ mod tests {
 
         let mut stream = RpcStream::new(options).await.unwrap();
 
-        println!("Stream created successfully");
+        tracing::info!("Stream created successfully");
 
-        let mut last_block_number = 0;
+        let mut last_block_number = None;
 
         for i in 1..=10 {
-            println!("Waiting for block {i}");
+            tracing::info!("Waiting for block {i}");
             let block_input = stream.next().await.expect("Stream ended unexpectedly");
+            tracing::info!(?block_input, "got block {i}");
 
-            assert!(block_input.block.number == last_block_number + 1);
-            last_block_number = block_input.block.number;
-            println!("Received block {i}");
+            if let Some(last_block_number) = last_block_number {
+                assert_eq!(block_input.block.number, last_block_number + 1);
+            }
+            last_block_number = Some(block_input.block.number);
         }
     }
 

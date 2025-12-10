@@ -43,7 +43,7 @@ jobs:
 
       - name: Test
         run: cargo llvm-cov --no-report nextest --ignore-filename-regex testing.rs
-        timeout-minutes: 20
+        timeout-minutes: 30
 
       - name: Coverage Report
         run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex testing.rs

@@ -58,7 +58,7 @@ use crate::{
         l1::testing::ContractDeployment,
     },
     types::{
-        common::{Address, ESPTokenAmount},
+        common::{Address, ESPTokenAmount, Ratio},
         global::{ActiveNodeSetDiff, ActiveNodeSetUpdate},
     },
 };
@@ -73,6 +73,7 @@ pub struct MockEspressoClient {
     num_nodes: u64,
     unavailable_leaves: HashSet<u64>,
     unavailable_stake_tables: HashSet<u64>,
+    apr: Ratio,
 }
 
 impl EspressoClient for MockEspressoClient {
@@ -117,6 +118,10 @@ impl EspressoClient for MockEspressoClient {
             })
             .collect();
         Ok(nodes)
+    }
+
+    async fn apr_for_epoch(&self, _epoch: u64, _total_staked: ESPTokenAmount) -> Result<Ratio> {
+        Ok(self.apr)
     }
 
     async fn leaf(&self, height: u64) -> Result<Leaf2> {
@@ -177,6 +182,7 @@ impl MockEspressoClient {
             leaves: vec![],
             unavailable_leaves: Default::default(),
             unavailable_stake_tables: Default::default(),
+            apr: Ratio::new(1, 100),
         };
 
         // At minimum we need the end of the previous epoch, starting from the transition block.
@@ -278,6 +284,11 @@ impl MockEspressoClient {
     /// Synchronous, infallible version of [`EspressoClient::epoch_height`].
     pub fn epoch_height(&self) -> u64 {
         self.epoch_height
+    }
+
+    /// The fixed APR that this mock will always return for [`apr_for_epoch`](Self::apr_for_epoch).
+    pub fn apr(&self) -> Ratio {
+        self.apr
     }
 }
 
@@ -389,10 +400,11 @@ impl EspressoPersistence for MemoryStorage {
                         active_nodes.nodes[voter].votes += 1;
                     }
                 }
-                ActiveNodeSetDiff::NewEpoch(addrs) => {
+                ActiveNodeSetDiff::NewEpoch { nodes, apr } => {
                     *active_nodes = Some(ActiveNodeSet {
                         espresso_block: update.espresso_block,
-                        nodes: addrs.into_iter().map(ActiveNode::new).collect(),
+                        apr,
+                        nodes: nodes.into_iter().map(ActiveNode::new).collect(),
                     });
                 }
             }
@@ -475,3 +487,5 @@ pub async fn start_pos_network(
 
     (network, deployment, storage)
 }
+
+pub const DEFAULT_TOKEN_SUPPLY: ESPTokenAmount = ESPTokenAmount::ONE.saturating_shl(128);

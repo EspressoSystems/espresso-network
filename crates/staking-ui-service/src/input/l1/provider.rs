@@ -6,13 +6,21 @@ use crate::{
     Error, Result,
     error::{ResultExt, ensure},
     input::l1::{L1BlockSnapshot, L1Event},
-    types::common::{Address, L1BlockId, Timestamp},
+    types::common::{Address, ESPTokenAmount, L1BlockId, Timestamp},
 };
-use alloy::{eips::BlockId, providers::Provider, rpc::types::Filter, sol_types::SolEventInterface};
+use alloy::{
+    eips::{BlockId, BlockNumberOrTag},
+    primitives::utils::format_ether,
+    providers::Provider,
+    rpc::types::Filter,
+    sol_types::SolEventInterface,
+};
 use hotshot_contract_adapter::sol_types::{
+    EspToken,
     RewardClaim::RewardClaimEvents,
     StakeTableV2::{self, StakeTableV2Events},
 };
+use tracing::instrument;
 
 /// Get the Espresso stake table genesis block.
 pub async fn load_genesis(
@@ -85,6 +93,71 @@ pub async fn load_genesis(
         timestamp: block.header.timestamp,
         exit_escrow_period,
     })
+}
+
+/// Get the amount of Espresso tokens issued in the initial mint event.
+#[instrument(skip(provider))]
+pub async fn get_initial_token_supply(
+    provider: &impl Provider,
+    stake_table: Address,
+) -> Result<ESPTokenAmount> {
+    // Get the token contract from the stake table contract.
+    let stake_table = StakeTableV2::new(stake_table, provider);
+    let token =
+        stake_table.token().call().await.context(|| {
+            Error::internal().context("getting token address from stake table contract")
+        })?;
+    let token = EspToken::new(token, provider);
+
+    // Get the transaction where the token contract was initialized.
+    let init_logs = token
+        .Initialized_filter()
+        .from_block(0)
+        .to_block(BlockNumberOrTag::Finalized)
+        .query()
+        .await
+        .context(|| Error::internal().context("getting token initialized block"))?;
+    // Take the first initialization event. This will be the one with the mint event. Subsequent
+    // initialized events are emitted when the contract is updated to new versions.
+    let init_log = &init_logs
+        .first()
+        .ok_or_else(|| Error::internal().context("missing token initialized event"))?
+        .1;
+    let init_tx_hash = init_log.transaction_hash.ok_or_else(|| {
+        Error::internal().context("missing token initialization transaction hash")
+    })?;
+    let init_tx = provider
+        .get_transaction_receipt(init_tx_hash)
+        .await
+        .context(|| {
+            Error::internal()
+                .context("getting receipt for token initialization transaction {init_tx_hash}")
+        })?
+        .ok_or_else(|| {
+            Error::internal().context(format!(
+                "missing receipt for token initialization transaction {init_tx_hash}"
+            ))
+        })?;
+
+    // Now we can get the initial mint transfer event from the initializing transaction.
+    let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().ok_or_else(|| {
+        Error::internal().context(format!(
+            "token initialization transaction {init_tx_hash} is missing mint transfer"
+        ))
+    })?;
+
+    tracing::debug!(?mint_transfer, "mint transfer event");
+    ensure!(
+        mint_transfer.from == Address::ZERO,
+        Error::internal().context(format!(
+            "mint transfer is from address {}, not zero address",
+            mint_transfer.from
+        ))
+    );
+
+    let initial_supply = mint_transfer.value;
+    tracing::info!("Initial token amount: {} ESP", format_ether(initial_supply));
+    Ok(initial_supply)
 }
 
 pub(super) async fn get_events(
@@ -164,16 +237,19 @@ pub(super) async fn get_events(
 mod test {
     use alloy::{
         node_bindings::Anvil,
+        primitives::U256,
         providers::{ProviderBuilder, WalletProvider, ext::AnvilApi},
         signers::local::MnemonicBuilder,
     };
     use futures::future::join_all;
+    use hotshot_contract_adapter::sol_types::EspTokenV2;
     use rand::{SeedableRng, rngs::StdRng};
     use staking_cli::DEV_MNEMONIC;
     use tide_disco::Url;
 
     use crate::input::l1::testing::{
-        ContractDeployment, assert_events_eq, validator_registered_event_with_account,
+        ContractDeployment, DeploymentConfig, assert_events_eq,
+        validator_registered_event_with_account,
     };
 
     use super::*;
@@ -343,5 +419,71 @@ mod test {
         assert_eq!(block_events.len(), 2);
         assert_events_eq(&block_events[0], &events[1][0]);
         assert_events_eq(&block_events[1], &events[1][1]);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_initial_token_supply() {
+        let initial_token_supply = 42;
+
+        let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let rpc_url: Url = anvil.endpoint().parse().unwrap();
+        let config = DeploymentConfig {
+            initial_token_supply,
+            ..Default::default()
+        };
+        let deployment = ContractDeployment::deploy_with_config(rpc_url.clone(), config)
+            .await
+            .unwrap();
+        let provider = ProviderBuilder::new().connect_http(rpc_url);
+
+        // Send a couple of other token transfer events with different amounts, including one mint,
+        // to be sure that `get_initial_token_supply` correctly fetches the initial mint event.
+        let token = EspTokenV2::new(deployment.token_addr, &provider);
+        let decimals = token.decimals().call().await.unwrap();
+
+        provider.anvil_auto_impersonate_account(true).await.unwrap();
+
+        // Normal transfer event.
+        token
+            .transfer(Address::random(), ESPTokenAmount::ONE)
+            .from(deployment.admin)
+            .send()
+            .await
+            .unwrap()
+            .get_receipt()
+            .await
+            .unwrap();
+
+        // Send ETH to the reward claim contract so we can send a mint transaction from that address.
+        provider
+            .anvil_set_balance(deployment.reward_claim_addr, U256::MAX)
+            .await
+            .unwrap();
+
+        // Mint event.
+        token
+            .mint(Address::random(), ESPTokenAmount::ONE)
+            .from(deployment.reward_claim_addr)
+            .send()
+            .await
+            .unwrap()
+            .get_receipt()
+            .await
+            .unwrap();
+
+        provider
+            .anvil_auto_impersonate_account(false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_initial_token_supply(&provider, deployment.stake_table_addr)
+                .await
+                .unwrap(),
+            U256::try_from(initial_token_supply).unwrap()
+                * U256::try_from(10)
+                    .unwrap()
+                    .pow(decimals.try_into().unwrap())
+        );
     }
 }

@@ -817,7 +817,7 @@ mod test {
             assert_eq!(update.espresso_block.epoch, epoch);
             if i == 1 {
                 assert_eq!(update.diff.len(), 2);
-                assert!(matches!(update.diff[0], ActiveNodeSetDiff::NewEpoch(_)));
+                assert!(matches!(update.diff[0], ActiveNodeSetDiff::NewEpoch { .. }));
                 assert!(matches!(update.diff[1], ActiveNodeSetDiff::NewBlock { .. }));
             } else {
                 assert_eq!(update.diff.len(), 1);

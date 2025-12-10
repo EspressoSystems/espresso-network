@@ -700,14 +700,14 @@ impl EspressoPersistence for Persistence {
         let mut tx = self.pool.begin().await.context("acquiring connection")?;
 
         // Load saved Espresso block.
-        let espresso_block = sqlx::query_as(
-            "SELECT number, epoch, timestamp FROM espresso_block
+        let espresso_block: Option<(u64, u64, u64, f32)> = sqlx::query_as(
+            "SELECT number, epoch, timestamp, apr FROM espresso_block
               WHERE always_one = 1 LIMIT 1",
         )
         .fetch_optional(tx.as_mut())
         .await
         .context("loading last Espresso block")?;
-        let Some((block, epoch, timestamp)) = espresso_block else {
+        let Some((block, epoch, timestamp, apr)) = espresso_block else {
             return Ok(None);
         };
         let espresso_block = EpochAndBlock {
@@ -741,6 +741,7 @@ impl EspressoPersistence for Persistence {
 
         Ok(Some(ActiveNodeSet {
             espresso_block,
+            apr: apr.into(),
             nodes,
         }))
     }
@@ -859,7 +860,7 @@ impl EspressoPersistence for Persistence {
                 // block for new epochs, as when we start up the service, we always fast forward to
                 // the current epoch regardless of where we left off.
                 if update.diff.is_empty()
-                    || matches!(&update.diff[0], ActiveNodeSetDiff::NewEpoch(_))
+                    || matches!(&update.diff[0], ActiveNodeSetDiff::NewEpoch { .. })
                 {
                     tracing::info!(
                         last_block,
@@ -881,8 +882,8 @@ impl EspressoPersistence for Persistence {
 
         // Update Espresso block information.
         sqlx::query(
-            "INSERT INTO espresso_block (always_one, number, epoch, timestamp) 
-                VALUES (1, $1, $2, $3)
+            "INSERT INTO espresso_block (always_one, number, epoch, timestamp, apr) 
+                VALUES (1, $1, $2, $3, 0)
                 ON CONFLICT (always_one) DO UPDATE SET
                     number    = excluded.number,
                     epoch     = excluded.epoch,
@@ -901,7 +902,13 @@ impl EspressoPersistence for Persistence {
         // Apply changes to active node set.
         for diff in update.diff {
             match diff {
-                ActiveNodeSetDiff::NewEpoch(nodes) => {
+                ActiveNodeSetDiff::NewEpoch { nodes, apr } => {
+                    sqlx::query("UPDATE espresso_block SET apr = $1")
+                        .bind(f32::from(apr))
+                        .execute(tx.as_mut())
+                        .await
+                        .context("updating APR")?;
+
                     let nodes = nodes
                         .into_iter()
                         .enumerate()
@@ -1557,11 +1564,15 @@ mod tests {
             timestamp: 300,
         };
         let nodes = vec![Address::random(), Address::random()];
+        let apr = Ratio::new(1, 100);
         persistence
             .apply_update(
                 ActiveNodeSetUpdate {
                     espresso_block,
-                    diff: vec![ActiveNodeSetDiff::NewEpoch(nodes.clone())],
+                    diff: vec![ActiveNodeSetDiff::NewEpoch {
+                        nodes: nodes.clone(),
+                        apr,
+                    }],
                 },
                 Default::default(),
             )
@@ -1573,6 +1584,7 @@ mod tests {
             snapshot.nodes,
             [ActiveNode::new(nodes[0]), ActiveNode::new(nodes[1])]
         );
+        assert_eq!(snapshot.apr, apr);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1600,7 +1612,10 @@ mod tests {
                 ActiveNodeSetUpdate {
                     espresso_block,
                     diff: vec![
-                        ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                        ActiveNodeSetDiff::NewEpoch {
+                            nodes: nodes.clone(),
+                            apr: Ratio::new(1, 100),
+                        },
                         // Populate some statistics. These will become stale in the next epoch and
                         // we can check that they get cleared.
                         ActiveNodeSetDiff::NewBlock {
@@ -1630,7 +1645,10 @@ mod tests {
             .apply_update(
                 ActiveNodeSetUpdate {
                     espresso_block,
-                    diff: vec![ActiveNodeSetDiff::NewEpoch(new_nodes.clone())],
+                    diff: vec![ActiveNodeSetDiff::NewEpoch {
+                        nodes: new_nodes.clone(),
+                        apr: Ratio::new(2, 100),
+                    }],
                 },
                 Default::default(),
             )
@@ -1645,6 +1663,7 @@ mod tests {
                 .map(ActiveNode::new)
                 .collect::<Vec<_>>()
         );
+        assert_eq!(snapshot.apr, Ratio::new(2, 100));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1672,7 +1691,10 @@ mod tests {
                 ActiveNodeSetUpdate {
                     espresso_block,
                     diff: vec![
-                        ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                        ActiveNodeSetDiff::NewEpoch {
+                            nodes: nodes.clone(),
+                            apr: Ratio::new(1, 100),
+                        },
                         // Populate some statistics. These will become stale in the next epoch and
                         // we can check that they get cleared.
                         ActiveNodeSetDiff::NewBlock {
@@ -1702,7 +1724,10 @@ mod tests {
             .apply_update(
                 ActiveNodeSetUpdate {
                     espresso_block,
-                    diff: vec![ActiveNodeSetDiff::NewEpoch(new_nodes.clone())],
+                    diff: vec![ActiveNodeSetDiff::NewEpoch {
+                        nodes: new_nodes.clone(),
+                        apr: Ratio::new(1, 100),
+                    }],
                 },
                 Default::default(),
             )
@@ -1746,7 +1771,10 @@ mod tests {
                 timestamp: 0,
             },
             diff: vec![
-                ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                ActiveNodeSetDiff::NewEpoch {
+                    nodes: nodes.clone(),
+                    apr: Ratio::new(1, 100),
+                },
                 ActiveNodeSetDiff::NewBlock {
                     leader,
                     failed_leaders,
@@ -1811,7 +1839,10 @@ mod tests {
                 timestamp: 0,
             },
             diff: vec![
-                ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                ActiveNodeSetDiff::NewEpoch {
+                    nodes: nodes.clone(),
+                    apr: Ratio::new(1, 100),
+                },
                 ActiveNodeSetDiff::NewBlock {
                     leader,
                     failed_leaders: vec![],
@@ -1865,7 +1896,10 @@ mod tests {
                 timestamp: 0,
             },
             diff: vec![
-                ActiveNodeSetDiff::NewEpoch(nodes.clone()),
+                ActiveNodeSetDiff::NewEpoch {
+                    nodes: nodes.clone(),
+                    apr: Ratio::new(1, 100),
+                },
                 ActiveNodeSetDiff::NewBlock {
                     leader,
                     failed_leaders,
@@ -1968,7 +2002,10 @@ mod tests {
             .apply_update(
                 ActiveNodeSetUpdate {
                     espresso_block,
-                    diff: vec![ActiveNodeSetDiff::NewEpoch(nodes.clone())],
+                    diff: vec![ActiveNodeSetDiff::NewEpoch {
+                        nodes: nodes.clone(),
+                        apr: Ratio::new(1, 100),
+                    }],
                 },
                 Default::default(),
             )
@@ -2028,7 +2065,10 @@ mod tests {
             .apply_update(
                 ActiveNodeSetUpdate {
                     espresso_block,
-                    diff: vec![ActiveNodeSetDiff::NewEpoch(nodes.clone())],
+                    diff: vec![ActiveNodeSetDiff::NewEpoch {
+                        nodes: nodes.clone(),
+                        apr: Ratio::new(1, 100),
+                    }],
                 },
                 Default::default(),
             )

@@ -504,8 +504,11 @@ async fn main() -> anyhow::Result<()> {
     .boxed();
 
     // Get delegator addresses, so we have non-trivial wallets to simulate.
-    let espresso =
-        QueryServiceClient::new(QueryServiceOptions::new(opt.espresso_url.clone())).await?;
+    let espresso = QueryServiceClient::new(
+        QueryServiceOptions::new(opt.espresso_url.clone()),
+        Default::default(),
+    )
+    .await?;
     let validators = espresso
         .stake_table_for_epoch(espresso.wait_for_epochs().await)
         .await?;

@@ -14,7 +14,7 @@ use staking_ui_service::{
         },
         l1::{
             self, RpcCatchup, RpcStream, Snapshot, metadata::HttpMetadataFetcher,
-            options::L1ClientOptions,
+            options::L1ClientOptions, provider::get_initial_token_supply,
         },
     },
     metrics::PrometheusMetrics,
@@ -106,6 +106,9 @@ impl Options {
         tracing::info!(?genesis_block, "loaded L1 genesis");
         let genesis = Snapshot::empty(genesis_block);
 
+        let initial_token_supply =
+            get_initial_token_supply(&l1_provider, self.l1_options.stake_table_address).await?;
+
         // Connect to L1.
         let l1_catchup = RpcCatchup::new(&self.l1_options)?;
         let l1_input = RpcStream::new(self.l1_options)
@@ -113,7 +116,7 @@ impl Options {
             .map_err(|err| err.context("opening L1 RPC stream"))?;
 
         // Connect to Espresso.
-        let espresso_input = QueryServiceClient::new(self.espresso_options)
+        let espresso_input = QueryServiceClient::new(self.espresso_options, initial_token_supply)
             .await
             .map_err(|err| err.context("connecting to Espresso query service"))?;
 

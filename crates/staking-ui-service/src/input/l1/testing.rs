@@ -856,7 +856,7 @@ impl Default for DeploymentConfig {
             deployer_index: 0,
             blocks_per_epoch: 100,
             epoch_start_block: 1,
-            exit_escrow_period_secs: 90,
+            exit_escrow_period_secs: 2 * 86_400,
             token_name: "Espresso".to_string(),
             token_symbol: "ESP".to_string(),
             initial_token_supply: 3_590_000_000,
@@ -871,6 +871,7 @@ pub struct ContractDeployment {
     pub stake_table_addr: Address,
     pub reward_claim_addr: Address,
     pub token_addr: Address,
+    pub admin: Address,
 }
 
 impl ContractDeployment {
@@ -946,6 +947,7 @@ impl ContractDeployment {
             stake_table_addr,
             reward_claim_addr,
             token_addr,
+            admin: deployer_address,
         })
     }
 

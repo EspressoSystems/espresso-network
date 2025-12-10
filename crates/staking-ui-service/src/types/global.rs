@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::types::common::Ratio;
+
 use super::common::{ActiveNodeSetEntry, EpochAndBlock, L1BlockInfo, NodeExit, NodeSetEntry};
 use alloy::primitives::Address;
 use bitvec::vec::BitVec;
@@ -45,6 +47,9 @@ pub enum FullNodeSetDiff {
 pub struct ActiveNodeSetSnapshot {
     /// The block at which this snapshot was taken.
     pub espresso_block: EpochAndBlock,
+
+    /// The block rewards APR during the current epoch.
+    pub apr: Ratio,
 
     /// The list of active nodes.
     pub nodes: Vec<ActiveNodeSetEntry>,
@@ -92,6 +97,12 @@ pub enum ActiveNodeSetDiff {
         voters: BitVec,
     },
 
-    /// Upon entering a new epoch, replace the current active node set with an entirely new set.
-    NewEpoch(Vec<Address>),
+    /// Update sent out when entering a new epoch.
+    NewEpoch {
+        /// Replace the current active node set with an entirely new set.
+        nodes: Vec<Address>,
+
+        /// The block reward APR for this epoch.
+        apr: Ratio,
+    },
 }
