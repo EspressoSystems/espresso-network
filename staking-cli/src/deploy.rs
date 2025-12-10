@@ -316,6 +316,17 @@ impl TestSystem {
         Ok(())
     }
 
+    pub async fn set_min_delegate_amount(&self, amount: U256) -> Result<()> {
+        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        stake_table
+            .setMinDelegateAmount(amount)
+            .send()
+            .await?
+            .assert_success()
+            .await?;
+        Ok(())
+    }
+
     pub async fn setup_reward_claim_mock(&self, balance: U256) -> Result<Url> {
         let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
         let light_client_addr = stake_table.lightClient().call().await?;
