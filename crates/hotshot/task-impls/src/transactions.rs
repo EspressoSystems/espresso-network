@@ -5,7 +5,6 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -29,12 +28,7 @@ use hotshot_types::{
     utils::{is_epoch_transition, is_last_block, ViewInner},
 };
 use hotshot_utils::anytrace::*;
-use tokio::{
-    spawn,
-    task::JoinSet,
-    time::{sleep, timeout},
-};
-use tokio_util::task::AbortOnDropHandle;
+use tokio::time::{sleep, timeout};
 use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
@@ -545,64 +539,16 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         view_number: TYPES::View,
         parent_comm_sig: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> anyhow::Result<BuilderResponse<TYPES>> {
-        // Create a `JoinSet` that joins tasks to get block information from all of the builder clients
-        let mut join_set = JoinSet::new();
+        // Collect all builders and sort them by latency (lowest to highest)
+        let mut builders: Vec<_> = self.builder_clients.iter().collect();
+        builders.sort_by(|a, b| a.latency().total_cmp(&b.latency()));
 
-        // Create a map so we can later re-associate a task with its builder client
-        let mut task_to_client = HashMap::new();
-
-        // Spawn tasks to get block information from all of the builder clients simultaneously
-        for client in self.builder_clients.iter() {
-            // Clone the things we need in the closure
-            let public_key = self.public_key.clone();
-            let parent_comm_sig = parent_comm_sig.clone();
-            let client = client.clone();
-            let client_clone = client.clone();
-
-            // Spawn the task to get block information from the builder client
-            let id = join_set
-                .spawn(async move { client.get_address().await })
-                .id();
-
-            // Add the task id to builder client mapping
-            task_to_client.insert(id, (client_clone, public_key, parent_comm_sig));
-        }
-
-        // We need this channel to deal with responses as they become completed. This is because the `JoinSet` doesn't
-        // return tasks in the order in which they completed if more than one was ready. In our scenario, if one fails,
-        // we still want to use the result from the next least latent builder.
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let _join_task = AbortOnDropHandle::new(spawn(async move {
-            while let Some(result) = join_set.join_next_with_id().await {
-                let _ = sender.send(result);
-            }
-        }));
-
-        // The first builder to return block information should be the closest/least latent. It doesn't include
-        // the actual block itself, so we need to ask for it
-        while let Some(result) = receiver.recv().await {
-            // Match on the result to get the block information
-            let (task_id, _address) = match result {
-                Ok((task_id, Ok(address))) => (task_id, address),
-                Ok((_, Err(err))) => {
-                    tracing::warn!("Failed to get builder address from builder: {err:#}");
-                    continue;
-                },
-                Err(err) => {
-                    tracing::warn!("Failed to join task: {err:#}");
-                    continue;
-                },
-            };
-
-            // Get the builder info from the map
-            let (client, public_key, parent_comm_sig) = task_to_client
-                .get(&task_id)
-                .ok_or_else(|| anyhow::anyhow!("missing builder client for task"))?;
-
-            // Ask for the actual block info
+        // Try to get a block from each builder, starting with the closest one
+        for builder in builders {
+            // Ask for the block info
             let block_info = match Self::get_block_info_from_builder(
-                &client,
-                &public_key,
+                &builder,
+                &self.public_key,
                 &parent_comm,
                 view_number,
                 &parent_comm_sig,
@@ -620,7 +566,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             for block_info in block_info {
                 // Get the actual block from the builder
                 let block = match Self::get_block_from_builder(
-                    client,
+                    builder,
                     &self.public_key,
                     &self.private_key,
                     view_number,

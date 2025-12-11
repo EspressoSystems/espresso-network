@@ -45,6 +45,8 @@ vbs = { workspace = true }
 vec1 = { workspace = true }
 tokio-util = { workspace = true }
 reqwest = { workspace = true }
+simple_moving_average = "1"
+parking_lot = { workspace = true }
 
 [lints]
 workspace = true

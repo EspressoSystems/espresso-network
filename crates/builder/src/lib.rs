@@ -27,10 +27,21 @@ pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
     >(&HotshotBuilderApiOptions::default())
     .expect("Failed to construct the builder API for private mempool txns");
 
+    // Allows external clients to ping the builder
+    let ping_api = hotshot_builder_api::v0_1::builder::ping_api::<
+        ProxyGlobalState<SeqTypes>,
+        SeqTypes,
+        StaticVersion<0, 1>,
+    >(&HotshotBuilderApiOptions::default())
+    .expect("Failed to construct the ping API");
+
     let mut app: App<ProxyGlobalState<SeqTypes>, BuilderApiError> = App::with_state(source);
 
     app.register_module("block_info", builder_api)
         .expect("Failed to register the builder API");
+
+    app.register_module("ping", ping_api)
+        .expect("Failed to register the ping API");
 
     app.register_module("txn_submit", private_mempool_api)
         .expect("Failed to register the private mempool API");

@@ -236,6 +236,28 @@ where
     Ok(api)
 }
 
+pub fn ping_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
+    options: &Options,
+) -> Result<Api<State, Error, Ver>, ApiError>
+where
+    State: 'static + Send + Sync + ReadState,
+    <State as ReadState>::State: Send + Sync + AcceptsTxnSubmits<Types>,
+{
+    let mut api = load_api::<State, Error, Ver>(
+        options.api_path.as_ref(),
+        include_str!("../../api/v0_1/ping.toml"),
+        options.extensions.clone(),
+    )?;
+
+    // Define the ping API
+    api.with_version("0.0.1".parse().unwrap())
+        .get("ping", |_req, _state| {
+            async move { Ok("pong".to_string()) }.boxed()
+        })?;
+
+    Ok(api)
+}
+
 pub fn submit_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
     options: &Options,
 ) -> Result<Api<State, Error, Ver>, ApiError>
