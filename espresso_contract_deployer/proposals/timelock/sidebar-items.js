@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["TimelockContract","TimelockOperationType"],"fn":["cancel_timelock_operation","execute_timelock_operation","schedule_timelock_operation"],"struct":["TimelockOperationData"]};
+window.SIDEBAR_ITEMS = {"enum":["TimelockContract","TimelockOperationType"],"fn":["cancel_timelock_operation","derive_timelock_address_from_contract_type","execute_timelock_operation","get_timelock_for_contract","schedule_timelock_operation"],"struct":["TimelockOperationData"]};
