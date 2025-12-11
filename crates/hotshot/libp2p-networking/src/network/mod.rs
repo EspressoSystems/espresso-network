@@ -16,17 +16,14 @@ pub mod transport;
 /// Forked `cbor` codec with altered request/response sizes
 pub mod cbor;
 
-use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use bimap::BiMap;
 use futures::channel::oneshot::Sender;
 use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
 use libp2p::{
     build_multiaddr,
-    core::{
-        muxing::StreamMuxerBox,
-        transport::{timeout::TransportTimeout, Boxed},
-    },
+    core::{muxing::StreamMuxerBox, transport::Boxed},
     dns::tokio::Transport as DnsTransport,
     gossipsub::Event as GossipEvent,
     identify::Event as IdentifyEvent,
@@ -49,11 +46,6 @@ pub use self::{
         RequestResponseConfig, DEFAULT_REPLICATION_FACTOR,
     },
 };
-
-/// The timeout for the authentication handshake. This is used to prevent
-/// attacks that keep connections open indefinitely by half-finishing the
-/// handshake.
-const AUTH_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Actions to send from the client to the swarm
 #[derive(Debug)]
@@ -176,17 +168,20 @@ pub async fn gen_transport<T: NodeType>(
     let transport = {
         let mut config = quic::Config::new(&identity);
         config.handshake_timeout = std::time::Duration::from_secs(20);
-        DnsTransport::system(QuicTransport::new(config))
-            .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?
+        QuicTransport::new(config)
+    };
+
+    // Require authentication against the stake table
+    let transport: ConsensusKeyAuthentication<_, T::SignatureKey, _> =
+        ConsensusKeyAuthentication::new(transport, auth_message, consensus_key_to_pid_map);
+
+    // Support DNS resolution
+    let transport = {
+        {
+            DnsTransport::system(transport)
+        }
     }
-    .and_then(|output, connected_point| {
-        crate::network::transport::handshake(
-            output,
-            connected_point,
-            auth_message,
-            consensus_key_to_pid_map,
-        )
-    });
+    .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?;
 
     Ok(transport
         .map(|(peer_id, connection), _| (peer_id, StreamMuxerBox::new(connection)))
