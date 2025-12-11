@@ -6,6 +6,7 @@
 
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use hotshot_builder_api::v0_1::{
     block_info::AvailableBlockInfo,
     builder::{BuildError, Error as BuilderApiError},
@@ -125,6 +126,28 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
             .send()
             .await
             .map_err(Into::into)
+    }
+
+    /// Get the builder's address
+    pub async fn get_address(&self) -> anyhow::Result<String> {
+        // Join the request URL with the base URL
+        let url = self
+            .client
+            .base_url()
+            .join("v0/block_info/builderaddress")
+            .with_context(|| "failed to join request URL")?;
+
+        // Perform the request
+        let response = reqwest::get(url).await.with_context(|| "request failed")?;
+
+        // Get the response text
+        let response_text = response
+            .text()
+            .await
+            .with_context(|| "failed to get response as text")?;
+
+        // Return it
+        Ok(response_text)
     }
 }
 

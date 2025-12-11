@@ -5803,6 +5803,7 @@ dependencies = [
  "jf-advz",
  "lru 0.12.5",
  "rand 0.8.5",
+ "reqwest",
  "serde",
  "sha2 0.10.9",
  "surf-disco",

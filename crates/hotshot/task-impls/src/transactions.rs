@@ -561,20 +561,11 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
 
             // Spawn the task to get block information from the builder client
             let id = join_set
-                .spawn(async move {
-                    Self::get_block_info_from_builder(
-                        &client,
-                        &public_key,
-                        &parent_comm,
-                        view_number,
-                        &parent_comm_sig,
-                    )
-                    .await
-                })
+                .spawn(async move { client.get_address().await })
                 .id();
 
             // Add the task id to builder client mapping
-            task_to_client.insert(id, client_clone);
+            task_to_client.insert(id, (client_clone, public_key, parent_comm_sig));
         }
 
         // We need this channel to deal with responses as they become completed. This is because the `JoinSet` doesn't
@@ -591,10 +582,10 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         // the actual block itself, so we need to ask for it
         while let Some(result) = receiver.recv().await {
             // Match on the result to get the block information
-            let (task_id, block_info) = match result {
-                Ok((task_id, Ok(block_info))) => (task_id, block_info),
+            let (task_id, _address) = match result {
+                Ok((task_id, Ok(address))) => (task_id, address),
                 Ok((_, Err(err))) => {
-                    tracing::warn!("Failed to get block info from builder: {err:#}");
+                    tracing::warn!("Failed to get builder address from builder: {err:#}");
                     continue;
                 },
                 Err(err) => {
@@ -603,10 +594,27 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 },
             };
 
-            // Get the builder client from the map
-            let client = task_to_client
+            // Get the builder info from the map
+            let (client, public_key, parent_comm_sig) = task_to_client
                 .get(&task_id)
                 .ok_or_else(|| anyhow::anyhow!("missing builder client for task"))?;
+
+            // Ask for the actual block info
+            let block_info = match Self::get_block_info_from_builder(
+                &client,
+                &public_key,
+                &parent_comm,
+                view_number,
+                &parent_comm_sig,
+            )
+            .await
+            {
+                Ok(block_info) => block_info,
+                Err(err) => {
+                    tracing::warn!("Failed to get block info from builder: {err:#}");
+                    continue;
+                },
+            };
 
             // For each block info,
             for block_info in block_info {

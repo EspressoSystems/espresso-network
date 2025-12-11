@@ -44,6 +44,7 @@ url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
 tokio-util = { workspace = true }
+reqwest = { workspace = true }
 
 [lints]
 workspace = true
