@@ -13,7 +13,7 @@ use std::{
 use async_trait::async_trait;
 use chrono::Utc;
 use hotshot_task_impls::{
-    builder::BuilderClient, consensus::ConsensusTaskState, da::DaTaskState,
+    builder::BuilderClient, consensus::ConsensusTaskState,
     quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState,
     quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState,
     stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState,
@@ -136,28 +136,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
     }
 }
 
-#[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for DaTaskState<TYPES, I, V>
-{
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
-        Self {
-            consensus: OuterConsensus::new(handle.hotshot.consensus()),
-            output_event_stream: handle.hotshot.external_event_stream.0.clone(),
-            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
-            network: Arc::clone(&handle.hotshot.network),
-            cur_view: handle.cur_view().await,
-            cur_epoch: handle.cur_epoch().await,
-            vote_collectors: BTreeMap::default(),
-            public_key: handle.public_key().clone(),
-            private_key: handle.private_key().clone(),
-            id: handle.hotshot.id,
-            storage: handle.storage.clone(),
-            storage_metrics: handle.storage_metrics(),
-            upgrade_lock: handle.hotshot.upgrade_lock.clone(),
-        }
-    }
-}
+// #[async_trait]
+// impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+//     for DaTaskState<TYPES, I, V>
+// {
+//     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+//         Self {
+//             consensus: OuterConsensus::new(handle.hotshot.consensus()),
+//             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
+//             membership_coordinator: handle.hotshot.membership_coordinator.clone(),
+//             network: Arc::clone(&handle.hotshot.network),
+//             cur_view: handle.cur_view().await,
+//             cur_epoch: handle.cur_epoch().await,
+//             vote_collectors: BTreeMap::default(),
+//             public_key: handle.public_key().clone(),
+//             private_key: handle.private_key().clone(),
+//             id: handle.hotshot.id,
+//             storage: handle.storage.clone(),
+//             storage_metrics: handle.storage_metrics(),
+//             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+//         }
+//     }
+// }
 
 #[async_trait]
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>

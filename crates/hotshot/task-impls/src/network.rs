@@ -533,6 +533,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             HotShotEvent::DaVoteRecv(vote.clone())
                         },
                         DaConsensusMessage::DaCertificate(cert) => {
+                            tracing::error!(
+                                "received DaConsensusMessage::DaCertificate for view {}",
+                                cert.view_number()
+                            );
                             if self.upgrade_lock.epochs_enabled(cert.view_number()).await {
                                 tracing::warn!(
                                     "received DaConsensusMessage::DaCertificate for view {} but \
