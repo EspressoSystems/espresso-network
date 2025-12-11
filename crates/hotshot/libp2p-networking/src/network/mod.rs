@@ -162,7 +162,7 @@ type BoxedTransport = Boxed<(PeerId, StreamMuxerBox)>;
 pub async fn gen_transport<T: NodeType>(
     identity: Keypair,
     auth_message: Option<Vec<u8>>,
-    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
+    _consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
 ) -> Result<BoxedTransport, NetworkError> {
     // Create the initial `Quic` transport
     let transport = {
@@ -170,10 +170,6 @@ pub async fn gen_transport<T: NodeType>(
         config.handshake_timeout = std::time::Duration::from_secs(20);
         QuicTransport::new(config)
     };
-
-    // Require authentication against the stake table
-    let transport: ConsensusKeyAuthentication<_, T::SignatureKey, _> =
-        ConsensusKeyAuthentication::new(transport, auth_message, consensus_key_to_pid_map);
 
     // Support DNS resolution
     let transport = {
