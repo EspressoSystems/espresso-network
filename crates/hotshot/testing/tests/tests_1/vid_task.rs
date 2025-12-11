@@ -133,6 +133,7 @@ async fn test_vid_task() {
                     num_transactions: transactions.len() as u64,
                 },
                 ViewNumber::new(2),
+                None,
                 vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                     num_storage_nodes,
                     <TestVersions as Versions>::Base::VERSION,
