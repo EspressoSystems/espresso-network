@@ -673,7 +673,7 @@ impl TestNetwork {
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
-            genesis_version: Version { major: 0, minor: 1 },
+            genesis_version: Version { major: 0, minor: 3 },
             da_committees: None,
         };
 
