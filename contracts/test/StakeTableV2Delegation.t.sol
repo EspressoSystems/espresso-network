@@ -236,4 +236,12 @@ contract StakeTableV2DelegationTest is Test {
         proxy.delegate(validator, newMinAmount - 1);
         vm.stopPrank();
     }
+
+    function test_expectRevertWhenMinDelegateAmountIsTooSmall() public {
+        uint256 newMinAmount = 0;
+        vm.startPrank(stakeTableUpgradeTest.admin());
+        vm.expectRevert(StakeTableV2.MinDelegateAmountTooSmall.selector);
+        proxy.setMinDelegateAmount(newMinAmount);
+        vm.stopPrank();
+    }
 }
