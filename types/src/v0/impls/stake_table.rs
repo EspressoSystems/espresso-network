@@ -735,6 +735,8 @@ pub struct EpochCommittees {
     non_epoch_committee: NonEpochCommittee,
     /// Holds Stake table and da stake
     state: HashMap<Epoch, EpochCommittee>,
+    /// holds the full validator sets temporarily, until we store them
+    all_validators: BTreeMap<Epoch, ValidatorMap>,
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     /// DA committees, indexed by the first epoch in which they apply
@@ -1911,6 +1913,7 @@ impl EpochCommittees {
             non_epoch_committee: members,
             da_committees: BTreeMap::new(),
             state: map,
+            all_validators: BTreeMap::new(),
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
             fixed_block_reward,
@@ -2317,23 +2320,72 @@ impl Membership<SeqTypes> for EpochCommittees {
             active_validators.clone(),
             block_reward,
             stake_table_hash,
-            Some(block_header),
+            Some(block_header.clone()),
         );
+
+        // previous_epoch is the epoch prior to `epoch`,
+        // or the epoch immediately succeeding the block header
+        let previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
+        let previous_committee = membership_writer.state.get(&previous_epoch).cloned();
+        // garbage collect the validator set
+        membership_writer.all_validators =
+            membership_writer.all_validators.split_off(&previous_epoch);
+        // extract `all_validators` for the previous epoch
+        let previous_validators = membership_writer.all_validators.remove(&previous_epoch);
+        membership_writer
+            .all_validators
+            .insert(epoch, all_validators.clone());
         drop(membership_writer);
 
         let persistence_lock = fetcher.persistence.lock().await;
-        if let Err(e) = persistence_lock
-            .store_stake(epoch, active_validators, block_reward, stake_table_hash)
-            .await
-        {
-            tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing stake table");
-        }
 
-        if let Err(e) = persistence_lock
-            .store_all_validators(epoch, all_validators)
-            .await
-        {
-            tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
+        let decided_hash = block_header.next_stake_table_hash();
+
+        // we store the information from the previous epoch's in-memory committeee
+        // if the decided stake_table_hash is consistent with what we get
+        //
+        // in principle this is unnecessary and we could've stored these right away,
+        // without offsetting the epoch. but the intention is to catch L1 provider issues
+        // if there is a mismatch
+        if let Some(previous_committee) = previous_committee {
+            if decided_hash == previous_committee.stake_table_hash {
+                if let Err(e) = persistence_lock
+                    .store_stake(
+                        previous_epoch,
+                        previous_committee.validators,
+                        previous_committee.block_reward,
+                        previous_committee.stake_table_hash,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        ?e,
+                        ?previous_epoch,
+                        "`add_epoch_root`, error storing stake table"
+                    );
+                }
+
+                if let Some(previous_validators) = previous_validators {
+                    if let Err(e) = persistence_lock
+                        .store_all_validators(previous_epoch, previous_validators)
+                        .await
+                    {
+                        tracing::error!(
+                            ?e,
+                            ?epoch,
+                            "`add_epoch_root`, error storing all validators"
+                        );
+                    }
+                }
+            } else {
+                tracing::error!(?decided_hash, ?previous_committee.stake_table_hash, "The decided block header's `next_stake_table_hash` does not match the hash of the stake table we have. This is an unrecoverable error likely due to issues with the your L1 RPC provider.");
+
+                // rollback the incorrect entries from the in-memory stake table
+                let mut membership_writer = membership.write().await;
+                membership_writer.state.remove(&previous_epoch);
+                membership_writer.all_validators.remove(&previous_epoch);
+                drop(membership_writer);
+            }
         }
 
         Ok(())
