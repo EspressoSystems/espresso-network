@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     data::{
-        vid_disperse::ADVZDisperseShare, DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal,
-        QuorumProposalWrapper, UpgradeProposal, VidDisperseShare,
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
+        UpgradeProposal, VidDisperseShare, VidDisperseShare0,
     },
     error::HotShotError,
     message::{convert_proposal, Proposal},
@@ -97,7 +97,7 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
                 .vid_share
                 .map(|share| match share {
                     VidDisperseShare::V0(share) => Ok(share),
-                    VidDisperseShare::V1(_) => Err(error!("VID share is post-epoch")),
+                    _ => Err(error!("VID share is post-epoch")),
                 })
                 .transpose()?,
         })
@@ -115,7 +115,7 @@ pub struct LegacyLeafInfo<TYPES: NodeType> {
     /// Optional application-specific state delta.
     pub delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
     /// Optional VID share data.
-    pub vid_share: Option<ADVZDisperseShare<TYPES>>,
+    pub vid_share: Option<VidDisperseShare0<TYPES>>,
 }
 
 impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
@@ -124,7 +124,7 @@ impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
         leaf: Leaf<TYPES>,
         state: Arc<<TYPES as NodeType>::ValidatedState>,
         delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
-        vid_share: Option<ADVZDisperseShare<TYPES>>,
+        vid_share: Option<VidDisperseShare0<TYPES>>,
     ) -> Self {
         Self {
             leaf,

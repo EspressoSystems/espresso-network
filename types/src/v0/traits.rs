@@ -11,7 +11,6 @@ use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
@@ -860,12 +859,7 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>>;
     async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()>;
-    // TODO: merge these two `append_vid`s
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()>;
     async fn append_da(
         &self,
@@ -1002,16 +996,9 @@ impl EventConsumer for NullEventConsumer {
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         (**self).append_vid(proposal).await
-    }
-
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        (**self).append_vid2(proposal).await
     }
 
     async fn append_da(
