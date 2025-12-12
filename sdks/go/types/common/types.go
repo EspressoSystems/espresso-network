@@ -485,10 +485,10 @@ func (b *BlockPayload) BuilderCommitment() (*BuilderCommitment, error) {
 }
 
 type PayloadQueryData struct {
-	Height 		 uint64 	   `json:"height"`
+	Height       uint64        `json:"height"`
 	BlockHash    *TaggedBase64 `json:"block_hash"`
-	Hash 		 *TaggedBase64 `json:"hash"`
-	Size 		 uint64 	   `json:"size"`
+	Hash         *TaggedBase64 `json:"hash"`
+	Size         uint64        `json:"size"`
 	BlockPayload *BlockPayload `json:"data"`
 }
 

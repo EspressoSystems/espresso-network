@@ -137,7 +137,7 @@ func TestDecodePayload(t *testing.T) {
 	}
 
 	// Test with empty payload
-	emptyTransactions, err := decodePayload([]byte{}, []byte{00,00,00,00})
+	emptyTransactions, err := decodePayload([]byte{}, []byte{00, 00, 00, 00})
 	if err != nil {
 		t.Fatalf("Failed to decode empty payload: %v", err)
 	}
