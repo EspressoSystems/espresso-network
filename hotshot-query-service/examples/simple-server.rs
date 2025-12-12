@@ -28,8 +28,7 @@ use hotshot::{
     HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
-    membership::fetcher::Leaf2FetcherTrait, state_types::TestInstanceState,
-    storage_types::TestStorage,
+    membership::fetcher::Leaf2Fetcher, state_types::TestInstanceState, storage_types::TestStorage,
 };
 use hotshot_query_service::{
     data_source,
@@ -248,7 +247,7 @@ async fn init_consensus(
                     known_nodes_with_stake_clone.clone(),
                     known_nodes_with_stake_clone,
                     (),
-                    Leaf2FetcherTrait::<MockTypes>::new::<MockNodeImpl>(
+                    Leaf2Fetcher::<MockTypes>::new::<MockNodeImpl>(
                         network.clone(),
                         storage.clone(),
                         pub_keys[node_id],
