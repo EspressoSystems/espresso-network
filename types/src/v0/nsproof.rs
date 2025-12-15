@@ -1,5 +1,7 @@
-use hotshot_query_service::VidCommon;
-use hotshot_types::{data::VidCommitment, vid::avidm::AvidMShare};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    vid::avidm::AvidMShare,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -36,6 +38,7 @@ impl NsProof {
         match common {
             VidCommon::V0(common) => Some(NsProof::V0(ADVZNsProof::new(payload, index, common)?)),
             VidCommon::V1(common) => Some(NsProof::V1(AvidMNsProof::new(payload, index, common)?)),
+            _ => todo!("unsupported VidCommon version"),
         }
     }
 

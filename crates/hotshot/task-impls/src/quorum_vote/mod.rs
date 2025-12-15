@@ -766,7 +766,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     target_epoch,
                 );
 
-                if let Err(()) = share.data.verify_share(total_weight) {
+                if !share.data.verify(total_weight) {
                     bail!("Failed to verify VID share");
                 }
 

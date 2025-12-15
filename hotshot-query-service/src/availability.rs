@@ -31,7 +31,7 @@ use std::{fmt::Display, path::PathBuf, time::Duration};
 use derive_more::From;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use hotshot_types::{
-    data::{Leaf, Leaf2, QuorumProposal, VidCommitment},
+    data::{Leaf, Leaf2, QuorumProposal, VidCommitment, VidCommon},
     simple_certificate::QuorumCertificate,
     traits::node_implementation::NodeType,
 };
@@ -40,7 +40,7 @@ use snafu::{OptionExt, Snafu};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError, VidCommon};
+use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError};
 
 pub(crate) mod data_source;
 mod fetch;
