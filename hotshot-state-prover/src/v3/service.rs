@@ -204,6 +204,14 @@ async fn generate_proof(
     signature_map: HashMap<StateVerKey, StateSignature>,
     proving_key: &ProvingKey,
 ) -> Result<(Proof, PublicInput), ProverError> {
+    // Check whether the local stake table matches the one on the contract
+    // If there's a mismatch, the contract won't accept the generated proof
+    if state.st_state != current_stake_table_state {
+        return Err(ProverError::StakeTableMismatch(
+            current_stake_table_state,
+            state.st_state,
+        ));
+    }
     // Stake table update is already handled in the epoch catchup
     let entries = state
         .stake_table

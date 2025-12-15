@@ -165,6 +165,9 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
             )),
+            StakeTableV2Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MinDelegateAmountUpdated({v:?})"
+            )),
         }
     }
 }
@@ -1683,25 +1686,44 @@ impl EpochCommittees {
         let average_block_time_ms = if previous_epoch <= first_epoch + 1 {
             ASSUMED_BLOCK_TIME_SECONDS as u64 * 1000 // 2 seconds in milliseconds
         } else {
-            let prev_stake_table = self
-                .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
-                .context("Stake table not found")?
-                .into();
+            // We are calculating rewards for epoch `epoch`, so the current epoch should be `epoch - 2`.
+            // We need to calculate the average block time for the current epoch, so we need to know
+            // the previous epoch root which is stored with epoch `epoch - 1`, i.e. the next epoch.
+            let next_epoch = epoch
+                .checked_sub(1)
+                .context("underflow: cannot get next epoch when epoch is 0")?;
+            let prev_ts = match self.get_header(EpochNumber::new(next_epoch)) {
+                Some(header) => header.timestamp_millis_internal(),
+                None => {
+                    tracing::info!(
+                        "Calculating rewards for epoch {}, we have no root leaf header for epoch \
+                         - 1. Fetching from peers",
+                        epoch
+                    );
 
-            let success_threshold = self.success_threshold(Some(EpochNumber::new(previous_epoch)));
+                    let root_height = header.height().checked_sub(epoch_height).context(
+                        "Epoch height is greater than block height. cannot compute previous epoch \
+                         root height",
+                    )?;
 
-            let root_height = header.height().checked_sub(epoch_height).context(
-                "Epoch height is greater than block height. cannot compute previous epoch root \
-                 height",
-            )?;
+                    let prev_stake_table = self
+                        .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
+                        .context("Stake table not found")?
+                        .into();
 
-            let prev_root = fetcher
-                .peers
-                .fetch_leaf(root_height, prev_stake_table, success_threshold)
-                .await
-                .context("Epoch root leaf not found")?;
+                    let success_threshold =
+                        self.success_threshold(Some(EpochNumber::new(previous_epoch)));
 
-            let prev_ts = prev_root.block_header().timestamp_millis_internal();
+                    fetcher
+                        .peers
+                        .fetch_leaf(root_height, prev_stake_table, success_threshold)
+                        .await
+                        .context("Epoch root leaf not found")?
+                        .block_header()
+                        .timestamp_millis_internal()
+                },
+            };
+
             let time_diff = curr_ts.checked_sub(prev_ts).context(
                 "Current timestamp is earlier than previous. underflow in block time calculation",
             )?;
@@ -1957,6 +1979,13 @@ impl EpochCommittees {
             self.non_epoch_committee.da_committee.clone()
         }
     }
+
+    /// Get root leaf header for a given epoch
+    fn get_header(&self, epoch: Epoch) -> Option<&Header> {
+        self.state
+            .get(&epoch)
+            .and_then(|committee| committee.header.as_ref())
+    }
 }
 
 /// Calculates the stake ratio `p` and reward rate `R(p)`.
@@ -1968,7 +1997,7 @@ impl EpochCommittees {
 ///         0.03 / sqrt(2 * p),            if 0.01 < p <= 1
 ///     }
 ///
-fn calculate_proportion_staked_and_reward_rate(
+pub fn calculate_proportion_staked_and_reward_rate(
     total_stake: &BigDecimal,
     total_supply: &BigDecimal,
 ) -> anyhow::Result<(BigDecimal, BigDecimal)> {

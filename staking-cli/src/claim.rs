@@ -181,7 +181,7 @@ pub async fn unclaimed_rewards(
 
 #[cfg(test)]
 mod test {
-    use alloy::primitives::U256;
+    use alloy::primitives::{utils::parse_ether, U256};
     use warp::Filter as _;
 
     use super::*;
@@ -190,7 +190,7 @@ mod test {
     #[tokio::test]
     async fn test_claim_withdrawal() -> Result<()> {
         let system = TestSystem::deploy().await?;
-        let amount = U256::from(123);
+        let amount = parse_ether("1.23")?;
         system.register_validator().await?;
         system.delegate(amount).await?;
         system.undelegate(amount).await?;
@@ -213,7 +213,7 @@ mod test {
     #[tokio::test]
     async fn test_claim_validator_exit() -> Result<()> {
         let system = TestSystem::deploy().await?;
-        let amount = U256::from(123);
+        let amount = parse_ether("1.23")?;
         system.register_validator().await?;
         system.delegate(amount).await?;
         system.deregister_validator().await?;
