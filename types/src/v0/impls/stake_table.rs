@@ -2378,13 +2378,12 @@ impl Membership<SeqTypes> for EpochCommittees {
                     }
                 }
             } else {
-                tracing::error!(?decided_hash, ?previous_committee.stake_table_hash, "The decided block header's `next_stake_table_hash` does not match the hash of the stake table we have. This is an unrecoverable error likely due to issues with the your L1 RPC provider.");
-
-                // rollback the incorrect entries from the in-memory stake table
-                let mut membership_writer = membership.write().await;
-                membership_writer.state.remove(&previous_epoch);
-                membership_writer.all_validators.remove(&previous_epoch);
-                drop(membership_writer);
+                panic!(
+                    "The decided block header's `next_stake_table_hash` does not match the hash \
+                     of the stake table we have. This is an unrecoverable error likely due to \
+                     issues with the your L1 RPC provider. Decided:\n\n{:?}Actual:\n\n{:?}",
+                    decided_hash, previous_committee.stake_table_hash
+                );
             }
         }
 
