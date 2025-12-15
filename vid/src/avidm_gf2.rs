@@ -4,10 +4,10 @@ use std::{ops::Range, vec};
 
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme};
+use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme, RangeProofMerkleTreeScheme};
 use jf_utils::canonical;
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
+use sha3::Digest;
 use tagged_base64::tagged;
 
 use crate::{VidError, VidResult, VidScheme};
@@ -21,6 +21,7 @@ pub mod proofs;
 pub(crate) type MerkleTree =
     jf_merkle_tree::hasher::HasherMerkleTree<sha3::Keccak256, HasherNode<sha3::Keccak256>>;
 type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
+type MerkleRangeProof = <MerkleTree as RangeProofMerkleTreeScheme>::RangeMembershipProof;
 type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 
 /// Dummy struct for AVID-M scheme over GF2
@@ -145,11 +146,19 @@ impl AvidmGf2Scheme {
         let recovery = reed_solomon_simd::encode(original_count, recovery_count, &original)?;
 
         let shares = [original, recovery].concat();
-        let share_digests: Vec<_> = shares
-            .iter()
-            .map(|share| HasherNode::from(sha3::Keccak256::digest(share)))
+        let codewords: Vec<u8> = shares.iter().flatten().copied().collect();
+        let leaves: Vec<_> = codewords
+            .chunks(32)
+            .map(|chunk| {
+                HasherNode::<sha3::Keccak256>::from(
+                    #[allow(deprecated)]
+                    sha3::digest::generic_array::GenericArray::from_iter(
+                        chunk.iter().copied().chain(std::iter::repeat(0u8)).take(32),
+                    ),
+                )
+            })
             .collect();
-        let mt = MerkleTree::from_elems(None, &share_digests)?;
+        let mt = MerkleTree::from_elems(None, &leaves)?;
         Ok((mt, shares))
     }
 }

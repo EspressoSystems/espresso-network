@@ -1,12 +1,12 @@
 //! This module implements encoding proofs for the Avid-M Scheme.
 
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree::{MerkleTreeScheme, RangeProofMerkleTreeScheme};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     avidm_gf2::{
         namespaced::{NsAvidmGf2Commit, NsAvidmGf2Common, NsAvidmGf2Scheme},
-        AvidmGf2Scheme, MerkleProof, MerkleTree,
+        AvidmGf2Commit, AvidmGf2Param, AvidmGf2Scheme, MerkleProof, MerkleRangeProof, MerkleTree,
     },
     VerificationResult, VidError, VidResult, VidScheme,
 };
@@ -74,6 +74,68 @@ impl NsAvidmGf2Scheme {
             &proof.ns_proof,
         )?)
     }
+}
+
+/// A proof of a transaction payload.
+/// It consists of the range of the transaction in bytes, the transaction payload, and a merkle proof
+/// of the transaction payload against the namespaced VID commitment.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct BytesInclusionProof {
+    /// The range of the transaction in bytes.
+    pub bytes_range: std::ops::Range<u64>,
+    /// The transaction payload.
+    #[serde(with = "base64_bytes")]
+    pub bytes: Vec<u8>,
+    /// The merkle proof of the transaction payload against the namespace commitment.
+    pub proof: MerkleRangeProof,
+}
+
+impl AvidmGf2Scheme {
+    /// Generate a proof of a transaction payload.
+    pub fn bytes_inclusion_proof(
+        param: &AvidmGf2Param,
+        payload: &[u8],
+        bytes_range: std::ops::Range<u64>,
+    ) -> VidResult<BytesInclusionProof> {
+        let (mt, _) = AvidmGf2Scheme::raw_disperse(param, payload)?;
+        Ok(BytesInclusionProof {
+            bytes_range: bytes_range.clone(),
+            bytes: payload[bytes_range.start as usize..bytes_range.end as usize].to_vec(),
+            proof: mt
+                .range_lookup(bytes_range.start, bytes_range.end - 1)
+                .expect_ok()
+                .expect("Range proof shouldn't fail")
+                .1,
+        })
+    }
+
+    /// Verify a transaction proof against a commitment.
+    pub fn verify_bytes_inclusion_proof(
+        param: &AvidmGf2Param,
+        commit: &AvidmGf2Commit,
+        proof: &BytesInclusionProof,
+    ) -> VidResult<VerificationResult> {
+        todo!()
+        // let indices: Vec<u64> = proof.tx_bytes_range.clone().collect();
+        // Ok(MerkleTree::verify_range_proof(
+        //     &commit.commit,
+        //     &indices,
+        //     &proof.tx_payload,
+        //     &proof.tx_proof,
+        // )?)
+    }
+}
+
+/// A proof of a transaction payload within a namespace.
+pub struct NsTxProof {
+    /// The index of the namespace.
+    pub ns_index: usize,
+    /// The commitment of the namespaced VID.
+    pub ns_commit: AvidmGf2Commit,
+    /// The merkle proof of the namespace against the namespaced VID commitment.
+    pub ns_proof: MerkleProof,
+    /// The proof of the transaction payload.
+    pub tx_proof: BytesInclusionProof,
 }
 
 #[cfg(test)]
