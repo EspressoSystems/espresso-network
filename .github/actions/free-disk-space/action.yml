@@ -8,7 +8,11 @@ runs:
       run: |
         set -euxo pipefail
 
-        curl -L https://github.com/SUPERCILEX/fuc/releases/latest/download/x86_64-unknown-linux-gnu-rmz -o /tmp/rmz
+        ./scripts/download-github-release.sh \
+          --repo SUPERCILEX/fuc \
+          --asset x86_64-unknown-linux-gnu-rmz \
+          --output /tmp/rmz
+
         sudo mv /tmp/rmz /usr/local/bin/rmz
         sudo chmod +x /usr/local/bin/rmz
 
