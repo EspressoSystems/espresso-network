@@ -7,7 +7,10 @@ use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
+use hotshot::{
+    types::{BLSPubKey, EventType},
+    HotShotInitializer, InitializerEpochInfo,
+};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
@@ -26,11 +29,13 @@ use hotshot_types::{
     traits::{
         metrics::Metrics,
         node_implementation::{ConsensusTime, NodeType, Versions},
-        storage::Storage,
+        signature_key::SignatureKey,
+        storage::{EpochStateStorage, Storage},
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
+    PeerConfig,
 };
 use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
@@ -41,7 +46,10 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    v0::impls::{StakeTableHash, ValidatedState},
+    v0::{
+        impls::{StakeTableHash, StakeTableMetadata, ValidatedState},
+        Header,
+    },
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
         Validator,
@@ -50,6 +58,15 @@ use crate::{
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
     PubKey, SeqTypes, ValidatorMap,
 };
+
+#[derive(Clone, Debug)]
+pub struct EpochState {
+    pub stake_table: ValidatorMap,
+    pub block_reward: Option<RewardAmount>,
+    pub stake_table_hash: Option<StakeTableHash>,
+    pub block_header: Option<Header>,
+    pub drb_result: Option<DrbResult>,
+}
 
 #[async_trait]
 pub trait StateCatchup: Send + Sync {
@@ -515,16 +532,13 @@ pub enum EventsPersistenceRead {
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
+    async fn load_epoch_state(&self, epoch: EpochNumber) -> anyhow::Result<Option<EpochState>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
-    /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(
+    /// Store epoch state at `epoch` in the persistence layer
+    async fn store_epoch_state(
         &self,
         epoch: EpochNumber,
         stake: ValidatorMap,
@@ -1000,6 +1014,8 @@ impl EventConsumer for NullEventConsumer {
 
 #[async_trait]
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
+    type StakeTableMetadata = StakeTableMetadata;
+
     async fn append_vid(
         &self,
         proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
@@ -1096,20 +1112,63 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
             .await
     }
 
-    async fn store_drb_result(
+    async fn update_state_cert(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
-        drb_result: DrbResult,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        (**self).store_drb_result(epoch, drb_result).await
+        (**self).add_state_cert(state_cert).await
+    }
+}
+
+#[async_trait]
+impl<P: SequencerPersistence> EpochStateStorage<SeqTypes> for Arc<P> {
+    async fn load_epoch_root(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<<SeqTypes as NodeType>::BlockHeader>> {
+        Ok((**self)
+            .load_epoch_state(epoch)
+            .await?
+            .and_then(|state| state.block_header))
     }
 
-    async fn store_epoch_root(
+    async fn load_stake_table(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        (**self).store_epoch_root(epoch, block_header).await
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<(HSStakeTable<SeqTypes>, Box<dyn std::any::Any + Send + Sync>)>>
+    {
+        let Some(epoch_state) = (**self).load_epoch_state(epoch).await? else {
+            return Ok(None);
+        };
+
+        let stake_table = epoch_state
+            .stake_table
+            .into_values()
+            .map(|validator| PeerConfig {
+                stake_table_entry: BLSPubKey::stake_table_entry(
+                    &validator.stake_table_key,
+                    validator.stake,
+                ),
+                state_ver_key: validator.state_ver_key,
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        let metadata = StakeTableMetadata {
+            block_reward: epoch_state.block_reward,
+            stake_table_hash: epoch_state.stake_table_hash,
+        };
+
+        Ok(Some((stake_table, Box::new(metadata))))
+    }
+
+    async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<DrbResult> {
+        let res = (**self)
+            .load_epoch_state(epoch)
+            .await?
+            .context("epoch state not found")?;
+
+        res.drb_result.context("drb result not found")
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
@@ -1120,11 +1179,20 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).load_drb_input(epoch).await
     }
 
-    async fn update_state_cert(
+    async fn store_drb_result(
         &self,
-        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        epoch: EpochNumber,
+        drb_result: DrbResult,
     ) -> anyhow::Result<()> {
-        (**self).add_state_cert(state_cert).await
+        (**self).store_drb_result(epoch, drb_result).await
+    }
+
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()> {
+        (**self).store_epoch_root(epoch, block_header).await
     }
 }
 

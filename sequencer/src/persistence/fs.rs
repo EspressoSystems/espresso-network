@@ -14,9 +14,10 @@ use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EpochState, EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
-    Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, ValidatorMap,
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, StakeTableMetadata,
+    ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -1767,10 +1768,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_epoch_state(&self, epoch: EpochNumber) -> anyhow::Result<Option<EpochState>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1783,7 +1781,12 @@ impl MembershipPersistence for Persistence {
             format!("failed to read stake table file at {}", file_path.display())
         })?;
 
-        let stake = match bincode::deserialize(&bytes) {
+        let (stake_table, block_reward, stake_table_hash) = match bincode::deserialize::<(
+            ValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        )>(&bytes)
+        {
             Ok(res) => res,
             Err(err) => {
                 let map = bincode::deserialize::<ValidatorMap>(&bytes).with_context(|| {
@@ -1798,7 +1801,47 @@ impl MembershipPersistence for Persistence {
             },
         };
 
-        Ok(Some(stake))
+        let drb_path = inner
+            .epoch_drb_result_dir_path()
+            .join(epoch.to_string())
+            .with_extension("txt");
+        let drb_result = if drb_path.exists() {
+            let drb_bytes = fs::read(&drb_path)
+                .with_context(|| format!("failed to read drb result at {}", drb_path.display()))?;
+            Some(
+                bincode::deserialize(&drb_bytes)
+                    .context("deserializing drb result for epoch from storage")?,
+            )
+        } else {
+            None
+        };
+
+        let header_path = inner
+            .epoch_root_block_header_dir_path()
+            .join(epoch.to_string())
+            .with_extension("txt");
+        let block_header = if header_path.exists() {
+            let header_bytes = fs::read(&header_path).with_context(|| {
+                format!(
+                    "failed to read epoch root header at {}",
+                    header_path.display()
+                )
+            })?;
+            Some(
+                bincode::deserialize(&header_bytes)
+                    .context("deserializing epoch root header from storage")?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Some(EpochState {
+            stake_table,
+            block_reward,
+            stake_table_hash,
+            drb_result,
+            block_header,
+        }))
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
@@ -1838,13 +1881,20 @@ impl MembershipPersistence for Persistence {
                     },
                 };
 
-            validator_sets.push((epoch, (stake.0, stake.1), stake.2));
+            validator_sets.push((
+                epoch,
+                stake.0,
+                StakeTableMetadata {
+                    block_reward: stake.1,
+                    stake_table_hash: stake.2,
+                },
+            ));
         }
 
         Ok(Some(validator_sets))
     }
 
-    async fn store_stake(
+    async fn store_epoch_state(
         &self,
         epoch: EpochNumber,
         stake: ValidatorMap,

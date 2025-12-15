@@ -2566,6 +2566,7 @@ mod test {
     };
     use hotshot_types::{
         data::EpochNumber,
+        epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         traits::{
             block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
@@ -4612,6 +4613,89 @@ mod test {
                 node_stake_table, stake_table,
                 "Stake table mismatch for epoch {epoch_num}",
             );
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_membership_coordinator_loads_from_storage() {
+        // TODO: We don't need to spin up TestNetwork for this test
+        // we can insert mock stake tables and drb result into persistence directly
+        //
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                &NoMetrics,
+            )
+        });
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .catchups(catchup_peers)
+            .pos_hook::<PosVersionV4>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, PosVersionV4::new()).await;
+
+        // Wait for the peer 0 (node 0) to advance past 4 epochs
+        let mut events = network.peers[0].event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {height}");
+                if height > EPOCH_HEIGHT * 4 {
+                    break;
+                }
+            }
+        }
+
+        drop(network);
+        let membership = NodeState::mock().coordinator.membership().clone();
+
+        let p = persistence_options[1].clone().create().await.unwrap();
+        membership
+            .write()
+            .await
+            .set_first_epoch(EpochNumber::new(1), [0_u8; 32]);
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(membership, 10, Arc::new(p));
+
+        // we don't have first two epochs in storage
+        // because the first real epoch is 3
+        for epoch_num in 3..=4 {
+            let epoch = EpochNumber::new(epoch_num);
+
+            tracing::info!("Verifying epoch {epoch_num} is loaded from storage");
+
+            // Request membership for this epoch
+            // it should succeed immediately
+            // because the data is in storage, not requiring catchup
+            let membership_result = coordinator.membership_for_epoch(Some(epoch)).await;
+
+            membership_result.unwrap();
         }
     }
 

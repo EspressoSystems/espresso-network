@@ -29,7 +29,7 @@ pub use impls::testing;
 pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
     get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
-    EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
+    EpochCommittees, FeeError, ProposalValidationError, StakeTableMetadata, StateValidationError,
 };
 pub use nsproof::*;
 pub use txproof::*;

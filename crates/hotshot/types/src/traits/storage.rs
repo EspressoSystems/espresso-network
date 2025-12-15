@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
@@ -29,11 +29,51 @@ use crate::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
     },
+    stake_table::HSStakeTable,
 };
+
+/// This trait is used by EpochMembershipCoordinator to load
+/// stake tables, DRB results, and epoch state before triggering catchup.
+/// We are not using `Storage` trait directly because that one is not object safe.
+/// It also has methods to store DRB inputs and result
+#[async_trait]
+pub trait EpochStateStorage<TYPES: NodeType>: Send + Sync {
+    /// Load an epoch block header
+    async fn load_epoch_root(&self, epoch: TYPES::Epoch) -> Result<Option<TYPES::BlockHeader>>;
+
+    /// Load stake table with metadata
+    async fn load_stake_table(
+        &self,
+        epoch: TYPES::Epoch,
+    ) -> Result<Option<(HSStakeTable<TYPES>, Box<dyn std::any::Any + Send + Sync>)>>;
+
+    /// Load DRB result for an epoch
+    async fn load_drb_result(&self, epoch: TYPES::Epoch) -> Result<DrbResult>;
+
+    /// Store DRB input for an epoch
+    async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()>;
+
+    /// Load DRB input for an epoch
+    async fn load_drb_input(&self, epoch: u64) -> Result<DrbInput>;
+
+    /// Store DRB result for an epoch
+    async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
+
+    /// Store epoch root (block header)
+    async fn store_epoch_root(
+        &self,
+        epoch: TYPES::Epoch,
+        block_header: TYPES::BlockHeader,
+    ) -> Result<()>;
+}
 
 /// Abstraction for storing a variety of consensus payload datum.
 #[async_trait]
-pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
+pub trait Storage<TYPES: NodeType>:
+    Send + Sync + Clone + 'static + EpochStateStorage<TYPES>
+{
+    type StakeTableMetadata: Clone + Send + Sync + 'static;
+
     /// Add a proposal to the stored VID proposals.
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
     /// Add a proposal to the stored VID proposals.
@@ -146,26 +186,6 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     async fn migrate_storage(&self) -> Result<()> {
         Ok(())
     }
-    /// Add a drb result
-    async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
-    /// Add an epoch block header
-    async fn store_epoch_root(
-        &self,
-        epoch: TYPES::Epoch,
-        block_header: TYPES::BlockHeader,
-    ) -> Result<()>;
-    async fn load_drb_result(&self, epoch: TYPES::Epoch) -> Result<DrbResult> {
-        match self.load_drb_input(*epoch).await {
-            Ok(drb_input) => {
-                ensure!(drb_input.iteration == drb_input.difficulty_level);
-
-                Ok(drb_input.value)
-            },
-            Err(e) => Err(e),
-        }
-    }
-    async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()>;
-    async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput>;
 }
 
 pub async fn load_drb_input_impl<TYPES: NodeType>(

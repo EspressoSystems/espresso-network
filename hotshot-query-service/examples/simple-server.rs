@@ -253,7 +253,7 @@ async fn init_consensus(
                 let coordinator = EpochMembershipCoordinator::new(
                     Arc::new(RwLock::new(membership)),
                     config.epoch_height,
-                    &storage.clone(),
+                    storage.clone(),
                 );
 
                 SystemContext::init(

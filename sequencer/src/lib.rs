@@ -600,7 +600,7 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     // Create the HotShot membership
-    let mut membership = EpochCommittees::new_stake(
+    let membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
@@ -608,15 +608,13 @@ where
         epoch_height,
     );
     info!("Membership created. Reloading stake");
-    membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
-    info!("Stake reloaded");
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         network_config.config.epoch_height,
-        &persistence.clone(),
+        persistence.clone(),
     );
 
     let instance_state = NodeState {
@@ -1358,14 +1356,13 @@ pub mod testing {
             fetcher.spawn_update_loop().await;
 
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-            let mut membership = EpochCommittees::new_stake(
+            let membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
                 config.epoch_height,
             );
-            membership.reload_stake(50).await;
 
             let membership = Arc::new(RwLock::new(membership));
             let persistence = Arc::new(persistence);
@@ -1373,7 +1370,7 @@ pub mod testing {
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
                 config.epoch_height,
-                &persistence.clone(),
+                persistence.clone(),
             );
 
             let node_state = NodeState::new(

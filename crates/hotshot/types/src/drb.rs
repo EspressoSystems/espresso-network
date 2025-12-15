@@ -14,7 +14,7 @@ use vbs::version::{StaticVersionType, Version};
 use crate::{
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
-        storage::{LoadDrbProgressFn, StoreDrbProgressFn},
+        storage::EpochStateStorage,
     },
     HotShotConfig,
 };
@@ -98,15 +98,14 @@ pub fn difficulty_level() -> u64 {
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
 #[must_use]
-pub async fn compute_drb_result(
+pub async fn compute_drb_result<TYPES: NodeType>(
     drb_input: DrbInput,
-    store_drb_progress: StoreDrbProgressFn,
-    load_drb_progress: LoadDrbProgressFn,
+    storage: Arc<dyn EpochStateStorage<TYPES>>,
 ) -> DrbResult {
     tracing::warn!("Beginning DRB calculation with input {:?}", drb_input);
     let mut drb_input = drb_input;
 
-    if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
+    if let Ok(loaded_drb_input) = storage.load_drb_input(drb_input.epoch).await {
         if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
             tracing::error!(
                 "We are calculating the DRB result with input {drb_input:?}, but we had \
@@ -165,7 +164,7 @@ pub async fn compute_drb_result(
 
         let elapsed_time = last_time.elapsed().as_millis();
 
-        let store_drb_progress = store_drb_progress.clone();
+        let storage = Arc::clone(&storage);
         tokio::spawn(async move {
             tracing::warn!(
                 "Storing partial DRB progress: {:?}. Time elapsed since the previous iteration of \
@@ -174,7 +173,7 @@ pub async fn compute_drb_result(
                 last_iteration,
                 elapsed_time
             );
-            if let Err(e) = store_drb_progress(updated_drb_input).await {
+            if let Err(e) = storage.store_drb_input(updated_drb_input).await {
                 tracing::warn!("Failed to store DRB progress during calculation: {}", e);
             }
         });
@@ -212,10 +211,9 @@ pub async fn compute_drb_result(
 
     tracing::warn!("Completed DRB calculation. Result: {:?}", final_drb_input);
 
-    let store_drb_progress = store_drb_progress.clone();
     tokio::spawn(async move {
-        if let Err(e) = store_drb_progress(final_drb_input).await {
-            tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+        if let Err(e) = storage.store_drb_input(final_drb_input).await {
+            tracing::warn!("Failed to store final DRB result: {}", e);
         }
     });
 

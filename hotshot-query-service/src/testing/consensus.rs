@@ -209,7 +209,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                         let memberships = EpochMembershipCoordinator::new(
                             membership,
                             config.epoch_height,
-                            &hs_storage.clone(),
+                            hs_storage.clone(),
                         );
 
                         let hotshot = SystemContext::init(
