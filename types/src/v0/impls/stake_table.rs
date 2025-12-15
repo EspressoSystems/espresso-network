@@ -2348,7 +2348,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         // without offsetting the epoch. but the intention is to catch L1 provider issues
         // if there is a mismatch
         if let Some(previous_committee) = previous_committee {
-            if decided_hash.is_some() && decided_hash == previous_committee.stake_table_hash {
+            if decided_hash.is_none() || decided_hash == previous_committee.stake_table_hash {
                 if let Err(e) = persistence_lock
                     .store_stake(
                         previous_epoch,
