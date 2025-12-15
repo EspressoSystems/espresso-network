@@ -46,7 +46,7 @@ processes:
       ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
       ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
       ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
-      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee --deploy-esp-token --deploy-stake-table
+      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -93,7 +93,7 @@ processes:
   deploy-pos-contracts-upgrades:
     command:
       unset ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS
-      && deploy --deploy-reward-claim --upgrade-esp-token-v2 --upgrade-stake-table-v2
+      && deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2 --upgrade-stake-table-v2
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -180,12 +180,12 @@ processes:
     availability: *run-forever
 
   prover-one-shot:
-    # to avoid interfering so much with other work, "nice" the state prover process
-    command: env RUST_LOG=INFO,hotshot_state_prover=DEBUG state-prover
+    # "nice" this compute heavy process to reduce load
+    command: nice state-prover
     environment:
-      - MNEMONIC=${ESPRESSO_SEQUENCER_ETH_MNEMONIC}
       - RAYON_NUM_THREADS=${PROVER_RAYON_NUM_THREADS}
       - ESPRESSO_STATE_PROVER_ONESHOT_RETRIES=1
+      - RUST_LOG=${RUST_LOG},hotshot_state_prover=DEBUG
     depends_on:
       sequencer0:
         condition: process_healthy

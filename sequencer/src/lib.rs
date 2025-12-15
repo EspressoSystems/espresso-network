@@ -5,6 +5,7 @@ pub mod genesis;
 mod proposal_fetcher;
 mod request_response;
 pub mod state_cert;
+pub mod util;
 
 mod external_event_handler;
 pub mod options;
@@ -708,6 +709,7 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use std::{
+        cmp::max,
         collections::{BTreeMap, HashMap},
         time::Duration,
     };
@@ -733,7 +735,7 @@ pub mod testing {
     use committable::Committable;
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
         eth_signature_key::EthKeyPair,
@@ -995,7 +997,10 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
-                        .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
+                        .exit_escrow_period(U256::from(max(
+                            blocks_per_epoch * 15 + 100,
+                            DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+                        )))
                         .multisig_pauser(self.signer.address())
                         .token_name("Espresso".to_string())
                         .token_symbol("ESP".to_string())

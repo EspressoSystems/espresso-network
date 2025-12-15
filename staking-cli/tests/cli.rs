@@ -345,7 +345,7 @@ async fn test_cli_undelegate(#[case] version: StakeTableContractVersion) -> Resu
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
-    let amount = U256::from(123);
+    let amount = parse_ether("1.23")?;
     system.register_validator().await?;
     system.delegate(amount).await?;
     system.undelegate(amount).await?;
@@ -368,7 +368,7 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
-    let amount = U256::from(123);
+    let amount = parse_ether("1.23")?;
     system.register_validator().await?;
     system.delegate(amount).await?;
     system.deregister_validator().await?;
@@ -523,7 +523,7 @@ async fn test_cli_allowance(#[case] version: StakeTableContractVersion) -> Resul
 async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
-    let amount = parse_ether("0.123")?;
+    let amount = parse_ether("1.123")?;
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("transfer")
         .arg("--to")
@@ -609,15 +609,15 @@ async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
-    let amount = parse_ether("0.123")?;
+    let amount = parse_ether("1.123")?;
     system.delegate(amount).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("stake-table")
         .assert()
         .success()
-        .stdout(str::contains("BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=0.123000000000000000 ESP"))
-        .stdout(str::contains(" - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP"));
+        .stdout(str::contains("BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=1.123000000000000000 ESP"))
+        .stdout(str::contains(" - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=1.123000000000000000 ESP"));
 
     Ok(())
 }
@@ -627,7 +627,7 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
-    let amount = parse_ether("0.123")?;
+    let amount = parse_ether("1.123")?;
     system.delegate(amount).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
@@ -636,11 +636,11 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
         .assert()
         .success()
         .stdout(str::contains(
-            "BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=0.123000000000000000 \
+            "BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZ.. comm=12.34 % stake=1.123000000000000000 \
              ESP",
         ))
         .stdout(str::contains(
-            " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 \
+            " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=1.123000000000000000 \
              ESP",
         ));
 
@@ -674,7 +674,7 @@ async fn test_cli_transfer_ledger() -> Result<()> {
     let system = TestSystem::deploy().await?;
     let address = address_from_cli(&system).await?;
 
-    let amount = parse_ether("0.123")?;
+    let amount = parse_ether("1.123")?;
     system.transfer_eth(address, amount).await?;
     system.transfer(address, amount).await?;
 
@@ -716,7 +716,7 @@ async fn test_cli_delegate_ledger() -> Result<()> {
     system.register_validator().await?;
     let address = address_from_cli(&system).await?;
 
-    let amount = parse_ether("0.123")?;
+    let amount = parse_ether("1.123")?;
     system.transfer_eth(address, amount).await?;
     system.transfer(address, amount).await?;
 
@@ -1010,6 +1010,51 @@ async fn test_cli_all_operations_manual_inspect(
             .clone();
         println!("{}", String::from_utf8_lossy(&output));
     }
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_delegate_below_minimum() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    // Set min delegate amount to 100 ESP
+    let high_min = parse_ether("100")?;
+    system.set_min_delegate_amount(high_min).await?;
+
+    // Try to delegate less than the minimum
+    let amount = "50";
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("delegate")
+        .arg("--validator-address")
+        .arg(system.deployer_address.to_string())
+        .arg("--amount")
+        .arg(amount)
+        .assert()
+        .failure()
+        .stderr(str::contains("below minimum"))
+        .stderr(str::contains("100"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_stake_for_demo_below_minimum() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    // Set min delegate amount higher than the demo amounts (100-500 ESP range)
+    let high_min = parse_ether("2000")?;
+    system.set_min_delegate_amount(high_min).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-for-demo")
+        .assert()
+        .failure()
+        .stderr(str::contains("below minimum"))
+        .stderr(str::contains("2000"));
 
     Ok(())
 }

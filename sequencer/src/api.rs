@@ -1227,7 +1227,7 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
-    use std::time::Duration;
+    use std::{cmp::max, time::Duration};
 
     use alloy::{
         network::EthereumWallet,
@@ -1237,7 +1237,7 @@ pub mod test_helpers {
     use committable::Committable;
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
@@ -1470,7 +1470,10 @@ pub mod test_helpers {
                 .genesis_st_state(genesis_stake)
                 .blocks_per_epoch(blocks_per_epoch)
                 .epoch_start_block(epoch_start_block)
-                .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
+                .exit_escrow_period(U256::from(max(
+                    blocks_per_epoch * 15 + 100,
+                    DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+                )))
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
@@ -5157,12 +5160,19 @@ mod test {
         )
         .await
         .unwrap();
-        let mut tx = ds.write().await?;
+        let mut tx = ds.read().await?;
 
-        let (state, leaf) =
-            reconstruct_state(&instance, &mut tx, node_block_height - 1, to_view, &[], &[])
-                .await
-                .unwrap();
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &ds,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(leaf.view_number(), to_view);
         assert!(
             state
@@ -5176,6 +5186,7 @@ mod test {
         // Reconstruct fee state
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
@@ -5203,6 +5214,7 @@ mod test {
 
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
@@ -5247,6 +5259,7 @@ mod test {
 
         let (state, leaf) = reconstruct_state(
             &instance,
+            &ds,
             &mut tx,
             node_block_height - 1,
             to_view,
@@ -6654,7 +6667,8 @@ mod test {
             .iter()
             .map(|(addr, amt)| (*addr, *amt))
             .collect();
-        expected.sort_by_key(|(acct, _)| *acct);
+        // Results are sorted by account address descending
+        expected.sort_by_key(|(acct, _)| std::cmp::Reverse(*acct));
 
         tracing::info!("expected accounts = {expected:?}");
         let limit = expected.len().min(10_000) as u64;
@@ -6808,16 +6822,16 @@ mod test {
         }
 
         // Test pagination
-        // results are sorted by account address
+        // results are sorted by account address descending
         let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
         assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account1, RewardAmount::from(1500u64)));
-        assert_eq!(result_limit_2[1], (account2, RewardAmount::from(2500u64)));
+        assert_eq!(result_limit_2[0], (account4, RewardAmount::from(4000u64)));
+        assert_eq!(result_limit_2[1], (account3, RewardAmount::from(3000u64)));
 
         let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
         assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account3, RewardAmount::from(3000u64)));
-        assert_eq!(result_offset_2[1], (account4, RewardAmount::from(4000u64)));
+        assert_eq!(result_offset_2[0], (account2, RewardAmount::from(2500u64)));
+        assert_eq!(result_offset_2[1], (account1, RewardAmount::from(1500u64)));
 
         Ok(())
     }
