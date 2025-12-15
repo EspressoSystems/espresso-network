@@ -3,13 +3,14 @@ use alloy::{
     primitives::{utils::format_ether, Address, U256},
     providers::{PendingTransactionBuilder, Provider},
 };
-use anyhow::Result;
+use anyhow::{bail, Result};
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
     sol_types::{
         EspToken::{self, EspTokenErrors},
         StakeTableV2::{self, StakeTableV2Errors},
     },
+    stake_table::StakeTableContractVersion,
 };
 
 pub async fn approve(
@@ -41,6 +42,19 @@ pub async fn delegate(
         format_ether(amount)
     );
     let st = StakeTableV2::new(stake_table, provider);
+
+    let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
+    if let StakeTableContractVersion::V2 = version {
+        let min_amount = st.minDelegateAmount().call().await?;
+        if amount < min_amount {
+            bail!(
+                "delegation amount {} ESP is below minimum of {} ESP",
+                format_ether(amount),
+                format_ether(min_amount)
+            );
+        }
+    }
+
     st.delegate(validator_address, amount)
         .send()
         .await
@@ -66,9 +80,7 @@ pub async fn undelegate(
 
 #[cfg(test)]
 mod test {
-    use hotshot_contract_adapter::{
-        sol_types::StakeTableV2, stake_table::StakeTableContractVersion,
-    };
+    use alloy::primitives::utils::parse_ether;
     use rstest::rstest;
 
     use super::*;
@@ -83,7 +95,7 @@ mod test {
         system.register_validator().await?;
         let validator_address = system.deployer_address;
 
-        let amount = U256::from(123);
+        let amount = parse_ether("1.23")?;
         let receipt = delegate(
             &system.provider,
             system.stake_table,
@@ -107,7 +119,7 @@ mod test {
     #[tokio::test]
     async fn test_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
-        let amount = U256::from(123);
+        let amount = parse_ether("1.23")?;
         system.register_validator().await?;
         system.delegate(amount).await?;
 
@@ -143,6 +155,35 @@ mod test {
                 assert_eq!(event.unlocksAt, U256::from(expected_unlock));
             },
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delegate_below_minimum_amount() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+        let validator_address = system.deployer_address;
+
+        let amount = U256::from(123);
+        let err = delegate(
+            &system.provider,
+            system.stake_table,
+            validator_address,
+            amount,
+        )
+        .await
+        .expect_err("should fail with amount below minimum");
+
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("below minimum"),
+            "error should mention below minimum: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("1.000000000000000000 ESP"),
+            "error should include min amount: {err_msg}"
+        );
 
         Ok(())
     }

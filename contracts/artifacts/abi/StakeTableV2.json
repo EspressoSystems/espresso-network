@@ -19,6 +19,32 @@
   },
   {
     "type": "function",
+    "name": "MAX_COMMISSION_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_EXIT_ESCROW_PERIOD",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_METADATA_URI_LENGTH",
     "inputs": [],
     "outputs": [
@@ -26,6 +52,19 @@
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MIN_EXIT_ESCROW_PERIOD",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "stateMutability": "view"
@@ -481,6 +520,19 @@
   },
   {
     "type": "function",
+    "name": "minDelegateAmount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "owner",
     "inputs": [],
     "outputs": [
@@ -764,6 +816,19 @@
     "inputs": [
       {
         "name": "newInterval",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMinDelegateAmount",
+    "inputs": [
+      {
+        "name": "newMinDelegateAmount",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1072,6 +1137,19 @@
   },
   {
     "type": "function",
+    "name": "validateMetadataUri",
+    "inputs": [
+      {
+        "name": "metadataUri",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
     "name": "validatorExits",
     "inputs": [
       {
@@ -1375,6 +1453,19 @@
     "inputs": [
       {
         "name": "newInterval",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MinDelegateAmountUpdated",
+    "inputs": [
+      {
+        "name": "newMinDelegateAmount",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -1919,6 +2010,21 @@
   },
   {
     "type": "error",
+    "name": "DefaultAdminCannotBeRenounced",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DefaultAdminCannotBeRevoked",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DelegateAmountTooSmall",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "DeprecatedFunction",
     "inputs": []
   },
@@ -2027,6 +2133,11 @@
   },
   {
     "type": "error",
+    "name": "MinDelegateAmountTooSmall",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NoUndelegationFound",
     "inputs": []
   },
@@ -2061,6 +2172,11 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
   },
   {
     "type": "error",

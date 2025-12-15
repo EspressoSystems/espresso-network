@@ -41,9 +41,17 @@ clippy *args:
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
+check *args:
+    # postgres
+    cargo check {{args}}
+    # embedded-db
+    cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
+
 build profile="dev" features="":
+    # postgres
     cargo build --profile {{profile}} {{features}}
-    cargo build --profile {{profile}} -p sequencer-sqlite {{features}}
+    # embedded-db 
+    cargo build --profile {{profile}} -p sequencer-sqlite -p espresso-dev-node {{features}}
 
 demo-native-fee *args: (build "test" "--no-default-features --features fee")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -216,7 +224,7 @@ build-docker-images:
 
 # generate rust bindings for contracts
 VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
-EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|IRewardClaim|IPlonkVerifier"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules
@@ -240,7 +248,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken IRewardClaim; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken{,V2} IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 

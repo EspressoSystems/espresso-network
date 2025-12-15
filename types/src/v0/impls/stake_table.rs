@@ -165,6 +165,9 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
             )),
+            StakeTableV2Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV2Events::MinDelegateAmountUpdated({v:?})"
+            )),
         }
     }
 }
@@ -1994,7 +1997,7 @@ impl EpochCommittees {
 ///         0.03 / sqrt(2 * p),            if 0.01 < p <= 1
 ///     }
 ///
-fn calculate_proportion_staked_and_reward_rate(
+pub fn calculate_proportion_staked_and_reward_rate(
     total_stake: &BigDecimal,
     total_supply: &BigDecimal,
 ) -> anyhow::Result<(BigDecimal, BigDecimal)> {

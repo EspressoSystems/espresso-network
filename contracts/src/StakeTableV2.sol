@@ -5,6 +5,8 @@ import { PausableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { AccessControlUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
@@ -38,6 +40,8 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// - `deregisterValidator(...)`
 /// - `registerValidatorV2(...)`
 /// - `updateConsensusKeysV2(...)`
+/// - `updateCommission(...)`
+/// - `updateMetadataUri(...)`
 /// When paused, these functions revert with a standard pausable error, `EnforcedPause()`.
 /// Only the PAUSER_ROLE can pause/unpause the contract.
 ///
@@ -70,11 +74,24 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// 11. Validators must provide a metadata URI during registration and can update it via
 /// `updateMetadataUri`. The metadata URI is event-sourced only (not stored on-chain for gas
 /// efficiency). The `ValidatorRegisteredV2` event includes the metadata URI, and a new
-/// `MetadataUriUpdated` event is emitted when validators update their URI. Metadata URIs must be
-/// non-empty and cannot exceed 2048 bytes.
+/// `MetadataUriUpdated` event is emitted when validators update their URI. Metadata URIs can be
+/// empty and cannot exceed 2048 bytes.
+///
+///12. A minimum delegation amount (`minDelegateAmount`) is enforced to prevent dust delegations
+/// and reduce state bloat. The minimum is initialized to 1 ESP token (1 ether) in `initializeV2`
+/// and
+/// can be updated by governance via the `setMinDelegateAmount` function. The `delegate` function
+/// reverts with `DelegateAmountTooSmall` if the delegation amount is below the minimum.
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
+///
+/// Governance: This contract enforces a single-admin model. `owner()` and
+/// `DEFAULT_ADMIN_ROLE` always reference the same address and can only be
+/// changed via `transferOwnership()` (directly or through
+/// `grantRole(DEFAULT_ADMIN_ROLE, ...)`, which delegates to the transfer). Any
+/// attempt to revoke or renounce the default admin role, or to renounce
+/// ownership, reverts. This removes governance drift.
 contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
     // === Types ===
 
@@ -97,6 +114,23 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Maximum length for metadata URIs (in bytes)
     uint256 public constant MAX_METADATA_URI_LENGTH = 2048;
 
+    /// @notice Maximum commission in basis points (100% = 10000 bps)
+    uint16 public constant MAX_COMMISSION_BPS = 10000;
+
+    /// @notice Minimum exit escrow period (2 days)
+    /// @dev This is a technical minimum bound enforced by the contract. Setting the exit escrow
+    /// period
+    /// to this minimum does not guarantee safety. The actual exit escrow period must be set such
+    /// that the contract holds funds long enough until they are no longer staked in Espresso,
+    /// allowing sufficient time for validators to exit the active validator set and for slashing
+    /// evidence to be submitted. Governance should set a value appropriate for Espresso network
+    /// parameters (e.g., blocksPerEpoch, blockTime, and epoch duration) to ensure security.
+    uint64 public constant MIN_EXIT_ESCROW_PERIOD = 2 days;
+
+    /// @notice Maximum exit escrow period (14 days)
+    /// @dev Reasonable upper bound to prevent excessive lockup periods
+    uint64 public constant MAX_EXIT_ESCROW_PERIOD = 14 days;
+
     /// @notice Minimum time interval between commission increases (in seconds)
     uint256 public minCommissionIncreaseInterval;
 
@@ -105,6 +139,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Total stake in active (not marked for exit) validators in the contract
     uint256 public activeStake;
+
+    /// @notice min delegate amount
+    uint256 public minDelegateAmount;
 
     /// @notice Commission tracking for each validator
     mapping(address validator => CommissionTracking tracking) public commissionTracking;
@@ -216,6 +253,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param metadataUri The new metadata URI
     event MetadataUriUpdated(address indexed validator, string metadataUri);
 
+    /// @notice The minimum delegate amount is updated
+    /// @param newMinDelegateAmount The new minimum delegate amount in wei
+    event MinDelegateAmountUpdated(uint256 newMinDelegateAmount);
+
     // === Errors ===
 
     /// The Schnorr signature is invalid (either the wrong length or the wrong key)
@@ -244,12 +285,22 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// The Schnorr key has been previously registered in the contract.
     error SchnorrKeyAlreadyUsed();
+    /// Attempted to revoke DEFAULT_ADMIN_ROLE which would break single-admin governance
+    error DefaultAdminCannotBeRevoked();
+    /// Attempted to renounce DEFAULT_ADMIN_ROLE which would break single-admin governance
+    error DefaultAdminCannotBeRenounced();
 
     /// No undelegation exists for the given validator and delegator
     error NoUndelegationFound();
 
     /// The metadata URI exceeds maximum allowed length
     error InvalidMetadataUriLength();
+
+    /// The delegate amount is too small
+    error DelegateAmountTooSmall();
+
+    /// The minimum delegate amount is too small
+    error MinDelegateAmountTooSmall();
 
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
@@ -259,8 +310,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Reinitialize the contract
     ///
-    /// @param admin The address to be granted the default admin role
     /// @param pauser The address to be granted the pauser role
+    /// @param admin The address to be granted the default admin role and ownership.
+    /// This should be a timelock contract address, multisig, or another governance address.
     /// @param initialActiveStake The initial active stake in the contract
     /// @param initialCommissions commissions of validators
     ///
@@ -269,17 +321,31 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// this must be called with the current commissions of pre-existing
     /// validators read from L1 events.
     ///
-    /// @dev This function is overridden to add pauser and admin roles
+    /// @dev Sets up roles and transfers ownership to admin. The deployer picks the admin
+    /// address (timelock, multisig, etc.) based on config.
     function initializeV2(
         address pauser,
         address admin,
         uint256 initialActiveStake,
         InitialCommission[] calldata initialCommissions
     ) public onlyOwner reinitializer(2) {
+        require(admin != address(0), ZeroAddress());
+        require(pauser != address(0), ZeroAddress());
         __AccessControl_init();
+        __Pausable_init();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, pauser);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+
+        // Transfer ownership to admin if it's not the current owner
+        // This ensures owner() and DEFAULT_ADMIN_ROLE remain synchronized
+        // preventing governance drift.
+        address previousOwner = owner();
+        if (admin != previousOwner) {
+            // Use internal method since we've already granted DEFAULT_ADMIN_ROLE above.
+            // The public transferOwnership requires this role and would redundantly grant it again.
+            _transferOwnership(admin);
+        }
 
         // Default values found to be reasonable in internal discussion, may be
         // adjusted before release and updated after release.
@@ -288,6 +354,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
         // Initialize undelegation IDs to start at 1 (0 is reserved for V1 undelegations)
         nextUndelegationId = 1;
+
+        // Initialize min delegate amount to 1 ESP token (the token is hardcoded to 18 decimals, the
+        // same as 1 ether)
+        minDelegateAmount = 1 ether;
 
         // initialize commissions (if the contract under upgrade has existing state)
         _initializeCommissions(initialCommissions);
@@ -316,6 +386,71 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @dev This function is only callable by the PAUSER_ROLE
     function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
+    }
+
+    /// @notice Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
+    /// Grants the role to new owner and revokes from old owner.
+    /// Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
+    /// super.transferOwnership() which requires onlyOwner.
+    /// This ensures that only the current admin (who holds both ownership and DEFAULT_ADMIN_ROLE)
+    /// can transfer ownership.
+    /// This is intentionally not pausable for emergency governance access.
+    /// @inheritdoc OwnableUpgradeable
+    function transferOwnership(address newOwner)
+        public
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (newOwner == address(0)) {
+            revert OwnableInvalidOwner(address(0));
+        }
+        address oldOwner = owner();
+
+        // Handle self-transfer: OpenZeppelin's transferOwnership allows it (no-op but emits event).
+        // We follow the same pattern. Self-granting in grantRole is also a no-op, so we skip it
+        // here.
+        if (oldOwner == newOwner) {
+            super.transferOwnership(newOwner);
+            return;
+        }
+
+        // Grant role first, then transfer ownership, then revoke from old owner.
+        // This order ensures newOwner has the role before becoming owner, maintaining the
+        // invariant, only one admin/owner at a time.
+        super.grantRole(DEFAULT_ADMIN_ROLE, newOwner);
+        super.transferOwnership(newOwner);
+        _revokeRole(DEFAULT_ADMIN_ROLE, oldOwner);
+    }
+
+    /// @notice Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first,
+    /// which handles both role grant and ownership transfer atomically.
+    /// This is intentionally not pausable for emergency governance access.
+    /// @inheritdoc AccessControlUpgradeable
+    function grantRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            transferOwnership(account);
+            return;
+        }
+        super.grantRole(role, account);
+    }
+
+    /// @notice Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
+    function revokeRole(bytes32 role, address account) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRevoked();
+        }
+        super.revokeRole(role, account);
+    }
+
+    /// @notice Prevent renouncing DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.
+    /// @inheritdoc AccessControlUpgradeable
+    function renounceRole(bytes32 role, address callerConfirmation) public virtual override {
+        if (role == DEFAULT_ADMIN_ROLE) {
+            revert DefaultAdminCannotBeRenounced();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @notice Withdraw previously delegated funds after a validator has exited
@@ -379,9 +514,33 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @param validator The validator to delegate to
     /// @param amount The amount to delegate
     /// @dev This function is overridden to add pausable functionality
+    /// @dev The function body is copied from V1 to maintain checks-effects-interactions pattern.
     function delegate(address validator, uint256 amount) public virtual override whenNotPaused {
-        super.delegate(validator, amount);
+        ensureValidatorActive(validator);
+        address delegator = msg.sender;
+
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+
+        if (amount < minDelegateAmount) {
+            revert DelegateAmountTooSmall();
+        }
+
+        uint256 allowance = token.allowance(delegator, address(this));
+        if (allowance < amount) {
+            revert InsufficientAllowance(allowance, amount);
+        }
+
+        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
+
+        validators[validator].delegatedAmount += amount;
+        delegations[validator][delegator] += amount;
+
+        // Added in V2
         activeStake += amount;
+
+        emit Delegated(delegator, validator, amount);
     }
 
     /// @notice Undelegate funds from a validator
@@ -473,14 +632,11 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             revert InvalidSchnorrSig();
         }
 
-        if (commission > 10000) {
+        if (commission > MAX_COMMISSION_BPS) {
             revert InvalidCommission();
         }
 
-        uint256 metadataLength = bytes(metadataUri).length;
-        if (metadataLength == 0 || metadataLength > MAX_METADATA_URI_LENGTH) {
-            revert InvalidMetadataUriLength();
-        }
+        validateMetadataUri(metadataUri);
 
         blsKeys[_hashBlsKey(blsVK)] = true;
         schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
@@ -542,7 +698,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     function updateCommission(uint16 newCommission) external virtual whenNotPaused {
         address validator = msg.sender;
         ensureValidatorActive(validator);
-        require(newCommission <= 10000, InvalidCommission());
+        require(newCommission <= MAX_COMMISSION_BPS, InvalidCommission());
 
         CommissionTracking storage tracking = commissionTracking[validator];
         uint16 currentCommission = tracking.commission;
@@ -578,28 +734,30 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// @notice Update the metadata URI for a validator
     /// @param metadataUri The new metadata URI
     ///
-    /// @dev The metadata URI is NOT stored on-chain. This function is event-sourced only. Off-chain
-    /// indexers must listen to the MetadataUriUpdated event to track the current URI. URIs should
-    /// be kept reasonably short for gas efficiency (max 2048 bytes). Only the validator
-    /// (msg.sender) can update their own metadata URI.
+    /// @dev The metadata URI is NOT stored on-chain. Off-chain indexers must listen to the
+    /// MetadataUriUpdated event to track the current URI. URIs should be kept reasonably short for
+    /// gas efficiency (max 2048 bytes). Only the validator (msg.sender) can update their own
+    /// metadata URI.
     ///
-    /// @dev No format validation is performed on the URI - any non-empty string within length
-    /// limits is accepted. Consumers should validate URI format and accessibility off-chain.
+    /// @dev No format validation is performed on the URI - any string within length limits
+    /// (including empty string) is accepted. Consumers should validate URI format and accessibility
+    /// off-chain.
     function updateMetadataUri(string memory metadataUri) external virtual whenNotPaused {
         address validator = msg.sender;
         ensureValidatorActive(validator);
 
-        uint256 metadataLength = bytes(metadataUri).length;
-        if (metadataLength == 0 || metadataLength > MAX_METADATA_URI_LENGTH) {
-            revert InvalidMetadataUriLength();
-        }
+        validateMetadataUri(metadataUri);
 
         emit MetadataUriUpdated(validator, metadataUri);
     }
 
     /// @notice Set the minimum interval between commission updates
     /// @param newInterval The new minimum interval in seconds
-    function setMinCommissionUpdateInterval(uint256 newInterval) external virtual onlyOwner {
+    function setMinCommissionUpdateInterval(uint256 newInterval)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         require(newInterval > 0 && newInterval <= 365 days, InvalidRateLimitParameters());
         minCommissionIncreaseInterval = newInterval;
         emit MinCommissionUpdateIntervalUpdated(newInterval);
@@ -607,8 +765,14 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
 
     /// @notice Set the maximum commission increase allowed per update
     /// @param newMaxIncrease The new maximum increase in basis points (e.g., 500 = 5%)
-    function setMaxCommissionIncrease(uint16 newMaxIncrease) external virtual onlyOwner {
-        require(newMaxIncrease > 0 && newMaxIncrease <= 10000, InvalidRateLimitParameters());
+    function setMaxCommissionIncrease(uint16 newMaxIncrease)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        require(
+            newMaxIncrease > 0 && newMaxIncrease <= MAX_COMMISSION_BPS, InvalidRateLimitParameters()
+        );
         maxCommissionIncrease = newMaxIncrease;
         emit MaxCommissionIncreaseUpdated(newMaxIncrease);
     }
@@ -625,7 +789,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
             address validator = initialCommissions[i].validator;
             uint16 commission = initialCommissions[i].commission;
 
-            require(commission <= 10000, InvalidCommission());
+            require(commission <= MAX_COMMISSION_BPS, InvalidCommission());
 
             ValidatorStatus status = validators[validator].status;
             require(status != ValidatorStatus.Unknown, ValidatorInactive());
@@ -651,20 +815,38 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         activeStake = initialActiveStake;
     }
 
+    /// @notice Validate metadata URI length
+    /// @param metadataUri The metadata URI to validate
+    /// @dev Public view function to allow external validation before transaction submission
+    function validateMetadataUri(string memory metadataUri) public pure {
+        uint256 metadataLength = bytes(metadataUri).length;
+        if (metadataLength > MAX_METADATA_URI_LENGTH) {
+            revert InvalidMetadataUriLength();
+        }
+    }
+
     /// @notice Update the exit escrow period
     /// @param newExitEscrowPeriod The new exit escrow period
     /// @dev This function ensures that the exit escrow period is within the valid range
-    /// @dev This function is not pausable so that governance can perform emergency updates in the
-    /// presence of system
-    function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external virtual onlyOwner {
-        uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
-            // block
-        uint64 maxExitEscrowPeriod = 86400 * 14; // 14 days
-
-        if (newExitEscrowPeriod < minExitEscrowPeriod || newExitEscrowPeriod > maxExitEscrowPeriod)
-        {
+    /// (MIN_EXIT_ESCROW_PERIOD
+    /// to MAX_EXIT_ESCROW_PERIOD). However, governance MUST set a value that ensures funds are held
+    /// until they are no longer staked in Espresso, accounting for validator exit time and slashing
+    /// evidence submission windows. This function is not pausable so that governance can perform
+    /// emergency updates in the
+    /// presence of system upgrades.
+    function updateExitEscrowPeriod(uint64 newExitEscrowPeriod)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        // check if the new exit escrow period is within the valid range
+        if (
+            newExitEscrowPeriod < MIN_EXIT_ESCROW_PERIOD
+                || newExitEscrowPeriod > MAX_EXIT_ESCROW_PERIOD
+        ) {
             revert ExitEscrowPeriodInvalid();
         }
+
         exitEscrowPeriod = newExitEscrowPeriod;
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
     }
@@ -711,7 +893,6 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         }
     }
 
-    // deprecate previous registration function
     /// @notice Deprecate previous registration function
     /// @dev This function is overridden to revert with a DeprecatedFunction error
     /// @dev users must call registerValidatorV2 instead
@@ -734,4 +915,31 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     ) external pure override {
         revert DeprecatedFunction();
     }
+
+    /// @notice Set the minimum delegate amount
+    /// @param newMinDelegateAmount The new minimum delegate amount in wei
+    function setMinDelegateAmount(uint256 newMinDelegateAmount)
+        external
+        virtual
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (newMinDelegateAmount < 1 wei) {
+            revert MinDelegateAmountTooSmall();
+        }
+
+        minDelegateAmount = newMinDelegateAmount;
+        emit MinDelegateAmountUpdated(newMinDelegateAmount);
+    }
+
+    /// @notice Authorize an upgrade to a new implementation
+    /// @param newImplementation The address of the new implementation
+    /// @dev This function is overridden to use AccessControl instead of Ownable
+    /// Only addresses with DEFAULT_ADMIN_ROLE can authorize upgrades
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        virtual
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    // solhint-disable-next-line no-empty-blocks
+    { }
 }

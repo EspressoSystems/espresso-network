@@ -110,6 +110,8 @@ pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
 const LIBRARY_PLACEHOLDER_ADDRESS: &str = "ffffffffffffffffffffffffffffffffffffffff";
 /// `stateHistoryRetentionPeriod` in LightClient.sol as the maximum retention period in seconds
 pub const MAX_HISTORY_RETENTION_SECONDS: u32 = 864000;
+/// Default exit escrow period for stake table (2 days in seconds)
+pub const DEFAULT_EXIT_ESCROW_PERIOD_SECONDS: u64 = 172800;
 
 /// Set of predeployed contracts.
 #[derive(Clone, Debug, Parser)]
@@ -117,15 +119,19 @@ pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
     #[clap(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
+
     /// OpsTimelock.sol
     #[clap(long, env = Contract::OpsTimelock)]
     ops_timelock: Option<Address>,
+
     /// SafeExitTimelock.sol
     #[clap(long, env = Contract::SafeExitTimelock)]
     safe_exit_timelock: Option<Address>,
+
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
+
     /// PlonkVerifierV3.sol
     #[clap(long, env = Contract::PlonkVerifierV3)]
     plonk_verifier_v3: Option<Address>,
@@ -133,9 +139,11 @@ pub struct DeployedContracts {
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
     #[clap(long, env = Contract::LightClient)]
     light_client: Option<Address>,
+
     /// LightClientV2.sol
     #[clap(long, env = Contract::LightClientV2)]
     light_client_v2: Option<Address>,
+
     /// LightClientV3.sol
     #[clap(long, env = Contract::LightClientV3)]
     light_client_v3: Option<Address>,
@@ -175,9 +183,11 @@ pub struct DeployedContracts {
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
+
     /// RewardClaim.sol
     #[clap(long, env = Contract::RewardClaim)]
     reward_claim: Option<Address>,
+
     /// Use an already-deployed RewardClaim.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::RewardClaimProxy)]
     reward_claim_proxy: Option<Address>,
@@ -326,6 +336,9 @@ impl Contracts {
         let tx_hash = *pending_tx.tx_hash();
         tracing::info!(%tx_hash, "waiting for tx to be mined");
         let receipt = pending_tx.get_receipt().await?;
+        if !receipt.inner.is_success() {
+            anyhow::bail!("Deployment transaction failed: {:?}", receipt);
+        }
         tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
         let addr = receipt
             .contract_address
@@ -954,7 +967,7 @@ pub async fn deploy_reward_claim_proxy(
     contracts: &mut Contracts,
     esp_token_addr: Address,
     light_client_addr: Address,
-    owner: Address,
+    admin: Address,
     pauser: Address,
 ) -> Result<Address> {
     let reward_claim_addr = contracts
@@ -976,7 +989,7 @@ pub async fn deploy_reward_claim_proxy(
     }
 
     let init_data = reward_claim
-        .initialize(owner, esp_token_addr, light_client_addr, pauser)
+        .initialize(admin, esp_token_addr, light_client_addr, pauser)
         .calldata()
         .to_owned();
     let reward_claim_proxy_addr = contracts
@@ -995,7 +1008,12 @@ pub async fn deploy_reward_claim_proxy(
         reward_claim_proxy.getVersion().call().await?,
         (1, 0, 0).into()
     );
-    assert_eq!(reward_claim_proxy.owner().call().await?, owner);
+    // Verify admin has DEFAULT_ADMIN_ROLE
+    let admin_role = reward_claim_proxy.DEFAULT_ADMIN_ROLE().call().await?;
+    assert!(
+        reward_claim_proxy.hasRole(admin_role, admin).call().await?,
+        "admin should have DEFAULT_ADMIN_ROLE"
+    );
     assert_eq!(reward_claim_proxy.espToken().call().await?, esp_token_addr);
     assert_eq!(
         reward_claim_proxy.lightClient().call().await?,
@@ -1162,7 +1180,10 @@ pub async fn upgrade_stake_table_v2(
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
 
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
-        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?,);
+        assert!(
+            proxy_as_v2.hasRole(pauser_role, pauser).call().await?,
+            "pauser should have PAUSER_ROLE"
+        );
 
         let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?;
         assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?,);
@@ -1200,59 +1221,70 @@ pub async fn transfer_ownership(
     target_address: Address,
     new_owner: Address,
 ) -> Result<TransactionReceipt> {
-    let receipt = match target_contract {
-        Contract::LightClient | Contract::LightClientProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer LightClient ownership");
-            let lc = LightClient::new(target_address, &provider);
-            lc.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::FeeContract | Contract::FeeContractProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer FeeContract ownership");
-            let fee = FeeContract::new(target_address, &provider);
-            fee.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::EspToken | Contract::EspTokenProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer EspToken ownership");
-            let token = EspToken::new(target_address, &provider);
-            token
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
-            tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
-            let stake_table = StakeTable::new(target_address, &provider);
-            stake_table
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::RewardClaim | Contract::RewardClaimProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer RewardClaim ownership");
-            let reward_claim = RewardClaim::new(target_address, &provider);
-            reward_claim
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
-    };
+    // Use OwnableUpgradeable interface for all Ownable contracts
+    // This is more generic and maintainable than matching on each contract type
+    let ownable = OwnableUpgradeable::new(target_address, &provider);
+
+    // Verify the contract is actually Ownable by checking if we can read the owner
+    let current_owner = ownable.owner().call().await.context(format!(
+        "Contract at {target_address:#x} does not implement Ownable interface"
+    ))?;
+
+    tracing::info!(%target_contract, %target_address, current_owner = %current_owner, new_owner = %new_owner, "Transferring ownership of {target_contract}");
+
+    let receipt = ownable
+        .transferOwnership(new_owner)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
     let tx_hash = receipt.transaction_hash;
     tracing::info!(%receipt.gas_used, %tx_hash, "ownership transferred");
+    Ok(receipt)
+}
+
+/// Grant DEFAULT_ADMIN_ROLE to a new admin for AccessControl-based contracts
+/// This handles contracts like RewardClaim that use AccessControl instead of Ownable
+pub async fn grant_admin_role(
+    provider: impl Provider,
+    target_contract: Contract,
+    target_address: Address,
+    new_admin: Address,
+) -> Result<TransactionReceipt> {
+    // Use AccessControlUpgradeable interface
+    let access_control = AccessControlUpgradeable::new(target_address, &provider);
+
+    // Verify the contract is actually AccessControl by checking if we can read roles
+    let admin_role = access_control
+        .DEFAULT_ADMIN_ROLE()
+        .call()
+        .await
+        .context(format!(
+            "Contract at {target_address:#x} does not implement AccessControl interface"
+        ))?;
+
+    // Check if new_admin already has the role (for logging purposes)
+    let already_has_role = access_control.hasRole(admin_role, new_admin).call().await?;
+
+    tracing::info!(
+        %target_contract,
+        %target_address,
+        new_admin = %new_admin,
+        already_has_role = %already_has_role,
+        "Granting DEFAULT_ADMIN_ROLE for {target_contract}"
+    );
+
+    // For RewardClaim, grantRole handles the revoke of the previous admin internally
+    let receipt = access_control
+        .grantRole(admin_role, new_admin)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    let tx_hash = receipt.transaction_hash;
+    tracing::info!(%receipt.gas_used, %tx_hash, "admin role granted");
     Ok(receipt)
 }
 
@@ -1492,13 +1524,14 @@ mod tests {
             multisig::{
                 transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
                 upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-                LightClientV2UpgradeParams, TransferOwnershipParams,
+                LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
-                cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-                TimelockOperationData,
+                cancel_timelock_operation, derive_timelock_address_from_contract_type,
+                execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
             },
         },
+        Contracts,
     };
 
     trait ProviderBuilderExt: Sized {
@@ -1806,7 +1839,7 @@ mod tests {
         )
         .await?;
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -1844,9 +1877,21 @@ mod tests {
         }
 
         let delegators = [
-            (accounts[0], validators[0].account, U256::from(1000)),
-            (accounts[1], validators[1].account, U256::from(1000)),
-            (accounts[2], validators[0].account, U256::from(10_000)),
+            (
+                accounts[0],
+                validators[0].account,
+                parse_ether("10").unwrap(),
+            ),
+            (
+                accounts[1],
+                validators[1].account,
+                parse_ether("10").unwrap(),
+            ),
+            (
+                accounts[2],
+                validators[0].account,
+                parse_ether("100").unwrap(),
+            ),
         ];
 
         let token = EspToken::new(token_addr, &provider);
@@ -1890,8 +1935,16 @@ mod tests {
         assert!(receipt.status());
 
         let undelegations = [
-            (accounts[0], validators[0].account, U256::from(500)),
-            (accounts[2], validators[0].account, U256::from(300)),
+            (
+                accounts[0],
+                validators[0].account,
+                parse_ether("5").unwrap(),
+            ),
+            (
+                accounts[2],
+                validators[0].account,
+                parse_ether("3").unwrap(),
+            ),
         ];
 
         for (delegator_addr, validator_addr, amount) in undelegations.iter() {
@@ -2275,7 +2328,7 @@ mod tests {
             },
             options.is_mock,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
@@ -2410,7 +2463,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -2469,7 +2522,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -2500,7 +2553,10 @@ mod tests {
 
         // get pauser role
         let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?;
-        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?,);
+        assert!(
+            stake_table_v2.hasRole(pauser_role, pauser).call().await?,
+            "pauser should have PAUSER_ROLE"
+        );
 
         // get admin role
         let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?;
@@ -2577,7 +2633,7 @@ mod tests {
         )
         .await?;
 
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -2604,10 +2660,12 @@ mod tests {
             &provider,
             l1_client,
             &mut contracts,
-            sepolia_rpc_url,
-            multisig_admin,
-            pauser,
-            Some(dry_run),
+            StakeTableV2UpgradeParams {
+                rpc_url: sepolia_rpc_url,
+                multisig_address: multisig_admin,
+                pauser,
+                dry_run,
+            },
         )
         .await?;
 
@@ -2899,7 +2957,7 @@ mod tests {
             &provider,
             &mut contracts,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
@@ -3154,7 +3212,7 @@ mod tests {
                     &mut contracts,
                     token_addr,
                     lc_proxy_addr,
-                    U256::from(1000u64),
+                    U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS),
                     admin,
                 )
                 .await?
@@ -3396,7 +3454,7 @@ mod tests {
         .await?;
 
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -3433,7 +3491,7 @@ mod tests {
         .await?;
 
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
-        let exit_escrow_period = U256::from(1000);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
 
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -3451,6 +3509,415 @@ mod tests {
 
         let version = get_proxy_initialized_version(&l1_client, stake_table_proxy_addr).await?;
         assert_eq!(version, 2, "Reinitialized proxy should return version 2");
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_grant_admin_role_reward_claim() -> Result<()> {
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+
+        let mut contracts = Contracts::new();
+        let deployer = l1_client.get_accounts().await?[0];
+        let new_admin = Address::random();
+
+        // Deploy RewardClaim
+        let esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            deployer,
+            deployer,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            esp_token_addr,
+            lc_addr,
+            deployer,
+            deployer, // pauser
+        )
+        .await?;
+
+        // Verify initial admin
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(reward_claim.hasRole(admin_role, deployer).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, new_admin).call().await?);
+
+        // Grant admin role
+        let receipt = grant_admin_role(
+            &provider,
+            Contract::RewardClaimProxy,
+            reward_claim_addr,
+            new_admin,
+        )
+        .await?;
+
+        assert!(receipt.inner.is_success());
+
+        // Verify new admin has role and old admin doesn't
+        assert!(reward_claim.hasRole(admin_role, new_admin).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, deployer).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_transfer_ownership_from_eoa_reward_claim_routes_to_grant_role() -> Result<()> {
+        let (anvil, provider, l1_client) = ProviderBuilder::new().connect_anvil_with_l1_client()?;
+
+        let mut contracts = Contracts::new();
+        let deployer = l1_client.get_accounts().await?[0];
+        let new_admin = Address::random();
+
+        // Deploy RewardClaim
+        let esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            deployer,
+            deployer,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            esp_token_addr,
+            lc_addr,
+            deployer,
+            deployer, // pauser
+        )
+        .await?;
+
+        // Verify initial admin
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(reward_claim.hasRole(admin_role, deployer).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, new_admin).call().await?);
+
+        use builder::DeployerArgsBuilder;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .transfer_ownership_from_eoa(true)
+            .target_contract("rewardclaim".to_string())
+            .transfer_ownership_new_owner(new_admin);
+        let args = args_builder.build()?;
+
+        args.transfer_ownership_from_eoa(&mut contracts).await?;
+
+        // Verify new admin has role and old admin doesn't
+        assert!(reward_claim.hasRole(admin_role, new_admin).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, deployer).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_perform_timelock_operation_reward_claim() -> Result<()> {
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        // Deploy SafeExitTimelock
+        let timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            vec![provider_wallet],
+            vec![provider_wallet],
+            provider_wallet,
+        )
+        .await?;
+
+        // Deploy dependencies
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+
+        // Deploy RewardClaim with timelock as admin
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            timelock_addr,
+            provider_wallet,
+        )
+        .await?;
+
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let pauser_role = reward_claim.PAUSER_ROLE().call().await?;
+        let new_pauser = Address::random();
+
+        // Verify new_pauser doesn't have the role yet
+        assert!(!reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        // Use DeployerArgsBuilder to test perform_timelock_operation_on_contract
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::TimelockOperationType;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Schedule)
+            .target_contract("RewardClaim".to_string())
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+
+        // Schedule the operation using the high-level function
+        args.perform_timelock_operation_on_contract(&mut contracts)
+            .await?;
+
+        // Now execute it
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Execute)
+            .target_contract("RewardClaim".to_string())
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+        args.perform_timelock_operation_on_contract(&mut contracts)
+            .await?;
+
+        // Verify the function was actually called
+        assert!(reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_derive_timelock_address_from_contracts() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::{get_timelock_for_contract, TimelockContract};
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        // Deploy both timelocks first
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers.clone(),
+            executors.clone(),
+            provider_wallet,
+        )
+        .await?;
+
+        let safe_exit_timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        //  Use DeployerArgsBuilder to deploy FeeContractProxy with use_timelock_owner
+        // This tests the actual deployment code path and verifies it chooses OpsTimelock
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args = args_builder.build()?;
+
+        // Deploy FeeContractProxy - it should automatically use OpsTimelock
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+
+        // Verify derivation function returns correct timelock
+        let fee_contract_derived_timelock =
+            derive_timelock_address_from_contract_type(Contract::FeeContractProxy, &contracts)?;
+        assert_eq!(fee_contract_derived_timelock, ops_timelock_addr);
+
+        // Verify on-chain that FeeContractProxy has OpsTimelock as owner
+        let fee_contract_addr = contracts
+            .address(Contract::FeeContractProxy)
+            .expect("FeeContractProxy should be deployed");
+        let fee_contract = FeeContract::new(fee_contract_addr, &provider);
+        let actual_owner = fee_contract.owner().call().await?;
+        assert_eq!(
+            actual_owner, ops_timelock_addr,
+            "FeeContractProxy should have OpsTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::FeeContractProxy, fee_contract_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::OpsTimelock(addr) => {
+                assert_eq!(
+                    addr, ops_timelock_addr,
+                    "Queried timelock should match deployed OpsTimelock"
+                );
+                assert_eq!(
+                    addr, fee_contract_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "FeeContractProxy should use OpsTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        //  Deploy RewardsClaimProxy - it should automatically use SafeExitTimelock
+        let _esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = admin;
+
+        let _lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            true, // is_mock = true
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        let mut args_builder2 = DeployerArgsBuilder::default();
+        args_builder2
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args2 = args_builder2.build()?;
+
+        args2
+            .deploy(&mut contracts, Contract::RewardClaimProxy)
+            .await?;
+
+        // Verify derivation
+        let reward_claim_derived_timelock =
+            derive_timelock_address_from_contract_type(Contract::RewardClaimProxy, &contracts)?;
+        assert_eq!(reward_claim_derived_timelock, safe_exit_timelock_addr);
+
+        // Verify on-chain
+        let reward_claim_addr = contracts
+            .address(Contract::RewardClaimProxy)
+            .expect("RewardClaimProxy should be deployed");
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let actual_owner = reward_claim.currentAdmin().call().await?;
+        assert_eq!(
+            actual_owner, safe_exit_timelock_addr,
+            "RewardClaimProxy should have SafeExitTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::RewardClaimProxy, reward_claim_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::SafeExitTimelock(addr) => {
+                assert_eq!(
+                    addr, safe_exit_timelock_addr,
+                    "Queried timelock should match deployed SafeExitTimelock"
+                );
+                assert_eq!(
+                    addr, reward_claim_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "RewardClaimProxy should use SafeExitTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        // Error case - missing timelock
+        let empty_contracts = Contracts::new();
+        let result = derive_timelock_address_from_contract_type(
+            Contract::FeeContractProxy,
+            &empty_contracts,
+        );
+        assert!(
+            result.is_err(),
+            "Should error when timelock is missing from contracts map"
+        );
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("not found") || error_msg.contains("OpsTimelock"),
+            "Error should mention missing timelock, got: {}",
+            error_msg
+        );
+
+        // Error case - invalid contract type
+        let result =
+            derive_timelock_address_from_contract_type(Contract::PlonkVerifier, &contracts);
+        assert!(result.is_err(), "Should error for invalid contract type");
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Invalid contract type"),
+            "Error should mention invalid contract type, got: {}",
+            error_msg
+        );
 
         Ok(())
     }

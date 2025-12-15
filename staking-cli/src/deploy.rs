@@ -17,6 +17,7 @@ use anyhow::Result;
 use espresso_contract_deployer::{
     build_signer, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table, Contract, Contracts,
+    DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
 };
 use espresso_types::{
     v0::v0_4::{
@@ -79,7 +80,7 @@ impl TestSystem {
     pub async fn deploy_version(
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
-        let exit_escrow_period = Duration::from_secs(250);
+        let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         // Sporadically the provider builder fails with a timeout inside alloy.
         // Retry a few times.
         let mut attempts = 0;
@@ -208,11 +209,12 @@ impl TestSystem {
             &self.bls_key_pair.clone(),
             &self.state_key_pair.clone(),
         );
+        let metadata_uri = "https://example.com/metadata".parse()?;
         register_validator(
             &self.provider,
             self.stake_table,
             self.commission,
-            Url::parse("https://example.com/metadata")?,
+            metadata_uri,
             payload,
         )
         .await?
@@ -311,6 +313,17 @@ impl TestSystem {
             .assert_success()
             .await?;
         assert!(self.allowance(self.deployer_address).await? == amount);
+        Ok(())
+    }
+
+    pub async fn set_min_delegate_amount(&self, amount: U256) -> Result<()> {
+        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        stake_table
+            .setMinDelegateAmount(amount)
+            .send()
+            .await?
+            .assert_success()
+            .await?;
         Ok(())
     }
 

@@ -5,6 +5,7 @@ pub mod genesis;
 mod proposal_fetcher;
 mod request_response;
 pub mod state_cert;
+pub mod util;
 
 mod external_event_handler;
 pub mod options;
@@ -109,6 +110,10 @@ pub struct NetworkParams {
     pub cdn_endpoint: String,
     pub orchestrator_url: Url,
     pub state_relay_server_url: Url,
+
+    /// The URLs of the builders to use for submitting transactions
+    pub builder_urls: Vec<Url>,
+
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
     pub state_peers: Vec<Url>,
@@ -228,6 +233,7 @@ where
             "node_identity_general".into(),
             vec![
                 "name".into(),
+                "description".into(),
                 "company_name".into(),
                 "company_website".into(),
                 "operating_system".into(),
@@ -236,15 +242,16 @@ where
             ],
         )
         .create(vec![
-            identity.node_name.unwrap_or("".into()),
-            identity.company_name.unwrap_or("".into()),
+            identity.node_name.unwrap_or_default(),
+            identity.node_description.unwrap_or_default(),
+            identity.company_name.unwrap_or_default(),
             identity
                 .company_website
                 .map(|u| u.into())
-                .unwrap_or("".into()),
-            identity.operating_system.unwrap_or("".into()),
-            identity.node_type.unwrap_or("".into()),
-            identity.network_type.unwrap_or("".into()),
+                .unwrap_or_default(),
+            identity.operating_system.unwrap_or_default(),
+            identity.node_type.unwrap_or_default(),
+            identity.network_type.unwrap_or_default(),
         ]);
 
     // Expose Node Identity Location via the status/metrics API
@@ -254,15 +261,52 @@ where
             vec!["country".into(), "latitude".into(), "longitude".into()],
         )
         .create(vec![
-            identity.country_code.unwrap_or("".into()),
-            identity
-                .latitude
-                .map(|l| l.to_string())
-                .unwrap_or("".into()),
+            identity.country_code.unwrap_or_default(),
+            identity.latitude.map(|l| l.to_string()).unwrap_or_default(),
             identity
                 .longitude
                 .map(|l| l.to_string())
-                .unwrap_or("".into()),
+                .unwrap_or_default(),
+        ]);
+
+    // Expose icons for node dashboard via the status/metrics API
+    metrics
+        .text_family(
+            "node_identity_icon".into(),
+            vec![
+                "small_1x".into(),
+                "small_2x".into(),
+                "small_3x".into(),
+                "large_1x".into(),
+                "large_2x".into(),
+                "large_3x".into(),
+            ],
+        )
+        .create(vec![
+            identity
+                .icon_14x14_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
         ]);
 
     // Stick our public key in `metrics` so it is easily accessible via the status API.
@@ -368,6 +412,12 @@ where
 
     if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
+    }
+
+    // Override the builder URLs in the network config with the ones from the command line
+    // if any were provided
+    if !network_params.builder_urls.is_empty() {
+        network_config.config.builder_urls = network_params.builder_urls.try_into().unwrap();
     }
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
@@ -659,6 +709,7 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use std::{
+        cmp::max,
         collections::{BTreeMap, HashMap},
         time::Duration,
     };
@@ -684,7 +735,7 @@ pub mod testing {
     use committable::Committable;
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
         eth_signature_key::EthKeyPair,
@@ -946,7 +997,10 @@ pub mod testing {
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
-                        .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
+                        .exit_escrow_period(U256::from(max(
+                            blocks_per_epoch * 15 + 100,
+                            DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+                        )))
                         .multisig_pauser(self.signer.address())
                         .token_name("Espresso".to_string())
                         .token_symbol("ESP".to_string())

@@ -12,6 +12,7 @@ interface IRewardClaim {
 
     function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
     function claimedRewards(address claimer) external view returns (uint256);
+    function totalClaimed() external view returns (uint256);
 }
 ```
 
@@ -46,6 +47,19 @@ interface IRewardClaim {
         "internalType": "address"
       }
     ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "totalClaimed",
+    "inputs": [],
     "outputs": [
       {
         "name": "",
@@ -847,6 +861,151 @@ function claimedRewards(address claimer) external view returns (uint256);
             }
         }
     };
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
+    /**Function with signature `totalClaimed()` and selector `0xd54ad2a1`.
+```solidity
+function totalClaimed() external view returns (uint256);
+```*/
+    #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
+    #[derive(Clone)]
+    pub struct totalClaimedCall;
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
+    ///Container type for the return parameters of the [`totalClaimed()`](totalClaimedCall) function.
+    #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
+    #[derive(Clone)]
+    pub struct totalClaimedReturn {
+        #[allow(missing_docs)]
+        pub _0: alloy::sol_types::private::primitives::aliases::U256,
+    }
+    #[allow(
+        non_camel_case_types,
+        non_snake_case,
+        clippy::pub_underscore_fields,
+        clippy::style
+    )]
+    const _: () = {
+        use alloy::sol_types as alloy_sol_types;
+        {
+            #[doc(hidden)]
+            type UnderlyingSolTuple<'a> = ();
+            #[doc(hidden)]
+            type UnderlyingRustTuple<'a> = ();
+            #[cfg(test)]
+            #[allow(dead_code, unreachable_patterns)]
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
+                match _t {
+                    alloy_sol_types::private::AssertTypeEq::<
+                        <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
+                    >(_) => {}
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<totalClaimedCall> for UnderlyingRustTuple<'_> {
+                fn from(value: totalClaimedCall) -> Self {
+                    ()
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<UnderlyingRustTuple<'_>> for totalClaimedCall {
+                fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
+                    Self
+                }
+            }
+        }
+        {
+            #[doc(hidden)]
+            type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
+            #[doc(hidden)]
+            type UnderlyingRustTuple<'a> = (
+                alloy::sol_types::private::primitives::aliases::U256,
+            );
+            #[cfg(test)]
+            #[allow(dead_code, unreachable_patterns)]
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
+                match _t {
+                    alloy_sol_types::private::AssertTypeEq::<
+                        <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
+                    >(_) => {}
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<totalClaimedReturn> for UnderlyingRustTuple<'_> {
+                fn from(value: totalClaimedReturn) -> Self {
+                    (value._0,)
+                }
+            }
+            #[automatically_derived]
+            #[doc(hidden)]
+            impl ::core::convert::From<UnderlyingRustTuple<'_>> for totalClaimedReturn {
+                fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
+                    Self { _0: tuple.0 }
+                }
+            }
+        }
+        #[automatically_derived]
+        impl alloy_sol_types::SolCall for totalClaimedCall {
+            type Parameters<'a> = ();
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
+            type Return = alloy::sol_types::private::primitives::aliases::U256;
+            type ReturnTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
+            const SIGNATURE: &'static str = "totalClaimed()";
+            const SELECTOR: [u8; 4] = [213u8, 74u8, 210u8, 161u8];
+            #[inline]
+            fn new<'a>(
+                tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
+            ) -> Self {
+                tuple.into()
+            }
+            #[inline]
+            fn tokenize(&self) -> Self::Token<'_> {
+                ()
+            }
+            #[inline]
+            fn tokenize_returns(ret: &Self::Return) -> Self::ReturnToken<'_> {
+                (
+                    <alloy::sol_types::sol_data::Uint<
+                        256,
+                    > as alloy_sol_types::SolType>::tokenize(ret),
+                )
+            }
+            #[inline]
+            fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                    .map(|r| {
+                        let r: totalClaimedReturn = r.into();
+                        r._0
+                    })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(|r| {
+                        let r: totalClaimedReturn = r.into();
+                        r._0
+                    })
+            }
+        }
+    };
     ///Container for all the [`IRewardClaim`](self) function calls.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive()]
@@ -855,6 +1014,8 @@ function claimedRewards(address claimer) external view returns (uint256);
         claimRewards(claimRewardsCall),
         #[allow(missing_docs)]
         claimedRewards(claimedRewardsCall),
+        #[allow(missing_docs)]
+        totalClaimed(totalClaimedCall),
     }
     #[automatically_derived]
     impl IRewardClaimCalls {
@@ -867,13 +1028,14 @@ function claimedRewards(address claimer) external view returns (uint256);
         pub const SELECTORS: &'static [[u8; 4usize]] = &[
             [84u8, 157u8, 216u8, 195u8],
             [189u8, 131u8, 67u8, 69u8],
+            [213u8, 74u8, 210u8, 161u8],
         ];
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for IRewardClaimCalls {
         const NAME: &'static str = "IRewardClaimCalls";
-        const MIN_DATA_LENGTH: usize = 32usize;
-        const COUNT: usize = 2usize;
+        const MIN_DATA_LENGTH: usize = 0usize;
+        const COUNT: usize = 3usize;
         #[inline]
         fn selector(&self) -> [u8; 4] {
             match self {
@@ -882,6 +1044,9 @@ function claimedRewards(address claimer) external view returns (uint256);
                 }
                 Self::claimedRewards(_) => {
                     <claimedRewardsCall as alloy_sol_types::SolCall>::SELECTOR
+                }
+                Self::totalClaimed(_) => {
+                    <totalClaimedCall as alloy_sol_types::SolCall>::SELECTOR
                 }
             }
         }
@@ -923,6 +1088,17 @@ function claimedRewards(address claimer) external view returns (uint256);
                             .map(IRewardClaimCalls::claimedRewards)
                     }
                     claimedRewards
+                },
+                {
+                    fn totalClaimed(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                            )
+                            .map(IRewardClaimCalls::totalClaimed)
+                    }
+                    totalClaimed
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
@@ -966,6 +1142,17 @@ function claimedRewards(address claimer) external view returns (uint256);
                     }
                     claimedRewards
                 },
+                {
+                    fn totalClaimed(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
+                                data,
+                            )
+                            .map(IRewardClaimCalls::totalClaimed)
+                    }
+                    totalClaimed
+                },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
                 return Err(
@@ -990,6 +1177,11 @@ function claimedRewards(address claimer) external view returns (uint256);
                         inner,
                     )
                 }
+                Self::totalClaimed(inner) => {
+                    <totalClaimedCall as alloy_sol_types::SolCall>::abi_encoded_size(
+                        inner,
+                    )
+                }
             }
         }
         #[inline]
@@ -1003,6 +1195,12 @@ function claimedRewards(address claimer) external view returns (uint256);
                 }
                 Self::claimedRewards(inner) => {
                     <claimedRewardsCall as alloy_sol_types::SolCall>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
+                Self::totalClaimed(inner) => {
+                    <totalClaimedCall as alloy_sol_types::SolCall>::abi_encode_raw(
                         inner,
                         out,
                     )
@@ -1499,6 +1697,12 @@ the bytecode concatenated with the constructor's ABI-encoded arguments.*/
             claimer: alloy::sol_types::private::Address,
         ) -> alloy_contract::SolCallBuilder<&P, claimedRewardsCall, N> {
             self.call_builder(&claimedRewardsCall { claimer })
+        }
+        ///Creates a new call builder for the [`totalClaimed`] function.
+        pub fn totalClaimed(
+            &self,
+        ) -> alloy_contract::SolCallBuilder<&P, totalClaimedCall, N> {
+            self.call_builder(&totalClaimedCall)
         }
     }
     /// Event filters.

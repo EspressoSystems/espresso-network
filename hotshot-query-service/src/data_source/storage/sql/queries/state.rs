@@ -756,7 +756,9 @@ mod test {
         // Each entry's merkle path is compared with the path from the tree
 
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         // define a test tree
         let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
@@ -921,7 +923,9 @@ mod test {
         // It is expected that the path retrieved from the tree matches the path obtained from the database.
 
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         // define a test tree
         let mut test_tree = MockMerkleTree::new(MockMerkleTree::tree_height());
@@ -1052,7 +1056,9 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_non_membership_proof_unseen_entry() {
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         // define a test tree
         let mut test_tree = MockMerkleTree::new(MockMerkleTree::tree_height());
@@ -1123,7 +1129,9 @@ mod test {
         // This test insert a merkle path into the database and queries the path using the merkle commitment
 
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         // define a test tree
         let mut test_tree = MockMerkleTree::new(MockMerkleTree::tree_height());
@@ -1191,7 +1199,9 @@ mod test {
         // A node which is in the traversal path with bh = 2 is deleted, so the get_path should return an error as an older version of one of the nodes is used.
 
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         // define a test tree
         let mut test_tree = MockMerkleTree::new(MockMerkleTree::tree_height());
@@ -1359,7 +1369,9 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_snapshot() {
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         // Define a test tree
         let mut test_tree = MockMerkleTree::new(MockMerkleTree::tree_height());
@@ -1545,7 +1557,9 @@ mod test {
 
         for tree_size in 1..=3 {
             let db = TmpDb::init().await;
-            let storage = SqlStorage::connect(db.config()).await.unwrap();
+            let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap();
 
             // Define a test tree
             let mut test_tree = MockMerkleTree::new(MockMerkleTree::tree_height());
