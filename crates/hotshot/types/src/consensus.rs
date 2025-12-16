@@ -217,6 +217,7 @@ impl<'a, TYPES: NodeType> ConsensusUpgradableReadLockGuard<'a, TYPES> {
 
     /// Upgrades the inner `RwLockUpgradableReadGuard` and leaves debug traces
     #[instrument(skip_all, target = "ConsensusUpgradableReadLockGuard")]
+    #[allow(unused_assignments)] // `taken` is read in Drop impl
     pub async fn upgrade(mut guard: Self) -> ConsensusWriteLockGuard<'a, TYPES> {
         let inner_guard = unsafe { ManuallyDrop::take(&mut guard.lock_guard) };
         guard.taken = true;
