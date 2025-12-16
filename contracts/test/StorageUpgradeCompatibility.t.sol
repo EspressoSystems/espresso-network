@@ -26,14 +26,40 @@ contract UpgradeTestHelper is Test {
     address sepoliaStakeTableProxy = 0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037;
     address sepoliaEspTokenProxy = 0xb3e655a030e2e34a18b72757b40be086a8F43f3b;
 
+    /// Returns true if local contract's storage layout is compatible with deployed implementation.
+    function isLocalLayoutCompatible(
+        string memory network,
+        address proxyAddress,
+        string memory contractName
+    ) internal returns (bool compatible) {
+        string memory rpcUrl;
+        if (keccak256(bytes(network)) == keccak256(bytes("sepolia"))) {
+            rpcUrl = "https://ethereum-sepolia-rpc.publicnode.com";
+        } else if (keccak256(bytes(network)) == keccak256(bytes("mainnet"))) {
+            rpcUrl = "https://ethereum-rpc.publicnode.com";
+        } else {
+            revert("Unsupported network");
+        }
+
+        vm.setEnv("RPC_URL", vm.envOr("RPC_URL", rpcUrl));
+        vm.createSelectFork(rpcUrl);
+
+        bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+        address impl = address(uint160(uint256(vm.load(proxyAddress, implSlot))));
+        require(impl != address(0), "Invalid implementation address");
+
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout-deployed.js";
+        cmds[2] = vm.toString(impl);
+        cmds[3] = contractName;
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+        return keccak256(bytes(result)) == keccak256(bytes("true"));
+    }
+
     /// Check storage layout compatibility between deployed proxy and all upgrade versions.
-    /// Returns true if all versions are compatible, false otherwise.
-    ///
-    /// @param network Network name ("sepolia" or "mainnet")
-    /// @param proxyAddress Address of the deployed proxy contract
-    /// @param contractBaseName Base name of contract (e.g., "StakeTable", "EspToken")
-    /// @param maxMajorVersion Highest major version to check (e.g., 2 for V2)
-    /// @return compatible True if all versions are storage compatible
     function isStorageLayoutCompatible(
         string memory network,
         address proxyAddress,
@@ -52,15 +78,8 @@ contract UpgradeTestHelper is Test {
         vm.setEnv("RPC_URL", vm.envOr("RPC_URL", rpcUrl));
         vm.createSelectFork(rpcUrl);
 
-        // Read implementation address from EIP-1967 slot
-        bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
-        address impl = address(uint160(uint256(vm.load(proxyAddress, implSlot))));
-        require(impl != address(0), "Invalid implementation address");
-
-        // Get deployed version from proxy
         (uint8 majorVersion,,) = IVersioned(proxyAddress).getVersion();
 
-        // Check storage layout for all versions from deployed to max
         for (uint8 v = majorVersion; v <= maxMajorVersion; v++) {
             string memory contractName;
             if (v == 1) {
@@ -69,15 +88,7 @@ contract UpgradeTestHelper is Test {
                 contractName = string.concat(contractBaseName, "V", vm.toString(v));
             }
 
-            string[] memory cmds = new string[](4);
-            cmds[0] = "node";
-            cmds[1] = "contracts/test/script/compare-storage-layout-deployed.js";
-            cmds[2] = vm.toString(impl);
-            cmds[3] = contractName;
-
-            bytes memory output = vm.ffi(cmds);
-            string memory result = string(output);
-            if (keccak256(bytes(result)) != keccak256(bytes("true"))) {
+            if (!isLocalLayoutCompatible(network, proxyAddress, contractName)) {
                 return false;
             }
         }
@@ -119,15 +130,14 @@ contract UpgradeTestHelper is Test {
 
 contract NetworkStorageLayoutSanityTest is UpgradeTestHelper {
     function test_Network_StorageLayout_Sanity_IncompatibleMissingField() public {
-        bool compatible = isStorageLayoutCompatible(
-            "sepolia", sepoliaStakeTableProxy, "StakeTableMissingFieldTest", 1
-        );
+        bool compatible =
+            isLocalLayoutCompatible("sepolia", sepoliaStakeTableProxy, "StakeTableMissingFieldTest");
         assertFalse(compatible, "Missing field should be incompatible");
     }
 
     function test_Network_StorageLayout_Sanity_IncompatibleReorderedFields() public {
-        bool compatible = isStorageLayoutCompatible(
-            "sepolia", sepoliaStakeTableProxy, "StakeTableFieldsReorderedTest", 1
+        bool compatible = isLocalLayoutCompatible(
+            "sepolia", sepoliaStakeTableProxy, "StakeTableFieldsReorderedTest"
         );
         assertFalse(compatible, "Reordered fields should be incompatible");
     }
