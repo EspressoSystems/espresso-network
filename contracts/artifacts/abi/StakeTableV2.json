@@ -2133,6 +2133,11 @@
   },
   {
     "type": "error",
+    "name": "MinDelegateAmountTooSmall",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NoUndelegationFound",
     "inputs": []
   },

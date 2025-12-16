@@ -119,15 +119,19 @@ pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
     #[clap(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
+
     /// OpsTimelock.sol
     #[clap(long, env = Contract::OpsTimelock)]
     ops_timelock: Option<Address>,
+
     /// SafeExitTimelock.sol
     #[clap(long, env = Contract::SafeExitTimelock)]
     safe_exit_timelock: Option<Address>,
+
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
+
     /// PlonkVerifierV3.sol
     #[clap(long, env = Contract::PlonkVerifierV3)]
     plonk_verifier_v3: Option<Address>,
@@ -135,9 +139,11 @@ pub struct DeployedContracts {
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
     #[clap(long, env = Contract::LightClient)]
     light_client: Option<Address>,
+
     /// LightClientV2.sol
     #[clap(long, env = Contract::LightClientV2)]
     light_client_v2: Option<Address>,
+
     /// LightClientV3.sol
     #[clap(long, env = Contract::LightClientV3)]
     light_client_v3: Option<Address>,
@@ -177,9 +183,11 @@ pub struct DeployedContracts {
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
+
     /// RewardClaim.sol
     #[clap(long, env = Contract::RewardClaim)]
     reward_claim: Option<Address>,
+
     /// Use an already-deployed RewardClaim.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::RewardClaimProxy)]
     reward_claim_proxy: Option<Address>,
@@ -328,6 +336,9 @@ impl Contracts {
         let tx_hash = *pending_tx.tx_hash();
         tracing::info!(%tx_hash, "waiting for tx to be mined");
         let receipt = pending_tx.get_receipt().await?;
+        if !receipt.inner.is_success() {
+            anyhow::bail!("Deployment transaction failed: {:?}", receipt);
+        }
         tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
         let addr = receipt
             .contract_address
@@ -1235,7 +1246,6 @@ pub async fn transfer_ownership(
 
 /// Grant DEFAULT_ADMIN_ROLE to a new admin for AccessControl-based contracts
 /// This handles contracts like RewardClaim that use AccessControl instead of Ownable
-/// TODO: create a function for pauser roles
 pub async fn grant_admin_role(
     provider: impl Provider,
     target_contract: Contract,
@@ -1517,10 +1527,11 @@ mod tests {
                 LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
-                cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-                TimelockOperationData,
+                cancel_timelock_operation, derive_timelock_address_from_contract_type,
+                execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
             },
         },
+        Contracts,
     };
 
     trait ProviderBuilderExt: Sized {
@@ -3609,6 +3620,304 @@ mod tests {
         // Verify new admin has role and old admin doesn't
         assert!(reward_claim.hasRole(admin_role, new_admin).call().await?);
         assert!(!reward_claim.hasRole(admin_role, deployer).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_perform_timelock_operation_reward_claim() -> Result<()> {
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        // Deploy SafeExitTimelock
+        let timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            vec![provider_wallet],
+            vec![provider_wallet],
+            provider_wallet,
+        )
+        .await?;
+
+        // Deploy dependencies
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+
+        // Deploy RewardClaim with timelock as admin
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            timelock_addr,
+            provider_wallet,
+        )
+        .await?;
+
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let pauser_role = reward_claim.PAUSER_ROLE().call().await?;
+        let new_pauser = Address::random();
+
+        // Verify new_pauser doesn't have the role yet
+        assert!(!reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        // Use DeployerArgsBuilder to test perform_timelock_operation_on_contract
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::TimelockOperationType;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Schedule)
+            .target_contract("RewardClaim".to_string())
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+
+        // Schedule the operation using the high-level function
+        args.perform_timelock_operation_on_contract(&mut contracts)
+            .await?;
+
+        // Now execute it
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Execute)
+            .target_contract("RewardClaim".to_string())
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+        args.perform_timelock_operation_on_contract(&mut contracts)
+            .await?;
+
+        // Verify the function was actually called
+        assert!(reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_derive_timelock_address_from_contracts() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::{get_timelock_for_contract, TimelockContract};
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        // Deploy both timelocks first
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers.clone(),
+            executors.clone(),
+            provider_wallet,
+        )
+        .await?;
+
+        let safe_exit_timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        //  Use DeployerArgsBuilder to deploy FeeContractProxy with use_timelock_owner
+        // This tests the actual deployment code path and verifies it chooses OpsTimelock
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args = args_builder.build()?;
+
+        // Deploy FeeContractProxy - it should automatically use OpsTimelock
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+
+        // Verify derivation function returns correct timelock
+        let fee_contract_derived_timelock =
+            derive_timelock_address_from_contract_type(Contract::FeeContractProxy, &contracts)?;
+        assert_eq!(fee_contract_derived_timelock, ops_timelock_addr);
+
+        // Verify on-chain that FeeContractProxy has OpsTimelock as owner
+        let fee_contract_addr = contracts
+            .address(Contract::FeeContractProxy)
+            .expect("FeeContractProxy should be deployed");
+        let fee_contract = FeeContract::new(fee_contract_addr, &provider);
+        let actual_owner = fee_contract.owner().call().await?;
+        assert_eq!(
+            actual_owner, ops_timelock_addr,
+            "FeeContractProxy should have OpsTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::FeeContractProxy, fee_contract_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::OpsTimelock(addr) => {
+                assert_eq!(
+                    addr, ops_timelock_addr,
+                    "Queried timelock should match deployed OpsTimelock"
+                );
+                assert_eq!(
+                    addr, fee_contract_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "FeeContractProxy should use OpsTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        //  Deploy RewardsClaimProxy - it should automatically use SafeExitTimelock
+        let _esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = admin;
+
+        let _lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            true, // is_mock = true
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        let mut args_builder2 = DeployerArgsBuilder::default();
+        args_builder2
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args2 = args_builder2.build()?;
+
+        args2
+            .deploy(&mut contracts, Contract::RewardClaimProxy)
+            .await?;
+
+        // Verify derivation
+        let reward_claim_derived_timelock =
+            derive_timelock_address_from_contract_type(Contract::RewardClaimProxy, &contracts)?;
+        assert_eq!(reward_claim_derived_timelock, safe_exit_timelock_addr);
+
+        // Verify on-chain
+        let reward_claim_addr = contracts
+            .address(Contract::RewardClaimProxy)
+            .expect("RewardClaimProxy should be deployed");
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let actual_owner = reward_claim.currentAdmin().call().await?;
+        assert_eq!(
+            actual_owner, safe_exit_timelock_addr,
+            "RewardClaimProxy should have SafeExitTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::RewardClaimProxy, reward_claim_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::SafeExitTimelock(addr) => {
+                assert_eq!(
+                    addr, safe_exit_timelock_addr,
+                    "Queried timelock should match deployed SafeExitTimelock"
+                );
+                assert_eq!(
+                    addr, reward_claim_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "RewardClaimProxy should use SafeExitTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        // Error case - missing timelock
+        let empty_contracts = Contracts::new();
+        let result = derive_timelock_address_from_contract_type(
+            Contract::FeeContractProxy,
+            &empty_contracts,
+        );
+        assert!(
+            result.is_err(),
+            "Should error when timelock is missing from contracts map"
+        );
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("not found") || error_msg.contains("OpsTimelock"),
+            "Error should mention missing timelock, got: {}",
+            error_msg
+        );
+
+        // Error case - invalid contract type
+        let result =
+            derive_timelock_address_from_contract_type(Contract::PlonkVerifier, &contracts);
+        assert!(result.is_err(), "Should error for invalid contract type");
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Invalid contract type"),
+            "Error should mention invalid contract type, got: {}",
+            error_msg
+        );
 
         Ok(())
     }
