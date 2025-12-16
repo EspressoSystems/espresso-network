@@ -1,7 +1,13 @@
 [route.leaf]
-PATH = ["/leaf/:number", "/leaf/:number/:finalized"]
+PATH = [
+    "/leaf/:number",
+    "/leaf/:number/:finalized",
+    "/leaf/hash/:hash",
+    "/leaf/hash/:hash/:finalized",
+]
 ":number" = "Integer"
 ":finalized" = "Integer"
+":hash" = "TaggedBase64"
 DOC = """
 Fetch a leaf plus a proof of it's finality (a chain of leaves leading from that leaf to either a
 chain of consecutive valid QCs or a known-finalized leaf).

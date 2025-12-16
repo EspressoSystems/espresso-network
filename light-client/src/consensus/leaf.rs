@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use committable::Committable;
 use espresso_types::{EpochVersion, Leaf2, SeqTypes};
 use hotshot_query_service::availability::LeafQueryData;
-use hotshot_types::vote::HasViewNumber;
+use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembership, vote::HasViewNumber};
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersionType;
 
 use super::quorum::{Certificate, Quorum};
+use crate::consensus::quorum::StakeTableQuorum;
 
 /// Data sufficient to convince a client that a certain leaf is finalized.
 ///
@@ -44,6 +45,53 @@ pub enum FinalityProof {
     },
 }
 
+impl FinalityProof {
+    /// The epoch number whose quorum is needed to verify this proof.
+    ///
+    /// This determines the kind of [`LeafProofHint`] needed to verify the proof. If [`Some`], then
+    /// a [`LeafProofHint::Quorum`] is needed with a quorum from this epoch. If [`None`], then a
+    /// [`LeafProofHint::Assumption`] is needed.
+    pub fn epoch(&self) -> Option<EpochNumber> {
+        match self {
+            Self::Assumption => None,
+            Self::HotStuff2 { committing_qc, .. } => committing_qc.epoch(),
+            Self::HotStuff { precommit_qc, .. } => precommit_qc.epoch(),
+        }
+    }
+}
+
+/// A hint that allows a verifier to verify a proof.
+///
+/// The hint should be supplied by the verifier (e.g. the light client). It represents the root of
+/// trust for this proof.
+#[derive(Clone, Copy, Debug)]
+pub enum LeafProofHint<'a, Q> {
+    /// The root of trust is a quorum for a particular epoch.
+    ///
+    /// This quorum can be used to verify the [`Certificate`]s that make up a
+    /// [`HotStuff`](FinalityProof::HotStuff) or [`HotStuff2`](FinalityProof::HotStuff2)
+    /// [`FinalityProof`].
+    Quorum(&'a Q),
+
+    /// The root of trust is an existing leaf that is already known by the verifier to be finalized.
+    ///
+    /// This can be used to check that the leaf chain in a [`LeafProof`] leads up to a leaf that is
+    /// finalized, and thus the whole chain is finalized.
+    Assumption(&'a Leaf2),
+}
+
+impl<'a> LeafProofHint<'a, StakeTableQuorum<EpochMembership<SeqTypes>>> {
+    /// Construct a [`LeafProofHint`] from a known-finalized leaf, where the quorum type doesn't
+    /// matter.
+    ///
+    /// If the quorum type matters (even though it will not be used in verification whenever the
+    /// known-finalized leaf is used), use `LeafProofHint::<Q>::Assumption(leaf)` to specify the
+    /// quorum type `Q` explicitly.
+    pub fn assumption(leaf: &'a Leaf2) -> Self {
+        Self::Assumption(leaf)
+    }
+}
+
 /// A proof that a leaf is finalized.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LeafProof {
@@ -65,8 +113,7 @@ impl LeafProof {
     /// If successful, returns the leaf which is proven finalized.
     pub async fn verify(
         &self,
-        quorum: &impl Quorum,
-        finalized: Option<&Leaf2>,
+        hint: LeafProofHint<'_, impl Quorum>,
     ) -> Result<LeafQueryData<SeqTypes>> {
         let mut leaves = self.leaves.iter();
         let leaf = leaves.next().context("empty leaf chain")?;
@@ -88,19 +135,20 @@ impl LeafProof {
         }
 
         // Check that the final leaf is actually finalized and get the QC which signs it.
-        let final_qc = match &self.proof {
-            FinalityProof::Assumption => {
+        let final_qc = match (&self.proof, hint) {
+            (FinalityProof::Assumption, LeafProofHint::Assumption(finalized)) => {
                 // The prover claims that we already have a finalized leaf whose parent is the
                 // current leaf.
-                let finalized = finalized.context("no finalized leaf and no QC chain provided")?;
                 ensure!(finalized.parent_commitment() == curr.commit());
-
                 finalized.justify_qc()
             },
-            FinalityProof::HotStuff2 {
-                committing_qc,
-                deciding_qc,
-            } => {
+            (
+                FinalityProof::HotStuff2 {
+                    committing_qc,
+                    deciding_qc,
+                },
+                LeafProofHint::Quorum(quorum),
+            ) => {
                 // Check that the given QCs form a 2-chain, which proves `curr` finalized under
                 // HotStuff2.
                 let version = quorum
@@ -113,11 +161,14 @@ impl LeafProof {
 
                 committing_qc.qc().clone()
             },
-            FinalityProof::HotStuff {
-                precommit_qc,
-                committing_qc,
-                deciding_qc,
-            } => {
+            (
+                FinalityProof::HotStuff {
+                    precommit_qc,
+                    committing_qc,
+                    deciding_qc,
+                },
+                LeafProofHint::Quorum(quorum),
+            ) => {
                 // Check that the given QCs form a 3-chain, which proves `curr` finalized under
                 // HotStuff.
                 let version = quorum
@@ -132,6 +183,20 @@ impl LeafProof {
                 ensure!(version < EpochVersion::version());
 
                 precommit_qc.qc().clone()
+            },
+            (proof, hint) => {
+                let required = match proof {
+                    FinalityProof::Assumption => "finalized leaf",
+                    FinalityProof::HotStuff { .. } | FinalityProof::HotStuff2 { .. } => "quorum",
+                };
+                let supplied = match hint {
+                    LeafProofHint::Assumption(..) => "finalized leaf",
+                    LeafProofHint::Quorum(..) => "quorum",
+                };
+                bail!(
+                    "verifier supplied wrong hint for proof: proof requires a {required} but \
+                     supplied hint is {supplied}"
+                );
             },
         };
 
@@ -251,7 +316,10 @@ mod test {
         assert!(!proof.push(leaves[1].clone()));
         assert!(proof.push(leaves[2].clone()));
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
     }
@@ -268,11 +336,17 @@ mod test {
 
         // The proof is otherwise valid...
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
         // ...but fails if the signatures are not valid.
-        proof.verify(&AlwaysFalseQuorum, None).await.unwrap_err();
+        proof
+            .verify(LeafProofHint::Quorum(&AlwaysFalseQuorum))
+            .await
+            .unwrap_err();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -285,7 +359,7 @@ mod test {
         assert!(!proof.push(leaves[0].clone()));
         assert_eq!(
             proof
-                .verify(&AlwaysTrueQuorum, Some(leaves[1].leaf()))
+                .verify(LeafProofHint::assumption(leaves[1].leaf()))
                 .await
                 .unwrap(),
             leaves[0]
@@ -306,7 +380,7 @@ mod test {
         // extends 3) we fail to generate a proof because we can't generate a chain from the
         // requested leaf (1) to the finalized leaf (4), since leaf 2 is missing.
         proof
-            .verify(&AlwaysTrueQuorum, Some(leaves[3].leaf()))
+            .verify(LeafProofHint::assumption(leaves[3].leaf()))
             .await
             .unwrap_err();
     }
@@ -323,7 +397,10 @@ mod test {
             Arc::new(Certificate::for_parent(leaves[2].leaf())),
         );
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None,).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
     }
@@ -339,7 +416,10 @@ mod test {
         assert!(!proof.push(leaves[2].clone()));
         assert!(proof.push(leaves[3].clone()));
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None,).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
     }
@@ -354,6 +434,9 @@ mod test {
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));
-        proof.verify(&AlwaysTrueQuorum, None).await.unwrap_err();
+        proof
+            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+            .await
+            .unwrap_err();
     }
 }

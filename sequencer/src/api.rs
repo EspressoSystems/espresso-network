@@ -2511,7 +2511,7 @@ mod test {
     };
 
     use ::light_client::{
-        consensus::leaf::LeafProof,
+        consensus::leaf::{LeafProof, LeafProofHint},
         testing::{EpochChangeQuorum, LegacyVersion},
     };
     use alloy::{
@@ -7267,7 +7267,13 @@ mod test {
                 .await
                 .unwrap();
             tracing::debug!(?leaf_proof, "fetched proof");
-            assert_eq!(leaf_proof.verify(&quorum, None).await.unwrap(), leaf);
+            assert_eq!(
+                leaf_proof
+                    .verify(LeafProofHint::Quorum(&quorum))
+                    .await
+                    .unwrap(),
+                leaf
+            );
         }
     }
 }
