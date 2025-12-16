@@ -1,0 +1,12 @@
+# cargo-mutants configuration for testing validate_and_apply_header
+# Run with: cargo mutants -p espresso-types
+
+examine_globs = ["types/src/v0/impls/state.rs"]
+
+# Use nextest if available (faster)
+test_tool = "nextest"
+
+# Recommended settings for large codebases
+minimum_test_timeout = 20.0
+timeout_multiplier = 2.0
+gitignore = true
