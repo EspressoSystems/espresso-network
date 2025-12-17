@@ -207,46 +207,46 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
     ensure!(receipt.inner.is_success(), "deposit transaction reverted");
     tracing::info!(l1_block, "deposit mined on L1");
 
-    // Wait for Espresso to catch up to the L1.
-    let espresso_height = espresso.get_height().await?;
-    let mut headers = espresso.subscribe_headers(espresso_height).await?;
-    let espresso_block = loop {
-        let header: Header = match headers.next().await.context("header stream ended")? {
-            Ok(header) => header,
-            Err(err) => {
-                tracing::warn!("error in header stream: {err:#}");
-                continue;
-            },
-        };
-        let Some(l1_finalized) = header.l1_finalized() else {
-            continue;
-        };
-        if l1_finalized.number() >= l1_block {
-            tracing::info!(block = header.height(), "deposit finalized on Espresso");
-            break header.height();
-        } else {
-            tracing::debug!(
-                block = header.height(),
-                l1_block,
-                ?l1_finalized,
-                "waiting for deposit on Espresso"
-            )
-        }
-    };
+    // // Wait for Espresso to catch up to the L1.
+    // let espresso_height = espresso.get_height().await?;
+    // let mut headers = espresso.subscribe_headers(espresso_height).await?;
+    // let espresso_block = loop {
+    //     let header: Header = match headers.next().await.context("header stream ended")? {
+    //         Ok(header) => header,
+    //         Err(err) => {
+    //             tracing::warn!("error in header stream: {err:#}");
+    //             continue;
+    //         },
+    //     };
+    //     let Some(l1_finalized) = header.l1_finalized() else {
+    //         continue;
+    //     };
+    //     if l1_finalized.number() >= l1_block {
+    //         tracing::info!(block = header.height(), "deposit finalized on Espresso");
+    //         break header.height();
+    //     } else {
+    //         tracing::debug!(
+    //             block = header.height(),
+    //             l1_block,
+    //             ?l1_finalized,
+    //             "waiting for deposit on Espresso"
+    //         )
+    //     }
+    // };
 
-    // Confirm that the Espresso balance has increased.
-    let final_balance = espresso
-        .get_espresso_balance(signer.address(), Some(espresso_block))
-        .await?;
-    if final_balance >= initial_balance + amount.into() {
-        tracing::info!(%final_balance, "deposit successful");
-    } else {
-        // The balance didn't increase as much as expected. This doesn't necessarily mean the
-        // deposit failed: there could have been a race condition where the balance on Espresso was
-        // altered by some other operation at the same time, but we should at least let the user
-        // know about it.
-        tracing::warn!(%initial_balance, %final_balance, "Espresso balance did not increase as expected");
-    }
+    // // Confirm that the Espresso balance has increased.
+    // let final_balance = espresso
+    //     .get_espresso_balance(signer.address(), Some(espresso_block))
+    //     .await?;
+    // if final_balance >= initial_balance + amount.into() {
+    //     tracing::info!(%final_balance, "deposit successful");
+    // } else {
+    //     // The balance didn't increase as much as expected. This doesn't necessarily mean the
+    //     // deposit failed: there could have been a race condition where the balance on Espresso was
+    //     // altered by some other operation at the same time, but we should at least let the user
+    //     // know about it.
+    //     tracing::warn!(%initial_balance, %final_balance, "Espresso balance did not increase as expected");
+    // }
 
     Ok(())
 }
