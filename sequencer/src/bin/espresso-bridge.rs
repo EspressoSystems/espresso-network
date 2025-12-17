@@ -195,17 +195,17 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
         .context("sending deposit transaction")?;
     tracing::info!(hash = %tx.tx_hash(), "deposit transaction sent to L1");
 
-    // Wait for the transaction to finalize on L1.
-    let receipt = tx
-        .with_required_confirmations(opt.confirmations as u64)
-        .get_receipt()
-        .await
-        .context("waiting for deposit transaction")?;
-    let l1_block = receipt
-        .block_number
-        .context("deposit transaction not mined")?;
-    ensure!(receipt.inner.is_success(), "deposit transaction reverted");
-    tracing::info!(l1_block, "deposit mined on L1");
+    // // Wait for the transaction to finalize on L1.
+    // let receipt = tx
+    //     .with_required_confirmations(opt.confirmations as u64)
+    //     .get_receipt()
+    //     .await
+    //     .context("waiting for deposit transaction")?;
+    // let l1_block = receipt
+    //     .block_number
+    //     .context("deposit transaction not mined")?;
+    // ensure!(receipt.inner.is_success(), "deposit transaction reverted");
+    // tracing::info!(l1_block, "deposit mined on L1");
 
     // // Wait for Espresso to catch up to the L1.
     // let espresso_height = espresso.get_height().await?;
