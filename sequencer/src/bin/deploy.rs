@@ -13,9 +13,12 @@ use espresso_contract_deployer::{
     build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
-    proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
+    proposals::{
+        multisig::{upgrade_fee_contract_multisig_owner, verify_node_js_files},
+        timelock::TimelockOperationType,
+    },
     provider::connect_ledger,
-    Contract, Contracts, DeployedContracts,
+    upgrade_fee_v1_0_1, Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -392,6 +395,10 @@ struct Options {
         requires = "perform_timelock_operation"
     )]
     timelock_operation_delay: Option<u64>,
+
+    /// Option to upgrade fee contract v1.1
+    #[clap(long, default_value = "false")]
+    upgrade_fee_v1_0_1: bool,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -774,6 +781,24 @@ async fn main() -> anyhow::Result<()> {
         args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
+    if opt.upgrade_fee_v1_0_1 {
+        // For FeeContract, we need to check use_multisig directly since there's no Contract::FeeContractV1_1 variant
+        // Note: This is handled directly (not via builder pattern) because it's a patch upgrade
+        // that reuses Contract::FeeContract rather than a new Contract variant like V2 upgrades.
+        if opt.use_multisig {
+            // Call multisig upgrade directly
+            upgrade_fee_contract_multisig_owner(
+                &provider,
+                &mut contracts,
+                opt.rpc_url.to_string(),
+                opt.dry_run,
+            )
+            .await?;
+        } else {
+            // Call EOA upgrade directly
+            upgrade_fee_v1_0_1(&provider, &mut contracts).await?;
+        }
+    }
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()
@@ -782,6 +807,8 @@ async fn main() -> anyhow::Result<()> {
             .write(true)
             .open(out)?;
         contracts.write(file)?;
+        // Also write to stdout so users can see output immediately
+        contracts.write(stdout())?;
     } else {
         contracts.write(stdout())?;
     }

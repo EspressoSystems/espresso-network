@@ -1214,6 +1214,74 @@ pub async fn upgrade_stake_table_v2(
     Ok(receipt)
 }
 
+pub async fn upgrade_fee_v1_0_1(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+) -> Result<TransactionReceipt> {
+    tracing::info!("Upgrading FeeContract to FeeContractV1.0.1 with EOA admin");
+    let Some(fee_contract_proxy_addr) = contracts.address(Contract::FeeContractProxy) else {
+        anyhow::bail!("FeeContractProxy not found, can't upgrade")
+    };
+
+    let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+    let curr_version = fee_contract_proxy.getVersion().call().await?;
+    if curr_version.majorVersion != 1 {
+        anyhow::bail!(
+            "Expected FeeContract V1 for upgrade to V1.0.1, found V{}.{}.{}",
+            curr_version.majorVersion,
+            curr_version.minorVersion,
+            curr_version.patchVersion
+        );
+    }
+
+    let old_fee_contract_addr = contracts.address(Contract::FeeContract);
+
+    // Remove old implementation from cache so we deploy a new one
+    contracts.0.remove(&Contract::FeeContract);
+
+    let new_fee_contract_addr = contracts
+        .deploy(
+            Contract::FeeContract,
+            FeeContract::deploy_builder(&provider),
+        )
+        .await?;
+
+    if let Some(old_fee_contract_addr) = old_fee_contract_addr {
+        assert_ne!(
+            old_fee_contract_addr, new_fee_contract_addr,
+            "New deployment should have a different address than the cached one"
+        );
+        tracing::info!(
+            old_impl = %old_fee_contract_addr,
+            new_impl = %new_fee_contract_addr,
+            "New FeeContract implementation deployed at {new_fee_contract_addr:#x}"
+        );
+    }
+
+    let receipt = fee_contract_proxy
+        .upgradeToAndCall(new_fee_contract_addr, "0x".to_string())
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    if receipt.inner.is_success() {
+        let new_version = fee_contract_proxy.getVersion().call().await?;
+        assert_eq!(new_version.majorVersion, 1);
+        assert_eq!(new_version.minorVersion, 0);
+        assert_eq!(new_version.patchVersion, 1);
+        tracing::info!(
+            proxy = %fee_contract_proxy_addr,
+            impl = %new_fee_contract_addr,
+            "FeeContract successfully upgraded to v1.0.1"
+        );
+    } else {
+        anyhow::bail!("FeeContract upgrade failed: {:?}", receipt);
+    }
+
+    Ok(receipt)
+}
+
 /// Common logic for any Ownable contract to transfer ownership
 pub async fn transfer_ownership(
     provider: impl Provider,
@@ -1515,7 +1583,7 @@ mod tests {
         sol_types::SolValue,
     };
     use espresso_types::testing::TestValidator;
-    use hotshot_contract_adapter::sol_types::StakeTableV2;
+    use hotshot_contract_adapter::sol_types::{FeeContract, StakeTableV2};
 
     use super::*;
     use crate::{
@@ -1523,8 +1591,9 @@ mod tests {
         proposals::{
             multisig::{
                 transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-                upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-                LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
+                upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
+                upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
+                StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
                 cancel_timelock_operation, derive_timelock_address_from_contract_type,
@@ -3918,6 +3987,143 @@ mod tests {
             "Error should mention invalid contract type, got: {}",
             error_msg
         );
+
+        Ok(())
+    }
+
+    // This test is used to test the upgrade of the FeeContractProxy via the multisig wallet
+    // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
+    // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
+    // The test assumes that there is a file .env.deployer.rs.test in the root directory with the following variables:
+    // RPC_URL=
+    // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
+    // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
+    // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
+    async fn test_upgrade_fee_contract_multisig_owner_helper(dry_run: bool) -> Result<()> {
+        let mut localhost_rpc_url = "http://localhost:8545".to_string();
+        let mut multisig_admin = Address::random();
+        let (_anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let admin = provider.get_accounts().await?[0];
+
+        if !dry_run {
+            dotenvy::from_filename_override(".env.deployer.rs.test")
+                .map_err(|e| anyhow!("Failed to load .env.deployer.rs.test: {}", e))?;
+
+            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
+                .expect("Failed to read .env.deployer.rs.test")
+            {
+                let (key, val) = item?;
+                if key == "RPC_URL" {
+                    localhost_rpc_url = val.to_string();
+                } else if key == "SAFE_MULTISIG_ADDRESS" {
+                    multisig_admin = val.parse::<Address>()?;
+                }
+            }
+
+            if localhost_rpc_url.is_empty() || multisig_admin.is_zero() {
+                anyhow::bail!(
+                    "RPC_URL and SAFE_MULTISIG_ADDRESS must be set in .env.deployer.rs.test"
+                );
+            }
+        }
+
+        // Deploy FeeContract proxy
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+
+        // transfer ownership to multisig
+        let _receipt = transfer_ownership(
+            &provider,
+            Contract::FeeContractProxy,
+            fee_contract_proxy_addr,
+            multisig_admin,
+        )
+        .await?;
+
+        // Then send upgrade proposal to the multisig wallet
+        let result = upgrade_fee_contract_multisig_owner(
+            &provider,
+            &mut contracts,
+            localhost_rpc_url.clone(),
+            dry_run,
+        )
+        .await?;
+
+        tracing::info!(
+            "Result when trying to upgrade FeeContractProxy via the multisig wallet: {:?}",
+            result
+        );
+
+        if dry_run {
+            let data: serde_json::Value = serde_json::from_str(&result)?;
+            assert_eq!(data["rpcUrl"], localhost_rpc_url);
+            assert_eq!(data["safeAddress"], multisig_admin.to_string());
+            assert_eq!(data["proxyAddress"], fee_contract_proxy_addr.to_string());
+            assert_eq!(data["initData"], "0x".to_string());
+            assert_eq!(data["useHardwareWallet"], false);
+        }
+
+        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+        // One has to test that the upgrade proposal is available via the Safe UI
+        // and then test that the v1 state is persisted
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_fee_contract_multisig_owner_dry_run() -> Result<()> {
+        test_upgrade_fee_contract_multisig_owner_helper(true).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_fee_contract_v1_0_1_eoa() -> Result<()> {
+        let (_anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let admin = provider.get_accounts().await?[0];
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+
+        let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+        let curr_version = fee_contract_proxy.getVersion().call().await?;
+        assert_eq!(curr_version.majorVersion, 1);
+        assert_eq!(curr_version.minorVersion, 0);
+        assert_eq!(curr_version.patchVersion, 1); // since the current version of the contract is 1.0.1 as needed for the patch
+
+        // Store old implementation address for verification
+        let old_impl_addr = contracts.address(Contract::FeeContract);
+
+        // Test the upgrade function directly
+        let receipt = upgrade_fee_v1_0_1(&provider, &mut contracts).await?;
+
+        // Verify upgrade succeeded
+        assert!(receipt.inner.is_success());
+
+        // Verify a new implementation was deployed (if old one existed)
+        let new_impl_addr = contracts.address(Contract::FeeContract);
+        if let Some(old_addr) = old_impl_addr {
+            assert_ne!(
+                old_addr,
+                new_impl_addr.expect("New implementation should be deployed"),
+                "New implementation should have a different address"
+            );
+        }
+
+        // Verify the proxy now points to the new implementation
+        let new_proxy_impl = read_proxy_impl(&provider, fee_contract_proxy_addr).await?;
+        assert_eq!(
+            new_proxy_impl,
+            new_impl_addr.expect("New implementation should be deployed"),
+            "Proxy should point to the new implementation address"
+        );
+
+        // Verify version is correct (this is already checked in upgrade_fee_v1_0_1, but explicit here)
+        let new_version = fee_contract_proxy.getVersion().call().await?;
+        assert_eq!(new_version.majorVersion, 1);
+        assert_eq!(new_version.minorVersion, 0);
+        assert_eq!(new_version.patchVersion, 1);
 
         Ok(())
     }

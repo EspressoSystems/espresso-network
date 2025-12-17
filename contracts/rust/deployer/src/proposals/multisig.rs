@@ -12,9 +12,9 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
-    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
-    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
-    StakeTableV2,
+    EspToken, EspTokenV2, FeeContract, LightClient, LightClientV2, LightClientV2Mock,
+    LightClientV3, LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3,
+    StakeTable, StakeTableV2,
 };
 use url::Url;
 
@@ -652,4 +652,96 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     tracing::info!("StakeTableProxy upgrade proposal sent");
 
     Ok(())
+}
+
+/// Upgrade the FeeContract proxy to a new implementation (patch upgrade).
+/// Internally, first detect existence of proxy, then deploy new FeeContract implementation, then upgrade.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_fee_contract_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    rpc_url: String,
+    dry_run: bool,
+) -> Result<String> {
+    let proxy_addr = contracts
+        .address(Contract::FeeContractProxy)
+        .ok_or_else(|| anyhow!("FeeContractProxy (multisig owner) not found, can't upgrade"))?;
+    tracing::info!("FeeContractProxy found at {proxy_addr:#x}");
+    let proxy = FeeContract::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?;
+
+    // Verify current version before upgrading
+    let curr_version = proxy.getVersion().call().await?;
+    if curr_version.majorVersion != 1
+        || curr_version.minorVersion != 0
+        || curr_version.patchVersion > 1
+    {
+        anyhow::bail!(
+            "Expected FeeContract V1.0.0 or V1.0.1 for upgrade to V1.0.1, found V{}.{}.{}",
+            curr_version.majorVersion,
+            curr_version.minorVersion,
+            curr_version.patchVersion
+        );
+    }
+
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+    }
+
+    // Deploy new implementation (with patch version)
+    let fee_contract_addr = if !dry_run {
+        let old_fee_contract_addr = contracts.address(Contract::FeeContract);
+
+        // Remove old implementation from cache so we deploy a new one
+        contracts.0.remove(&Contract::FeeContract);
+
+        let new_fee_contract_addr = contracts
+            .deploy(
+                Contract::FeeContract,
+                FeeContract::deploy_builder(&provider),
+            )
+            .await?;
+
+        if let Some(old_fee_contract_addr) = old_fee_contract_addr {
+            assert_ne!(
+                old_fee_contract_addr, new_fee_contract_addr,
+                "New deployment should have a different address than the cached one"
+            );
+            tracing::info!(
+                old_impl = %old_fee_contract_addr,
+                new_impl = %new_fee_contract_addr,
+                "Fresh FeeContract implementation deployed"
+            );
+        }
+        new_fee_contract_addr
+    } else {
+        // Use dummy address for dry run
+        Address::random()
+    };
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_upgrade_proxy_script(
+        proxy_addr,
+        fee_contract_addr,
+        "0x".to_string(),
+        rpc_url,
+        owner_addr,
+        dry_run,
+    )
+    .await?;
+
+    if !dry_run {
+        tracing::info!(
+            "FeeContractProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            owner_addr
+        );
+    }
+
+    Ok(result)
 }
