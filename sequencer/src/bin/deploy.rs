@@ -18,7 +18,7 @@ use espresso_contract_deployer::{
         timelock::TimelockOperationType,
     },
     provider::connect_ledger,
-    upgrade_fee_v1_0_1, Contract, Contracts, DeployedContracts,
+    upgrade_fee_v1, Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -398,7 +398,7 @@ struct Options {
 
     /// Option to upgrade fee contract v1.1
     #[clap(long, default_value = "false")]
-    upgrade_fee_v1_0_1: bool,
+    upgrade_fee_v1: bool,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -781,23 +781,9 @@ async fn main() -> anyhow::Result<()> {
         args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
-    if opt.upgrade_fee_v1_0_1 {
-        // For FeeContract, we need to check use_multisig directly since there's no Contract::FeeContractV1_1 variant
-        // Note: This is handled directly (not via builder pattern) because it's a patch upgrade
-        // that reuses Contract::FeeContract rather than a new Contract variant like V2 upgrades.
-        if opt.use_multisig {
-            // Call multisig upgrade directly
-            upgrade_fee_contract_multisig_owner(
-                &provider,
-                &mut contracts,
-                opt.rpc_url.to_string(),
-                opt.dry_run,
-            )
+    if opt.upgrade_fee_v1 {
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
             .await?;
-        } else {
-            // Call EOA upgrade directly
-            upgrade_fee_v1_0_1(&provider, &mut contracts).await?;
-        }
     }
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {

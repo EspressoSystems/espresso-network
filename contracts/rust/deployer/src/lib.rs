@@ -1232,7 +1232,7 @@ pub async fn upgrade_stake_table_v2(
     Ok(receipt)
 }
 
-pub async fn upgrade_fee_v1_0_1(
+pub async fn upgrade_fee_v1(
     provider: impl Provider,
     contracts: &mut Contracts,
 ) -> Result<TransactionReceipt> {
@@ -1242,10 +1242,11 @@ pub async fn upgrade_fee_v1_0_1(
     };
 
     let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+
     let curr_version = fee_contract_proxy.getVersion().call().await?;
     if curr_version.majorVersion != 1 {
         anyhow::bail!(
-            "Expected FeeContract V1 for upgrade to V1.0.1, found V{}.{}.{}",
+            "Expected FeeContract V1 for upgrade, found V{}.{}.{}",
             curr_version.majorVersion,
             curr_version.minorVersion,
             curr_version.patchVersion
@@ -1265,10 +1266,12 @@ pub async fn upgrade_fee_v1_0_1(
         .await?;
 
     if let Some(old_fee_contract_addr) = old_fee_contract_addr {
-        assert_ne!(
-            old_fee_contract_addr, new_fee_contract_addr,
-            "New deployment should have a different address than the cached one"
-        );
+        if old_fee_contract_addr == new_fee_contract_addr {
+            anyhow::bail!(
+                "New deployment address ({new_fee_contract_addr:#x}) matches cached address. \
+                 Cache removal may have failed."
+            );
+        }
         tracing::info!(
             old_impl = %old_fee_contract_addr,
             new_impl = %new_fee_contract_addr,
@@ -1277,11 +1280,12 @@ pub async fn upgrade_fee_v1_0_1(
     }
 
     let receipt = fee_contract_proxy
-        .upgradeToAndCall(new_fee_contract_addr, "0x".into())
+        .upgradeToAndCall(new_fee_contract_addr, vec![].into())
         .send()
         .await?
         .get_receipt()
-        .await?;
+        .await
+        .context("Failed to get upgrade transaction receipt")?;
 
     if receipt.inner.is_success() {
         let new_version = fee_contract_proxy.getVersion().call().await?;
@@ -4103,7 +4107,6 @@ mod tests {
 
         let fee_contract_proxy_addr =
             deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
-
         let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
         let curr_version = fee_contract_proxy.getVersion().call().await?;
         assert_eq!(curr_version.majorVersion, 1);
@@ -4114,7 +4117,7 @@ mod tests {
         let old_impl_addr = contracts.address(Contract::FeeContract);
 
         // Test the upgrade function directly
-        let receipt = upgrade_fee_v1_0_1(&provider, &mut contracts).await?;
+        let receipt = upgrade_fee_v1(&provider, &mut contracts).await?;
 
         // Verify upgrade succeeded
         assert!(receipt.inner.is_success());
@@ -4137,7 +4140,7 @@ mod tests {
             "Proxy should point to the new implementation address"
         );
 
-        // Verify version is correct (this is already checked in upgrade_fee_v1_0_1, but explicit here)
+        // Verify version is correct (this is already checked in upgrade_fee_v1, but explicit here)
         let new_version = fee_contract_proxy.getVersion().call().await?;
         assert_eq!(new_version.majorVersion, 1);
         assert_eq!(new_version.minorVersion, 0);
