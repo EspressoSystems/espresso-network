@@ -223,6 +223,10 @@ struct Options {
     #[clap(short, long, name = "OUT", env = "ESPRESSO_DEPLOYER_OUT_PATH")]
     out: Option<PathBuf>,
 
+    /// Suppress stdout output when writing to file
+    #[clap(long, short = 'q')]
+    quiet: bool,
+
     #[clap(flatten)]
     contracts: DeployedContracts,
 
@@ -396,7 +400,7 @@ struct Options {
     )]
     timelock_operation_delay: Option<u64>,
 
-    /// Option to upgrade fee contract v1.1
+    /// Option to upgrade fee contract v1 patch version
     #[clap(long, default_value = "false")]
     upgrade_fee_v1: bool,
 
@@ -794,7 +798,9 @@ async fn main() -> anyhow::Result<()> {
             .open(out)?;
         contracts.write(file)?;
         // Also write to stdout so users can see output immediately
-        contracts.write(stdout())?;
+        if !opt.quiet {
+            contracts.write(stdout())?;
+        }
     } else {
         contracts.write(stdout())?;
     }

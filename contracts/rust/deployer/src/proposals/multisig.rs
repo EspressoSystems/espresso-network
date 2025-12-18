@@ -677,12 +677,9 @@ pub async fn upgrade_fee_contract_multisig_owner(
 
     // Verify current version before upgrading
     let curr_version = proxy.getVersion().call().await?;
-    if curr_version.majorVersion != 1
-        || curr_version.minorVersion != 0
-        || curr_version.patchVersion > 1
-    {
+    if curr_version.majorVersion != 1 {
         anyhow::bail!(
-            "Expected FeeContract V1.0.0 or V1.0.1 for upgrade to V1.0.1, found V{}.{}.{}",
+            "Expected FeeContract V1.x for upgrade to V1.0.1, found V{}.{}.{}",
             curr_version.majorVersion,
             curr_version.minorVersion,
             curr_version.patchVersion
@@ -709,10 +706,13 @@ pub async fn upgrade_fee_contract_multisig_owner(
             .await?;
 
         if let Some(old_fee_contract_addr) = old_fee_contract_addr {
-            assert_ne!(
-                old_fee_contract_addr, new_fee_contract_addr,
-                "New deployment should have a different address than the cached one"
-            );
+            if old_fee_contract_addr == new_fee_contract_addr {
+                anyhow::bail!(
+                    "New deployment address ({new_fee_contract_addr:#x}) matches cached address \
+                     ({old_fee_contract_addr:#x}). Cache removal may have failed or deployment \
+                     reused cached contract."
+                );
+            }
             tracing::info!(
                 old_impl = %old_fee_contract_addr,
                 new_impl = %new_fee_contract_addr,

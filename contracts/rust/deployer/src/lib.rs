@@ -1232,6 +1232,8 @@ pub async fn upgrade_stake_table_v2(
     Ok(receipt)
 }
 
+/// Upgrade the fee contract from V1.x.x to V1.0.1
+/// This is for fee contracts owned by an EOA
 pub async fn upgrade_fee_v1(
     provider: impl Provider,
     contracts: &mut Contracts,
@@ -1242,6 +1244,11 @@ pub async fn upgrade_fee_v1(
     };
 
     let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+
+    let owner = fee_contract_proxy.owner().call().await?;
+    if is_contract(&provider, owner).await? {
+        anyhow::bail!("FeeContract owner is not an EOA, can't upgrade");
+    }
 
     let curr_version = fee_contract_proxy.getVersion().call().await?;
     if curr_version.majorVersion != 1 {
@@ -1289,10 +1296,20 @@ pub async fn upgrade_fee_v1(
 
     if receipt.inner.is_success() {
         let new_version = fee_contract_proxy.getVersion().call().await?;
-        assert_eq!(new_version.majorVersion, 1);
-        assert_eq!(new_version.minorVersion, 0);
-        assert_eq!(new_version.patchVersion, 1);
-        tracing::info!(
+        if new_version.majorVersion != 1
+            || new_version.minorVersion != 0
+            || new_version.patchVersion != 1
+        {
+            anyhow::bail!(
+                "Upgrade transaction succeeded but version is incorrect: V{}.{}.{} (expected \
+                 V1.0.1). Proxy: {fee_contract_proxy_addr:#x}, New impl: \
+                 {new_fee_contract_addr:#x}",
+                new_version.majorVersion,
+                new_version.minorVersion,
+                new_version.patchVersion
+            );
+        }
+        tracing::error!(
             proxy = %fee_contract_proxy_addr,
             impl = %new_fee_contract_addr,
             "FeeContract successfully upgraded to v1.0.1"
