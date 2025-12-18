@@ -319,3 +319,6 @@ opt-level = 3
 inherits = "test"
 strip = true
 debug = "none"
+
+[profile.release]
+debug = "full"
