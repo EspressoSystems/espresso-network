@@ -6,7 +6,6 @@ use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme};
 use jf_utils::canonical;
-
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
