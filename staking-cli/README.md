@@ -5,12 +5,11 @@ WARNING: This CLI is intended for use in testnet purposes only.
 This CLI helps users interact with the Espresso staking contract, either as a delegator or a node operator.
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
-
 **Table of Contents**
 
 - [Espresso staking CLI](#espresso-staking-cli)
   - [Getting Started](#getting-started)
-    - [Getting Help](#getting-help)
+    - [Overview](#overview)
     - [Choose your type of wallet (mnemonic based or Ledger)](#choose-your-type-of-wallet-mnemonic-based-or-ledger)
     - [Initialize the configuration file](#initialize-the-configuration-file)
     - [Inspect the configuration](#inspect-the-configuration)
@@ -26,6 +25,8 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     - [Updating your metadata URL](#updating-your-metadata-url)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
+    - [Exporting Node Signatures](#exporting-node-signatures)
+    - [Demo Commands](#demo-commands)
 
 <!-- markdown-toc end -->
 
@@ -82,7 +83,7 @@ Commands:
     token-allowance        Check ESP token allowance of stake table contract
     transfer               Transfer ESP tokens
     export-node-signatures       Export validator node signatures for address validation
-    stake-for-demo         Register the validators and delegates for the local demo
+    demo                   Demo commands for testing (stake, delegate, undelegate, churn)
     help                   Print this message or the help of the given subcommand(s)
 
 Options:
@@ -379,31 +380,7 @@ Format handling:
 - Stdin defaults to JSON: `cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99`
 - Explicit format for stdin: `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
 
-### Native Demo Staking
+### Demo Commands
 
-The `stake-for-demo` command is used to set up validators and delegators for testing purposes.
-
-    staking-cli stake-for-demo --num-validators 5
-
-Configuration options:
-
-- `--num-validators`: Number of validators to register (default: 5)
-- `--num-delegators-per-validator`: Number of delegators per validator (default: random 2-5, max: 100,000)
-- `--delegation-config`: Delegation configuration mode (default: variable-amounts)
-  - `equal-amounts`: All validators have equal delegation amounts
-  - `variable-amounts`: Variable delegation amounts per validator
-  - `multiple-delegators`: Multiple delegators per validator
-  - `no-self-delegation`: Validators do not self-delegate
-
-Environment variables:
-
-- `NUM_DELEGATORS_PER_VALIDATOR`: Set the number of delegators per validator
-- `DELEGATION_CONFIG`: Set the delegation configuration mode
-
-Example usage:
-
-    # Create 10 validators with 50 delegators each
-    staking-cli stake-for-demo --num-validators 10 --num-delegators-per-validator 50
-
-    # Using environment variables with native demo
-    env NUM_DELEGATORS_PER_VALIDATOR=1000 DELEGATION_CONFIG=no-self-delegation just demo-native-drb-header
+The `demo` subcommand provides tools for testing and demonstration purposes.
+See [DEVELOPER_DOCS.md](DEVELOPER_DOCS.md) for details.
