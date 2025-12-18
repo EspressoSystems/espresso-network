@@ -25,6 +25,11 @@ Similarly, avoid enabling the `embedded-db` feature by using passing the cargo
 flag `--all-features` when building the sequencer binary target.
 "#
 );
+use tikv_jemalloc_sys as _;
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
