@@ -546,10 +546,9 @@ processes:
   permissionless-builder:
     command: permissionless-builder
     environment:
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
-      - ESPRESSO_SEQUENCER_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}
-      - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-data/genesis/demo.toml}
-      - ESPRESSO_BUILDER_L1_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
+      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://localhost:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
+      - ESPRESSO_BUILDER_GENESIS_FILE
     depends_on:
       sequencer0:
         condition: process_healthy
