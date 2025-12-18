@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme};
 use jf_utils::canonical;
+
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
@@ -142,7 +143,11 @@ impl AvidmGf2Scheme {
             .chunks(shard_bytes)
             .map(|chunk| chunk.to_owned())
             .collect::<Vec<_>>();
-        let recovery = reed_solomon_simd::encode(original_count, recovery_count, &original)?;
+        let recovery = if recovery_count == 0 {
+            vec![]
+        } else {
+            reed_solomon_simd::encode(original_count, recovery_count, &original)?
+        };
 
         let shares = [original, recovery].concat();
         let share_digests: Vec<_> = shares
@@ -240,34 +245,49 @@ impl VidScheme for AvidmGf2Scheme {
         };
         let shard_bytes = first_share.payload[0].len();
 
-        let mut decoder = reed_solomon_simd::ReedSolomonDecoder::new(
-            original_count,
-            recovery_count,
-            shard_bytes,
-        )?;
-        let mut original_shares = vec![None; original_count];
-        for share in shares {
-            if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
-                return Err(VidError::InvalidShare);
-            }
-            for (i, index) in share.range.clone().enumerate() {
-                if index < original_count {
-                    original_shares[index] = Some(share.payload[i].as_ref());
-                    decoder.add_original_shard(index, &share.payload[i])?;
-                } else {
-                    decoder.add_recovery_shard(index - original_count, &share.payload[i])?;
+        let mut original_shares: Vec<Option<Vec<u8>>> = vec![None; original_count];
+        if recovery_count == 0 {
+            // Edge case where there are no recovery shares
+            for share in shares {
+                if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
+                    return Err(VidError::InvalidShare);
+                }
+                for (i, index) in share.range.clone().enumerate() {
+                    if index < original_count {
+                        original_shares[index] = Some(share.payload[i].clone());
+                    }
                 }
             }
+        } else {
+            let mut decoder = reed_solomon_simd::ReedSolomonDecoder::new(
+                original_count,
+                recovery_count,
+                shard_bytes,
+            )?;
+            for share in shares {
+                if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
+                    return Err(VidError::InvalidShare);
+                }
+                for (i, index) in share.range.clone().enumerate() {
+                    if index < original_count {
+                        original_shares[index] = Some(share.payload[i].clone());
+                        decoder.add_original_shard(index, &share.payload[i])?;
+                    } else {
+                        decoder.add_recovery_shard(index - original_count, &share.payload[i])?;
+                    }
+                }
+            }
+
+            let result = decoder.decode()?;
+            original_shares
+                .iter_mut()
+                .enumerate()
+                .for_each(|(i, share)| {
+                    if share.is_none() {
+                        *share = result.restored_original(i).map(|s| s.to_vec());
+                    }
+                });
         }
-        let result = decoder.decode()?;
-        original_shares
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, share)| {
-                if share.is_none() {
-                    *share = result.restored_original(i);
-                }
-            });
         if original_shares.iter().any(|share| share.is_none()) {
             return Err(VidError::Internal(anyhow!(
                 "Failed to recover the payload."
@@ -275,7 +295,7 @@ impl VidScheme for AvidmGf2Scheme {
         }
         let mut recovered: Vec<_> = original_shares
             .into_iter()
-            .flat_map(|share| share.unwrap().to_vec())
+            .flat_map(|share| share.unwrap())
             .collect();
         match recovered.iter().rposition(|&b| b != 0) {
             Some(pad_index) if recovered[pad_index] == 1u8 => {
@@ -337,12 +357,57 @@ pub mod tests {
                 shares.shuffle(&mut rng);
                 let mut cumulated_weights = 0;
                 let mut cut_index = 0;
-                while cumulated_weights <= recovery_threshold {
+                while cumulated_weights < recovery_threshold {
                     cumulated_weights += shares[cut_index].weight();
                     cut_index += 1;
                 }
                 let payload_recovered =
                     AvidmGf2Scheme::recover(&params, &commit, &shares[..cut_index]).unwrap();
+                assert_eq!(payload_recovered, payload);
+            }
+        }
+    }
+
+    #[test]
+    fn round_trip_edge_case() {
+        // play with these items
+        let num_storage_nodes_list = [4, 9, 16];
+        let payload_byte_lens = [1, 31, 32, 500];
+
+        // more items as a function of the above
+
+        let mut rng = jf_utils::test_rng();
+
+        for num_storage_nodes in num_storage_nodes_list {
+            let weights: Vec<u32> = (0..num_storage_nodes)
+                .map(|_| rng.next_u32() % 5 + 1)
+                .collect();
+            let total_weights: u32 = weights.iter().sum();
+            let recovery_threshold = total_weights as usize;
+            let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
+
+            for payload_byte_len in payload_byte_lens {
+                let payload = {
+                    let mut bytes_random = vec![0u8; payload_byte_len];
+                    rng.fill_bytes(&mut bytes_random);
+                    bytes_random
+                };
+
+                let (commit, mut shares) =
+                    AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+
+                assert_eq!(shares.len(), num_storage_nodes);
+
+                // verify shares
+                shares.iter().for_each(|share| {
+                    assert!(AvidmGf2Scheme::verify_share(&params, &commit, share)
+                        .is_ok_and(|r| r.is_ok()))
+                });
+
+                // test payload recovery on a random subset of shares
+                shares.shuffle(&mut rng);
+                let payload_recovered =
+                    AvidmGf2Scheme::recover(&params, &commit, &shares[..]).unwrap();
                 assert_eq!(payload_recovered, payload);
             }
         }
