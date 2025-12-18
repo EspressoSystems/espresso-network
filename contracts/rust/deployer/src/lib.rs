@@ -521,6 +521,21 @@ pub async fn upgrade_light_client_v2(
         None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
+
+            let curr_version = proxy.getVersion().call().await?;
+            if curr_version.majorVersion > 2 {
+                anyhow::bail!(
+                    "Expected LightClient V1 or V2 for upgrade to V2, found V{}",
+                    curr_version.majorVersion
+                );
+            }
+            // Log a warning if this is a patch upgrade (re-applying same version)
+            if curr_version.majorVersion == 2 {
+                tracing::warn!(
+                    "Re-applying LightClient V2 (patch upgrade). This will deploy a fresh \
+                     implementation."
+                );
+            }
             let state_history_retention_period = proxy.stateHistoryRetentionPeriod().call().await?;
             // first deploy PlonkVerifierV2.sol
             let pv2_addr = contracts
@@ -564,6 +579,9 @@ pub async fn upgrade_light_client_v2(
                 tracing::info!("deployed LightClientV2Mock at {addr:#x}");
                 addr
             } else {
+                // Remove old implementation from cache so we deploy a new one
+                contracts.0.remove(&Contract::LightClientV2);
+
                 contracts
                     .deploy(
                         Contract::LightClientV2,
@@ -1259,7 +1277,7 @@ pub async fn upgrade_fee_v1_0_1(
     }
 
     let receipt = fee_contract_proxy
-        .upgradeToAndCall(new_fee_contract_addr, "0x".to_string())
+        .upgradeToAndCall(new_fee_contract_addr, "0x".into())
         .send()
         .await?
         .get_receipt()
@@ -4124,6 +4142,79 @@ mod tests {
         assert_eq!(new_version.majorVersion, 1);
         assert_eq!(new_version.minorVersion, 0);
         assert_eq!(new_version.patchVersion, 1);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_light_client_v2_twice_checks_impl_address() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let blocks_per_epoch = 10;
+        let epoch_start_block = 22;
+
+        // Prepare initialization inputs
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = Address::random();
+
+        // Deploy proxy and V1
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        // First upgrade to V2
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            false, // is_mock
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // Capture the implementation address after first upgrade
+        let first_impl_addr = read_proxy_impl(&provider, lc_proxy_addr).await?;
+
+        // Also capture what's in the cache
+        let cached_impl_addr = contracts.address(Contract::LightClientV2);
+        assert_eq!(
+            first_impl_addr,
+            cached_impl_addr.expect("LightClientV2 should be in cache"),
+            "First upgrade: proxy should point to cached implementation"
+        );
+
+        // Second upgrade to V2 (re-applying same version)
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            false, // is_mock
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // Check if implementation address changed
+        let second_impl_addr = read_proxy_impl(&provider, lc_proxy_addr).await?;
+
+        let cached_impl_addr_after = contracts.address(Contract::LightClientV2);
+        assert_ne!(
+            first_impl_addr, second_impl_addr,
+            "LightClientV2 should have been deployed again"
+        );
+        assert_eq!(
+            second_impl_addr,
+            cached_impl_addr_after.expect("LightClientV2 should still be in cache"),
+            "Second upgrade: proxy should point to cached implementation"
+        );
 
         Ok(())
     }
