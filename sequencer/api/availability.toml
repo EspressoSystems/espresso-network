@@ -27,6 +27,7 @@ of the returned array.
 
 [route.stream_namespace_proofs]
 PATH = ["stream/blocks/:from/namespace/:namespace"]
+METHOD = "SOCKET"
 ":from" = "Integer"
 ":namespace" = "Integer"
 DOC = """
