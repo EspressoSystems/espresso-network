@@ -13,12 +13,9 @@ use espresso_contract_deployer::{
     build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
-    proposals::{
-        multisig::{upgrade_fee_contract_multisig_owner, verify_node_js_files},
-        timelock::TimelockOperationType,
-    },
+    proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
     provider::connect_ledger,
-    upgrade_fee_v1, Contract, Contracts, DeployedContracts,
+    Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
