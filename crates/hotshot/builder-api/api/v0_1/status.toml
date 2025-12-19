@@ -1,0 +1,7 @@
+[route.ping]
+PATH = ["ping"]
+DOC = """
+Ping the builder.
+
+Returns "pong"
+"""
