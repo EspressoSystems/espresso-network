@@ -226,11 +226,13 @@ libp2p = { package = "libp2p", version = "0.56", default-features = false, featu
     "dns",
     "gossipsub",
     "identify",
+    "noise",
     "kad",
-    "quic",
+    "tcp",
     "request-response",
     "secp256k1",
     "serde",
+    "yamux"
 ] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"
