@@ -1566,8 +1566,8 @@ mod test {
     use espresso_types::{
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
-        BackoffParams, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
-        MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
+        BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
+        MockSequencerVersions, NamespaceId, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState,
     };
     use ethers::utils::Anvil;
@@ -1593,9 +1593,13 @@ mod test {
         catchup_test_helper, spawn_dishonest_peer_catchup_api, state_signature_test_helper,
         status_test_helper, submit_test_helper, TestNetwork, TestNetworkConfigBuilder,
     };
-    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
+    use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus, Url};
     use time::OffsetDateTime;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
+    use hotshot_types::traits::node_implementation::Versions;
+    use futures::try_join;
+    use endpoints::NamespaceProofQueryData;
+    use crate::testing::wait_for_decide_on_handle;
 
     use self::{
         data_source::{testing::TestableSequencerDataSource, PublicHotShotConfig},
@@ -2584,5 +2588,94 @@ mod test {
             }
         }
         assert_eq!(receive_count, total_count + 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_namespace_query_compat_v0_2() {
+        setup_test();
+        test_namespace_query_compat_helper(SequencerVersions::<FeeVersion, FeeVersion>::new())
+            .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_namespace_query_compat_v0_3() {
+        setup_test();
+        test_namespace_query_compat_helper(SequencerVersions::<EpochVersion, EpochVersion>::new())
+            .await;
+    }
+
+    async fn test_namespace_query_compat_helper<V: Versions>(v: V) {
+        // Number of nodes running in the test network.
+        const NUM_NODES: usize = 5;
+
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::from(options::Http {
+                port,
+                max_connections: None,
+            }))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let mut network = TestNetwork::new(config, v).await;
+        let mut events = network.server.event_stream().await;
+
+        // Submit a transaction.
+        let ns = NamespaceId::from(10_000u64);
+        let tx = Transaction::new(ns, vec![1, 2, 3]);
+        network.server.submit_transaction(tx.clone()).await.unwrap();
+        let block = wait_for_decide_on_handle(&mut events, &tx).await;
+
+        // Check namespace proof queries.
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        let (header, common): (Header, VidCommonQueryData<SeqTypes>) = try_join!(
+            client.get(&format!("availability/header/{block}")).send(),
+            client
+                .get(&format!("availability/vid/common/{block}"))
+                .send()
+        )
+        .unwrap();
+
+        // The namespace proof endpoint gives us a namespace proof.
+        let ns_proof: NamespaceProofQueryData = client
+            .get(&format!("availability/block/{block}/namespace/{ns}"))
+            .send()
+            .await
+            .unwrap();
+        let proof = ns_proof.proof.unwrap();
+        let (txs, ns_from_proof) = proof
+            .verify(
+                header.ns_table(),
+                &header.payload_commitment(),
+                common.common(),
+            )
+            .unwrap();
+        assert_eq!(ns_from_proof, ns);
+        assert_eq!(txs, ns_proof.transactions);
+        assert_eq!(txs, std::slice::from_ref(&tx));
+
+        // Any API version can correctly tell us that the namespace does not exist.
+        let ns_proof: NamespaceProofQueryData = client
+            .get(&format!(
+                "availability/block/{}/namespace/{ns}",
+                block - 1
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ns_proof.proof, None);
+        assert_eq!(ns_proof.transactions, vec![]);
     }
 }

@@ -1,5 +1,37 @@
 [route.getnamespaceproof]
-PATH = ["block/:height/namespace/:namespace"]
+PATH = ["block/:height/namespace/:namespace", "block/hash/:hash/namespace/:namespace", "block/payload-hash/:payload-hash/namespace/:namespace"]
 ":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
 ":namespace" = "Integer"
-DOC = "Get the transactions in a namespace of the given block, along with a proof."
+DOC = """
+Get the transactions in a namespace of a given block, along with a proof.
+
+The block may be specified by height (/block/:height/namespace/:namespace) or by its hash
+(/block/hash/:hash/namespace/:namespace) or by its payload hash
+(/block/payload-hash/:payload-hash/namespace/:namespace).
+"""
+
+[route.getnamespaceproof_range]
+PATH = ["block/:from/:until/namespace/:namespace"]
+":from" = "Integer"
+":until" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Get the transactions in a namespace of a range of blocks, along with proofs.
+
+The response is an array of namespace proof query results, one for each block in the range
+[from, until). Note that the `until` block is not included, so `until - from` is the length
+of the returned array.
+"""
+
+[route.stream_namespace_proofs]
+PATH = ["stream/blocks/:from/namespace/:namespace"]
+":from" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Stream namespace proofs for blocks starting from a given height.
+
+The response is a stream of namespace proof query results, one for each block starting
+from the given height. The stream will continue indefinitely as new blocks are produced.
+"""
