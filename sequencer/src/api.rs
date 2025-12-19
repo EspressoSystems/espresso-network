@@ -1563,14 +1563,17 @@ mod test {
     use std::{collections::BTreeMap, time::Duration};
     use tokio::time::sleep;
 
+    use crate::testing::wait_for_decide_on_handle;
+    use endpoints::NamespaceProofQueryData;
     use espresso_types::{
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
         BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
-        MockSequencerVersions, NamespaceId, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
-        UpgradeType, ValidatedState,
+        MockSequencerVersions, NamespaceId, SequencerVersions, TimeBasedUpgrade, Timestamp,
+        Upgrade, UpgradeType, ValidatedState,
     };
     use ethers::utils::Anvil;
+    use futures::try_join;
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
@@ -1580,6 +1583,7 @@ mod test {
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
     };
+    use hotshot_types::traits::node_implementation::Versions;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -1596,10 +1600,6 @@ mod test {
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus, Url};
     use time::OffsetDateTime;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
-    use hotshot_types::traits::node_implementation::Versions;
-    use futures::try_join;
-    use endpoints::NamespaceProofQueryData;
-    use crate::testing::wait_for_decide_on_handle;
 
     use self::{
         data_source::{testing::TestableSequencerDataSource, PublicHotShotConfig},
@@ -2668,10 +2668,7 @@ mod test {
 
         // Any API version can correctly tell us that the namespace does not exist.
         let ns_proof: NamespaceProofQueryData = client
-            .get(&format!(
-                "availability/block/{}/namespace/{ns}",
-                block - 1
-            ))
+            .get(&format!("availability/block/{}/namespace/{ns}", block - 1))
             .send()
             .await
             .unwrap();
