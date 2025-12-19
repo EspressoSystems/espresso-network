@@ -3,9 +3,10 @@
 use std::borrow::Cow;
 
 use anyhow::{ensure, Context, Result};
-use espresso_types::{Leaf2, SeqTypes};
+use espresso_types::{Header, Leaf2, SeqTypes};
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
+    node::BlockId,
     types::HeightIndexed,
 };
 use hotshot_types::{data::EpochNumber, PeerConfig};
@@ -17,7 +18,7 @@ use crate::{
         leaf::LeafProofHint,
         quorum::{StakeTable, StakeTablePair, StakeTableQuorum},
     },
-    storage::Storage,
+    storage::{LeafRequest, Storage},
 };
 
 /// Initial state for a [`LightClient`].
@@ -84,7 +85,44 @@ where
             None
         };
         let known_finalized = known_finalized.as_ref().map(LeafQueryData::leaf);
+        self.fetch_leaf_from_server(id, known_finalized).await
+    }
 
+    /// Fetch and verify the requested header.
+    pub async fn fetch_header(&self, id: BlockId<SeqTypes>) -> Result<Header> {
+        if let Some(leaf) = self.db.leaf_upper_bound(id).await? {
+            if leaf_matches_id(&leaf, id) {
+                // If we have the leaf for the requested header in our database already, we can just
+                // extract the header.
+                return Ok(leaf.header().clone());
+            } else {
+                // Otherwise, if we have a leaf that is known to be greater than the requested
+                // header, we can ask the server for an inclusion proof for the requested header
+                // relative to the Merkle root in the upper bound leaf.
+                let proof = self.server.header_proof(leaf.height(), id).await?;
+                return proof.verify(leaf.header().block_merkle_tree_root());
+            }
+        }
+
+        // We have neither the requested header nor an upper bound for it. All we can do is fetch
+        // the corresponding leaf from the server (verifying a leaf proof) and then extract the
+        // header from there.
+        let leaf = self.fetch_leaf_from_server(id, None).await?;
+        Ok(leaf.header().clone())
+    }
+
+    /// Fetch and verify the stake table for the requested epoch.
+    pub async fn quorum_for_epoch(&self, _epoch: EpochNumber) -> Result<&StakeTable> {
+        // TODO use dynamic stake table
+        Ok(&self.stake_table)
+    }
+
+    async fn fetch_leaf_from_server(
+        &self,
+        id: impl Into<LeafRequest>,
+        known_finalized: Option<&Leaf2>,
+    ) -> Result<LeafQueryData<SeqTypes>> {
+        let id = id.into();
         let proof = self
             .server
             .leaf_proof(id, known_finalized.map(Leaf2::height))
@@ -122,12 +160,6 @@ where
 
         Ok(leaf)
     }
-
-    /// Fetch and verify the stake table for the requested epoch.
-    pub async fn quorum_for_epoch(&self, _epoch: EpochNumber) -> Result<&StakeTable> {
-        // TODO use dynamic stake table
-        Ok(&self.stake_table)
-    }
 }
 
 impl<P, S> StakeTablePair for (EpochNumber, &LightClient<P, S>)
@@ -146,15 +178,21 @@ where
     }
 }
 
-fn leaf_matches_id(leaf: &LeafQueryData<SeqTypes>, id: LeafId<SeqTypes>) -> bool {
-    match id {
-        LeafId::Number(h) => (h as u64) == leaf.height(),
-        LeafId::Hash(h) => h == leaf.hash(),
+fn leaf_matches_id(leaf: &LeafQueryData<SeqTypes>, id: impl Into<LeafRequest>) -> bool {
+    match id.into() {
+        LeafRequest::Leaf(LeafId::Number(h)) | LeafRequest::Header(BlockId::Number(h)) => {
+            (h as u64) == leaf.height()
+        },
+        LeafRequest::Leaf(LeafId::Hash(h)) => h == leaf.hash(),
+        LeafRequest::Header(BlockId::Hash(h)) => h == leaf.block_hash(),
+        LeafRequest::Header(BlockId::PayloadHash(h)) => h == leaf.payload_hash(),
     }
 }
 
 #[cfg(test)]
 mod test {
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::{storage::SqliteStorage, testing::TestClient};
 
@@ -218,6 +256,83 @@ mod test {
             client.genesis(),
         );
         client.return_wrong_leaf(1, 2).await;
+        lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
+        lc.fetch_leaf(LeafId::Hash(client.leaf(1).await.hash()))
+            .await
+            .unwrap_err();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_header_twice() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis(),
+        );
+
+        // Fetch the header for the first time. We will need to get it from the server.
+        let leaf = client.remember_leaf(1).await;
+        assert_eq!(
+            lc.fetch_header(BlockId::Number(1)).await.unwrap(),
+            *leaf.header()
+        );
+
+        // Fetching the header again hits the cache.
+        client.forget_leaf(1).await;
+        assert_eq!(
+            lc.fetch_header(BlockId::Number(1)).await.unwrap(),
+            *leaf.header()
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_header_upper_bound() {
+        let client = TestClient::default();
+
+        let db = SqliteStorage::default().await.unwrap();
+        db.insert_leaf(client.leaf(2).await).await.unwrap();
+
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
+        assert_eq!(
+            lc.fetch_header(BlockId::Number(1)).await.unwrap(),
+            *client.leaf(1).await.header(),
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_header_invalid_proof() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis(),
+        );
+        client.return_invalid_proof(1).await;
+        lc.fetch_header(BlockId::Number(1)).await.unwrap_err();
+        lc.fetch_header(BlockId::Hash(client.leaf(1).await.block_hash()))
+            .await
+            .unwrap_err();
+        lc.fetch_header(BlockId::PayloadHash(client.leaf(1).await.payload_hash()))
+            .await
+            .unwrap_err();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_header_wrong_header() {
+        let client = TestClient::default();
+        let db = SqliteStorage::default().await.unwrap();
+
+        // Start with an upper bound, so that `fetch_header` goes through the `client.header_proof`
+        // path.
+        db.insert_leaf(client.leaf(2).await).await.unwrap();
+
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
+        client.return_wrong_leaf(1, 0).await;
         lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
         lc.fetch_leaf(LeafId::Hash(client.leaf(1).await.hash()))
             .await
