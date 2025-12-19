@@ -69,8 +69,6 @@ ethers = { workspace = true }
 ethers-conv = { workspace = true }
 futures = { workspace = true }
 
-test-log = { version = "0.2", features = ["color", "trace"], default-features = false }
-
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
