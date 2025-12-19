@@ -4,8 +4,9 @@ use anyhow::Result;
 use espresso_types::SeqTypes;
 use futures::{future::FutureExt, stream::StreamExt};
 use hotshot_query_service::{
-    availability::AvailabilityDataSource,
+    availability::{AvailabilityDataSource, LeafHash},
     data_source::{storage::NodeStorage, VersionedDataSource},
+    types::HeightIndexed,
     Error,
 };
 use light_client::consensus::leaf::LeafProof;
@@ -123,10 +124,31 @@ where
 
     api.get("leaf", move |req, state| {
         async move {
-            let requested = req.integer_param("number").map_err(|err| Error::Custom {
-                message: err.to_string(),
-                status: StatusCode::BAD_REQUEST,
-            })?;
+            let requested = match req
+                .opt_integer_param("number")
+                .map_err(|err| Error::Custom {
+                    message: err.to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })? {
+                Some(n) => n,
+                None => {
+                    let hash: LeafHash<SeqTypes> =
+                        req.blob_param("hash").map_err(|err| Error::Custom {
+                            message: err.to_string(),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
+                    let leaf = state
+                        .get_leaf(hash)
+                        .await
+                        .with_timeout(fetch_timeout)
+                        .await
+                        .ok_or_else(|| Error::Custom {
+                            message: format!("unknown leaf {hash}"),
+                            status: StatusCode::NOT_FOUND,
+                        })?;
+                    leaf.height() as usize
+                },
+            };
             let finalized = req
                 .opt_integer_param("finalized")
                 .map_err(|err| Error::Custom {
@@ -147,7 +169,7 @@ mod test {
     use hotshot_query_service::data_source::{storage::UpdateAvailabilityStorage, Transaction};
     use hotshot_types::simple_certificate::CertificatePair;
     use light_client::{
-        consensus::leaf::FinalityProof,
+        consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
             leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, EnableEpochs, LegacyVersion,
             VersionCheckQuorum,
@@ -185,7 +207,10 @@ mod test {
         // Ask for the first leaf; it is proved finalized by the chain formed along with the second.
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
     }
@@ -215,7 +240,7 @@ mod test {
             .unwrap();
         assert_eq!(
             proof
-                .verify(&AlwaysTrueQuorum, Some(leaves[1].leaf()))
+                .verify(LeafProofHint::assumption(leaves[1].leaf()))
                 .await
                 .unwrap(),
             leaves[0]
@@ -311,7 +336,10 @@ mod test {
 
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
     }
@@ -349,10 +377,9 @@ mod test {
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
         assert_eq!(
             proof
-                .verify(
-                    &VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone())),
-                    None
-                )
+                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                )))
                 .await
                 .unwrap(),
             leaves[0]
