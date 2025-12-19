@@ -206,7 +206,6 @@ where
         BlockId::PayloadHash(req.blob_param("payload-hash")?)
     };
 
-    // Fetch block and VID common - we need to do this sequentially due to borrowing constraints
     let block = state
         .read(|state| state.get_block(id).boxed())
         .await
