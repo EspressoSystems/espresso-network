@@ -2511,7 +2511,7 @@
 <a href=#2511 id=2511 data-nosnippet>2511</a>    };
 <a href=#2512 id=2512 data-nosnippet>2512</a>
 <a href=#2513 id=2513 data-nosnippet>2513</a>    <span class="kw">use </span>::light_client::{
-<a href=#2514 id=2514 data-nosnippet>2514</a>        consensus::leaf::LeafProof,
+<a href=#2514 id=2514 data-nosnippet>2514</a>        consensus::leaf::{LeafProof, LeafProofHint},
 <a href=#2515 id=2515 data-nosnippet>2515</a>        testing::{EpochChangeQuorum, LegacyVersion},
 <a href=#2516 id=2516 data-nosnippet>2516</a>    };
 <a href=#2517 id=2517 data-nosnippet>2517</a>    <span class="kw">use </span>alloy::{
@@ -7267,7 +7267,13 @@
 <a href=#7267 id=7267 data-nosnippet>7267</a>                .<span class="kw">await
 <a href=#7268 id=7268 data-nosnippet>7268</a>                </span>.unwrap();
 <a href=#7269 id=7269 data-nosnippet>7269</a>            <span class="macro">tracing::debug!</span>(<span class="question-mark">?</span>leaf_proof, <span class="string">"fetched proof"</span>);
-<a href=#7270 id=7270 data-nosnippet>7270</a>            <span class="macro">assert_eq!</span>(leaf_proof.verify(<span class="kw-2">&amp;</span>quorum, <span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap(), leaf);
-<a href=#7271 id=7271 data-nosnippet>7271</a>        }
-<a href=#7272 id=7272 data-nosnippet>7272</a>    }
-<a href=#7273 id=7273 data-nosnippet>7273</a>}</code></pre></div></section></main></body></html>
+<a href=#7270 id=7270 data-nosnippet>7270</a>            <span class="macro">assert_eq!</span>(
+<a href=#7271 id=7271 data-nosnippet>7271</a>                leaf_proof
+<a href=#7272 id=7272 data-nosnippet>7272</a>                    .verify(LeafProofHint::Quorum(<span class="kw-2">&amp;</span>quorum))
+<a href=#7273 id=7273 data-nosnippet>7273</a>                    .<span class="kw">await
+<a href=#7274 id=7274 data-nosnippet>7274</a>                    </span>.unwrap(),
+<a href=#7275 id=7275 data-nosnippet>7275</a>                leaf
+<a href=#7276 id=7276 data-nosnippet>7276</a>            );
+<a href=#7277 id=7277 data-nosnippet>7277</a>        }
+<a href=#7278 id=7278 data-nosnippet>7278</a>    }
+<a href=#7279 id=7279 data-nosnippet>7279</a>}</code></pre></div></section></main></body></html>
