@@ -10,6 +10,11 @@ normal = ["hotshot-testing"]
 [package.metadata.cargo-machete]
 ignored = ["vergen", "include_dir", "hotshot_builder_api"]
 
+[[bin]]
+name = "deploy"
+path = "src/bin/deploy.rs"
+required-features = ["deployer"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
@@ -20,6 +25,7 @@ testing = [
     "light-client/testing",
     "sequencer-utils/testing",
     "hotshot-query-service/testing",
+    "deployer",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
@@ -27,6 +33,7 @@ fee = []
 pos = []
 drb-and-header = []
 da-upgrade = []
+deployer = ["dep:espresso-contract-deployer"]
 
 [dependencies]
 
@@ -41,6 +48,7 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 byteorder = "1"
 hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
+openssl-sys = { version = "0.9", features = ["vendored"] }
 
 # CDN imports
 cdn-broker = { workspace = true }
@@ -53,7 +61,7 @@ derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 either = { workspace = true }
-espresso-contract-deployer = { path = "../contracts/rust/deployer" }
+espresso-contract-deployer = { path = "../contracts/rust/deployer", optional = true }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
 generic-tests = "0.1.3"
@@ -64,7 +72,7 @@ hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-state-prover = { workspace = true }
+# hotshot-state-prover = { workspace = true }
 hotshot-task-impls = { workspace = true }
 # Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
@@ -105,7 +113,6 @@ sqlx = { workspace = true, features = [
     "runtime-tokio",
     "tls-native-tls",
 ] }
-staking-cli = { workspace = true }
 static_assertions = "1"
 strum = { workspace = true }
 surf-disco = { workspace = true }
@@ -144,6 +151,7 @@ test-log = { workspace = true }
 # Enable "testing" feature when running tests
 light-client = { workspace = true, features = ["testing"] }
 sequencer = { path = ".", features = ["testing"] }
+staking-cli = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

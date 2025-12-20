@@ -706,7 +706,7 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
     BuilderCommitment::from_bytes([])
 }
 
-#[cfg(any(test, feature = "testing"))]
+#[cfg(any(test, feature = "testing", feature = "deployer"))]
 pub mod testing {
     use std::{
         cmp::max,

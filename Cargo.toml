@@ -320,5 +320,6 @@ inherits = "test"
 strip = true
 debug = "none"
 
-[profile.release]
+[profile.profiling]
+inherits = "release"
 debug = "full"

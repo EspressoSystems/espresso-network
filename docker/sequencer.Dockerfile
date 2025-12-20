@@ -1,23 +1,21 @@
 FROM ghcr.io/espressosystems/ubuntu-base:main
 
-ARG TARGETARCH
-
-COPY target/$TARGETARCH/release/sequencer /bin/sequencer-postgres
+COPY target/profiling/sequencer /bin/sequencer-postgres
 RUN chmod +x /bin/sequencer-postgres
 
-COPY target/$TARGETARCH/release/sequencer-sqlite /bin/sequencer-sqlite
-RUN chmod +x /bin/sequencer-sqlite
+#COPY target/profiling/sequencer-sqlite /bin/sequencer-sqlite
+#RUN chmod +x /bin/sequencer-sqlite
 
-COPY target/$TARGETARCH/release/utils /bin/utils
+COPY target/profiling/utils /bin/utils
 RUN chmod +x /bin/utils
 
-COPY target/$TARGETARCH/release/reset-storage /bin/reset-storage
+COPY target/profiling/reset-storage /bin/reset-storage
 RUN chmod +x /bin/reset-storage
 
-COPY target/$TARGETARCH/release/keygen /bin/keygen
+COPY target/profiling/keygen /bin/keygen
 RUN chmod +x /bin/keygen
 
-COPY target/$TARGETARCH/release/pub-key /bin/pub-key
+COPY target/profiling/pub-key /bin/pub-key
 RUN chmod +x /bin/pub-key
 
 # Install genesis files for all supported configurations. The desired configuration can be chosen by
