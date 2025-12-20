@@ -227,8 +227,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                 // pick a free, unused UDP port for testing
                 let port = portpicker::pick_unused_port().expect("Could not find an open port");
 
-                let addr =
-                    Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();
+                let addr = Multiaddr::from_str(&format!("/ip4/127.0.0.1/tcp/{port}")).unwrap();
 
                 // We assign node's public key and stake value rather than read from config file since it's a test
                 let privkey = T::SignatureKey::generated_from_seed_indexed([0u8; 32], node_id).1;
@@ -352,8 +351,8 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
 
     // Conditionally build the multiaddr string
     let multiaddr_string = match ip {
-        Ok(IpAddr::V4(ip)) => format!("/ip4/{ip}/udp/{port}/quic-v1"),
-        Ok(IpAddr::V6(ip)) => format!("/ip6/{ip}/udp/{port}/quic-v1"),
+        Ok(IpAddr::V4(ip)) => format!("/ip4/{ip}/tcp/{port}"),
+        Ok(IpAddr::V6(ip)) => format!("/ip6/{ip}/tcp/{port}"),
         Err(_) => {
             // Try resolving the host. If it fails, continue but warn the user
             let lookup_result = addr.to_socket_addrs();
@@ -371,7 +370,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
                 );
             }
 
-            format!("/dns/{host}/udp/{port}/quic-v1")
+            format!("/dns/{host}/tcp/{port}")
         },
     };
 
