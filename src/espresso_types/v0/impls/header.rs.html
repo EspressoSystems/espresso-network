@@ -1075,8 +1075,8 @@
 <a href=#1075 id=1075 data-nosnippet>1075</a>
 <a href=#1076 id=1076 data-nosnippet>1076</a>                <span class="kw">let </span>epoch = EpochNumber::new(epoch_from_block_number(height + <span class="number">1</span>, epoch_height));
 <a href=#1077 id=1077 data-nosnippet>1077</a>
-<a href=#1078 id=1078 data-nosnippet>1078</a>                <span class="comment">// first 2 epochs don't have stake table hash because they are configured.
-<a href=#1079 id=1079 data-nosnippet>1079</a>                </span><span class="kw">if </span>epoch &gt; first_epoch + <span class="number">1 </span>{
+<a href=#1078 id=1078 data-nosnippet>1078</a>                <span class="comment">// first 2 epochs don't have a stake table hash because they are configured.
+<a href=#1079 id=1079 data-nosnippet>1079</a>                </span><span class="kw">if </span>epoch &gt; first_epoch {
 <a href=#1080 id=1080 data-nosnippet>1080</a>                    <span class="kw">let </span>epoch_membership = coordinator
 <a href=#1081 id=1081 data-nosnippet>1081</a>                        .stake_table_for_epoch(<span class="prelude-val">Some</span>(epoch + <span class="number">1</span>))
 <a href=#1082 id=1082 data-nosnippet>1082</a>                        .<span class="kw">await
