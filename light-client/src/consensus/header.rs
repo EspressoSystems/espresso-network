@@ -48,7 +48,12 @@ impl HeaderProof {
 
         BlockMerkleTree::verify(root, self.header.height(), &self.proof)
             .context("malformed proof")?
-            .map_err(|()| anyhow!("incorrect proof"))?;
+            .map_err(|()| {
+                anyhow!(
+                    "incorrect proof for element {} relative to {root}",
+                    self.header.height()
+                )
+            })?;
         Ok(())
     }
 }
