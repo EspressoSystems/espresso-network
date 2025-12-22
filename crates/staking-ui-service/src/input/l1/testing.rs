@@ -271,6 +271,15 @@ impl MetadataFetcher for NoMetadata {
 #[derive(Clone, Debug, Default)]
 pub struct ConstMetadata(pub NodeMetadataContent);
 
+impl ConstMetadata {
+    pub fn with_key(pub_key: PubKey) -> Self {
+        Self(NodeMetadataContent {
+            pub_key,
+            ..Default::default()
+        })
+    }
+}
+
 impl MetadataFetcher for ConstMetadata {
     async fn fetch_content(&self, _uri: &Url) -> Result<NodeMetadataContent> {
         Ok(self.0.clone())

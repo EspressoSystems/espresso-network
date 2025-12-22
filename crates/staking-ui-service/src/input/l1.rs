@@ -650,9 +650,6 @@ impl Snapshot {
                         return Default::default();
                     }
 
-                    // Download third-party metadata.
-                    let metadata = metadata_fetcher.fetch_infallible(&ev.metadataUri).await;
-
                     // Downgrade the event: apart from authentication and metadata, the V2 event
                     // contains the same information as the V1 event, and can be converted to a node
                     // the same way.
@@ -662,10 +659,13 @@ impl Snapshot {
                         commission: ev.commission,
                         schnorrVk: ev.schnorrVK,
                     };
-                    let node = NodeSetEntry {
-                        metadata,
-                        ..(&legacy).into()
-                    };
+                    let mut node: NodeSetEntry = (&legacy).into();
+
+                    // Download third-party metadata.
+                    node.metadata = metadata_fetcher
+                        .fetch_infallible_authenticated(&ev.metadataUri, &node.staking_key)
+                        .await;
+
                     (vec![FullNodeSetDiff::NodeUpdate(Arc::new(node))], vec![])
                 }
                 StakeTableV2Events::ValidatorRegistered(ev) => {
@@ -794,7 +794,9 @@ impl Snapshot {
                         )
                     });
                     let diff = FullNodeSetDiff::NodeUpdate(Arc::new(NodeSetEntry {
-                        metadata: metadata_fetcher.fetch_infallible(&ev.metadataUri).await,
+                        metadata: metadata_fetcher
+                            .fetch_infallible_authenticated(&ev.metadataUri, &node.staking_key)
+                            .await,
                         ..node.clone()
                     }));
                     (vec![diff], vec![])
@@ -955,7 +957,10 @@ impl Snapshot {
 
             // Fetch the node's metadata again; see if it has changed.
             Some(async move {
-                let new = match metadata_fetcher.fetch_content(&metadata.uri).await {
+                let new = match metadata_fetcher
+                    .fetch_content_authenticated(&metadata.uri, &node.staking_key)
+                    .await
+                {
                     Ok(content) => content,
                     Err(err) => {
                         // We know this node has a valid metadata URI, so if we get an error (e.g.
@@ -2010,6 +2015,28 @@ mod test {
         let mut node = validator_registered_event(rand::thread_rng());
         node.metadataUri = "https://testmetadata.com".to_string();
         let block: BlockData = test_events(
+            &ConstMetadata::with_key(node.blsVK.into()),
+            [StakeTableV2Events::ValidatorRegisteredV2(node.clone())],
+        )
+        .await;
+        assert_eq!(
+            block.state.node_set[&node.account].metadata,
+            Some(NodeMetadata {
+                uri: node.metadataUri.parse().unwrap(),
+                content: Some(NodeMetadataContent {
+                    pub_key: node.blsVK.into(),
+                    ..Default::default()
+                })
+            })
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_event_registration_with_metadata_wrong_pub_key() {
+        let mut node = validator_registered_event(rand::thread_rng());
+        node.metadataUri = "https://testmetadata.com".to_string();
+        let block: BlockData = test_events(
+            // Use default metadata, not one with a public key corresponding to this node.
             &ConstMetadata::default(),
             [StakeTableV2Events::ValidatorRegisteredV2(node.clone())],
         )
@@ -2018,7 +2045,7 @@ mod test {
             block.state.node_set[&node.account].metadata,
             Some(NodeMetadata {
                 uri: node.metadataUri.parse().unwrap(),
-                content: Some(NodeMetadataContent::default())
+                content: None
             })
         );
     }
@@ -2048,6 +2075,36 @@ mod test {
 
         let uri = "https://testmetadata.com";
         let block = test_events(
+            &ConstMetadata::with_key(node.blsVK.into()),
+            [
+                StakeTableV2Events::ValidatorRegisteredV2(node.clone()),
+                StakeTableV2Events::MetadataUriUpdated(MetadataUriUpdated {
+                    validator: node.account,
+                    metadataUri: uri.to_string(),
+                }),
+            ],
+        )
+        .await;
+        assert_eq!(
+            block.state.node_set[&node.account].metadata,
+            Some(NodeMetadata {
+                uri: uri.parse().unwrap(),
+                content: Some(NodeMetadataContent {
+                    pub_key: node.blsVK.into(),
+                    ..Default::default()
+                })
+            })
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_event_updated_with_metadata_wrong_pub_key() {
+        let mut node = validator_registered_event(rand::thread_rng());
+        node.metadataUri = "".to_string();
+
+        let uri = "https://testmetadata.com";
+        let block = test_events(
+            // Use default metadata, not one with a public key corresponding to this node.
             &ConstMetadata::default(),
             [
                 StakeTableV2Events::ValidatorRegisteredV2(node.clone()),
@@ -2062,7 +2119,7 @@ mod test {
             block.state.node_set[&node.account].metadata,
             Some(NodeMetadata {
                 uri: uri.parse().unwrap(),
-                content: Some(NodeMetadataContent::default())
+                content: None
             })
         );
     }
@@ -2348,6 +2405,7 @@ mod test {
         // blocks, we will refresh the node's metadata, which gives us another chance to load it
         // successfully.
         let content = NodeMetadataContent {
+            pub_key: node.blsVK.into(),
             name: Some("refreshed".into()),
             ..Default::default()
         };
@@ -2370,14 +2428,17 @@ mod test {
 
     #[test_log::test(tokio::test)]
     async fn test_refresh_metadata() {
-        // With four nodes, we cover the four cases that we can encounter in `refresh_metadata`:
+        // With five nodes, we cover the five cases that we can encounter in `refresh_metadata`:
         // * One node that has no metadata
         // * One whose metadata doesn't change
         // * One that has metadata and fails to refresh, so we keep the old metadata
+        // * One that has metadata and refreshes with the wrong public key, so we keep the old
+        //   metadata
         // * One that refreshes and changes.
         let metadata_const = NodeMetadata {
             uri: "https://const-metadata.com".parse().unwrap(),
             content: Some(NodeMetadataContent {
+                pub_key: make_node(1).staking_key.try_into().unwrap(),
                 name: Some("const".into()),
                 ..Default::default()
             }),
@@ -2385,13 +2446,23 @@ mod test {
         let metadata_fail = NodeMetadata {
             uri: "https://fail-metadata.com".parse().unwrap(),
             content: Some(NodeMetadataContent {
+                pub_key: make_node(2).staking_key.try_into().unwrap(),
                 name: Some("fail".into()),
+                ..Default::default()
+            }),
+        };
+        let metadata_pub_key = NodeMetadata {
+            uri: "https://metadata-with-pub-key.com".parse().unwrap(),
+            content: Some(NodeMetadataContent {
+                name: Some("pub-key".into()),
+                pub_key: make_node(3).staking_key.try_into().unwrap(),
                 ..Default::default()
             }),
         };
         let metadata_change = NodeMetadata {
             uri: "https://change-metadata.com".parse().unwrap(),
             content: Some(NodeMetadataContent {
+                pub_key: make_node(4).staking_key.try_into().unwrap(),
                 name: Some("change".into()),
                 ..Default::default()
             }),
@@ -2417,8 +2488,12 @@ mod test {
                     ..make_node(2)
                 },
                 NodeSetEntry {
-                    metadata: Some(metadata_change.clone()),
+                    metadata: Some(metadata_pub_key.clone()),
                     ..make_node(3)
+                },
+                NodeSetEntry {
+                    metadata: Some(metadata_change.clone()),
+                    ..make_node(4)
                 },
             ]
             .into_iter()
@@ -2429,6 +2504,13 @@ mod test {
         let fetcher = vec![
             (metadata_const.uri, metadata_const.content),
             (metadata_fail.uri, None),
+            (
+                metadata_pub_key.uri,
+                Some(NodeMetadataContent {
+                    pub_key: make_node(100).staking_key.try_into().unwrap(),
+                    ..metadata_pub_key.content.clone().unwrap()
+                }),
+            ),
             (
                 metadata_change.uri.clone(),
                 Some(after_change_metadata.clone()),
@@ -2441,7 +2523,7 @@ mod test {
                     uri: metadata_change.uri,
                     content: Some(after_change_metadata)
                 }),
-                ..make_node(3)
+                ..make_node(4)
             }]
         );
     }
@@ -2454,6 +2536,7 @@ mod test {
         let before = NodeMetadata {
             uri: "https://before.com".parse().unwrap(),
             content: Some(NodeMetadataContent {
+                pub_key: make_node(0).staking_key.try_into().unwrap(),
                 name: Some("before".to_string()),
                 ..Default::default()
             }),
@@ -2461,6 +2544,7 @@ mod test {
         let after = NodeMetadata {
             uri: "https://after.com".parse().unwrap(),
             content: Some(NodeMetadataContent {
+                pub_key: make_node(0).staking_key.try_into().unwrap(),
                 name: Some("after".to_string()),
                 ..Default::default()
             }),

@@ -1057,6 +1057,8 @@ mod tests {
         PendingWithdrawal, RatioSet, Withdrawal,
     };
     use crate::types::global::FullNodeSetDiff;
+    use espresso_types::PubKey;
+    use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use im::ordmap;
 
     use pretty_assertions::assert_eq;
@@ -2207,6 +2209,7 @@ mod tests {
         let mut persistence = Persistence::new(&options).await.unwrap();
 
         let content = NodeMetadataContent {
+            pub_key: PubKey::generated_from_seed_indexed(Default::default(), 42).0,
             name: Some("test".into()),
             description: Some("longer description".into()),
             company_name: Some("Espresso Systems".into()),

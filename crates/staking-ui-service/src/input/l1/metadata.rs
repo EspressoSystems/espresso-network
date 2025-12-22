@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use crate::{
     Error, Result,
-    error::ResultExt,
+    error::{ResultExt, ensure},
     types::common::{ImageSet, NodeMetadata, NodeMetadataContent},
 };
 use prometheus_parse::Scrape;
 use reqwest::{Url, header::HeaderValue};
+use tagged_base64::TaggedBase64;
 use tide_disco::http::mime::{JSON, PLAIN};
 use tracing::instrument;
 
@@ -52,8 +53,56 @@ pub trait MetadataFetcher: Sync {
         }
     }
 
+    /// Fetch node metadata from the given URI, authenticating against the given public key.
+    ///
+    /// If `pub_key` does not match the public key contained in the metadata content, the content
+    /// is treated as invalid (i.e. the result has [`NodeMetadata::content`]: [`None`]).
+    fn fetch_infallible_authenticated(
+        &self,
+        uri: &str,
+        pub_key: &TaggedBase64,
+    ) -> impl Send + Future<Output = Option<NodeMetadata>> {
+        async move {
+            let mut metadata = self.fetch_infallible(uri).await?;
+            if let Some(content) = &mut metadata.content
+                && *pub_key != content.pub_key.into()
+            {
+                tracing::warn!(
+                    %pub_key,
+                    %content.pub_key,
+                    "metadata content includes incorrect public key",
+                );
+                metadata.content = None;
+            }
+            Some(metadata)
+        }
+    }
+
     /// Download and parse node metadata content from a third-party URI.
     fn fetch_content(&self, url: &Url) -> impl Send + Future<Output = Result<NodeMetadataContent>>;
+
+    /// Download and parse node metadata content from a third-party URI, authenticating against the
+    /// given public key.
+    ///
+    /// If `pub_key` does not match the public key contained in the metadata content, an error is
+    /// returned.
+    fn fetch_content_authenticated(
+        &self,
+        uri: &Url,
+        pub_key: &TaggedBase64,
+    ) -> impl Send + Future<Output = Result<NodeMetadataContent>> {
+        async move {
+            let content = self.fetch_content(uri).await?;
+            ensure!(
+                *pub_key == content.pub_key.into(),
+                Error::internal().context(format!(
+                    "metadata content includes incorrect public key {} (expected {pub_key})",
+                    content.pub_key
+                ))
+            );
+            Ok(content)
+        }
+    }
 }
 
 /// Object that can download metadata from a given URI.
@@ -108,7 +157,25 @@ fn parse_prometheus(text: &str) -> Result<NodeMetadataContent> {
     let metrics = Scrape::parse(text.lines().map(String::from).map(Ok))
         .context(|| Error::internal().context("malformed prometheus metadata"))?;
 
-    let mut metadata = NodeMetadataContent::default();
+    // Find the public key, which is required.
+    let node = metrics
+        .samples
+        .iter()
+        .find(|sample| sample.metric.as_str() == "consensus_node")
+        .ok_or_else(|| Error::internal().context("missing public key"))?;
+    let key = node
+        .labels
+        .get("key")
+        .ok_or_else(|| Error::internal().context("consensus_node metric is missing key label"))?;
+    let pub_key = key
+        .parse()
+        .context(|| Error::internal().context("invalid public key"))?;
+
+    let mut metadata = NodeMetadataContent {
+        pub_key,
+        ..Default::default()
+    };
+
     for sample in metrics.samples {
         match sample.metric.as_str() {
             "consensus_node_identity_general" => {
@@ -190,9 +257,10 @@ mod test {
     use super::*;
 
     use async_lock::RwLock;
+    use espresso_types::PubKey;
     use futures::FutureExt;
     use hotshot_query_service::metrics::PrometheusMetrics;
-    use hotshot_types::traits::metrics::Metrics;
+    use hotshot_types::traits::{metrics::Metrics, signature_key::SignatureKey};
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_eq;
     use tokio::spawn;
@@ -201,24 +269,31 @@ mod test {
 
     #[test_log::test]
     fn test_parse_prometheus_all_fields() {
-        let text = r#"
+        let pub_key = PubKey::generated_from_seed_indexed(Default::default(), 42).0;
+        let text = format!(
+            r#"
+        # HELP consensus_node node
+        # TYPE consensus_node gauge
+        consensus_node{{key="{pub_key}"}} 1
         # HELP consensus_version version
         # TYPE consensus_version gauge
-        consensus_version{desc="db0900d",rev="db0900dc7bc539479dfc58c5ace8f3aed736491a",timestamp="2025-11-21T14:40:40.000000000-05:00"} 1
+        consensus_version{{desc="db0900d",rev="db0900dc7bc539479dfc58c5ace8f3aed736491a",timestamp="2025-11-21T14:40:40.000000000-05:00"}} 1
         # HELP consensus_node_identity_general node_identity_general
         # TYPE consensus_node_identity_general gauge
-        consensus_node_identity_general{company_name="Espresso Systems",company_website="https://www.espressosys.com/",name="test-node",description="a test node",network_type="AWS",node_type="espresso-sequencer 0.1.0",operating_system="Linux"} 1
+        consensus_node_identity_general{{company_name="Espresso Systems",company_website="https://www.espressosys.com/",name="test-node",description="a test node",network_type="AWS",node_type="espresso-sequencer 0.1.0",operating_system="Linux"}} 1
         # HELP consensus_node_identity_location node_identity_location
         # TYPE consensus_node_identity_location gauge
-        consensus_node_identity_location{country="US",latitude="39.96264474822646",longitude="-83.00332937380611"} 1
+        consensus_node_identity_location{{country="US",latitude="39.96264474822646",longitude="-83.00332937380611"}} 1
         # HELP consensus_node_identity_icon node_identity_icon
         # TYPE consensus_node_identity_icon gauge
-        consensus_node_identity_icon{small_1x="https://www.espressosys.com/small-icon.png",large_2x="https://www.espressosys.com/large-icon.png","medium_1x"="https://www.espressosys.com/ignored-icon.png"} 1
-        "#;
-        let metadata = parse_prometheus(text).unwrap();
+        consensus_node_identity_icon{{small_1x="https://www.espressosys.com/small-icon.png",large_2x="https://www.espressosys.com/large-icon.png","medium_1x"="https://www.espressosys.com/ignored-icon.png"}} 1
+        "#
+        );
+        let metadata = parse_prometheus(&text).unwrap();
         assert_eq!(
             metadata,
             NodeMetadataContent {
+                pub_key,
                 name: Some("test-node".into()),
                 description: Some("a test node".into()),
                 company_name: Some("Espresso Systems".into()),
@@ -250,7 +325,9 @@ mod test {
 
     #[test_log::test]
     fn test_parse_prometheus_no_fields() {
-        let text = r#"
+        let pub_key = PubKey::generated_from_seed_indexed(Default::default(), 42).0;
+        let text = format!(
+            r#"
         # HELP consensus_l1_failovers failovers
         # TYPE consensus_l1_failovers counter
         consensus_l1_failovers 0
@@ -286,27 +363,55 @@ mod test {
         consensus_libp2p_num_failed_messages 4098
         # HELP consensus_node node
         # TYPE consensus_node gauge
-        consensus_node{key="BLS_VER_KEY~widXdplI_m2zFsHBNxCmo5GfJa0VZtkPI88pRal6eRP9ZDwZth4iMXHTruzDFhnJW6-g3LVr3JJHUG6P3-IVECesRGFjvOEM4TofF2CCPD16uSGYJMpbgWKyw1x2OQYpZTkfDqtwTUtCWRrTNiFfJZYEJfyeQwUACFfF8fCNFwJZ"} 1
-        "#;
+        consensus_node{{key="{pub_key}"}} 1
+        "#
+        );
         assert_eq!(
-            parse_prometheus(text).unwrap(),
-            NodeMetadataContent::default()
+            parse_prometheus(&text).unwrap(),
+            NodeMetadataContent {
+                pub_key,
+                ..Default::default()
+            }
         );
     }
 
     #[test_log::test]
     fn test_parse_prometheus_invalid_urls() {
-        let text = r#"
-        consensus_node_identity_general{company_website="notaurl"} 1
-        consensus_node_identity_icon{small_1x="notaurl"} 1
-        "#;
+        let pub_key = PubKey::generated_from_seed_indexed(Default::default(), 42).0;
+        let text = format!(
+            r#"
+        consensus_node{{key={pub_key}}} 1
+        consensus_node_identity_general{{company_website="notaurl"}} 1
+        consensus_node_identity_icon{{small_1x="notaurl"}} 1
+        "#
+        );
         assert_eq!(
-            parse_prometheus(text).unwrap(),
+            parse_prometheus(&text).unwrap(),
             NodeMetadataContent {
                 icon: Some(ImageSet::default()),
+                pub_key,
                 ..Default::default()
             }
         );
+    }
+
+    #[test_log::test]
+    fn test_parse_prometheus_missing_pub_key() {
+        let text = r#"
+        # HELP consensus_version version
+        # TYPE consensus_version gauge
+        consensus_version{{desc="db0900d",rev="db0900dc7bc539479dfc58c5ace8f3aed736491a",timestamp="2025-11-21T14:40:40.000000000-05:00"}} 1
+        # HELP consensus_node_identity_general node_identity_general
+        # TYPE consensus_node_identity_general gauge
+        consensus_node_identity_general{{company_name="Espresso Systems",company_website="https://www.espressosys.com/",name="test-node",description="a test node",network_type="AWS",node_type="espresso-sequencer 0.1.0",operating_system="Linux"}} 1
+        # HELP consensus_node_identity_location node_identity_location
+        # TYPE consensus_node_identity_location gauge
+        consensus_node_identity_location{{country="US",latitude="39.96264474822646",longitude="-83.00332937380611"}} 1
+        # HELP consensus_node_identity_icon node_identity_icon
+        # TYPE consensus_node_identity_icon gauge
+        consensus_node_identity_icon{{small_1x="https://www.espressosys.com/small-icon.png",large_2x="https://www.espressosys.com/large-icon.png","medium_1x"="https://www.espressosys.com/ignored-icon.png"}} 1
+        "#;
+        parse_prometheus(text).unwrap_err();
     }
 
     #[test_log::test]
@@ -349,7 +454,9 @@ mod test {
 
     #[test_log::test(tokio::test)]
     async fn test_fetch_json() {
+        let pub_key = PubKey::generated_from_seed_indexed(Default::default(), 42).0;
         let expected = NodeMetadataContent {
+            pub_key,
             name: Some("test".into()),
             description: Some("longer description".into()),
             company_name: Some("Espresso Systems".into()),
@@ -415,9 +522,35 @@ mod test {
         assert_eq!(
             fetcher.fetch_infallible(uri.as_ref()).await.unwrap(),
             NodeMetadata {
-                uri,
+                uri: uri.clone(),
+                content: Some(expected.clone())
+            }
+        );
+
+        // Test authentication with valid public key.
+        assert_eq!(
+            fetcher
+                .fetch_infallible_authenticated(uri.as_ref(), &pub_key.into())
+                .await
+                .unwrap(),
+            NodeMetadata {
+                uri: uri.clone(),
                 content: Some(expected)
             }
+        );
+
+        // Test authentication with wrong public key.
+        assert_eq!(
+            fetcher
+                .fetch_infallible_authenticated(
+                    uri.as_ref(),
+                    &PubKey::generated_from_seed_indexed(Default::default(), 43)
+                        .0
+                        .into()
+                )
+                .await
+                .unwrap(),
+            NodeMetadata { uri, content: None }
         );
 
         server.abort();
@@ -426,7 +559,9 @@ mod test {
 
     #[test_log::test(tokio::test)]
     async fn test_fetch_prometheus() {
+        let pub_key = PubKey::generated_from_seed_indexed(Default::default(), 42).0;
         let expected = NodeMetadataContent {
+            pub_key,
             name: Some("test".into()),
             description: Some("longer description".into()),
             company_name: Some("Espresso Systems".into()),
@@ -472,6 +607,10 @@ mod test {
         let metrics = PrometheusMetrics::default();
         {
             let metrics: &dyn Metrics = &metrics;
+            metrics
+                .gauge_family("consensus_node".into(), vec!["key".into()])
+                .create(vec![pub_key.to_string()])
+                .set(1);
             metrics
                 .gauge_family(
                     "consensus_node_identity_general".into(),

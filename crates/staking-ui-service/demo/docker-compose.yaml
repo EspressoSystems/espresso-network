@@ -19,7 +19,7 @@ services:
       start_interval: 1s
 
   espresso-dev-node:
-    image: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:latest
+    image: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:main
     ports:
       - "$ESPRESSO_SEQUENCER_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
       - "$ESPRESSO_BUILDER_PORT:$ESPRESSO_BUILDER_PORT"
@@ -49,7 +49,7 @@ services:
       - espresso_storage:/data/espresso
 
   staking-ui-service:
-    image: ghcr.io/espressosystems/staking-ui-service:latest
+    image: ghcr.io/espressosystems/staking-ui-service:main
     ports:
       - "$ESPRESSO_STAKING_SERVICE_PORT:$ESPRESSO_STAKING_SERVICE_PORT"
     environment:
@@ -69,7 +69,7 @@ services:
       - espresso_storage:/data/espresso
 
   client-swarm:
-    image: ghcr.io/espressosystems/staking-client-swarm:latest
+    image: ghcr.io/espressosystems/staking-client-swarm:main
     ports:
       - "$STAKING_CLIENT_SWARM_PORT:$STAKING_CLIENT_SWARM_PORT"
     environment:
