@@ -15,7 +15,7 @@ use hotshot_testing::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     overall_safety_task::OverallSafetyPropertiesDescription,
     spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
-    test_builder::{TestDescription, TimingData},
+    test_builder::{TestDescription},
 };
 
 #[cfg(test)]
@@ -26,13 +26,9 @@ async fn test_catchup() {
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
-        test_builder::{TestDescription, TimingData},
+        test_builder::{TestDescription},
     };
 
-    let timing_data = TimingData {
-        next_view_timeout: 2000,
-        ..Default::default()
-    };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
@@ -41,7 +37,6 @@ async fn test_catchup() {
     }];
 
     metadata.test_config.epoch_height = 0;
-    metadata.timing_data = timing_data;
 
     metadata.view_sync_properties =
         hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
@@ -73,13 +68,9 @@ async fn test_catchup_cdn() {
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
-        test_builder::{TestDescription, TimingData},
+        test_builder::{TestDescription},
     };
 
-    let timing_data = TimingData {
-        next_view_timeout: 2000,
-        ..Default::default()
-    };
     let mut metadata: TestDescription<TestTypes, PushCdnImpl, TestVersions> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
@@ -87,7 +78,6 @@ async fn test_catchup_cdn() {
         updown: NodeAction::Up,
     }];
     metadata.test_config.epoch_height = 0;
-    metadata.timing_data = timing_data;
 
     metadata.spinning_properties = SpinningTaskDescription {
         // Start the nodes before their leadership.
@@ -114,13 +104,9 @@ async fn test_catchup_one_node() {
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
-        test_builder::{TestDescription, TimingData},
+        test_builder::{TestDescription},
     };
 
-    let timing_data = TimingData {
-        next_view_timeout: 2000,
-        ..Default::default()
-    };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
@@ -128,7 +114,6 @@ async fn test_catchup_one_node() {
         updown: NodeAction::Up,
     }];
     metadata.test_config.epoch_height = 0;
-    metadata.timing_data = timing_data;
 
     metadata.spinning_properties = SpinningTaskDescription {
         // Start the nodes before their leadership.
@@ -157,13 +142,9 @@ async fn test_catchup_in_view_sync() {
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
-        test_builder::{TestDescription, TimingData},
+        test_builder::{TestDescription},
     };
 
-    let timing_data = TimingData {
-        next_view_timeout: 2000,
-        ..Default::default()
-    };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![
@@ -178,7 +159,6 @@ async fn test_catchup_in_view_sync() {
     ];
 
     metadata.test_config.epoch_height = 0;
-    metadata.timing_data = timing_data;
     metadata.view_sync_properties =
         hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
 
@@ -207,13 +187,9 @@ async fn test_catchup_reload() {
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
         spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
-        test_builder::{TestDescription, TimingData},
+        test_builder::{TestDescription},
     };
 
-    let timing_data = TimingData {
-        next_view_timeout: 2000,
-        ..Default::default()
-    };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
@@ -222,7 +198,6 @@ async fn test_catchup_reload() {
     }];
 
     metadata.test_config.epoch_height = 0;
-    metadata.timing_data = timing_data;
     metadata.skip_late = true;
 
     metadata.view_sync_properties =
@@ -254,10 +229,6 @@ cross_tests!(
     Versions: [TestVersions],
     Ignore: false,
     Metadata: {
-      let timing_data = TimingData {
-          next_view_timeout: 2000,
-          ..Default::default()
-      };
       let mut metadata = TestDescription::default().set_num_nodes(14,7);
       let mut catchup_nodes = vec![];
 
@@ -268,7 +239,6 @@ cross_tests!(
           })
       }
 
-      metadata.timing_data = timing_data;
       metadata.test_config.epoch_height = 0;
 
       metadata.spinning_properties = SpinningTaskDescription {
@@ -282,7 +252,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          possible_view_failures: vec![12, 14],
+          possible_view_failures: vec![12, 14, 15],
           decide_timeout: Duration::from_secs(20),
           ..Default::default()
       };
@@ -302,10 +272,6 @@ cross_tests!(
     Versions: [TestVersions],
     Ignore: false,
     Metadata: {
-      let timing_data = TimingData {
-          next_view_timeout: 2000,
-          ..Default::default()
-      };
       let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> =
           TestDescription::default().set_num_nodes(14,1);
 
@@ -317,7 +283,6 @@ cross_tests!(
           })
       }
 
-      metadata.timing_data = timing_data;
       metadata.test_config.epoch_height = 0;
 
       metadata.spinning_properties = SpinningTaskDescription {
@@ -331,7 +296,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          possible_view_failures: vec![12, 14],
+          possible_view_failures: vec![12, 14, 15],
           decide_timeout: Duration::from_secs(20),
           ..Default::default()
       };

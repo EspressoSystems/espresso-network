@@ -149,7 +149,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     ) {
         match event.as_ref() {
             HotShotEvent::QuorumProposalRecv(proposal, sender) => {
-                tracing::debug!(
+                tracing::warn!(
                     "Quorum proposal recv for view {}",
                     proposal.data.view_number()
                 );

@@ -117,6 +117,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
                     num_transactions: 0
                 },
                 ViewNumber::new(1),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -218,8 +219,8 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                     num_transactions: 0
                 },
                 ViewNumber::new(1),
+                None,
                 vec1![builder_fee.clone()],
-                 
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -236,6 +237,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 builder_commitment.clone(),
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
+                None,
                 vec1![builder_fee.clone()],
                  
             ),
@@ -254,6 +256,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 builder_commitment.clone(),
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
+                None,
                 vec1![builder_fee.clone()],
                  
             ),
@@ -272,6 +275,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 builder_commitment.clone(),
                 proposals[2].data.block_header().metadata,
                 ViewNumber::new(4),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -290,6 +294,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 builder_commitment,
                 proposals[3].data.block_header().metadata,
                 ViewNumber::new(5),
+                None,
                 vec1![builder_fee.clone()],
                  
             ),
@@ -389,6 +394,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
                 num_transactions: 0
             },
             ViewNumber::new(3),
+            None,
             vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                 num_storage_nodes,
                 <TestVersions as Versions>::Base::VERSION,
@@ -489,6 +495,7 @@ async fn test_quorum_proposal_task_view_sync() {
                 num_transactions: 0
             },
             ViewNumber::new(2),
+            None,
             vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                 num_storage_nodes,
                 <TestVersions as Versions>::Base::VERSION,
@@ -592,6 +599,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                     num_transactions: 0
                 },
                 ViewNumber::new(1),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -610,6 +618,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 builder_commitment.clone(),
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -628,6 +637,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 builder_commitment.clone(),
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -646,6 +656,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 builder_commitment.clone(),
                 proposals[2].data.block_header().metadata,
                 ViewNumber::new(4),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),
@@ -664,6 +675,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 builder_commitment,
                 proposals[3].data.block_header().metadata,
                 ViewNumber::new(5),
+                None,
                 vec1![builder_fee.clone()],
                 
             ),

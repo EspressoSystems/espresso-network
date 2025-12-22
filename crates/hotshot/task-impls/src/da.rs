@@ -414,6 +414,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     encoded_transactions,
                     metadata,
                     view_number,
+                    epoch_number,
                     ..
                 } = packed_bundle;
                 let view_number = *view_number;
@@ -426,12 +427,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     TYPES::SignatureKey::sign(&self.private_key, &encoded_transactions_hash)
                         .wrap()?;
 
-                let epoch = self.cur_epoch;
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(epoch)
+                    .membership_for_epoch(*epoch_number)
                     .await
-                    .context(warn!("No stake table for epoch"))?
+                    .context(warn!("No stake table for epoch {epoch_number:?}"))?
                     .leader(view_number)
                     .await?;
                 if leader != self.public_key {
@@ -482,7 +482,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     metadata: metadata.clone(),
                     // Upon entering a new view we want to send a DA Proposal for the next view -> Is it always the case that this is cur_view + 1?
                     view_number,
-                    epoch,
+                    epoch: *epoch_number,
                     epoch_transition_indicator,
                 };
 
