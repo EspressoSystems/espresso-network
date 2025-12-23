@@ -33,9 +33,10 @@ EOF
 # native builds.
 
 # parse arguments until -- to see if an image was selected
-cargo_build_args=""
+cargo_build_args="-j1 -vv"
 image=""
 clean=""
+tag="main"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
@@ -51,6 +52,10 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       image="$2"
+      shift 2
+      ;;
+    -t|--tag)
+      tag="$2"
       shift 2
       ;;
     clean)
@@ -278,5 +283,5 @@ cp package.json yarn.lock "$workdir/"
 export DOCKER_BUILDKIT=1
 
 for image in "${images[@]}"; do
-  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-sequencer/$image:main" -f "docker/$image.Dockerfile" "$workdir"
+  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-sequencer/$image:$tag" -f "docker/$image.Dockerfile" "$workdir"
 done

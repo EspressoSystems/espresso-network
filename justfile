@@ -22,6 +22,8 @@ demo *args:
         lazydocker
     fi
 
+demo-file file *args:
+    docker compose -f "{{file}}" up {{args}}
 
 demo-native *args: (build "test")
     scripts/demo-native {{args}}

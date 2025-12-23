@@ -316,6 +316,7 @@ opt-level = 3
 # - Optimized enough to run demo
 # - Avoids huge binaries
 [profile.test-docker]
+incremental = false
 inherits = "test"
 strip = true
 debug = "none"
