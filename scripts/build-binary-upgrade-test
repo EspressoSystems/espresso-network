@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+scripts/build-docker-images-native --image builder --tag testing
+scripts/build-docker-images-native --image sequencer --tag testing
