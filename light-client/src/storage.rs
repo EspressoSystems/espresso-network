@@ -1,12 +1,25 @@
 use std::{future::Future, path::PathBuf};
 
 use anyhow::{Context, Result};
+use derive_more::{Display, From};
 use espresso_types::SeqTypes;
 use hotshot_query_service::{
-    availability::{LeafId, LeafQueryData},
+    availability::{BlockId, LeafId, LeafQueryData},
     types::HeightIndexed,
 };
-use sqlx::{query, query_as, sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{query, query_as, sqlite::SqlitePoolOptions, QueryBuilder, SqlitePool};
+
+/// Different ways to ask the database for a leaf.
+#[derive(Clone, Copy, Debug, Display, From)]
+pub enum LeafRequest {
+    /// Ask for a leaf with a given ID.
+    #[display("leaf {_0}")]
+    Leaf(LeafId<SeqTypes>),
+
+    /// Ask for the leaf containing a header with a given ID.
+    #[display("header {_0}")]
+    Header(BlockId<SeqTypes>),
+}
 
 /// Client-side database for a [`LightClient`].
 pub trait Storage: Sized + Send + Sync + 'static {
@@ -25,7 +38,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
     /// If there is no known leaf later than the requested leaf, the result is [`None`].
     fn leaf_upper_bound(
         &self,
-        leaf: LeafId<SeqTypes>,
+        leaf: impl Into<LeafRequest> + Send,
     ) -> impl Send + Future<Output = Result<Option<LeafQueryData<SeqTypes>>>>;
 
     /// Add a leaf to the cache.
@@ -94,33 +107,37 @@ impl Storage for SqliteStorage {
 
     async fn leaf_upper_bound(
         &self,
-        id: LeafId<SeqTypes>,
+        id: impl Into<LeafRequest> + Send,
     ) -> Result<Option<LeafQueryData<SeqTypes>>> {
         let mut tx = self.pool.begin().await?;
-        let (height, data): (i64, _) = match id {
-            LeafId::Number(n) => {
-                let Some((height, data)) = query_as(
-                    "SELECT height, data FROM leaf WHERE height >= $1 ORDER BY height LIMIT 1",
-                )
-                .bind(n as i64)
-                .fetch_optional(tx.as_mut())
-                .await?
-                else {
-                    return Ok(None);
-                };
-                (height, data)
+
+        let mut q = QueryBuilder::new("SELECT height, data FROM leaf WHERE ");
+        match id.into() {
+            LeafRequest::Leaf(LeafId::Number(n)) | LeafRequest::Header(BlockId::Number(n)) => {
+                q.push("height >= ")
+                    .push_bind(n as i64)
+                    .push("ORDER BY HEIGHT");
             },
-            LeafId::Hash(h) => {
-                let Some((height, data)) =
-                    query_as("SELECT height, data FROM leaf WHERE hash = $1 LIMIT 1")
-                        .bind(h.to_string())
-                        .fetch_optional(tx.as_mut())
-                        .await?
-                else {
-                    return Ok(None);
-                };
-                (height, data)
+            LeafRequest::Leaf(LeafId::Hash(h)) => {
+                q.push("hash = ").push_bind(h.to_string());
             },
+            LeafRequest::Header(BlockId::Hash(h)) => {
+                q.push("block_hash = ").push_bind(h.to_string());
+            },
+            LeafRequest::Header(BlockId::PayloadHash(h)) => {
+                q.push("payload_hash = ")
+                    .push_bind(h.to_string())
+                    .push("ORDER BY height");
+            },
+        }
+        q.push(" LIMIT 1");
+
+        let Some((height, data)) = q
+            .build_query_as::<(i64, _)>()
+            .fetch_optional(tx.as_mut())
+            .await?
+        else {
+            return Ok(None);
         };
         let leaf = serde_json::from_value(data)?;
 
@@ -143,16 +160,21 @@ impl Storage for SqliteStorage {
 
         let height = leaf.height() as i64;
         let hash = leaf.hash().to_string();
+        let block_hash = leaf.block_hash().to_string();
+        let payload_hash = leaf.payload_hash().to_string();
         let data = serde_json::to_value(leaf)?;
 
         tracing::debug!(height, hash, "inserting leaf");
         let (id,): (i32,) = query_as(
-            "INSERT INTO leaf (height, hash, data) VALUES ($1, $2, $3)
+            "INSERT INTO leaf (height, hash, block_hash, payload_hash, data) VALUES ($1, $2, $3, \
+             $4, $5)
                     ON CONFLICT (height) DO UPDATE SET id = excluded.id
                     RETURNING id",
         )
         .bind(height)
         .bind(&hash)
+        .bind(&block_hash)
+        .bind(&payload_hash)
         .bind(data)
         .fetch_one(tx.as_mut())
         .await
@@ -190,6 +212,7 @@ impl Storage for SqliteStorage {
 #[cfg(test)]
 mod test {
     use espresso_types::EpochVersion;
+    use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::testing::leaf_chain;
@@ -215,6 +238,28 @@ mod test {
                 .unwrap(),
             leaf
         );
+        assert_eq!(
+            db.leaf_upper_bound(BlockId::Number(0))
+                .await
+                .unwrap()
+                .unwrap(),
+            leaf
+        );
+        assert_eq!(
+            db.leaf_upper_bound(BlockId::Hash(leaf.block_hash()))
+                .await
+                .unwrap()
+                .unwrap(),
+            leaf
+        );
+        assert_eq!(
+            db.leaf_upper_bound(BlockId::PayloadHash(leaf.payload_hash()))
+                .await
+                .unwrap()
+                .unwrap()
+                .payload_hash(),
+            leaf.payload_hash()
+        );
     }
 
     #[tokio::test]
@@ -238,6 +283,29 @@ mod test {
                 .await
                 .unwrap(),
             None
+        );
+        assert_eq!(
+            db.leaf_upper_bound(BlockId::Hash(leaves[0].block_hash()))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_leaf_upper_bound_least_upper_bound() {
+        let db = SqliteStorage::default().await.unwrap();
+
+        let leaves = leaf_chain::<EpochVersion>(0..=2).await;
+        db.insert_leaf(leaves[2].clone()).await.unwrap();
+        db.insert_leaf(leaves[1].clone()).await.unwrap();
+        assert_eq!(
+            db.leaf_upper_bound(LeafId::Number(0))
+                .await
+                .unwrap()
+                .unwrap(),
+            leaves[1]
         );
     }
 

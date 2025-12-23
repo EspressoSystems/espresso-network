@@ -235,6 +235,7 @@ where
 #[cfg(test)]
 mod test {
     use espresso_types::EpochVersion;
+    use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::testing::{

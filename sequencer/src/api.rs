@@ -2511,7 +2511,10 @@ mod test {
     };
 
     use ::light_client::{
-        consensus::leaf::{LeafProof, LeafProofHint},
+        consensus::{
+            header::HeaderProof,
+            leaf::{LeafProof, LeafProofHint},
+        },
         testing::{EpochChangeQuorum, LegacyVersion},
     };
     use alloy::{
@@ -7261,19 +7264,49 @@ mod test {
                 .await
                 .unwrap();
             tracing::debug!(?leaf, "expected leaf");
-            let leaf_proof: LeafProof = client
-                .get(&format!("light-client/leaf/{i}"))
+
+            // Get the same leaf proof by other IDs.
+            for path in [
+                format!("light-client/leaf/{i}"),
+                format!("light-client/leaf/hash/{}", leaf.hash()),
+                format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
+            ] {
+                tracing::info!(i, path, "get leaf proof");
+                let leaf_proof: LeafProof = client.get(&path).send().await.unwrap();
+                tracing::debug!(?leaf_proof, "fetched proof");
+                assert_eq!(
+                    leaf_proof
+                        .verify(LeafProofHint::Quorum(&quorum))
+                        .await
+                        .unwrap(),
+                    leaf
+                );
+            }
+
+            // Get the corresponding header.
+            let root_height = i + 1;
+            let root: Header = client
+                .get(&format!("availability/header/{root_height}"))
                 .send()
                 .await
                 .unwrap();
-            tracing::debug!(?leaf_proof, "fetched proof");
-            assert_eq!(
-                leaf_proof
-                    .verify(LeafProofHint::Quorum(&quorum))
-                    .await
-                    .unwrap(),
-                leaf
-            );
+            for path in [
+                format!("light-client/header/{root_height}/{i}"),
+                format!(
+                    "light-client/header/{root_height}/hash/{}",
+                    leaf.block_hash()
+                ),
+            ] {
+                tracing::info!(i, path, "get header proof");
+                let header_proof: HeaderProof = client.get(&path).send().await.unwrap();
+                tracing::debug!(?header_proof, "fetched proof");
+                assert_eq!(
+                    header_proof
+                        .verify_ref(root.block_merkle_tree_root())
+                        .unwrap(),
+                    leaf.header()
+                );
+            }
         }
     }
 }
