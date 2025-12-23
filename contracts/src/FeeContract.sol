@@ -100,6 +100,6 @@ contract FeeContract is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         pure
         returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
     {
-        return (1, 0, 0);
+        return (1, 0, 1);
     }
 }
