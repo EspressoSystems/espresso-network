@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["build_get_path_query","build_hash_batch_insert"],"struct":["Node"]};
+window.SIDEBAR_ITEMS = {"fn":["batch_insert_hashes","build_get_path_query","collect_nodes_from_proofs"],"struct":["Node"],"type":["NodeWithHashes","ProofWithPath"]};
