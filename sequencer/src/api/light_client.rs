@@ -11,10 +11,13 @@ use hotshot_query_service::{
     types::HeightIndexed,
     Error,
 };
+use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::consensus::{header::HeaderProof, leaf::LeafProof};
 use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
+
+use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
 async fn get_leaf_proof<State>(
     state: &State,
@@ -151,6 +154,8 @@ where
     S: ReadState + Send + Sync + 'static,
     S::State: AvailabilityDataSource<SeqTypes>
         + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + NodeStateDataSource
+        + StakeTableDataSource<SeqTypes>
         + VersionedDataSource,
     for<'a> <S::State as VersionedDataSource>::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
@@ -194,6 +199,83 @@ where
                 });
             };
             get_header_proof(state, root, requested, fetch_timeout).await
+        }
+        .boxed()
+    })?
+    .get("stake_table", move |req, state| {
+        async move {
+            let epoch: u64 = req.integer_param("epoch").map_err(|err| Error::Custom {
+                message: format!("epoch: {err:#}"),
+                status: StatusCode::BAD_REQUEST,
+            })?;
+
+            let node_state = state.node_state().await;
+            let epoch_height = node_state.epoch_height.ok_or_else(|| Error::Custom {
+                message: "epoch state not set".into(),
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+            })?;
+            let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
+
+            if epoch < first_epoch + 2 {
+                return Err(Error::Custom {
+                    message: format!("epoch must be at least {}", first_epoch + 2),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
+            // Find the range of L1 block containing events for this epoch. This is determined by
+            // the `l1_finalized` field of the epoch root (from two epochs prior) and the previous
+            // epoch's epoch root.
+            let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
+            let epoch_root = state
+                .get_header(epoch_root_height)
+                .await
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| Error::Custom {
+                    message: format!("missing epoch root header {epoch_root_height}"),
+                    status: StatusCode::NOT_FOUND,
+                })?;
+            let to_l1_block = epoch_root
+                .l1_finalized()
+                .ok_or_else(|| Error::Custom {
+                    message: "epoch root header is missing L1 finalized block".into(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?
+                .number();
+
+            let from_l1_block = if epoch >= first_epoch + 3 {
+                let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
+                let prev_epoch_root = state
+                    .get_header(prev_epoch_root_height)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!(
+                            "missing previous epoch root header {prev_epoch_root_height}"
+                        ),
+                        status: StatusCode::NOT_FOUND,
+                    })?;
+                prev_epoch_root
+                    .l1_finalized()
+                    .ok_or_else(|| Error::Custom {
+                        message: "previous epoch root header is missing L1 finalized block".into(),
+                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                    })?
+                    .number()
+                    + 1
+            } else {
+                0
+            };
+
+            state
+                .stake_table_events(from_l1_block, to_l1_block)
+                .await
+                .map_err(|err| Error::Custom {
+                    message: format!("failed to load stake table events: {err:#}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })
         }
         .boxed()
     })?;

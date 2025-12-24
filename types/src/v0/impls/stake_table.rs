@@ -865,7 +865,7 @@ impl Fetcher {
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let (read_l1_offset, persistence_events) = {
             let persistence_lock = self.persistence.lock().await;
-            persistence_lock.load_events(to_block).await?
+            persistence_lock.load_events(0, to_block).await?
         };
 
         tracing::info!("loaded events from storage to_block={to_block:?}");
