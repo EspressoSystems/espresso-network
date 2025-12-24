@@ -87,7 +87,6 @@ func verifyNamespace(namespace uint64, proof []byte, blockComm []byte, nsTable [
 	return false, errors.New(msg)
 }
 
-
 func verifyMerkleProof(proof []byte, header []byte, blockComm []byte, circuitBlock []byte) (bool, error) {
 
 	proofPtr := (*C.uint8_t)(unsafe.Pointer(&proof[0]))
