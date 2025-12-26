@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use futures::future::Future;
 use hotshot::types::{Event, EventType};
 use hotshot_types::{
-    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidDisperseShare, VidShare},
+    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare},
     event::LeafInfo,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
@@ -27,6 +27,7 @@ use hotshot_types::{
     vid::{
         advz::advz_scheme,
         avidm::{init_avidm_param, AvidMScheme},
+        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
     },
     vote::HasViewNumber,
 };
@@ -37,7 +38,7 @@ use crate::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
         UpdateAvailabilityData, VidCommonQueryData,
     },
-    Header, Payload, VidCommon,
+    Header, Payload,
 };
 
 /// An extension trait for types which implement the update trait for each API module.
@@ -143,6 +144,13 @@ where
                         )),
                         Some(VidShare::V1(share.share.clone())),
                     ),
+                    Some(VidDisperseShare::V2(share)) => (
+                        Some(VidCommonQueryData::new(
+                            leaf2.block_header().clone(),
+                            VidCommon::V2(share.common.clone()),
+                        )),
+                        Some(VidShare::V2(share.share.clone())),
+                    ),
                     None => {
                         if leaf2.view_number().u64() == 0 {
                             // HotShot does not run VID in consensus for the genesis block. In this case,
@@ -228,6 +236,26 @@ fn genesis_vid<Types: NodeType>(
             Ok((
                 VidCommonQueryData::new(leaf.block_header().clone(), VidCommon::V1(avidm_param)),
                 VidShare::V1(shares.remove(0)),
+            ))
+        },
+        VidCommitment::V2(commit) => {
+            let avidm_gf2_param = init_avidm_gf2_param(GENESIS_VID_NUM_STORAGE_NODES)?;
+            let weights = vec![1; GENESIS_VID_NUM_STORAGE_NODES];
+            let ns_table = parse_ns_table(bytes.len(), &leaf.block_header().metadata().encode());
+
+            let (calculated_commit, common, mut shares) =
+                AvidmGf2Scheme::ns_disperse(&avidm_gf2_param, &weights, &bytes, ns_table).unwrap();
+
+            ensure!(
+                calculated_commit == commit,
+                "computed VID commit {} for genesis block does not match header commit {}",
+                calculated_commit,
+                commit
+            );
+
+            Ok((
+                VidCommonQueryData::new(leaf.block_header().clone(), VidCommon::V2(common)),
+                VidShare::V2(shares.remove(0)),
             ))
         },
     }

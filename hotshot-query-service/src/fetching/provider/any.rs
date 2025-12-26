@@ -14,14 +14,14 @@ use std::{fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 
 use super::{Provider, Request};
 use crate::{
     availability::LeafQueryData,
     data_source::AvailabilityProvider,
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
-    Payload, VidCommon,
+    Payload,
 };
 
 /// Blanket trait combining [`Debug`] and [`Provider`].

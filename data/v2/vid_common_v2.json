@@ -1,0 +1,23 @@
+{
+  "block_hash": "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2",
+  "common": {
+    "V2": {
+      "ns_commits": [
+        "AvidmGf2Commit~S4uLwuhpm2cMOmrewnglJva3dkw1EyDDjnyB3QScR8n8",
+        "AvidmGf2Commit~8576EKyci9C39vIu2G7YqTeyMy2kdtFg372fQKt8Eo8Q",
+        "AvidmGf2Commit~nfvFraNgQtRXuhk9GCqu8yLWHPrLJkCpoLfX0gGZ7mvd"
+      ],
+      "ns_lens": [
+        1564,
+        2084,
+        1564
+      ],
+      "param": {
+        "recovery_threshold": 4,
+        "total_weights": 10
+      }
+    }
+  },
+  "height": 42,
+  "payload_hash": "HASH~u-mEo1mwByROUhnvO7pBFitcD0UEvruK-b8WONkKoCLQ"
+}

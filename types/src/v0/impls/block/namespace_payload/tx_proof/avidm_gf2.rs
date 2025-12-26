@@ -1,19 +1,19 @@
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    vid::avidm::AvidMCommon,
+    vid::avidm_gf2::AvidmGf2Common,
 };
 
 use crate::{
-    v0_3::{AvidMNsProof, AvidMTxProof},
+    v0_6::{AvidmGf2NsProof, AvidmGf2TxProof},
     Index, NsTable, NumTxs, NumTxsRange, Payload, Transaction, TxIndex, TxPayloadRange,
     TxTableEntriesRange,
 };
 
-impl AvidMTxProof {
+impl AvidmGf2TxProof {
     pub fn new(
         index: &Index,
         payload: &Payload,
-        common: &AvidMCommon,
+        common: &AvidmGf2Common,
     ) -> Option<(Transaction, Self)> {
         let ns_index = &index.ns_index;
         let tx_index = &TxIndex(index.position as usize);
@@ -28,7 +28,7 @@ impl AvidMTxProof {
         let ns_range = payload.ns_table().ns_range(ns_index, &payload_byte_len);
         let ns_byte_len = ns_range.byte_len();
         let ns_payload = payload.read_ns_payload(&ns_range);
-        let ns_proof = AvidMNsProof::new(payload, ns_index, common)?;
+        let ns_proof = AvidmGf2NsProof::new(payload, ns_index, common)?;
 
         // Read the tx table len from this namespace's tx table and compute a
         // proof of correctness.
@@ -63,7 +63,7 @@ impl AvidMTxProof {
 
         Some((
             tx,
-            AvidMTxProof {
+            AvidmGf2TxProof {
                 tx_index: tx_index.clone(),
                 ns_proof,
             },
@@ -77,11 +77,6 @@ impl AvidMTxProof {
         commit: &VidCommitment,
         common: &VidCommon,
     ) -> bool {
-        let VidCommon::V1(common) = common else {
-            tracing::info!("VID version mismatch");
-            return false;
-        };
-
         let Some((txs, _)) = self.ns_proof.verify(ns_table, commit, common) else {
             return false;
         };

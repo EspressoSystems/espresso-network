@@ -1,14 +1,18 @@
-use hotshot_query_service::{availability::VerifiableInclusion, VidCommon};
-use hotshot_types::data::VidCommitment;
+use hotshot_query_service::availability::VerifiableInclusion;
+use hotshot_types::data::{VidCommitment, VidCommon};
 use serde::{Deserialize, Serialize};
 
-use super::{v0_1::ADVZTxProof, v0_3::AvidMTxProof, Index, NsTable, Payload, Transaction};
+use super::{
+    v0_1::ADVZTxProof, v0_3::AvidMTxProof, v0_6::AvidmGf2TxProof, Index, NsTable, Payload,
+    Transaction,
+};
 use crate::SeqTypes;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxProof {
     V0(ADVZTxProof),
     V1(AvidMTxProof),
+    V2(AvidmGf2TxProof),
 }
 
 impl TxProof {
@@ -23,6 +27,8 @@ impl TxProof {
             },
             VidCommon::V1(common) => AvidMTxProof::new(index, payload, common)
                 .map(|(tx, proof)| (tx, TxProof::V1(proof))),
+            VidCommon::V2(common) => AvidmGf2TxProof::new(index, payload, common)
+                .map(|(tx, proof)| (tx, TxProof::V2(proof))),
         }
     }
 }
@@ -38,6 +44,7 @@ impl VerifiableInclusion<SeqTypes> for TxProof {
         match self {
             TxProof::V0(tx_proof) => tx_proof.verify(ns_table, tx, commit, common),
             TxProof::V1(tx_proof) => tx_proof.verify(ns_table, tx, commit, common),
+            TxProof::V2(tx_proof) => tx_proof.verify(ns_table, tx, commit, common),
         }
     }
 }

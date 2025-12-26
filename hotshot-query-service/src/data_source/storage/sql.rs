@@ -20,7 +20,7 @@ use committable::Committable;
 #[cfg(not(feature = "embedded-db"))]
 use futures::future::FutureExt;
 use hotshot_types::{
-    data::{Leaf, Leaf2, VidShare},
+    data::{Leaf, Leaf2, VidCommon, VidShare},
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
     traits::{metrics::Metrics, node_implementation::NodeType},
     vid::advz::{ADVZCommon, ADVZShare},
@@ -46,7 +46,7 @@ use crate::{
     metrics::PrometheusMetrics,
     node::BlockId,
     status::HasMetrics,
-    Header, QueryError, QueryResult, VidCommon,
+    Header, QueryError, QueryResult,
 };
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
