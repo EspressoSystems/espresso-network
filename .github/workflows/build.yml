@@ -505,3 +505,85 @@ jobs:
             echo "No jobs passed. Failing."
             exit 1
           fi
+
+  binary-upgrade-test-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@just
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
+      - name: Load docker images
+        run: |
+          # load all *.tar files in the temp directory, the layout should
+          # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
+            docker load --input $file
+          done
+
+      - name: Set docker image tag for compose
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
+          echo UPGRADE_DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
+
+      - name: Pull remaining docker images
+        run: |
+          docker compose pull --policy missing
+
+      - name: Binary upgrade test
+        run: ./scripts/binary-upgrade-test
+
+  binary-upgrade-test-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@just
+
+      - name: Set docker image tag for compose
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
+          echo UPGRADE_DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
+
+      - name: Pull the docker images
+        run: |
+          docker compose pull --policy missing
+          DOCKER_TAG=${{ env.UPGRADE_DOCKER_TAG }} docker compose pull --policy missing
+
+      - name: Binary upgrade test
+        run: ./scripts/binary-upgrade-test
+
+  # This job enables having a single required status check for both binary-upgrade-test jobs
+  binary-upgrade-test:
+    needs: [binary-upgrade-test-pr, binary-upgrade-test-non-pr]
+    runs-on: ubuntu-latest
+    # explicitly run and fail the job if dependencies failed
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate binary upgrade test results
+        run: |
+          # useful for debugging
+          echo "All results: ${{ toJson(needs) }}"
+
+          if ${{ contains(needs.*.result, 'success') }}; then
+            echo "At least one job passed. Ok."
+          else
+            echo "No jobs passed. Failing."
+            exit 1
+          fi

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#TODO: Remove
 
 echo " --- Building image: builder:testing --- "
 scripts/build-docker-images-native --no-tty --image builder --tag testing

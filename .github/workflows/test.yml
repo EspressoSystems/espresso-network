@@ -411,14 +411,14 @@ jobs:
           name: process-compose-logs-test-demo-native
           path: ${{ env.PC_LOG_FILE }}
 
-  binary-upgrade-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build binary upgrade test images
-        run: ./scripts/build-binary-upgrade-test
-      - name: Run binary upgrade test
-        run: ./scripts/binary-upgrade-test
+  #binary-upgrade-test:
+   # runs-on: ubuntu-latest
+    #steps:
+     # - uses: actions/checkout@v4
+#      - name: Build binary upgrade test images
+#        run: ./scripts/build-binary-upgrade-test
+#      - name: Run binary upgrade test
+        #run: ./scripts/binary-upgrade-test
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
