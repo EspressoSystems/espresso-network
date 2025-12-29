@@ -52,16 +52,18 @@ scripts/smoke-test-demo
 # WARN marketplace_builder_shared::utils::event_service_wrapper: Error in event stream err=Custom { message: "invalid binary: tag for enum is not valid, found 55
 # WARN marketplace_builder_shared::utils::event_service_wrapper: Error in event stream err=Custom { message: "invalid binary: invalid value: integer `88`, expected variant index 0 <= i < 2
 
-export ESPRESSO_SEQUENCER_GENESIS_FILE=genesis/demo-binary-upgrade.toml
+export ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-binary-upgrade.toml
 
 # upgrade sequencer0 binary
 docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" stop sequencer0 || true
 env DOCKER_TAG=testing docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" up --no-deps sequencer0 --force-recreate --wait || true
+#process-compose up --no-deps sequencer0
 
 docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" stop permissionless-builder || true
 # HOTSHOT_EVENTS_VERSION=v0 \
 env DOCKER_TAG=testing \ 
     docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" up --no-deps permissionless-builder --force-recreate --wait || true
+#process-compose up --no-deps permissionless-builder
 
 # submit transactions will have exited due to closed stream
 env DOCKER_TAG=$base_tag docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" up --no-deps submit-transactions-public --wait || true

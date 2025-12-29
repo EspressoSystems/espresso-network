@@ -33,10 +33,11 @@ EOF
 # native builds.
 
 # parse arguments until -- to see if an image was selected
-cargo_build_args="-j1 -vv"
+cargo_build_args="-vv"
 image=""
 clean=""
 tag="main"
+i_tty="-it"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
@@ -53,6 +54,10 @@ while [[ $# -gt 0 ]]; do
       fi
       image="$2"
       shift 2
+      ;;
+    --no-tty)
+      i_tty="-i"
+      shift 1
       ;;
     -t|--tag)
       tag="$2"
@@ -204,6 +209,8 @@ else
   esac
 fi
 
+cargo_cmd_line="RUSTC_LOG=rustc_codegen_ssa::back::link=info $cargo_cmd_line"
+
 echo "Running cargo commands: $cargo_cmd_line"
 
 # Get the default toolchain in the container to set RUSTUP_TOOLCHAIN during build. Without it rustup
@@ -225,7 +232,7 @@ docker run \
   -v "$(pwd):/work" \
   -v "$cargo_home/registry:/usr/local/cargo/registry" \
   -v "$cargo_home/git:/usr/local/cargo/git" \
-  -it rust \
+  $i_tty rust \
   bash -c "cd /work \
   && git config --global --add safe.directory /work \
   && rm -rfv \"$cargo_build_json\" \
