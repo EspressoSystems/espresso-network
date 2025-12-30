@@ -8,7 +8,6 @@ edition.workspace = true
 default = []
 testing = [
     "espresso-types/testing",
-    "async-lock",
     "bitvec",
     "hotshot-contract-adapter",
     "rand",
@@ -17,6 +16,7 @@ testing = [
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
+async-lock = { workspace = true }
 committable = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
@@ -35,7 +35,6 @@ tracing = { workspace = true }
 vbs = { workspace = true }
 
 # Testing dependencies
-async-lock = { workspace = true, optional = true }
 bitvec = { workspace = true, optional = true }
 hotshot-contract-adapter = { path = "../contracts/rust/adapter", optional = true }
 rand = { workspace = true, optional = true }
