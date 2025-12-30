@@ -6,7 +6,12 @@ edition.workspace = true
 
 [features]
 default = []
-testing = ["espresso-types/testing", "async-lock", "bitvec"]
+testing = [
+    "espresso-types/testing",
+    "async-lock",
+    "bitvec",
+    "hotshot-contract-adapter",
+]
 
 [dependencies]
 alloy = { workspace = true }
@@ -31,14 +36,15 @@ vbs = { workspace = true }
 # Testing dependencies
 async-lock = { workspace = true, optional = true }
 bitvec = { workspace = true, optional = true }
+hotshot-contract-adapter = { path = "../contracts/rust/adapter", optional = true }
 
 [dev-dependencies]
 # Add test dependencies when building tests.
 light-client = { path = ".", features = ["testing"] }
 
-pretty_assertions = { workspace = true }
-
 portpicker = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
 sequencer = { path = "../sequencer", features = ["testing"] }
 test-log = { workspace = true }
 

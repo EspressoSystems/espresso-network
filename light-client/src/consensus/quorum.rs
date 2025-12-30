@@ -1,4 +1,4 @@
-use std::{borrow::Cow, future::Future};
+use std::{future::Future, sync::Arc};
 
 use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context, Result};
@@ -125,25 +125,50 @@ pub trait Quorum {
 }
 
 /// A stake table representing a particular quorum.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StakeTable {
     entries: Vec<StakeTableEntry<PubKey>>,
     threshold: U256,
 }
 
-impl StakeTable {
-    /// Construct a stake table from a list of nodes with stake amounts and a quorum threshold.
-    pub fn new(table: HSStakeTable<SeqTypes>) -> Self {
-        let total_stake = table.total_stakes();
+impl From<HSStakeTable<SeqTypes>> for StakeTable {
+    fn from(table: HSStakeTable<SeqTypes>) -> Self {
+        StakeTableEntries::from(table).into()
+    }
+}
+
+impl From<Vec<StakeTableEntry<PubKey>>> for StakeTable {
+    fn from(entries: Vec<StakeTableEntry<PubKey>>) -> Self {
+        StakeTableEntries(entries).into()
+    }
+}
+
+impl From<StakeTableEntries<SeqTypes>> for StakeTable {
+    fn from(entries: StakeTableEntries<SeqTypes>) -> Self {
+        Self::from_iter(entries.0)
+    }
+}
+
+impl FromIterator<StakeTableEntry<PubKey>> for StakeTable {
+    fn from_iter<T: IntoIterator<Item = StakeTableEntry<PubKey>>>(entries: T) -> Self {
+        let mut total_stake = U256::ZERO;
+        let entries = entries
+            .into_iter()
+            .inspect(|entry| {
+                total_stake += entry.stake_amount;
+            })
+            .collect();
         Self {
-            entries: StakeTableEntries::<SeqTypes>::from(table).0,
+            entries,
             threshold: supermajority_threshold(total_stake),
         }
     }
+}
 
+impl StakeTable {
     /// Get a stake table from a particular epoch's quorum membership.
     pub async fn from_membership(membership: &EpochMembership<SeqTypes>) -> Self {
-        Self::new(membership.stake_table().await)
+        membership.stake_table().await.into()
     }
 
     /// Verify that a certificate is signed by a quorum of this stake table.
@@ -168,20 +193,20 @@ impl StakeTable {
 /// may also need to be fetched (in the case where the certificate is part of an epoch transition).
 pub trait StakeTablePair {
     /// Get the stake table for the current epoch.
-    fn stake_table(&self) -> impl Send + Future<Output = Result<Cow<'_, StakeTable>>>;
+    fn stake_table(&self) -> impl Send + Future<Output = Result<Arc<StakeTable>>>;
 
     /// Get the stake table for the next epoch.
-    fn next_epoch_stake_table(&self) -> impl Send + Future<Output = Result<Cow<'_, StakeTable>>>;
+    fn next_epoch_stake_table(&self) -> impl Send + Future<Output = Result<Arc<StakeTable>>>;
 }
 
 impl StakeTablePair for EpochMembership<SeqTypes> {
-    async fn stake_table(&self) -> Result<Cow<'_, StakeTable>> {
-        Ok(Cow::Owned(StakeTable::from_membership(self).await))
+    async fn stake_table(&self) -> Result<Arc<StakeTable>> {
+        Ok(Arc::new(StakeTable::from_membership(self).await))
     }
 
-    async fn next_epoch_stake_table(&self) -> Result<Cow<'_, StakeTable>> {
+    async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
         let membership = self.next_epoch_stake_table().await?;
-        Ok(Cow::Owned(StakeTable::from_membership(&membership).await))
+        Ok(Arc::new(StakeTable::from_membership(&membership).await))
     }
 }
 

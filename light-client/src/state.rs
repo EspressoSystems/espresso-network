@@ -1,16 +1,21 @@
 //! Client-side state used to implement light client fetching and verification.
 
-use std::borrow::Cow;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{ensure, Context, Result};
+use async_lock::RwLock;
 use committable::Committable;
-use espresso_types::{Header, Leaf2, SeqTypes};
+use espresso_types::{
+    select_active_validator_set, Header, Leaf2, PubKey, SeqTypes, StakeTableState,
+};
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::{data::EpochNumber, PeerConfig};
+use hotshot_types::{
+    data::EpochNumber, stake_table::StakeTableEntry, traits::node_implementation::ConsensusTime,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -34,8 +39,26 @@ pub struct Genesis {
     /// The number of blocks in an epoch.
     pub epoch_height: u64,
 
+    /// The first epoch where the stake table came from the contract, rather than the genesis stake
+    /// table.
+    pub first_epoch_with_dynamic_stake_table: EpochNumber,
+
     /// The fixed stake table used before epochs begin.
-    pub stake_table: Vec<PeerConfig<SeqTypes>>,
+    pub stake_table: Vec<StakeTableEntry<PubKey>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Options {
+    /// Maximum number of stake tables to cache in memory at any given time.
+    pub num_stake_tables: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            num_stake_tables: 100,
+        }
+    }
 }
 
 /// Client-side state required to implement the light client interface.
@@ -49,8 +72,14 @@ pub struct Genesis {
 pub struct LightClient<P, S> {
     db: P,
     server: S,
+    opt: Options,
+
     epoch_height: u64,
-    stake_table: StakeTable,
+    first_epoch_with_dynamic_stake_table: EpochNumber,
+    genesis_stake_table: Arc<StakeTable>,
+
+    // We cache stake tables in memory since they are large and expensive to load from the database.
+    stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
 }
 
 impl<P, S> LightClient<P, S>
@@ -65,11 +94,24 @@ where
     /// the genesis is not correct (i.e. matching the genesis used by honest HotShot nodes) the
     /// light client may verify incorrect data, or fail to verify correct data.
     pub fn from_genesis(db: P, server: S, genesis: Genesis) -> Self {
+        Self::from_genesis_with_options(db, server, genesis, Default::default())
+    }
+
+    /// Create a light client from scratch, with no state, using the given options.
+    ///
+    /// State will automatically be populated as queries are made. The provided genesis becomes the
+    /// root of trust for verifying all state that is subsequently loaded by the light client. If
+    /// the genesis is not correct (i.e. matching the genesis used by honest HotShot nodes) the
+    /// light client may verify incorrect data, or fail to verify correct data.
+    pub fn from_genesis_with_options(db: P, server: S, genesis: Genesis, opt: Options) -> Self {
         Self {
             db,
             server,
+            opt,
             epoch_height: genesis.epoch_height,
-            stake_table: StakeTable::new(genesis.stake_table.into()),
+            genesis_stake_table: Arc::new(genesis.stake_table.into()),
+            first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
+            stake_tables: Default::default(),
         }
     }
 
@@ -216,9 +258,67 @@ where
     }
 
     /// Fetch and verify the stake table for the requested epoch.
-    pub async fn quorum_for_epoch(&self, _epoch: EpochNumber) -> Result<&StakeTable> {
-        // TODO use dynamic stake table
-        Ok(&self.stake_table)
+    pub async fn quorum_for_epoch(&self, epoch: EpochNumber) -> Result<Arc<StakeTable>> {
+        if epoch < self.first_epoch_with_dynamic_stake_table {
+            return Ok(self.genesis_stake_table.clone());
+        }
+
+        // Check cache for the desired stake table.
+        {
+            let cache = self.stake_tables.read().await;
+            if let Some(stake_table) = cache.get(&epoch) {
+                tracing::debug!(%epoch, "found stake table in cache");
+                return Ok(stake_table.clone());
+            }
+        }
+
+        // If we didn't find the exact stake table we are looking for in cache, look for it in our
+        // local database, or an earlier one we can catch up from.
+        let (lower_bound, mut stake_table) = if let Some((lower_bound, stake_table)) =
+            self.db.stake_table_lower_bound(epoch).await?
+        {
+            if lower_bound == epoch {
+                // We have the exact quorum we requested already in our database. Add it to cache
+                // and return it.
+                tracing::debug!(%epoch, "found stake table in database");
+                let quorum = stake_table_state_to_quorum(stake_table)?;
+                return Ok(self.cache_stake_table(epoch, quorum).await);
+            }
+
+            (lower_bound, stake_table)
+        } else {
+            // We don't have any stake table earlier than `epoch` as a starting point, so we must
+            // start from the genesis state.
+            (
+                self.first_epoch_with_dynamic_stake_table - 1,
+                StakeTableState::default(),
+            )
+        };
+        tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
+
+        // Replay one epoch at a time from the lower bound stake table to the requested epoch.
+        for epoch in *lower_bound + 1..=*epoch {
+            let events = self
+                .server
+                .stake_table_events(EpochNumber::new(epoch))
+                .await?;
+            for event in events {
+                tracing::debug!(epoch, ?event, "replay event");
+                if let Err(err) = stake_table.apply_event(event).context("applying event")? {
+                    tracing::warn!("allowed error in event: {err:#}");
+                }
+            }
+        }
+
+        // Finally, add the reconstructed stake table to cache and storage, and return it.
+        if let Err(err) = self.db.insert_stake_table(epoch, &stake_table).await {
+            // If this fails, we can still successfully return the stake table that we have in
+            // memory right now, so this is just a warning.
+            tracing::warn!(%epoch, "failed to cache stake table: {err:#}");
+        }
+        Ok(self
+            .cache_stake_table(epoch, stake_table_state_to_quorum(stake_table)?)
+            .await)
     }
 
     async fn fetch_leaf_from_server(
@@ -264,6 +364,45 @@ where
 
         Ok(leaf)
     }
+
+    async fn cache_stake_table(
+        &self,
+        epoch: EpochNumber,
+        stake_table: StakeTable,
+    ) -> Arc<StakeTable> {
+        let mut cache = self.stake_tables.write().await;
+
+        // If inserting the new stake table would cause the cache to exceed its maximum size, first
+        // delete an old stake table.
+        if cache.len() >= self.opt.num_stake_tables {
+            // Always delete the _second oldest_ stake table. We want to keep the oldest around
+            // because it is the hardest to catch up for if we need it again (we would have to go
+            // all the way back to genesis). The second oldest is the least likely to be used again
+            // after the oldest, while still being easy to replay if we do need it (because we can
+            // just replay from the cached oldest).
+            if let Some(&second_oldest_epoch) = cache.keys().nth(1) {
+                cache.remove(&second_oldest_epoch);
+            }
+        }
+
+        cache
+            .entry(epoch)
+            .insert_entry(Arc::new(stake_table))
+            .get()
+            .clone()
+    }
+}
+
+fn stake_table_state_to_quorum(state: StakeTableState) -> Result<StakeTable> {
+    let validators = state.into_validators();
+    let active_validators = select_active_validator_set(&validators)?;
+    Ok(active_validators
+        .into_values()
+        .map(|validator| StakeTableEntry {
+            stake_key: validator.stake_table_key,
+            stake_amount: validator.stake,
+        })
+        .collect())
 }
 
 impl<P, S> StakeTablePair for (EpochNumber, &LightClient<P, S>)
@@ -271,14 +410,12 @@ where
     P: Storage,
     S: Client,
 {
-    async fn stake_table(&self) -> Result<Cow<'_, StakeTable>> {
-        let stake_table = self.1.quorum_for_epoch(self.0).await?;
-        Ok(Cow::Borrowed(stake_table))
+    async fn stake_table(&self) -> Result<Arc<StakeTable>> {
+        self.1.quorum_for_epoch(self.0).await
     }
 
-    async fn next_epoch_stake_table(&self) -> Result<Cow<'_, StakeTable>> {
-        let stake_table = self.1.quorum_for_epoch(self.0 + 1).await?;
-        Ok(Cow::Borrowed(stake_table))
+    async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
+        self.1.quorum_for_epoch(self.0 + 1).await
     }
 }
 
@@ -315,7 +452,7 @@ mod test {
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
-            client.genesis(),
+            client.genesis().await,
         );
 
         // Fetch the leaf for the first time. We will need to get it from the server.
@@ -335,7 +472,7 @@ mod test {
         let db = SqliteStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
 
-        let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
         assert_eq!(
             lc.fetch_leaf(LeafId::Number(1)).await.unwrap(),
             client.leaf(1).await,
@@ -349,7 +486,7 @@ mod test {
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
-            client.genesis(),
+            client.genesis().await,
         );
         client.return_invalid_proof(1).await;
         lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
@@ -365,7 +502,7 @@ mod test {
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
-            client.genesis(),
+            client.genesis().await,
         );
         client.return_wrong_leaf(1, 2).await;
         lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
@@ -381,7 +518,7 @@ mod test {
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
-            client.genesis(),
+            client.genesis().await,
         );
 
         // Fetch the header for the first time. We will need to get it from the server.
@@ -407,7 +544,7 @@ mod test {
         let db = SqliteStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
 
-        let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
         assert_eq!(
             lc.fetch_header(BlockId::Number(1)).await.unwrap(),
             *client.leaf(1).await.header(),
@@ -424,7 +561,7 @@ mod test {
         // path.
         db.insert_leaf(client.leaf(2).await).await.unwrap();
 
-        let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
         client.return_invalid_proof(1).await;
 
         let err = lc.fetch_header(BlockId::Number(1)).await.unwrap_err();
@@ -441,7 +578,7 @@ mod test {
         // path.
         db.insert_leaf(client.leaf(2).await).await.unwrap();
 
-        let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
         client.return_wrong_leaf(1, 0).await;
 
         let err = lc.fetch_header(BlockId::Number(1)).await.unwrap_err();
@@ -459,7 +596,7 @@ mod test {
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
-            client.genesis(),
+            client.genesis().await,
         );
 
         // Fetch leaves in range [1,3) for the first time. We will need to get them from the server.
@@ -485,7 +622,7 @@ mod test {
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
-            client.genesis(),
+            client.genesis().await,
         );
         client.return_invalid_proof(2).await;
         let err = lc.fetch_leaves_in_range(1, 3).await.unwrap_err();
@@ -505,10 +642,124 @@ mod test {
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),
             client.clone(),
-            client.genesis(),
+            client.genesis().await,
         );
         client.return_wrong_leaf(1, 2).await;
         let err = lc.fetch_leaves_in_range(1, 4).await.unwrap_err();
         assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_twice_cache() {
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        );
+
+        // Fetch a dynamic stake table for the first time. We will need to get it from the server.
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
+        let expected = client.quorum_for_epoch(epoch).await.into();
+        assert_eq!(*lc.quorum_for_epoch(epoch).await.unwrap(), expected);
+
+        // Fetching the stake table again hits the cache.
+        client.forget_quorum(epoch).await;
+        assert_eq!(*lc.quorum_for_epoch(epoch).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_twice_storage() {
+        let db = SqliteStorage::default().await.unwrap();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        // Fetch a dynamic stake table for the first time. We will need to get it from the server.
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
+        let expected = client.quorum_for_epoch(epoch).await.into();
+        assert_eq!(*lc.quorum_for_epoch(epoch).await.unwrap(), expected);
+
+        // Even if the in-memory cache is cleared, we can still get this stake table without hitting
+        // the server, but fetching from the database.
+        client.forget_quorum(epoch).await;
+        let lc = LightClient::from_genesis(db, client.clone(), genesis);
+        assert_eq!(*lc.quorum_for_epoch(epoch).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_catchup_from_lower_bound() {
+        let db = SqliteStorage::default().await.unwrap();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        // Fetch a stake table, causing it to be stored in the stake table, making it usable as a
+        // lower bound for later catchup.
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
+        lc.quorum_for_epoch(epoch).await.unwrap();
+
+        // Cause the server to forget older epochs' stake table events, so that we can only catch up
+        // successfully if we start from the saved lower bound.
+        for epoch in 0..*epoch - 1 {
+            client.forget_quorum(EpochNumber::new(epoch)).await;
+        }
+
+        // Fetch a future stake table, catching up from the saved lower bound.
+        let expected = client.quorum_for_epoch(epoch + 5).await.into();
+        assert_eq!(*lc.quorum_for_epoch(epoch + 5).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_cache_removal() {
+        let db = SqliteStorage::default().await.unwrap();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis_with_options(
+            db.clone(),
+            client.clone(),
+            genesis.clone(),
+            Options {
+                num_stake_tables: 2,
+            },
+        );
+
+        // Fetch two stake tables, causing the cache to be filled up.
+        for i in 0..2 {
+            let epoch = genesis.first_epoch_with_dynamic_stake_table + 5 + i;
+            assert_eq!(
+                *lc.quorum_for_epoch(epoch).await.unwrap(),
+                client.quorum_for_epoch(epoch).await.into(),
+            );
+        }
+        assert_eq!(lc.stake_tables.read().await.len(), 2);
+
+        // Fetch a third stake table, causing the second-oldest stake table to be deleted.
+        assert_eq!(
+            *lc.quorum_for_epoch(genesis.first_epoch_with_dynamic_stake_table + 10)
+                .await
+                .unwrap(),
+            client
+                .quorum_for_epoch(genesis.first_epoch_with_dynamic_stake_table + 10)
+                .await
+                .into(),
+        );
+        assert_eq!(lc.stake_tables.read().await.len(), 2);
+
+        // Even if the server forgets all earlier stake tables, we can still catch up because we
+        // didn't remove the lower bound stake table.
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 6;
+        for i in 0..*epoch {
+            client.forget_quorum(EpochNumber::new(i)).await;
+        }
+        assert_eq!(
+            *lc.quorum_for_epoch(epoch).await.unwrap(),
+            client.quorum_for_epoch(epoch).await.into(),
+        );
     }
 }

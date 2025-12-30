@@ -1,27 +1,30 @@
 #![cfg(any(test, feature = "testing"))]
 
 use std::{
+    cmp::max,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use anyhow::{bail, ensure, Context, Result};
 use async_lock::Mutex;
 use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
+use derivative::Derivative;
 use espresso_types::{
-    BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NodeState, PrivKey, PubKey, SeqTypes,
-    SequencerVersions, BLOCK_MERKLE_TREE_HEIGHT,
+    v0_3::StakeTableEvent, BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NodeState, PrivKey,
+    PubKey, SeqTypes, SequencerVersions, BLOCK_MERKLE_TREE_HEIGHT,
 };
+use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
     availability::{LeafHash, LeafId, LeafQueryData},
     node::{BlockHash, BlockId},
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
+    light_client::StateVerKey,
     message::UpgradeLock,
-    signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
     stake_table::{supermajority_threshold, StakeTableEntry},
@@ -31,7 +34,6 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_epoch_transition},
     vote::Certificate as _,
-    PeerConfig,
 };
 use jf_merkle_tree_compat::{
     prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
@@ -298,28 +300,9 @@ impl Quorum for EpochChangeQuorum {
     }
 }
 
-/// A default quorum for testing.
-fn test_quorum() -> Vec<(PrivKey, PeerConfig<SeqTypes>)> {
-    let seed = Default::default();
-    (1..=5)
-        .map(|i| {
-            let (pub_key, priv_key) = PubKey::generated_from_seed_indexed(seed, i);
-            let config = PeerConfig {
-                stake_table_entry: StakeTableEntry {
-                    stake_key: pub_key,
-                    stake_amount: U256::from(i) * U256::from(1_000_000_000u128),
-                },
-                state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, i).0,
-            };
-            (priv_key, config)
-        })
-        .collect()
-}
-
 #[derive(Clone, Debug)]
 pub struct TestClient {
     inner: Arc<Mutex<InnerTestClient>>,
-    quorum: Vec<(PrivKey, PeerConfig<SeqTypes>)>,
     epoch_height: u64,
 }
 
@@ -327,13 +310,13 @@ impl Default for TestClient {
     fn default() -> Self {
         Self {
             inner: Default::default(),
-            quorum: test_quorum(),
             epoch_height: 100,
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Derivative)]
+#[derivative(Default)]
 struct InnerTestClient {
     leaves: Vec<LeafQueryData<SeqTypes>>,
     // Use an appendable `MerkleTree` rather than a `BlockMerkleTree` (which is a
@@ -345,19 +328,36 @@ struct InnerTestClient {
     missing_leaves: HashSet<usize>,
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
+    quorum: Vec<(PrivKey, StakeTableEntry<PubKey>)>,
+    #[derivative(Default(value = "3"))]
+    first_epoch_with_dynamic_stake_table: u64,
+    missing_quorums: HashSet<u64>,
 }
 
 impl InnerTestClient {
-    async fn leaf(
-        &mut self,
-        height: usize,
-        epoch_height: u64,
-        quorum: &[(PrivKey, PeerConfig<SeqTypes>)],
-    ) -> LeafQueryData<SeqTypes> {
-        let stake_table = quorum
-            .iter()
-            .map(|(_, config)| config.stake_table_entry.clone())
-            .collect::<Vec<_>>();
+    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, StakeTableEntry<PubKey>)] {
+        // For testing purposes, we will say that one new node joins the quorum each epoch. The
+        // static stake table used before the first epoch with dynamic stake is the same as the
+        // stake table used in that epoch.
+        let quorum_size = max(epoch, self.first_epoch_with_dynamic_stake_table) as usize;
+
+        while self.quorum.len() < quorum_size {
+            let (pub_key, priv_key) =
+                PubKey::generated_from_seed_indexed(Default::default(), self.quorum.len() as u64);
+            let entry = StakeTableEntry {
+                stake_key: pub_key,
+                stake_amount: U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128),
+            };
+            self.quorum.push((priv_key, entry));
+        }
+
+        &self.quorum[..quorum_size]
+    }
+
+    async fn leaf(&mut self, height: usize, epoch_height: u64) -> LeafQueryData<SeqTypes> {
+        let epoch = epoch_from_block_number(height as u64, epoch_height);
+        let (quorum, stake_table): (Vec<_>, Vec<_>) =
+            self.quorum_for_epoch(epoch).iter().cloned().unzip();
         let pp = PubKey::public_parameter(
             stake_table.as_slice(),
             supermajority_threshold(stake_table.iter().map(|entry| entry.stake()).sum()),
@@ -418,7 +418,7 @@ impl InnerTestClient {
             .commit();
             let signatures = quorum
                 .iter()
-                .map(|(key, _)| PubKey::sign(key, quorum_data_comm.as_ref()).unwrap())
+                .map(|key| PubKey::sign(key, quorum_data_comm.as_ref()).unwrap())
                 .collect::<Vec<_>>();
             let assembled = PubKey::assemble(
                 &pp,
@@ -465,20 +465,24 @@ impl InnerTestClient {
 }
 
 impl TestClient {
-    pub fn genesis(&self) -> Genesis {
+    pub async fn genesis(&self) -> Genesis {
+        let mut inner = self.inner.lock().await;
         Genesis {
             epoch_height: self.epoch_height,
-            stake_table: self
-                .quorum
+            stake_table: inner
+                .quorum_for_epoch(1)
                 .iter()
-                .map(|(_, config)| config.clone())
+                .map(|(_, entry)| entry.clone())
                 .collect(),
+            first_epoch_with_dynamic_stake_table: EpochNumber::new(
+                inner.first_epoch_with_dynamic_stake_table,
+            ),
         }
     }
 
     pub async fn leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
-        inner.leaf(height, self.epoch_height, &self.quorum).await
+        inner.leaf(height, self.epoch_height).await
     }
 
     pub async fn remember_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
@@ -486,13 +490,13 @@ impl TestClient {
         inner.missing_leaves.remove(&height);
         inner.invalid_proofs.remove(&height);
         inner.swapped_leaves.remove(&height);
-        inner.leaf(height, self.epoch_height, &self.quorum).await
+        inner.leaf(height, self.epoch_height).await
     }
 
     pub async fn forget_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
         inner.missing_leaves.insert(height);
-        inner.leaf(height, self.epoch_height, &self.quorum).await
+        inner.leaf(height, self.epoch_height).await
     }
 
     pub async fn return_invalid_proof(&self, for_height: usize) {
@@ -503,6 +507,25 @@ impl TestClient {
     pub async fn return_wrong_leaf(&self, for_height: usize, substitute: usize) {
         let mut inner = self.inner.lock().await;
         inner.swapped_leaves.insert(for_height, substitute);
+    }
+
+    pub async fn quorum_for_epoch(&self, epoch: EpochNumber) -> Vec<StakeTableEntry<PubKey>> {
+        let mut inner = self.inner.lock().await;
+        inner
+            .quorum_for_epoch(*epoch)
+            .iter()
+            .map(|(_, entry)| entry.clone())
+            .collect()
+    }
+
+    pub async fn remember_quorum(&self, epoch: EpochNumber) {
+        let mut inner = self.inner.lock().await;
+        inner.missing_quorums.remove(&*epoch);
+    }
+
+    pub async fn forget_quorum(&self, epoch: EpochNumber) {
+        let mut inner = self.inner.lock().await;
+        inner.missing_quorums.insert(*epoch);
     }
 }
 
@@ -528,7 +551,7 @@ impl Client for TestClient {
             height = *sub;
         };
 
-        let leaf = inner.leaf(height, self.epoch_height, &self.quorum).await;
+        let leaf = inner.leaf(height, self.epoch_height).await;
 
         let mut proof = LeafProof::default();
         proof.push(leaf);
@@ -547,16 +570,8 @@ impl Client for TestClient {
             }
         }
 
-        proof.push(
-            inner
-                .leaf(height + 1, self.epoch_height, &self.quorum)
-                .await,
-        );
-        assert!(proof.push(
-            inner
-                .leaf(height + 2, self.epoch_height, &self.quorum)
-                .await
-        ));
+        proof.push(inner.leaf(height + 1, self.epoch_height).await);
+        assert!(proof.push(inner.leaf(height + 2, self.epoch_height).await));
 
         Ok(proof)
     }
@@ -572,7 +587,7 @@ impl Client for TestClient {
         );
         if inner.invalid_proofs.contains(&height) {
             tracing::info!(root, height, "return mock invalid proof");
-            let leaf = inner.leaf(height, self.epoch_height, &self.quorum).await;
+            let leaf = inner.leaf(height, self.epoch_height).await;
             // Construct a proof using a Merkle tree of the wrong height.
             let mt = BlockMerkleTree::from_elems(
                 Some(BLOCK_MERKLE_TREE_HEIGHT + 1),
@@ -592,11 +607,7 @@ impl Client for TestClient {
         let mt = &inner.merkle_trees[root];
         tracing::info!(height, root = %mt.commitment(), "get proof from Merkle tree");
         let proof = mt.lookup(height as u64).expect_ok().unwrap().1;
-        let header = inner
-            .leaf(height, self.epoch_height, &self.quorum)
-            .await
-            .header()
-            .clone();
+        let header = inner.leaf(height, self.epoch_height).await.header().clone();
         Ok(HeaderProof::new(header, proof))
     }
 
@@ -609,8 +620,53 @@ impl Client for TestClient {
         let mut inner = self.inner.lock().await;
         for h in start_height..end_height {
             let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
-            leaves.push(inner.leaf(height, self.epoch_height, &self.quorum).await);
+            leaves.push(inner.leaf(height, self.epoch_height).await);
         }
         Ok(leaves)
     }
+
+    async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
+        let mut inner = self.inner.lock().await;
+
+        ensure!(
+            !inner.missing_quorums.contains(&*epoch),
+            "missing quorum for epoch {epoch}"
+        );
+
+        let mut events = vec![];
+        if *epoch == inner.first_epoch_with_dynamic_stake_table {
+            // Generate events such that the first dynamic stake table is the same as the static
+            // stake table we started with.
+            for (i, (_, entry)) in inner.quorum_for_epoch(*epoch).iter().enumerate() {
+                register_validator_events(&mut events, i, entry);
+            }
+        } else if *epoch > inner.first_epoch_with_dynamic_stake_table {
+            // For each subsequent epoch, just generate one event for the new validator which joined
+            // in that epoch.
+            let (_, entry) = &inner.quorum_for_epoch(*epoch)[(*epoch as usize) - 1];
+            register_validator_events(&mut events, *epoch as usize, entry);
+        }
+        Ok(events)
+    }
+}
+
+fn register_validator_events(
+    events: &mut Vec<StakeTableEvent>,
+    i: usize,
+    entry: &StakeTableEntry<PubKey>,
+) {
+    let account = Address::random();
+    events.push(StakeTableEvent::Register(ValidatorRegistered {
+        account,
+        blsVk: entry.stake_key.into(),
+        schnorrVk: StateVerKey::generated_from_seed_indexed(Default::default(), i as u64)
+            .0
+            .into(),
+        commission: 1,
+    }));
+    events.push(StakeTableEvent::Delegate(Delegated {
+        delegator: Address::random(),
+        validator: account,
+        amount: entry.stake_amount,
+    }));
 }
