@@ -5,6 +5,15 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! This module provides types for VID disperse related data structures.
+//!
+//! We have three types of VID disperse related structs:
+//!
+//! 1. `ADVZ*`: VID V0, The most original VID scheme, which has guaranteed recovery but very inefficient.
+//! 2. `AvidM*`: VID V1, the efficient VID scheme, where we use it after the epocn upgrade. It's more
+//!    efficient but doesn't guarantee recovery. A VID V1 commitment could correspond to some junk
+//!    data, there'll be a proof of incorrect encoding in this case.
+//! 3. `AvidmGf2*`: VID V2, almost the same as VID V1 but we have a much more efficient recovery
+//!    implementation.
 
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
 
