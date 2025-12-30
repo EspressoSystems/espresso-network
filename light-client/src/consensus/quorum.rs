@@ -19,9 +19,13 @@ use vbs::version::{StaticVersion, StaticVersionType, Version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
-pub trait Quorum {
+pub trait Quorum: Sync {
     /// Check a threshold signature on a quorum certificate.
-    fn verify(&self, cert: &Certificate, version: Version) -> impl Future<Output = Result<()>> {
+    fn verify(
+        &self,
+        cert: &Certificate,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
         async move {
             match (version.major, version.minor) {
                 (0, 1) => self.verify_static::<StaticVersion<0, 1>>(cert).await,
@@ -42,7 +46,7 @@ pub trait Quorum {
     fn verify_static<V: StaticVersionType + 'static>(
         &self,
         qc: &Certificate,
-    ) -> impl Future<Output = Result<()>>;
+    ) -> impl Send + Future<Output = Result<()>>;
 
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
     /// version.
@@ -51,8 +55,8 @@ pub trait Quorum {
     fn verify_qc_chain_and_get_version<'a>(
         &self,
         leaf: &Leaf2,
-        certs: impl IntoIterator<Item = &'a Certificate>,
-    ) -> impl Future<Output = Result<Version>> {
+        certs: impl Send + IntoIterator<Item = &'a Certificate, IntoIter: Send>,
+    ) -> impl Send + Future<Output = Result<Version>> {
         let span = tracing::trace_span!(
             "verify_qc_chain_and_get_version",
             height = leaf.block_header().height()
@@ -210,6 +214,16 @@ impl StakeTablePair for EpochMembership<SeqTypes> {
     }
 }
 
+impl StakeTablePair for (Arc<StakeTable>, Arc<StakeTable>) {
+    async fn stake_table(&self) -> Result<Arc<StakeTable>> {
+        Ok(self.0.clone())
+    }
+
+    async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
+        Ok(self.1.clone())
+    }
+}
+
 /// A quorum based on a [`StakeTablePair`] for a particular epoch.
 #[derive(Clone, Debug)]
 pub struct StakeTableQuorum<T> {
@@ -229,7 +243,7 @@ impl<T> StakeTableQuorum<T> {
 
 impl<T> Quorum for StakeTableQuorum<T>
 where
-    T: StakeTablePair,
+    T: StakeTablePair + Sync,
 {
     async fn verify_static<V: StaticVersionType + 'static>(
         &self,

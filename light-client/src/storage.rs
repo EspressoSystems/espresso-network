@@ -453,17 +453,11 @@ impl Storage for SqliteStorage {
 
 #[cfg(test)]
 mod test {
-    use alloy::primitives::U256;
     use espresso_types::EpochVersion;
-    use hotshot_types::{
-        signature_key::SchnorrPubKey,
-        traits::signature_key::{SignatureKey, StateSignatureKey},
-    };
     use pretty_assertions::assert_eq;
-    use rand::RngCore;
 
     use super::*;
-    use crate::testing::leaf_chain;
+    use crate::testing::{leaf_chain, random_validator};
 
     #[tokio::test]
     #[test_log::test]
@@ -820,21 +814,6 @@ mod test {
                 .unwrap(),
             (EpochNumber::new(2), state2)
         );
-    }
-
-    fn random_validator() -> Validator<PubKey> {
-        let account = Address::random();
-        let mut seed = [0; 32];
-        rand::thread_rng().fill_bytes(&mut seed);
-        let stake = U256::from(rand::thread_rng().next_u64());
-        Validator {
-            account,
-            stake_table_key: PubKey::generated_from_seed_indexed(seed, 0).0,
-            state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, 0).0,
-            stake,
-            commission: 1,
-            delegators: [(Address::random(), stake)].into_iter().collect(),
-        }
     }
 
     /// Make a stake table state with all fields populated.

@@ -1,6 +1,6 @@
 //! Client-side state used to implement light client fetching and verification.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, future::Future, sync::Arc};
 
 use anyhow::{ensure, Context, Result};
 use async_lock::RwLock;
@@ -15,6 +15,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::EpochNumber, stake_table::StakeTableEntry, traits::node_implementation::ConsensusTime,
+    utils::root_block_in_epoch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +23,7 @@ use crate::{
     client::Client,
     consensus::{
         leaf::LeafProofHint,
-        quorum::{StakeTable, StakeTablePair, StakeTableQuorum},
+        quorum::{Quorum, StakeTable, StakeTablePair, StakeTableQuorum},
     },
     storage::{LeafRequest, Storage},
 };
@@ -117,6 +118,20 @@ where
 
     /// Fetch and verify the requested leaf.
     pub async fn fetch_leaf(&self, id: LeafId<SeqTypes>) -> Result<LeafQueryData<SeqTypes>> {
+        self.fetch_leaf_with_quorum(id, |epoch| {
+            StakeTableQuorum::new((epoch, self), self.epoch_height)
+        })
+        .await
+    }
+
+    async fn fetch_leaf_with_quorum<Q>(
+        &self,
+        id: LeafId<SeqTypes>,
+        quorum: impl Send + FnOnce(EpochNumber) -> Q,
+    ) -> Result<LeafQueryData<SeqTypes>>
+    where
+        Q: Send + Quorum,
+    {
         let upper_bound = self.db.leaf_upper_bound(id).await?;
         let known_finalized = if let Some(upper_bound) = upper_bound {
             if leaf_matches_id(&upper_bound, id) {
@@ -128,7 +143,8 @@ where
             None
         };
         let known_finalized = known_finalized.as_ref().map(LeafQueryData::leaf);
-        self.fetch_leaf_from_server(id, known_finalized).await
+        self.fetch_leaf_from_server(id, known_finalized, quorum)
+            .await
     }
 
     /// Fetches leaves in range [start_height, end_height)
@@ -222,6 +238,20 @@ where
 
     /// Fetch and verify the requested header.
     pub async fn fetch_header(&self, id: BlockId<SeqTypes>) -> Result<Header> {
+        self.fetch_header_with_quorum(id, |epoch| {
+            StakeTableQuorum::new((epoch, self), self.epoch_height)
+        })
+        .await
+    }
+
+    async fn fetch_header_with_quorum<Q>(
+        &self,
+        id: BlockId<SeqTypes>,
+        quorum: impl Send + FnOnce(EpochNumber) -> Q,
+    ) -> Result<Header>
+    where
+        Q: Send + Quorum,
+    {
         if let Some(leaf) = self.db.leaf_upper_bound(id).await? {
             if leaf_matches_id(&leaf, id) {
                 // If we have the leaf for the requested header in our database already, we can just
@@ -253,7 +283,7 @@ where
         // We have neither the requested header nor an upper bound for it. All we can do is fetch
         // the corresponding leaf from the server (verifying a leaf proof) and then extract the
         // header from there.
-        let leaf = self.fetch_leaf_from_server(id, None).await?;
+        let leaf = self.fetch_leaf_from_server(id, None, quorum).await?;
         Ok(leaf.header().clone())
     }
 
@@ -274,26 +304,31 @@ where
 
         // If we didn't find the exact stake table we are looking for in cache, look for it in our
         // local database, or an earlier one we can catch up from.
-        let (lower_bound, mut stake_table) = if let Some((lower_bound, stake_table)) =
-            self.db.stake_table_lower_bound(epoch).await?
-        {
-            if lower_bound == epoch {
-                // We have the exact quorum we requested already in our database. Add it to cache
-                // and return it.
-                tracing::debug!(%epoch, "found stake table in database");
-                let quorum = stake_table_state_to_quorum(stake_table)?;
-                return Ok(self.cache_stake_table(epoch, quorum).await);
-            }
+        let (lower_bound, mut stake_table, mut prev_quorum) =
+            if let Some((lower_bound, stake_table)) = self.db.stake_table_lower_bound(epoch).await?
+            {
+                if lower_bound == epoch {
+                    // We have the exact quorum we requested already in our database. Add it to cache
+                    // and return it.
+                    tracing::debug!(%epoch, "found stake table in database");
+                    let quorum = stake_table_state_to_quorum(stake_table)?;
+                    return Ok(self.cache_stake_table(epoch, Arc::new(quorum)).await);
+                }
 
-            (lower_bound, stake_table)
-        } else {
-            // We don't have any stake table earlier than `epoch` as a starting point, so we must
-            // start from the genesis state.
-            (
-                self.first_epoch_with_dynamic_stake_table - 1,
-                StakeTableState::default(),
-            )
-        };
+                (
+                    lower_bound,
+                    stake_table.clone(),
+                    Arc::new(stake_table_state_to_quorum(stake_table)?),
+                )
+            } else {
+                // We don't have any stake table earlier than `epoch` as a starting point, so we must
+                // start from the genesis state.
+                (
+                    self.first_epoch_with_dynamic_stake_table - 1,
+                    StakeTableState::default(),
+                    self.genesis_stake_table.clone(),
+                )
+            };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
 
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
@@ -302,12 +337,36 @@ where
                 .server
                 .stake_table_events(EpochNumber::new(epoch))
                 .await?;
+            tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
             for event in events {
                 tracing::debug!(epoch, ?event, "replay event");
                 if let Err(err) = stake_table.apply_event(event).context("applying event")? {
                     tracing::warn!("allowed error in event: {err:#}");
                 }
             }
+            let next_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
+
+            // Since we are reconstructing based on events from an untrusted server, we need to
+            // compare the hash of the stake table after each epoch to the hash recorded in the
+            // epoch root header, which is certified by the previous stake table.
+            let root_height = root_block_in_epoch(epoch - 1, self.epoch_height);
+            let root = self
+                .fetch_header_with_quorum(BlockId::Number(root_height as usize), |_| {
+                    StakeTableQuorum::new((prev_quorum, next_quorum.clone()), self.epoch_height)
+                })
+                .await
+                .context("fetching epoch root for {epoch}")?;
+            let hash = root.next_stake_table_hash().context(format!(
+                "epoch {epoch} root {root_height} does not have next stake table hash"
+            ))?;
+            ensure!(
+                hash == stake_table.commit(),
+                "epoch {epoch} root {root_height} stake table hash {hash} does not match \
+                 reconstructed hash {}",
+                stake_table.commit(),
+            );
+
+            prev_quorum = next_quorum;
         }
 
         // Finally, add the reconstructed stake table to cache and storage, and return it.
@@ -316,59 +375,64 @@ where
             // memory right now, so this is just a warning.
             tracing::warn!(%epoch, "failed to cache stake table: {err:#}");
         }
-        Ok(self
-            .cache_stake_table(epoch, stake_table_state_to_quorum(stake_table)?)
-            .await)
+        Ok(self.cache_stake_table(epoch, prev_quorum).await)
     }
 
-    async fn fetch_leaf_from_server(
-        &self,
-        id: impl Into<LeafRequest>,
-        known_finalized: Option<&Leaf2>,
-    ) -> Result<LeafQueryData<SeqTypes>> {
-        let id = id.into();
-        let proof = self
-            .server
-            .leaf_proof(id, known_finalized.map(Leaf2::height))
-            .await?;
-        let quorum;
-        let hint = match proof.proof().epoch() {
-            Some(epoch) => {
-                quorum = StakeTableQuorum::new((epoch, self), self.epoch_height);
-                LeafProofHint::Quorum(&quorum)
-            },
-            None => LeafProofHint::Assumption(known_finalized.context(
-                "server returned proof with assumption, but we have no finalized upper bound to \
-                 verify assumption",
-            )?),
-        };
-        let leaf = proof.verify(hint).await?;
+    fn fetch_leaf_from_server<'a, 'b, Q>(
+        &'a self,
+        id: impl Send + Into<LeafRequest> + 'a,
+        known_finalized: Option<&'b Leaf2>,
+        make_quorum: impl 'a + Send + FnOnce(EpochNumber) -> Q,
+    ) -> impl 'b + Send + Future<Output = Result<LeafQueryData<SeqTypes>>>
+    where
+        'a: 'b,
+        Q: Send + Quorum,
+    {
+        async move {
+            let id = id.into();
+            let proof = self
+                .server
+                .leaf_proof(id, known_finalized.map(Leaf2::height))
+                .await?;
+            let quorum;
+            let hint = match proof.proof().epoch() {
+                Some(epoch) => {
+                    quorum = make_quorum(epoch);
+                    LeafProofHint::Quorum(&quorum)
+                },
+                None => LeafProofHint::Assumption(known_finalized.context(
+                    "server returned proof with assumption, but we have no finalized upper bound \
+                     to verify assumption",
+                )?),
+            };
+            let leaf = proof.verify(hint).await?;
 
-        // The server has given us a leaf and correctly proved it finalized, but we still need to
-        // verify that it actually gave us the leaf we requested.
-        ensure!(
-            leaf_matches_id(&leaf, id),
-            "server returned a valid leaf proof for the wrong leaf (requested leaf {id}, got leaf \
-             {} with hash {})",
-            leaf.height(),
-            leaf.hash(),
-        );
+            // The server has given us a leaf and correctly proved it finalized, but we still need to
+            // verify that it actually gave us the leaf we requested.
+            ensure!(
+                leaf_matches_id(&leaf, id),
+                "server returned a valid leaf proof for the wrong leaf (requested leaf {id}, got \
+                 leaf {} with hash {})",
+                leaf.height(),
+                leaf.hash(),
+            );
 
-        // Having fetched and verified the leaf from the server, we can now cache it locally to
-        // improve future requests.
-        if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
-            // If this fails, we can still successfully return the leaf that we have in memory right
-            // now, so this is just a warning.
-            tracing::warn!("failed to cache fetched leaf: {err:#}");
+            // Having fetched and verified the leaf from the server, we can now cache it locally to
+            // improve future requests.
+            if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
+                // If this fails, we can still successfully return the leaf that we have in memory right
+                // now, so this is just a warning.
+                tracing::warn!("failed to cache fetched leaf: {err:#}");
+            }
+
+            Ok(leaf)
         }
-
-        Ok(leaf)
     }
 
     async fn cache_stake_table(
         &self,
         epoch: EpochNumber,
-        stake_table: StakeTable,
+        stake_table: Arc<StakeTable>,
     ) -> Arc<StakeTable> {
         let mut cache = self.stake_tables.write().await;
 
@@ -385,11 +449,7 @@ where
             }
         }
 
-        cache
-            .entry(epoch)
-            .insert_entry(Arc::new(stake_table))
-            .get()
-            .clone()
+        cache.entry(epoch).insert_entry(stake_table).get().clone()
     }
 }
 
@@ -761,5 +821,19 @@ mod test {
             *lc.quorum_for_epoch(epoch).await.unwrap(),
             client.quorum_for_epoch(epoch).await.into(),
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_invalid() {
+        let db = SqliteStorage::default().await.unwrap();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
+        client.return_invalid_quorum(epoch).await;
+        let err = lc.quorum_for_epoch(epoch).await.unwrap_err();
+        tracing::info!("quorum_for_epoch failed as expected: {err:#}");
     }
 }

@@ -13,8 +13,10 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    v0_3::StakeTableEvent, BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NodeState, PrivKey,
-    PubKey, SeqTypes, SequencerVersions, BLOCK_MERKLE_TREE_HEIGHT,
+    v0_3::{StakeTableEvent, Validator},
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, FeeVersion, Leaf2, NodeState, PrivKey, PubKey,
+    SeqTypes, SequencerVersions, StakeTableHash, StakeTableState, ValidatorMap,
+    BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -23,21 +25,22 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
-    light_client::StateVerKey,
     message::UpgradeLock,
+    signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
     stake_table::{supermajority_threshold, StakeTableEntry},
     traits::{
         node_implementation::{ConsensusTime, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
+        signature_key::{SignatureKey, StateSignatureKey},
     },
-    utils::{epoch_from_block_number, is_epoch_transition},
+    utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
     vote::Certificate as _,
 };
 use jf_merkle_tree_compat::{
     prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
 };
+use rand::RngCore;
 use vbs::version::StaticVersionType;
 
 use crate::{
@@ -52,7 +55,7 @@ use crate::{
 };
 
 /// Upgrade to epochs during testing.
-pub type EnableEpochs = SequencerVersions<LegacyVersion, EpochVersion>;
+pub type EnableEpochs = SequencerVersions<LegacyVersion, DrbAndHeaderUpgradeVersion>;
 
 /// Test without epochs and with legacy HotStuff.
 pub type LegacyVersion = FeeVersion;
@@ -176,7 +179,7 @@ pub async fn custom_leaf_chain<V: Versions>(
 
         qc.view_number = ViewNumber::new(height);
         qc.data.leaf_commit = Committable::commit(&leaf);
-        if leaf.block_header().version() >= EpochVersion::version() {
+        if leaf.block_header().version() >= DrbAndHeaderUpgradeVersion::version() {
             qc.data.block_number = Some(height);
         }
 
@@ -293,7 +296,7 @@ impl Quorum for EpochChangeQuorum {
         &self,
         cert: &Certificate,
     ) -> anyhow::Result<()> {
-        if V::version() >= EpochVersion::version() {
+        if V::version() >= DrbAndHeaderUpgradeVersion::version() {
             cert.verify_next_epoch_qc(self.epoch_height)?;
         }
         Ok(())
@@ -328,68 +331,111 @@ struct InnerTestClient {
     missing_leaves: HashSet<usize>,
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
-    quorum: Vec<(PrivKey, StakeTableEntry<PubKey>)>,
+    quorum: Vec<(PrivKey, Validator<PubKey>)>,
     #[derivative(Default(value = "3"))]
     first_epoch_with_dynamic_stake_table: u64,
     missing_quorums: HashSet<u64>,
+    invalid_quorums: HashSet<u64>,
 }
 
 impl InnerTestClient {
-    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, StakeTableEntry<PubKey>)] {
+    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, Validator<PubKey>)] {
         // For testing purposes, we will say that one new node joins the quorum each epoch. The
         // static stake table used before the first epoch with dynamic stake is the same as the
         // stake table used in that epoch.
         let quorum_size = max(epoch, self.first_epoch_with_dynamic_stake_table) as usize;
 
         while self.quorum.len() < quorum_size {
-            let (pub_key, priv_key) =
+            let (stake_table_key, priv_key) =
                 PubKey::generated_from_seed_indexed(Default::default(), self.quorum.len() as u64);
-            let entry = StakeTableEntry {
-                stake_key: pub_key,
-                stake_amount: U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128),
+            let (state_ver_key, _) = SchnorrPubKey::generated_from_seed_indexed(
+                Default::default(),
+                self.quorum.len() as u64,
+            );
+            let stake = U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128);
+            let validator = Validator {
+                account: Address::random(),
+                stake_table_key,
+                state_ver_key,
+                stake,
+                commission: 1,
+                delegators: [(Address::random(), stake)].into_iter().collect(),
             };
-            self.quorum.push((priv_key, entry));
+            self.quorum.push((priv_key, validator));
         }
 
         &self.quorum[..quorum_size]
+    }
+
+    fn stake_table_hash(&mut self, epoch: u64) -> StakeTableHash {
+        let quorum = self.quorum_for_epoch(epoch);
+        let mut validators = ValidatorMap::default();
+        let mut used_bls_keys = HashSet::default();
+        let mut used_schnorr_keys = HashSet::default();
+        for (_, validator) in quorum {
+            validators.insert(validator.account, validator.clone());
+            used_bls_keys.insert(validator.stake_table_key);
+            used_schnorr_keys.insert(validator.state_ver_key.clone());
+        }
+
+        let state = StakeTableState::new(
+            validators,
+            Default::default(),
+            used_bls_keys,
+            used_schnorr_keys,
+        );
+        state.commit()
     }
 
     async fn leaf(&mut self, height: usize, epoch_height: u64) -> LeafQueryData<SeqTypes> {
         let epoch = epoch_from_block_number(height as u64, epoch_height);
         let (quorum, stake_table): (Vec<_>, Vec<_>) =
             self.quorum_for_epoch(epoch).iter().cloned().unzip();
-        let pp = PubKey::public_parameter(
-            stake_table.as_slice(),
-            supermajority_threshold(stake_table.iter().map(|entry| entry.stake()).sum()),
-        );
+        let mut stake_entries = vec![];
+        let mut total_stake = U256::ZERO;
+        for validator in &stake_table {
+            stake_entries.push(StakeTableEntry {
+                stake_key: validator.stake_table_key,
+                stake_amount: validator.stake,
+            });
+            total_stake += validator.stake;
+        }
+
+        let pp = PubKey::public_parameter(&stake_entries, supermajority_threshold(total_stake));
 
         for i in self.leaves.len()..=height {
             let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
             let view_number = ViewNumber::new(i as u64);
 
-            let node_state = NodeState::mock_v3();
-            let (justify_qc, mt) =
-                if i == 0 {
-                    (QuorumCertificate2::genesis::<SequencerVersions<EpochVersion, EpochVersion>>(
-                    &Default::default(),
-                    &node_state,
+            let node_state =
+                NodeState::mock_v3().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
+            let (justify_qc, mt) = if i == 0 {
+                (
+                    QuorumCertificate2::genesis::<
+                        SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+                    >(&Default::default(), &node_state)
+                    .await,
+                    SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
                 )
-                .await, SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT))
-                } else {
-                    let parent = &self.leaves[i - 1];
-                    let mut mt = self.merkle_trees[i - 1].clone();
-                    mt.push(parent.block_hash()).unwrap();
-                    (parent.qc().clone(), mt)
-                };
-            let mut block_header = Leaf2::genesis::<SequencerVersions<EpochVersion, EpochVersion>>(
-                &Default::default(),
-                &node_state,
-            )
+            } else {
+                let parent = &self.leaves[i - 1];
+                let mut mt = self.merkle_trees[i - 1].clone();
+                mt.push(parent.block_hash()).unwrap();
+                (parent.qc().clone(), mt)
+            };
+            let mut block_header = Leaf2::genesis::<
+                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+            >(&Default::default(), &node_state)
             .await
             .block_header()
             .clone();
             *block_header.height_mut() = i as u64;
             *block_header.block_merkle_tree_root_mut() = mt.commitment();
+            if *epoch + 1 >= self.first_epoch_with_dynamic_stake_table
+                && is_ge_epoch_root(block_header.height(), epoch_height)
+            {
+                assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
+            }
             let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
                     epoch: Some(epoch),
@@ -412,7 +458,10 @@ impl InnerTestClient {
             let quorum_data_comm = VersionedVoteData::new_infallible(
                 quorum_data.clone(),
                 view_number,
-                &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+                &UpgradeLock::<
+                    SeqTypes,
+                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+                >::new(),
             )
             .await
             .commit();
@@ -472,7 +521,10 @@ impl TestClient {
             stake_table: inner
                 .quorum_for_epoch(1)
                 .iter()
-                .map(|(_, entry)| entry.clone())
+                .map(|(_, validator)| StakeTableEntry {
+                    stake_key: validator.stake_table_key,
+                    stake_amount: validator.stake,
+                })
                 .collect(),
             first_epoch_with_dynamic_stake_table: EpochNumber::new(
                 inner.first_epoch_with_dynamic_stake_table,
@@ -514,7 +566,10 @@ impl TestClient {
         inner
             .quorum_for_epoch(*epoch)
             .iter()
-            .map(|(_, entry)| entry.clone())
+            .map(|(_, validator)| StakeTableEntry {
+                stake_key: validator.stake_table_key,
+                stake_amount: validator.stake,
+            })
             .collect()
     }
 
@@ -526,6 +581,11 @@ impl TestClient {
     pub async fn forget_quorum(&self, epoch: EpochNumber) {
         let mut inner = self.inner.lock().await;
         inner.missing_quorums.insert(*epoch);
+    }
+
+    pub async fn return_invalid_quorum(&self, epoch: EpochNumber) {
+        let mut inner = self.inner.lock().await;
+        inner.invalid_quorums.insert(*epoch);
     }
 }
 
@@ -633,40 +693,59 @@ impl Client for TestClient {
             "missing quorum for epoch {epoch}"
         );
 
+        if inner.invalid_quorums.contains(&*epoch) {
+            // Return random events to create an invalid stake table.
+            let mut events = vec![];
+            let mut seed = [0; 32];
+            rand::thread_rng().fill_bytes(&mut seed);
+            register_validator_events(&mut events, &random_validator());
+            return Ok(events);
+        }
+
         let mut events = vec![];
         if *epoch == inner.first_epoch_with_dynamic_stake_table {
             // Generate events such that the first dynamic stake table is the same as the static
             // stake table we started with.
-            for (i, (_, entry)) in inner.quorum_for_epoch(*epoch).iter().enumerate() {
-                register_validator_events(&mut events, i, entry);
+            for (_, validator) in inner.quorum_for_epoch(*epoch) {
+                register_validator_events(&mut events, validator);
             }
         } else if *epoch > inner.first_epoch_with_dynamic_stake_table {
             // For each subsequent epoch, just generate one event for the new validator which joined
             // in that epoch.
-            let (_, entry) = &inner.quorum_for_epoch(*epoch)[(*epoch as usize) - 1];
-            register_validator_events(&mut events, *epoch as usize, entry);
+            let (_, validator) = &inner.quorum_for_epoch(*epoch)[(*epoch as usize) - 1];
+            register_validator_events(&mut events, validator);
         }
         Ok(events)
     }
 }
 
-fn register_validator_events(
-    events: &mut Vec<StakeTableEvent>,
-    i: usize,
-    entry: &StakeTableEntry<PubKey>,
-) {
-    let account = Address::random();
+fn register_validator_events(events: &mut Vec<StakeTableEvent>, validator: &Validator<PubKey>) {
     events.push(StakeTableEvent::Register(ValidatorRegistered {
+        account: validator.account,
+        blsVk: validator.stake_table_key.into(),
+        schnorrVk: validator.state_ver_key.clone().into(),
+        commission: validator.commission,
+    }));
+    for (&delegator, &amount) in &validator.delegators {
+        events.push(StakeTableEvent::Delegate(Delegated {
+            delegator,
+            validator: validator.account,
+            amount,
+        }));
+    }
+}
+
+pub fn random_validator() -> Validator<PubKey> {
+    let account = Address::random();
+    let mut seed = [0; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+    let stake = U256::from(rand::thread_rng().next_u64());
+    Validator {
         account,
-        blsVk: entry.stake_key.into(),
-        schnorrVk: StateVerKey::generated_from_seed_indexed(Default::default(), i as u64)
-            .0
-            .into(),
+        stake_table_key: PubKey::generated_from_seed_indexed(seed, 0).0,
+        state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, 0).0,
+        stake,
         commission: 1,
-    }));
-    events.push(StakeTableEvent::Delegate(Delegated {
-        delegator: Address::random(),
-        validator: account,
-        amount: entry.stake_amount,
-    }));
+        delegators: [(Address::random(), stake)].into_iter().collect(),
+    }
 }
