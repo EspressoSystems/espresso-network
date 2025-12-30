@@ -73,6 +73,19 @@ pub fn one_honest_threshold(total_stake: U256) -> U256 {
 }
 
 #[inline]
+/// A helper function to compute the fault tolerant quorum threshold given a total amount of stake.
+pub fn supermajority_threshold(total_stake: U256) -> U256 {
+    let one = U256::ONE;
+    let two = U256::from(2);
+    let three = U256::from(3);
+    if total_stake < U256::MAX / two {
+        ((total_stake * two) / three) + one
+    } else {
+        ((total_stake / three) * two) + two
+    }
+}
+
+#[inline]
 fn u256_to_field(amount: U256) -> CircuitField {
     let amount_bytes: [u8; 32] = amount.to_le_bytes();
     CircuitField::from_le_bytes_mod_order(&amount_bytes)

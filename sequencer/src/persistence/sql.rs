@@ -369,7 +369,7 @@ impl From<SqliteOptions> for Options {
     fn from(opt: SqliteOptions) -> Self {
         Options {
             sqlite_options: opt,
-            max_connections: 10,
+            max_connections: 5,
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),

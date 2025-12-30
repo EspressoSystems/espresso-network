@@ -59,6 +59,14 @@ pub trait UpdateStateData<Types: NodeType, State: MerklizedState<Types, ARITY>, 
         traversal_path: Vec<usize>,
         block_number: u64,
     ) -> anyhow::Result<()>;
+    async fn insert_merkle_nodes_batch(
+        &mut self,
+        proofs: Vec<(
+            MerkleProof<State::Entry, State::Key, State::T, ARITY>,
+            Vec<usize>,
+        )>,
+        block_number: u64,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]
