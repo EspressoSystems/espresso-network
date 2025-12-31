@@ -14,8 +14,8 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
     v0_3::{StakeTableEvent, Validator},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, FeeVersion, Leaf2, NodeState, PrivKey, PubKey,
-    SeqTypes, SequencerVersions, StakeTableHash, StakeTableState, ValidatorMap,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NodeState,
+    PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash, StakeTableState, ValidatorMap,
     BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
@@ -179,7 +179,7 @@ pub async fn custom_leaf_chain<V: Versions>(
 
         qc.view_number = ViewNumber::new(height);
         qc.data.leaf_commit = Committable::commit(&leaf);
-        if leaf.block_header().version() >= DrbAndHeaderUpgradeVersion::version() {
+        if leaf.block_header().version() >= EpochVersion::version() {
             qc.data.block_number = Some(height);
         }
 
@@ -296,7 +296,7 @@ impl Quorum for EpochChangeQuorum {
         &self,
         cert: &Certificate,
     ) -> anyhow::Result<()> {
-        if V::version() >= DrbAndHeaderUpgradeVersion::version() {
+        if V::version() >= EpochVersion::version() {
             cert.verify_next_epoch_qc(self.epoch_height)?;
         }
         Ok(())

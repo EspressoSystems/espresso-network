@@ -355,7 +355,7 @@ fn not_found(msg: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{EpochVersion, BLOCK_MERKLE_TREE_HEIGHT};
+    use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, BLOCK_MERKLE_TREE_HEIGHT};
     use hotshot_query_service::{
         data_source::{storage::UpdateAvailabilityStorage, Transaction},
         merklized_state::UpdateStateData,
@@ -554,7 +554,10 @@ mod test {
         // chain we would have required 3.
         let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=4, 2).await;
         assert_eq!(leaves[0].header().version(), LegacyVersion::version());
-        assert_eq!(leaves[1].header().version(), EpochVersion::version());
+        assert_eq!(
+            leaves[1].header().version(),
+            DrbAndHeaderUpgradeVersion::version()
+        );
         let qcs = [
             CertificatePair::for_parent(leaves[2].leaf()),
             CertificatePair::for_parent(leaves[3].leaf()),
