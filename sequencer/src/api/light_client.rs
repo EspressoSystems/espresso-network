@@ -2,7 +2,10 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use espresso_types::{BlockMerkleTree, SeqTypes};
-use futures::{future::FutureExt, stream::StreamExt};
+use futures::{
+    future::{try_join, FutureExt},
+    stream::StreamExt,
+};
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, LeafId},
     data_source::{storage::NodeStorage, VersionedDataSource},
@@ -13,7 +16,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use light_client::consensus::{header::HeaderProof, leaf::LeafProof};
+use light_client::consensus::{header::HeaderProof, leaf::LeafProof, payload::PayloadProof};
 use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
@@ -178,26 +181,7 @@ where
     .get("header", move |req, state| {
         async move {
             let root = req.integer_param("root").map_err(bad_param("root"))?;
-            let requested = if let Some(height) = req
-                .opt_integer_param("height")
-                .map_err(bad_param("height"))?
-            {
-                BlockId::Number(height)
-            } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
-                BlockId::Hash(hash)
-            } else if let Some(hash) = req
-                .opt_blob_param("payload-hash")
-                .map_err(bad_param("payload-hash"))?
-            {
-                BlockId::PayloadHash(hash)
-            } else {
-                return Err(Error::Custom {
-                    message: "missing parameter: requested header must be identified by height, \
-                              hash, or payload hash"
-                        .into(),
-                    status: StatusCode::BAD_REQUEST,
-                });
-            };
+            let requested = block_id_from_req(&req)?;
             get_header_proof(state, root, requested, fetch_timeout).await
         }
         .boxed()
@@ -273,6 +257,39 @@ where
                 })
         }
         .boxed()
+    })?
+    .get("payload", move |req, state| {
+        async move {
+            let block = block_id_from_req(&req)?;
+            let fetch_payload = async move {
+                state
+                    .get_payload(block)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing payload {block}"),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            };
+            let fetch_vid_common = async move {
+                state
+                    .get_vid_common(block)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing VID common {block}"),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            };
+            let (payload, vid_common) = try_join(fetch_payload, fetch_vid_common).await?;
+            Ok(PayloadProof::new(
+                payload.data().clone(),
+                vid_common.common().clone(),
+            ))
+        }
+        .boxed()
     })?;
 
     Ok(api)
@@ -329,6 +346,29 @@ where
             .into(),
         status: StatusCode::BAD_REQUEST,
     })
+}
+
+fn block_id_from_req(req: &RequestParams) -> Result<BlockId<SeqTypes>, Error> {
+    if let Some(height) = req
+        .opt_integer_param("height")
+        .map_err(bad_param("height"))?
+    {
+        Ok(BlockId::Number(height))
+    } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
+        Ok(BlockId::Hash(hash))
+    } else if let Some(hash) = req
+        .opt_blob_param("payload-hash")
+        .map_err(bad_param("payload-hash"))?
+    {
+        Ok(BlockId::PayloadHash(hash))
+    } else {
+        Err(Error::Custom {
+            message: "missing parameter: requested header must be identified by height, \
+                              hash, or payload hash"
+                .into(),
+            status: StatusCode::BAD_REQUEST,
+        })
+    }
 }
 
 fn bad_param<E>(name: &'static str) -> impl FnOnce(E) -> Error

@@ -9,7 +9,7 @@ use espresso_types::{
     select_active_validator_set, Header, Leaf2, PubKey, SeqTypes, StakeTableState,
 };
 use hotshot_query_service::{
-    availability::{LeafId, LeafQueryData},
+    availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData},
     node::BlockId,
     types::HeightIndexed,
 };
@@ -304,6 +304,19 @@ where
         // header from there.
         let leaf = self.fetch_leaf_from_server(id, None, quorum).await?;
         Ok(leaf.header().clone())
+    }
+
+    /// Fetch and verify the requested payload.
+    pub async fn fetch_payload(&self, id: BlockId<SeqTypes>) -> Result<PayloadQueryData<SeqTypes>> {
+        Ok(self.fetch_block(id).await?.into())
+    }
+
+    /// Fetch and verify the requested block.
+    pub async fn fetch_block(&self, id: BlockId<SeqTypes>) -> Result<BlockQueryData<SeqTypes>> {
+        let header = self.fetch_header(id).await?;
+        let proof = self.server.payload_proof(id).await?;
+        let payload = proof.verify(&header)?;
+        Ok(BlockQueryData::new(header, payload))
     }
 
     /// Fetch and verify the stake table for the requested epoch.
@@ -922,6 +935,45 @@ mod test {
         assert!(
             err.to_string()
                 .contains("does not match reconstructed hash"),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_payload() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        for i in 1..10 {
+            let payload = client.payload(i).await;
+            let res = lc.fetch_payload(BlockId::Number(i)).await.unwrap();
+            assert_eq!(res.data(), &payload);
+            assert_eq!(res.height(), i as u64);
+            assert_eq!(res.block_hash(), client.leaf(i).await.block_hash());
+            assert_eq!(res.hash(), client.leaf(i).await.payload_hash());
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_payload_invalid() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        client.return_invalid_payload(1).await;
+        let err = lc.fetch_payload(BlockId::Number(1)).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("commitment of payload does not match commitment in header"),
             "{err:#}"
         );
     }

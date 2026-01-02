@@ -11,7 +11,7 @@ use surf_disco::Url;
 use vbs::version::StaticVersion;
 
 use crate::{
-    consensus::{header::HeaderProof, leaf::LeafProof},
+    consensus::{header::HeaderProof, leaf::LeafProof, payload::PayloadProof},
     storage::LeafRequest,
 };
 
@@ -44,6 +44,12 @@ pub trait Client: Send + Sync + 'static {
            + Future<
         Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
     >;
+
+    /// Get a proof for the requested payload.
+    fn payload_proof(
+        &self,
+        id: BlockId<SeqTypes>,
+    ) -> impl Send + Future<Output = Result<PayloadProof>>;
 
     /// Get stake table events for the given epoch.
     ///
@@ -105,14 +111,14 @@ impl Client for QueryServiceClient {
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
-        let path = format!("/light-client/header/{root}");
-        let path = match id {
-            BlockId::Number(n) => format!("{path}/{n}"),
-            BlockId::Hash(h) => format!("{path}/hash/{h}"),
-            BlockId::PayloadHash(h) => format!("{path}/payload-hash/{h}"),
-        };
+        let path = format!("/light-client/header/{root}/{}", fmt_block_id(id));
         let proof = self.client.get(&path).send().await?;
         Ok(proof)
+    }
+
+    async fn payload_proof(&self, id: BlockId<SeqTypes>) -> Result<PayloadProof> {
+        let path = format!("/light-client/payload/{}", fmt_block_id(id));
+        Ok(self.client.get(&path).send().await?)
     }
 
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
@@ -124,11 +130,19 @@ impl Client for QueryServiceClient {
     }
 }
 
+fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
+    match id {
+        BlockId::Number(n) => format!("{n}"),
+        BlockId::Hash(h) => format!("hash/{h}"),
+        BlockId::PayloadHash(h) => format!("payload-hash/{h}"),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use espresso_types::{EpochVersion, SequencerVersions};
     use futures::{stream::StreamExt, TryStreamExt};
-    use hotshot_query_service::availability::LeafQueryData;
+    use hotshot_query_service::availability::{BlockQueryData, LeafQueryData};
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_eq;
     use sequencer::{
@@ -229,5 +243,129 @@ mod test {
                 .payload_hash(),
             leaves[0].payload_hash()
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_header_proof() {
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let _network = TestNetwork::new(
+            config,
+            SequencerVersions::<EpochVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client = QueryServiceClient::new(url);
+
+        // Wait for a chain of leaves to be produced.
+        let leaves: Vec<LeafQueryData<SeqTypes>> = client
+            .client
+            .socket("availability/stream/leaves/1")
+            .subscribe()
+            .await
+            .unwrap()
+            .take(2)
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Get header proof by height.
+        let proof = client.header_proof(2, BlockId::Number(1)).await.unwrap();
+        assert_eq!(
+            proof
+                .verify(leaves[1].header().block_merkle_tree_root())
+                .unwrap(),
+            *leaves[0].header()
+        );
+
+        // Get the same proof by block hash.
+        let proof = client
+            .header_proof(2, BlockId::Hash(leaves[0].block_hash()))
+            .await
+            .unwrap();
+        assert_eq!(
+            proof
+                .verify(leaves[1].header().block_merkle_tree_root())
+                .unwrap(),
+            *leaves[0].header()
+        );
+
+        // Get a proof by payload hash (this doesn't necessarily return a unique header, since
+        // multiple headers may have the same payload).
+        let proof = client
+            .header_proof(2, BlockId::PayloadHash(leaves[0].payload_hash()))
+            .await
+            .unwrap();
+        assert_eq!(
+            proof
+                .verify(leaves[1].header().block_merkle_tree_root())
+                .unwrap()
+                .payload_commitment(),
+            leaves[0].payload_hash()
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_payload_proof() {
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let _network = TestNetwork::new(
+            config,
+            SequencerVersions::<EpochVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client = QueryServiceClient::new(url);
+
+        // Wait for a block to be produced.
+        let block: BlockQueryData<SeqTypes> = client
+            .client
+            .socket("availability/stream/blocks/1")
+            .subscribe()
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap();
+
+        for id in [
+            BlockId::Number(1),
+            BlockId::Hash(block.hash()),
+            BlockId::PayloadHash(block.payload_hash()),
+        ] {
+            let proof = client.payload_proof(id).await.unwrap();
+            assert_eq!(proof.verify(block.header()).unwrap(), *block.payload());
+        }
     }
 }

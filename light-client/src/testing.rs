@@ -15,8 +15,8 @@ use derivative::Derivative;
 use espresso_types::{
     v0_3::{StakeTableEvent, Validator},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NodeState,
-    PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash, StakeTableState, ValidatorMap,
-    BLOCK_MERKLE_TREE_HEIGHT,
+    Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash, StakeTableState,
+    Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -24,17 +24,22 @@ use hotshot_query_service::{
     node::{BlockHash, BlockId},
 };
 use hotshot_types::{
-    data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
+    data::{
+        vid_commitment, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        VidCommon, ViewNumber,
+    },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
     stake_table::{supermajority_threshold, StakeTableEntry},
     traits::{
+        block_contents::EncodeBytes,
         node_implementation::{ConsensusTime, Versions},
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
+    vid::avidm::init_avidm_param,
     vote::Certificate as _,
 };
 use jf_merkle_tree_compat::{
@@ -48,6 +53,7 @@ use crate::{
     consensus::{
         header::HeaderProof,
         leaf::LeafProof,
+        payload::PayloadProof,
         quorum::{Certificate, Quorum},
     },
     state::Genesis,
@@ -322,6 +328,7 @@ impl Default for TestClient {
 #[derivative(Default)]
 struct InnerTestClient {
     leaves: Vec<LeafQueryData<SeqTypes>>,
+    payloads: Vec<Payload>,
     // Use an appendable `MerkleTree` rather than a `BlockMerkleTree` (which is a
     // `LightweightMerkleTree`) so we can look up paths for previously inserted elements.
     merkle_trees: Vec<SHA3MerkleTree<BlockHash<SeqTypes>>>,
@@ -331,6 +338,7 @@ struct InnerTestClient {
     missing_leaves: HashSet<usize>,
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
+    invalid_payloads: HashSet<usize>,
     quorum: Vec<(PrivKey, Validator<PubKey>)>,
     #[derivative(Default(value = "3"))]
     first_epoch_with_dynamic_stake_table: u64,
@@ -407,8 +415,8 @@ impl InnerTestClient {
             let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
             let view_number = ViewNumber::new(i as u64);
 
-            let node_state =
-                NodeState::mock_v3().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
+            let version = DrbAndHeaderUpgradeVersion::version();
+            let node_state = NodeState::mock_v3().with_genesis_version(version);
             let (justify_qc, mt) = if i == 0 {
                 (
                     QuorumCertificate2::genesis::<
@@ -423,6 +431,15 @@ impl InnerTestClient {
                 mt.push(parent.block_hash()).unwrap();
                 (parent.qc().clone(), mt)
             };
+
+            let transactions = vec![Transaction::random(&mut rand::thread_rng())];
+            let (payload, ns_table) =
+                Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
+            let payload_comm =
+                vid_commitment::<
+                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+                >(&payload.encode(), &ns_table.encode(), quorum.len(), version);
+
             let mut block_header = Leaf2::genesis::<
                 SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
             >(&Default::default(), &node_state)
@@ -431,6 +448,8 @@ impl InnerTestClient {
             .clone();
             *block_header.height_mut() = i as u64;
             *block_header.block_merkle_tree_root_mut() = mt.commitment();
+            *block_header.payload_commitment_mut() = payload_comm;
+            *block_header.ns_table_mut() = ns_table;
             if *epoch + 1 >= self.first_epoch_with_dynamic_stake_table
                 && is_ge_epoch_root(block_header.height(), epoch_height)
             {
@@ -485,6 +504,7 @@ impl InnerTestClient {
             self.block_hashes.insert(leaf.block_hash(), i);
             self.payload_hashes.entry(leaf.payload_hash()).or_insert(i);
             self.leaves.push(leaf);
+            self.payloads.push(payload);
             self.merkle_trees.push(mt);
         }
 
@@ -535,6 +555,17 @@ impl TestClient {
     pub async fn leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
         inner.leaf(height, self.epoch_height).await
+    }
+
+    pub async fn payload(&self, height: usize) -> Payload {
+        let mut inner = self.inner.lock().await;
+        inner.leaf(height, self.epoch_height).await;
+        inner.payloads[height].clone()
+    }
+
+    pub async fn return_invalid_payload(&self, for_height: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.invalid_payloads.insert(for_height);
     }
 
     pub async fn remember_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
@@ -716,6 +747,28 @@ impl Client for TestClient {
             register_validator_events(&mut events, validator);
         }
         Ok(events)
+    }
+
+    async fn payload_proof(&self, id: BlockId<SeqTypes>) -> Result<PayloadProof> {
+        let mut inner = self.inner.lock().await;
+
+        let height = inner.leaf_height(id.into())?;
+        let epoch = epoch_from_block_number(height as u64, self.epoch_height);
+        let quorum = inner.quorum_for_epoch(epoch);
+        let vid_common = VidCommon::V1(init_avidm_param(quorum.len()).unwrap());
+
+        let payload = if inner.invalid_payloads.contains(&height) {
+            Payload::from_transactions_sync(
+                [Transaction::random(&mut rand::thread_rng())],
+                NodeState::mock_v3().chain_config,
+            )
+            .unwrap()
+            .0
+        } else {
+            inner.payloads[height].clone()
+        };
+
+        Ok(PayloadProof::new(payload, vid_common))
     }
 }
 

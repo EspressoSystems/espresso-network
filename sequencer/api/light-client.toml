@@ -97,3 +97,16 @@ Returns
 [StakeTableEvent]
 ```
 """
+
+[route.payload]
+PATH = [
+    "/payload/:height",
+    "/payload/hash/:hash",
+    "/payload/payload-hash/:payload-hash",
+]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
+DOC = """
+Fetch a payload plus the VID common data needed to recompute and verify its hash.
+"""
