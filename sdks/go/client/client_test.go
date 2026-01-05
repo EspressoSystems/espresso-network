@@ -211,9 +211,9 @@ func TestNamespaceTransactionsInRange(t *testing.T) {
 
 	namespace := uint64(22266222)
 	startHeight := uint64(6386698)
-	endHeight := uint64(6389700)
+	endHeight := uint64(6386700)
 
-	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, namespace, startHeight, endHeight)
+	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
 	if err != nil {
 		t.Fatal("failed to fetch namespace transactions in range", err)
 	}
@@ -231,5 +231,14 @@ func TestNamespaceTransactionsInRange(t *testing.T) {
 				t.Fatal("transaction payload is empty")
 			}
 		}
+	}
+
+	startHeight = uint64(6386698)
+	endHeight = uint64(6389700)
+
+	// test if startHeight and endHeight are greater than 100 (which is the limit) then it throws an error
+	_, err = client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
+	if err == nil {
+		t.Fatal("expected error for large range, but got none")
 	}
 }
