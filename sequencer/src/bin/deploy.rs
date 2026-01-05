@@ -623,7 +623,7 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
         args_builder.timelock_operation_type(timelock_operation_type);
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract or ESPRESSO_TARGET_CONTRACT env var when \
                  scheduling timelock operation"
@@ -684,7 +684,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Add EOA ownership transfer parameters to builder
     if opt.transfer_ownership_from_eoa {
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract when using --transfer-ownership-from-eoa"
             )
@@ -702,7 +702,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Add multisig to timelock transfer parameters to builder
     if opt.propose_transfer_ownership_to_timelock {
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract when using \
                  --propose-transfer-ownership-to-timelock"
