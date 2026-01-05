@@ -204,3 +204,32 @@ func TestExplorerFetchTransactionByHash(t *testing.T) {
 		t.Fatal("failed to fetch block height", err)
 	}
 }
+
+func TestNamespaceTransactionsInRange(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient("https://query-0.decaf.testnet.espresso.network")
+
+	namespace := uint64(22266222)
+	startHeight := uint64(6386698)
+	endHeight := uint64(6389700)
+
+	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, namespace, startHeight, endHeight)
+	if err != nil {
+		t.Fatal("failed to fetch namespace transactions in range", err)
+	}
+
+	if len(blocksWithNamespaceTransactions) == 0 {
+		t.Fatal("no transactions found in the specified range for the given namespace")
+	}
+
+	for _, blocks := range blocksWithNamespaceTransactions {
+		for _, tx := range blocks.Transactions {
+			if tx.Namespace != namespace {
+				t.Fatalf("expected namespace %d, got %d", namespace, tx.Namespace)
+			}
+			if len(tx.Payload) == 0 {
+				t.Fatal("transaction payload is empty")
+			}
+		}
+	}
+}
