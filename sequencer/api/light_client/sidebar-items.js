@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["define_api","get_leaf_proof"],"struct":["Options"]};
+window.SIDEBAR_ITEMS = {"fn":["bad_param","define_api","get_header_proof","get_leaf_proof","leaf_height_from_req","not_found"],"struct":["Options"]};
