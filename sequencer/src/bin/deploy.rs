@@ -15,7 +15,7 @@ use espresso_contract_deployer::{
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
     proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
     provider::connect_ledger,
-    Contract, Contracts, DeployedContracts,
+    Contract, Contracts, DeployedContracts, OwnableContract,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -346,10 +346,10 @@ struct Options {
     timelock_operation_type: Option<TimelockOperationType>,
 
     /// The target contract for timelock operations or ownership transfers.
-    /// Valid values: "FeeContract", "EspToken", "LightClient", "StakeTable", "RewardClaim".
-    /// It's version agnostic
-    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT")]
-    target_contract: Option<String>,
+    /// Valid values: fee-contract-proxy, light-client-proxy, stake-table-proxy, esp-token-proxy, reward-claim-proxy
+    /// Aliases: feecontract, lightclient, staketable, esptoken, rewardclaim (case-insensitive)
+    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT", value_enum, ignore_case = true)]
+    target_contract: Option<OwnableContract>,
 
     /// The value to send with the timelock operation
     #[clap(
