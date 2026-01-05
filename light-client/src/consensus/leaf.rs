@@ -303,6 +303,8 @@ impl LeafProof {
 
 #[cfg(test)]
 mod test {
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum, LegacyVersion};
 
