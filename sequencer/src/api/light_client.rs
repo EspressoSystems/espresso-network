@@ -1,16 +1,19 @@
-use std::{sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use espresso_types::SeqTypes;
+use espresso_types::{BlockMerkleTree, SeqTypes};
 use futures::{future::FutureExt, stream::StreamExt};
 use hotshot_query_service::{
-    availability::{AvailabilityDataSource, LeafHash},
+    availability::{AvailabilityDataSource, LeafId},
     data_source::{storage::NodeStorage, VersionedDataSource},
+    merklized_state::{MerklizedStateDataSource, Snapshot},
+    node::BlockId,
     types::HeightIndexed,
     Error,
 };
-use light_client::consensus::leaf::LeafProof;
-use tide_disco::{method::ReadState, Api, StatusCode};
+use jf_merkle_tree_compat::MerkleTreeScheme;
+use light_client::consensus::{header::HeaderProof, leaf::LeafProof};
+use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
 async fn get_leaf_proof<State>(
@@ -63,10 +66,7 @@ where
         let leaf = leaf
             .with_timeout(fetch_timeout)
             .await
-            .ok_or_else(|| Error::Custom {
-                message: "missing leaves".into(),
-                status: StatusCode::NOT_FOUND,
-            })?;
+            .ok_or_else(|| not_found("missing leaves"))?;
 
         if proof.push(leaf) {
             return Ok(proof);
@@ -78,15 +78,51 @@ where
     // by appending two more QCs.
     if finalized.is_none() {
         let Some([committing_qc, deciding_qc]) = qc_chain else {
-            return Err(Error::Custom {
-                message: "missing QC 2-chain to prove finality".into(),
-                status: StatusCode::NOT_FOUND,
-            });
+            return Err(not_found("missing QC 2-chain to prove finality"));
         };
         proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
     }
 
     Ok(proof)
+}
+
+async fn get_header_proof<State>(
+    state: &State,
+    root: u64,
+    requested: BlockId<SeqTypes>,
+    fetch_timeout: Duration,
+) -> Result<HeaderProof, Error>
+where
+    State: AvailabilityDataSource<SeqTypes>
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + VersionedDataSource,
+{
+    let header = state
+        .get_header(requested)
+        .await
+        .with_timeout(fetch_timeout)
+        .await
+        .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
+    if header.height() >= root {
+        return Err(Error::Custom {
+            message: format!(
+                "height ({}) must be less than root ({root})",
+                header.height()
+            ),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+    let path = MerklizedStateDataSource::<SeqTypes, BlockMerkleTree, _>::get_path(
+        state,
+        Snapshot::Index(root),
+        header.height(),
+    )
+    .await
+    .map_err(|source| Error::MerklizedState {
+        source: source.into(),
+    })?;
+
+    Ok(HeaderProof::new(header, path))
 }
 
 #[derive(Debug)]
@@ -113,7 +149,9 @@ pub(super) fn define_api<S, ApiVer: StaticVersionType + 'static>(
 ) -> Result<Api<S, Error, ApiVer>>
 where
     S: ReadState + Send + Sync + 'static,
-    S::State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    S::State: AvailabilityDataSource<SeqTypes>
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + VersionedDataSource,
     for<'a> <S::State as VersionedDataSource>::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/light-client.toml"))?;
@@ -124,38 +162,38 @@ where
 
     api.get("leaf", move |req, state| {
         async move {
-            let requested = match req
-                .opt_integer_param("number")
-                .map_err(|err| Error::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::BAD_REQUEST,
-                })? {
-                Some(n) => n,
-                None => {
-                    let hash: LeafHash<SeqTypes> =
-                        req.blob_param("hash").map_err(|err| Error::Custom {
-                            message: err.to_string(),
-                            status: StatusCode::BAD_REQUEST,
-                        })?;
-                    let leaf = state
-                        .get_leaf(hash)
-                        .await
-                        .with_timeout(fetch_timeout)
-                        .await
-                        .ok_or_else(|| Error::Custom {
-                            message: format!("unknown leaf {hash}"),
-                            status: StatusCode::NOT_FOUND,
-                        })?;
-                    leaf.height() as usize
-                },
-            };
+            let requested = leaf_height_from_req(&req, state, fetch_timeout).await?;
             let finalized = req
                 .opt_integer_param("finalized")
-                .map_err(|err| Error::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::BAD_REQUEST,
-                })?;
+                .map_err(bad_param("finalized"))?;
             get_leaf_proof(state, requested, finalized, fetch_timeout).await
+        }
+        .boxed()
+    })?
+    .get("header", move |req, state| {
+        async move {
+            let root = req.integer_param("root").map_err(bad_param("root"))?;
+            let requested = if let Some(height) = req
+                .opt_integer_param("height")
+                .map_err(bad_param("height"))?
+            {
+                BlockId::Number(height)
+            } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
+                BlockId::Hash(hash)
+            } else if let Some(hash) = req
+                .opt_blob_param("payload-hash")
+                .map_err(bad_param("payload-hash"))?
+            {
+                BlockId::PayloadHash(hash)
+            } else {
+                return Err(Error::Custom {
+                    message: "missing parameter: requested header must be identified by height, \
+                              hash, or payload hash"
+                        .into(),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            };
+            get_header_proof(state, root, requested, fetch_timeout).await
         }
         .boxed()
     })?;
@@ -163,11 +201,85 @@ where
     Ok(api)
 }
 
+async fn leaf_height_from_req<S>(
+    req: &RequestParams,
+    state: &S,
+    fetch_timeout: Duration,
+) -> Result<usize, Error>
+where
+    S: AvailabilityDataSource<SeqTypes>,
+{
+    if let Some(height) = req
+        .opt_integer_param("height")
+        .map_err(bad_param("height"))?
+    {
+        return Ok(height);
+    } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
+        let leaf = state
+            .get_leaf(LeafId::Hash(hash))
+            .await
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found(format!("unknown leaf hash {hash}")))?;
+        return Ok(leaf.height() as usize);
+    } else if let Some(hash) = req
+        .opt_blob_param("block-hash")
+        .map_err(bad_param("block-hash"))?
+    {
+        let header = state
+            .get_header(BlockId::Hash(hash))
+            .await
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found(format!("unknown block hash {hash}")))?;
+        return Ok(header.height() as usize);
+    } else if let Some(hash) = req
+        .opt_blob_param("payload-hash")
+        .map_err(bad_param("payload-hash"))?
+    {
+        let header = state
+            .get_header(BlockId::PayloadHash(hash))
+            .await
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found(format!("unknown payload hash {hash}")))?;
+        return Ok(header.height() as usize);
+    }
+
+    Err(Error::Custom {
+        message: "missing parameter: requested leaf must be identified by height, hash, block \
+                  hash, or payload hash"
+            .into(),
+        status: StatusCode::BAD_REQUEST,
+    })
+}
+
+fn bad_param<E>(name: &'static str) -> impl FnOnce(E) -> Error
+where
+    E: Display,
+{
+    move |err| Error::Custom {
+        message: format!("{name}: {err:#}"),
+        status: StatusCode::BAD_REQUEST,
+    }
+}
+
+fn not_found(msg: impl Into<String>) -> Error {
+    Error::Custom {
+        message: msg.into(),
+        status: StatusCode::NOT_FOUND,
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use espresso_types::EpochVersion;
-    use hotshot_query_service::data_source::{storage::UpdateAvailabilityStorage, Transaction};
+    use espresso_types::{EpochVersion, BLOCK_MERKLE_TREE_HEIGHT};
+    use hotshot_query_service::{
+        data_source::{storage::UpdateAvailabilityStorage, Transaction},
+        merklized_state::UpdateStateData,
+    };
     use hotshot_types::simple_certificate::CertificatePair;
+    use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath};
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
@@ -385,5 +497,87 @@ mod test {
             leaves[0]
         );
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }))
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_header_proof() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Construct a chain of leaves, plus the corresponding block Merkle tree at each leaf.
+        let leaves = leaf_chain::<EpochVersion>(0..=2).await;
+        let mts = leaves
+            .iter()
+            .scan(
+                BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
+                |mt, leaf| {
+                    assert_eq!(mt.commitment(), leaf.header().block_merkle_tree_root());
+                    let item = mt.clone();
+                    mt.push(leaf.block_hash()).unwrap();
+                    Some(item)
+                },
+            )
+            .collect::<Vec<_>>();
+
+        // Save all those objects in the DB.
+        {
+            let mut tx = ds.write().await.unwrap();
+            for (leaf, mt) in leaves.iter().zip(&mts) {
+                tx.insert_leaf(leaf.clone()).await.unwrap();
+
+                if leaf.height() > 0 {
+                    let merkle_path = mt.lookup(leaf.height() - 1).expect_ok().unwrap().1;
+                    UpdateStateData::<SeqTypes, BlockMerkleTree, _>::insert_merkle_nodes(
+                        &mut tx,
+                        merkle_path,
+                        ToTraversalPath::<{ BlockMerkleTree::ARITY }>::to_traversal_path(
+                            &(leaf.height() - 1),
+                            BLOCK_MERKLE_TREE_HEIGHT,
+                        ),
+                        leaf.height(),
+                    )
+                    .await
+                    .unwrap();
+                    UpdateStateData::<SeqTypes, BlockMerkleTree, _>::set_last_state_height(
+                        &mut tx,
+                        leaf.height() as usize,
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // Test happy path.
+        for (root, mt) in mts.iter().enumerate().skip(1) {
+            for (height, leaf) in leaves.iter().enumerate().take(root) {
+                tracing::info!(root, height, "test happy path");
+                let proof =
+                    get_header_proof(&ds, root as u64, BlockId::Number(height), Duration::MAX)
+                        .await
+                        .unwrap();
+                assert_eq!(proof.verify_ref(mt.commitment()).unwrap(), leaf.header());
+            }
+        }
+
+        // Test unknown leaf.
+        let err = get_header_proof(&ds, 5, BlockId::Number(4), Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        // Test height >= root.
+        let err = get_header_proof(&ds, 1, BlockId::Number(1), Duration::MAX)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 }
