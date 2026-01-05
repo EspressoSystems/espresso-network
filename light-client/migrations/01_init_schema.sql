@@ -1,0 +1,6 @@
+CREATE TABLE leaf (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    height  BIGINT NOT NULL UNIQUE,
+    hash    TEXT NOT NULL UNIQUE,
+    data    JSONB NOT NULL
+);
