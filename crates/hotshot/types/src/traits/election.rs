@@ -18,7 +18,7 @@ use crate::{
     data::Leaf2,
     drb::DrbResult,
     event::Event,
-    stake_table::HSStakeTable,
+    stake_table::{supermajority_threshold, HSStakeTable},
     traits::{node_implementation::NodeImplementation, signature_key::StakeTableEntryType},
     PeerConfig,
 };
@@ -159,14 +159,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Returns the threshold for a specific `Membership` implementation
     fn success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
         let total_stake = self.total_stake(epoch);
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-        if total_stake < U256::MAX / two {
-            ((total_stake * two) / three) + one
-        } else {
-            ((total_stake / three) * two) + two
-        }
+        supermajority_threshold(total_stake)
     }
 
     /// Returns the DA threshold for a specific `Membership` implementation

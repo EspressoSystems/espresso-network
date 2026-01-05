@@ -1,21 +1,44 @@
 #![cfg(any(test, feature = "testing"))]
 
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
+use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context, Result};
+use async_lock::Mutex;
+use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
-use espresso_types::{EpochVersion, FeeVersion, Leaf2, NodeState, SeqTypes, SequencerVersions};
-use hotshot_query_service::availability::LeafQueryData;
+use espresso_types::{
+    EpochVersion, FeeVersion, Leaf2, NodeState, PrivKey, PubKey, SeqTypes, SequencerVersions,
+};
+use hotshot_query_service::availability::{LeafHash, LeafId, LeafQueryData};
 use hotshot_types::{
-    data::{QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    message::UpgradeLock,
+    signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
-    simple_vote::{NextEpochQuorumData2, UpgradeProposalData},
-    traits::node_implementation::{ConsensusTime, Versions},
-    utils::is_epoch_transition,
+    simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
+    stake_table::{supermajority_threshold, StakeTableEntry},
+    traits::{
+        node_implementation::{ConsensusTime, Versions},
+        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
+    },
+    utils::{epoch_from_block_number, is_epoch_transition},
+    vote::Certificate as _,
+    PeerConfig,
 };
 use vbs::version::StaticVersionType;
 
-use crate::consensus::quorum::{Certificate, Quorum};
+use crate::{
+    client::Client,
+    consensus::{
+        leaf::LeafProof,
+        quorum::{Certificate, Quorum},
+    },
+    state::Genesis,
+};
 
 /// Upgrade to epochs during testing.
 pub type EnableEpochs = SequencerVersions<LegacyVersion, EpochVersion>;
@@ -255,5 +278,233 @@ impl Quorum for EpochChangeQuorum {
             cert.verify_next_epoch_qc(self.epoch_height)?;
         }
         Ok(())
+    }
+}
+
+/// A default quorum for testing.
+fn test_quorum() -> Vec<(PrivKey, PeerConfig<SeqTypes>)> {
+    let seed = Default::default();
+    (1..=5)
+        .map(|i| {
+            let (pub_key, priv_key) = PubKey::generated_from_seed_indexed(seed, i);
+            let config = PeerConfig {
+                stake_table_entry: StakeTableEntry {
+                    stake_key: pub_key,
+                    stake_amount: U256::from(i) * U256::from(1_000_000_000u128),
+                },
+                state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, i).0,
+            };
+            (priv_key, config)
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct TestClient {
+    inner: Arc<Mutex<InnerTestClient>>,
+    quorum: Vec<(PrivKey, PeerConfig<SeqTypes>)>,
+    epoch_height: u64,
+}
+
+impl Default for TestClient {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+            quorum: test_quorum(),
+            epoch_height: 100,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct InnerTestClient {
+    leaves: Vec<LeafQueryData<SeqTypes>>,
+    leaf_hashes: HashMap<LeafHash<SeqTypes>, usize>,
+    missing_leaves: HashSet<usize>,
+    invalid_proofs: HashSet<usize>,
+    swapped_leaves: HashMap<usize, usize>,
+}
+
+impl InnerTestClient {
+    async fn leaf(
+        &mut self,
+        height: usize,
+        epoch_height: u64,
+        quorum: &[(PrivKey, PeerConfig<SeqTypes>)],
+    ) -> LeafQueryData<SeqTypes> {
+        let stake_table = quorum
+            .iter()
+            .map(|(_, config)| config.stake_table_entry.clone())
+            .collect::<Vec<_>>();
+        let pp = PubKey::public_parameter(
+            stake_table.as_slice(),
+            supermajority_threshold(stake_table.iter().map(|entry| entry.stake()).sum()),
+        );
+
+        for i in self.leaves.len()..=height {
+            let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
+            let view_number = ViewNumber::new(i as u64);
+
+            let node_state = NodeState::mock_v3();
+            let justify_qc = if i == 0 {
+                QuorumCertificate2::genesis::<SequencerVersions<EpochVersion, EpochVersion>>(
+                    &Default::default(),
+                    &node_state,
+                )
+                .await
+            } else {
+                self.leaves[i - 1].qc().clone()
+            };
+            let mut block_header = Leaf2::genesis::<SequencerVersions<EpochVersion, EpochVersion>>(
+                &Default::default(),
+                &node_state,
+            )
+            .await
+            .block_header()
+            .clone();
+            *block_header.height_mut() = i as u64;
+            let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+                proposal: QuorumProposal2::<SeqTypes> {
+                    epoch: Some(epoch),
+                    block_header,
+                    view_number,
+                    justify_qc,
+                    upgrade_certificate: None,
+                    view_change_evidence: None,
+                    next_drb_result: None,
+                    next_epoch_justify_qc: None,
+                    state_cert: None,
+                },
+            };
+            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            let quorum_data = QuorumData2 {
+                leaf_commit: leaf.commit(),
+                epoch: Some(epoch),
+                block_number: Some(i as u64),
+            };
+            let quorum_data_comm = VersionedVoteData::new_infallible(
+                quorum_data.clone(),
+                view_number,
+                &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+            )
+            .await
+            .commit();
+            let signatures = quorum
+                .iter()
+                .map(|(key, _)| PubKey::sign(key, quorum_data_comm.as_ref()).unwrap())
+                .collect::<Vec<_>>();
+            let assembled = PubKey::assemble(
+                &pp,
+                &std::iter::repeat_n(true, quorum.len()).collect::<BitVec>(),
+                &signatures,
+            );
+            let qc = QuorumCertificate2::create_signed_certificate(
+                quorum_data_comm,
+                quorum_data,
+                assembled,
+                view_number,
+            );
+            self.leaves.push(LeafQueryData::new(leaf, qc).unwrap());
+        }
+
+        self.leaves[height].clone()
+    }
+}
+
+impl TestClient {
+    pub fn genesis(&self) -> Genesis {
+        Genesis {
+            epoch_height: self.epoch_height,
+            stake_table: self
+                .quorum
+                .iter()
+                .map(|(_, config)| config.clone())
+                .collect(),
+        }
+    }
+
+    pub async fn leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
+        let mut inner = self.inner.lock().await;
+        inner.leaf(height, self.epoch_height, &self.quorum).await
+    }
+
+    pub async fn remember_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
+        let mut inner = self.inner.lock().await;
+        inner.missing_leaves.remove(&height);
+        inner.invalid_proofs.remove(&height);
+        inner.swapped_leaves.remove(&height);
+        inner.leaf(height, self.epoch_height, &self.quorum).await
+    }
+
+    pub async fn forget_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
+        let mut inner = self.inner.lock().await;
+        inner.missing_leaves.insert(height);
+        inner.leaf(height, self.epoch_height, &self.quorum).await
+    }
+
+    pub async fn return_invalid_proof(&self, for_height: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.invalid_proofs.insert(for_height);
+    }
+
+    pub async fn return_wrong_leaf(&self, for_height: usize, substitute: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.swapped_leaves.insert(for_height, substitute);
+    }
+}
+
+impl Client for TestClient {
+    async fn leaf_proof(&self, id: LeafId<SeqTypes>, finalized: Option<u64>) -> Result<LeafProof> {
+        let mut inner = self.inner.lock().await;
+
+        let mut height = match id {
+            LeafId::Number(h) => h,
+            LeafId::Hash(h) => *inner
+                .leaf_hashes
+                .get(&h)
+                .context(format!("missing leaf {h}"))?,
+        };
+        ensure!(
+            !inner.missing_leaves.contains(&height),
+            "missing leaf {height}"
+        );
+        if inner.invalid_proofs.contains(&height) {
+            return Ok(LeafProof::default());
+        }
+        if let Some(sub) = inner.swapped_leaves.get(&height) {
+            height = *sub;
+        };
+
+        let leaf = inner.leaf(height, self.epoch_height, &self.quorum).await;
+
+        let mut proof = LeafProof::default();
+        proof.push(leaf);
+        if let Some(finalized) = finalized {
+            ensure!(
+                finalized > (height as u64),
+                "assumed finalized leaf must be after requested leaf"
+            );
+            if finalized <= (height as u64) + 2 {
+                tracing::info!(
+                    height,
+                    finalized,
+                    "path to finalized is shorter than path to QC-chain, using finalized"
+                );
+                return Ok(proof);
+            }
+        }
+
+        proof.push(
+            inner
+                .leaf(height + 1, self.epoch_height, &self.quorum)
+                .await,
+        );
+        assert!(proof.push(
+            inner
+                .leaf(height + 2, self.epoch_height, &self.quorum)
+                .await
+        ));
+
+        Ok(proof)
     }
 }
