@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use anyhow::{ensure, Context, Result};
+use committable::Committable;
 use espresso_types::{Header, Leaf2, SeqTypes};
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
@@ -100,7 +101,21 @@ where
                 // header, we can ask the server for an inclusion proof for the requested header
                 // relative to the Merkle root in the upper bound leaf.
                 let proof = self.server.header_proof(leaf.height(), id).await?;
-                return proof.verify(leaf.header().block_merkle_tree_root());
+                let header = proof
+                    .verify(leaf.header().block_merkle_tree_root())
+                    .context("invalid header proof")?;
+
+                // The server has given us a header and correctly proved it finalized, but we still
+                // need to verify that it actually gave us the header we requested.
+                ensure!(
+                    header_matches_id(&header, id),
+                    "server returned a valid header proof for the wrong header (requested header \
+                     {id}, got header {} with hash {})",
+                    header.height(),
+                    header.commit(),
+                );
+
+                return Ok(header);
             }
         }
 
@@ -186,6 +201,14 @@ fn leaf_matches_id(leaf: &LeafQueryData<SeqTypes>, id: impl Into<LeafRequest>) -
         LeafRequest::Leaf(LeafId::Hash(h)) => h == leaf.hash(),
         LeafRequest::Header(BlockId::Hash(h)) => h == leaf.block_hash(),
         LeafRequest::Header(BlockId::PayloadHash(h)) => h == leaf.payload_hash(),
+    }
+}
+
+fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
+    match id {
+        BlockId::Number(n) => header.height() == (n as u64),
+        BlockId::Hash(h) => header.commit() == h,
+        BlockId::PayloadHash(h) => header.payload_commitment() == h,
     }
 }
 
@@ -306,19 +329,17 @@ mod test {
     #[test_log::test]
     async fn test_fetch_header_invalid_proof() {
         let client = TestClient::default();
-        let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
-            client.clone(),
-            client.genesis(),
-        );
+        let db = SqliteStorage::default().await.unwrap();
+
+        // Start with an upper bound, so that `fetch_header` goes through the `client.header_proof`
+        // path.
+        db.insert_leaf(client.leaf(2).await).await.unwrap();
+
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
         client.return_invalid_proof(1).await;
-        lc.fetch_header(BlockId::Number(1)).await.unwrap_err();
-        lc.fetch_header(BlockId::Hash(client.leaf(1).await.block_hash()))
-            .await
-            .unwrap_err();
-        lc.fetch_header(BlockId::PayloadHash(client.leaf(1).await.payload_hash()))
-            .await
-            .unwrap_err();
+
+        let err = lc.fetch_header(BlockId::Number(1)).await.unwrap_err();
+        assert!(err.to_string().contains("invalid header proof"), "{err:#}");
     }
 
     #[tokio::test]
@@ -333,9 +354,12 @@ mod test {
 
         let lc = LightClient::from_genesis(db, client.clone(), client.genesis());
         client.return_wrong_leaf(1, 0).await;
-        lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
-        lc.fetch_leaf(LeafId::Hash(client.leaf(1).await.hash()))
-            .await
-            .unwrap_err();
+
+        let err = lc.fetch_header(BlockId::Number(1)).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("server returned a valid header proof for the wrong header"),
+            "{err:#}"
+        );
     }
 }

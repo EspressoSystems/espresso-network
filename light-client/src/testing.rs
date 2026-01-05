@@ -431,7 +431,11 @@ impl InnerTestClient {
                 assembled,
                 view_number,
             );
-            self.leaves.push(LeafQueryData::new(leaf, qc).unwrap());
+            let leaf = LeafQueryData::new(leaf, qc).unwrap();
+            self.leaf_hashes.insert(leaf.hash(), i);
+            self.block_hashes.insert(leaf.block_hash(), i);
+            self.payload_hashes.entry(leaf.payload_hash()).or_insert(i);
+            self.leaves.push(leaf);
             self.merkle_trees.push(mt);
         }
 
