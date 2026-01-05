@@ -43,8 +43,14 @@ impl HeaderProof {
     fn verify_proof(&self, root: <BlockMerkleTree as MerkleTreeScheme>::Commitment) -> Result<()> {
         // Check that the proof is actually for the correct header, before verifying the proof
         // (which is slightly more expensive).
-        ensure!(self.proof.elem() == Some(&self.header.commit()));
-        ensure!(self.proof.index() == &self.header.height());
+        ensure!(
+            self.proof.elem() == Some(&self.header.commit()),
+            "proof is not for the correct header"
+        );
+        ensure!(
+            self.proof.index() == &self.header.height(),
+            "proof is not for the correct height"
+        );
 
         BlockMerkleTree::verify(root, self.header.height(), &self.proof)
             .context("malformed proof")?
@@ -100,27 +106,33 @@ mod test {
             leaves[0].header().clone(),
             mt.lookup(1).expect_ok().unwrap().1,
         );
-        proof.verify(mt.commitment()).unwrap_err();
+        let err = proof.verify(mt.commitment()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("proof is not for the correct header"),
+            "{err:#}"
+        );
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof_invalid_wrong_height() {
-        let leaves = leaf_chain::<EpochVersion>(0..=1).await;
+        let leaf = leaf_chain::<EpochVersion>(0..1).await.remove(0);
         let mts = [0, 1]
             .into_iter()
             .map(|height_diff| {
                 BlockMerkleTree::from_elems(
                     Some(BLOCK_MERKLE_TREE_HEIGHT + height_diff),
-                    [leaves[0].block_hash(), leaves[1].block_hash()],
+                    [leaf.block_hash()],
                 )
                 .unwrap()
             })
             .collect::<Vec<_>>();
         let proof = HeaderProof::new(
-            leaves[0].header().clone(),
-            mts[0].lookup(1).expect_ok().unwrap().1,
+            leaf.header().clone(),
+            mts[0].lookup(0).expect_ok().unwrap().1,
         );
-        proof.verify(mts[1].commitment()).unwrap_err();
+        let err = proof.verify(mts[1].commitment()).unwrap_err();
+        assert!(err.to_string().contains("malformed proof"), "{err:#}");
     }
 }
