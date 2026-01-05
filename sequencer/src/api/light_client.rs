@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use espresso_types::{BlockMerkleTree, SeqTypes};
@@ -66,10 +66,7 @@ where
         let leaf = leaf
             .with_timeout(fetch_timeout)
             .await
-            .ok_or_else(|| Error::Custom {
-                message: "missing leaves".into(),
-                status: StatusCode::NOT_FOUND,
-            })?;
+            .ok_or_else(|| not_found("missing leaves"))?;
 
         if proof.push(leaf) {
             return Ok(proof);
@@ -81,10 +78,7 @@ where
     // by appending two more QCs.
     if finalized.is_none() {
         let Some([committing_qc, deciding_qc]) = qc_chain else {
-            return Err(Error::Custom {
-                message: "missing QC 2-chain to prove finality".into(),
-                status: StatusCode::NOT_FOUND,
-            });
+            return Err(not_found("missing QC 2-chain to prove finality"));
         };
         proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
     }
@@ -108,10 +102,7 @@ where
         .await
         .with_timeout(fetch_timeout)
         .await
-        .ok_or_else(|| Error::Custom {
-            message: format!("unknown header {requested}"),
-            status: StatusCode::NOT_FOUND,
-        })?;
+        .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
     if header.height() >= root {
         return Err(Error::Custom {
             message: format!(
@@ -174,38 +165,24 @@ where
             let requested = leaf_height_from_req(&req, state, fetch_timeout).await?;
             let finalized = req
                 .opt_integer_param("finalized")
-                .map_err(|err| Error::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::BAD_REQUEST,
-                })?;
+                .map_err(bad_param("finalized"))?;
             get_leaf_proof(state, requested, finalized, fetch_timeout).await
         }
         .boxed()
     })?
     .get("header", move |req, state| {
         async move {
-            let root = req.integer_param("root").map_err(|err| Error::Custom {
-                message: format!("root: {err:#}"),
-                status: StatusCode::BAD_REQUEST,
-            })?;
-            let requested = if let Some(height) =
-                req.opt_integer_param("height")
-                    .map_err(|err| Error::Custom {
-                        message: format!("height: {err:#}"),
-                        status: StatusCode::BAD_REQUEST,
-                    })? {
+            let root = req.integer_param("root").map_err(bad_param("root"))?;
+            let requested = if let Some(height) = req
+                .opt_integer_param("height")
+                .map_err(bad_param("height"))?
+            {
                 BlockId::Number(height)
-            } else if let Some(hash) = req.opt_blob_param("hash").map_err(|err| Error::Custom {
-                message: format!("hash: {err:#}"),
-                status: StatusCode::BAD_REQUEST,
-            })? {
+            } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
                 BlockId::Hash(hash)
-            } else if let Some(hash) =
-                req.opt_blob_param("payload-hash")
-                    .map_err(|err| Error::Custom {
-                        message: format!("payload-hash: {err:#}"),
-                        status: StatusCode::BAD_REQUEST,
-                    })?
+            } else if let Some(hash) = req
+                .opt_blob_param("payload-hash")
+                .map_err(bad_param("payload-hash"))?
             {
                 BlockId::PayloadHash(hash)
             } else {
@@ -234,59 +211,38 @@ where
 {
     if let Some(height) = req
         .opt_integer_param("height")
-        .map_err(|err| Error::Custom {
-            message: format!("height: {err:#}"),
-            status: StatusCode::BAD_REQUEST,
-        })?
+        .map_err(bad_param("height"))?
     {
         return Ok(height);
-    } else if let Some(hash) = req.opt_blob_param("hash").map_err(|err| Error::Custom {
-        message: format!("hash: {err:#}"),
-        status: StatusCode::BAD_REQUEST,
-    })? {
+    } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
         let leaf = state
             .get_leaf(LeafId::Hash(hash))
             .await
             .with_timeout(fetch_timeout)
             .await
-            .ok_or_else(|| Error::Custom {
-                message: format!("unknown leaf hash {hash}"),
-                status: StatusCode::NOT_FOUND,
-            })?;
+            .ok_or_else(|| not_found(format!("unknown leaf hash {hash}")))?;
         return Ok(leaf.height() as usize);
     } else if let Some(hash) = req
         .opt_blob_param("block-hash")
-        .map_err(|err| Error::Custom {
-            message: format!("block-hash: {err:#}"),
-            status: StatusCode::BAD_REQUEST,
-        })?
+        .map_err(bad_param("block-hash"))?
     {
         let header = state
             .get_header(BlockId::Hash(hash))
             .await
             .with_timeout(fetch_timeout)
             .await
-            .ok_or_else(|| Error::Custom {
-                message: format!("unknown block hash {hash}"),
-                status: StatusCode::NOT_FOUND,
-            })?;
+            .ok_or_else(|| not_found(format!("unknown block hash {hash}")))?;
         return Ok(header.height() as usize);
     } else if let Some(hash) = req
         .opt_blob_param("payload-hash")
-        .map_err(|err| Error::Custom {
-            message: format!("payload-hash: {err:#}"),
-            status: StatusCode::BAD_REQUEST,
-        })?
+        .map_err(bad_param("payload-hash"))?
     {
         let header = state
             .get_header(BlockId::PayloadHash(hash))
             .await
             .with_timeout(fetch_timeout)
             .await
-            .ok_or_else(|| Error::Custom {
-                message: format!("unknown payload hash {hash}"),
-                status: StatusCode::NOT_FOUND,
-            })?;
+            .ok_or_else(|| not_found(format!("unknown payload hash {hash}")))?;
         return Ok(header.height() as usize);
     }
 
@@ -296,6 +252,23 @@ where
             .into(),
         status: StatusCode::BAD_REQUEST,
     })
+}
+
+fn bad_param<E>(name: &'static str) -> impl FnOnce(E) -> Error
+where
+    E: Display,
+{
+    move |err| Error::Custom {
+        message: format!("{name}: {err:#}"),
+        status: StatusCode::BAD_REQUEST,
+    }
+}
+
+fn not_found(msg: impl Into<String>) -> Error {
+    Error::Custom {
+        message: msg.into(),
+        status: StatusCode::NOT_FOUND,
+    }
 }
 
 #[cfg(test)]
