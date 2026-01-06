@@ -13,11 +13,19 @@ use std::{
 use async_trait::async_trait;
 use chrono::Utc;
 use hotshot_task_impls::{
-    builder::BuilderClient, consensus::ConsensusTaskState,
-    quorum_proposal::QuorumProposalTaskState, quorum_proposal_recv::QuorumProposalRecvTaskState,
-    quorum_vote::QuorumVoteTaskState, request::NetworkRequestState, rewind::RewindTaskState,
-    stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState,
-    vid::VidTaskState, view_sync::ViewSyncTaskState,
+    block::{BlockTaskState, Mempool},
+    builder::BuilderClient,
+    consensus::ConsensusTaskState,
+    quorum_proposal::QuorumProposalTaskState,
+    quorum_proposal_recv::QuorumProposalRecvTaskState,
+    quorum_vote::QuorumVoteTaskState,
+    request::NetworkRequestState,
+    rewind::RewindTaskState,
+    stats::StatsTaskState,
+    transactions::TransactionTaskState,
+    upgrade::UpgradeTaskState,
+    vid::VidTaskState,
+    view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -215,6 +223,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
                 .collect(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
+        }
+    }
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+    for BlockTaskState<TYPES, V>
+{
+    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        Self {
+            output_event_stream: handle.hotshot.external_event_stream.0.clone(),
+            consensus: OuterConsensus::new(handle.hotshot.consensus()),
+            cur_view: handle.cur_view().await,
+            cur_epoch: handle.cur_epoch().await,
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
+            public_key: handle.public_key().clone(),
+            private_key: handle.private_key().clone(),
+            instance_state: handle.hotshot.instance_state(),
+            id: handle.hotshot.id,
+            upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            epoch_height: handle.epoch_height,
+            mempool: Mempool::new(),
         }
     }
 }

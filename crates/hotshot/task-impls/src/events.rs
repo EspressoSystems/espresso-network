@@ -199,6 +199,14 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ),
     /// Event when the transactions task has sequenced transactions. Contains the encoded transactions, the metadata, and the view number
     BlockRecv(PackedBundle<TYPES>),
+
+    /// A proposed block has been reconstructed, or received from the network.
+    BlockReconstructed(
+        TYPES::BlockPayload,
+        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        TYPES::View,
+    ),
+
     /// Send VID shares to VID storage nodes; emitted by the DA leader
     ///
     /// Like [`HotShotEvent::DaProposalSend`].
@@ -394,6 +402,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             },
             HotShotEvent::SetFirstEpoch(..) => None,
             HotShotEvent::LeavesDecided(..) => None,
+            HotShotEvent::BlockReconstructed(_, _, view) => Some(*view),
         }
     }
 }
@@ -713,6 +722,9 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             },
             HotShotEvent::LeavesDecided(leaf) => {
                 write!(f, "LeavesDecided(leaf={leaf:?})")
+            },
+            HotShotEvent::BlockReconstructed(_, _, view) => {
+                write!(f, "BlockReconstructed(view_number={:?}", view)
             },
         }
     }

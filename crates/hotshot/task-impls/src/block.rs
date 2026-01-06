@@ -4,10 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, num::NonZero, sync::Arc};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
@@ -32,7 +29,6 @@ use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
 use crate::{
-    builder::v0_1::BuilderClient as BuilderClientBase,
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
 };
@@ -49,15 +45,24 @@ pub struct BuilderResponse<TYPES: NodeType> {
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
 }
 
-#[derive(Default)]
 pub struct Mempool<TYPES: NodeType> {
     transactions: Vec<TYPES::Transaction>,
-    recently_decided_transactions: HashSet<(TYPES::Transaction, TYPES::View)>,
-    recently_proposed_blocks: HashMap<TYPES::View, TYPES::BlockPayload>,
+    recently_decided_transactions: lru::LruCache<TYPES::Transaction, bool>,
+    recently_proposed_blocks: HashMap<TYPES::View, Vec<TYPES::Transaction>>,
 }
 
 impl<TYPES: NodeType> Mempool<TYPES> {
-    fn insert_transaction(&mut self, transaction: TYPES::Transaction) {
+    pub fn new() -> Self {
+        Self {
+            transactions: Vec::new(),
+            recently_decided_transactions: lru::LruCache::new(NonZero::new(1000).unwrap()),
+            recently_proposed_blocks: HashMap::new(),
+        }
+    }
+    fn receive_transaction(&mut self, transaction: TYPES::Transaction) {
+        if self.recently_decided_transactions.contains(&transaction) {
+            return;
+        }
         self.transactions.push(transaction);
     }
 
@@ -68,10 +73,25 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) {
         for transaction in block_payload.transactions(metadata) {
-            self.recently_decided_transactions
-                .insert((transaction, view));
+            self.recently_decided_transactions.put(transaction, true);
         }
         self.recently_proposed_blocks.remove(&view);
+    }
+
+    fn receive_block(
+        &mut self,
+        view: TYPES::View,
+        block_payload: TYPES::BlockPayload,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) {
+        self.recently_proposed_blocks
+            .insert(view, block_payload.transactions(metadata).collect());
+    }
+}
+
+impl<TYPES: NodeType> Default for Mempool<TYPES> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -91,9 +111,6 @@ pub struct BlockTaskState<TYPES: NodeType, V: Versions> {
 
     /// Membership for the quorum
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
-
-    /// Builder 0.1 API clients
-    pub builder_clients: Vec<BuilderClientBase<TYPES>>,
 
     /// This Nodes Public Key
     pub public_key: TYPES::SignatureKey,
@@ -141,13 +158,14 @@ async fn vid_from_high_qc<TYPES: NodeType>(
 
 impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     /// legacy view change handler
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view), name = "Transaction task", level = "error", target = "TransactionTaskState")]
+    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view), name = "Transaction task", level = "error", target = "BlockTaskState")]
     pub async fn handle_view_change(
         &mut self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
         block_view: TYPES::View,
         block_epoch: Option<TYPES::Epoch>,
         vid: Option<VidCommitment>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<HotShotTaskCompleted> {
         let version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
@@ -243,7 +261,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             {
                 None
             } else {
-                self.wait_for_block(block_view, vid).await
+                self.wait_for_block(block_view, vid, receiver).await
             }
         };
 
@@ -272,23 +290,47 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         return None;
     }
 
+    async fn handle_block(
+        &mut self,
+        view: TYPES::View,
+        block_payload: TYPES::BlockPayload,
+        metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) {
+        self.mempool.receive_block(view, block_payload, &metadata);
+    }
     async fn wait_for_block(
-        &self,
+        &mut self,
         block_view: TYPES::View,
         parent_vid: VidCommitment,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
-        let _previous_block = self
-            .wait_for_previous_block(block_view - 1, parent_vid)
+        let (previous_block, metadata) = self
+            .wait_for_previous_block(block_view - 1, parent_vid, receiver)
+            .await
+            .ok()?;
+        self.handle_block(block_view - 1, previous_block, metadata)
             .await;
         None
     }
 
     async fn wait_for_previous_block(
-        &self,
-        _parent_view: TYPES::View,
+        &mut self,
+        parent_view: TYPES::View,
         _parent_vid: VidCommitment,
-    ) -> Result<TYPES::BlockPayload> {
-        todo!()
+        mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    ) -> Result<(
+        TYPES::BlockPayload,
+        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    )> {
+        // TODO: Handle the case where the block is received before this call
+        while let Ok(event) = receiver.recv_direct().await {
+            if let HotShotEvent::BlockReconstructed(block, metadata, view) = event.as_ref() {
+                if *view == parent_view {
+                    return Ok((block.clone(), metadata.clone()));
+                }
+            }
+        }
+        Err(hotshot_utils::anytrace::error!("No block received"))
     }
 
     /// Send the event to the event stream that we are proposing an empty block
@@ -370,14 +412,18 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     }
 
     /// main task event handler
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "Transaction task", level = "error", target = "TransactionTaskState")]
+    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "Block task", level = "error", target = "BlockTaskState")]
     pub async fn handle(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
         event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::TransactionsRecv(transactions) => {
+                for transaction in transactions {
+                    self.mempool.receive_transaction(transaction.clone());
+                }
                 broadcast_event(
                     Event {
                         view_number: self.cur_view,
@@ -409,7 +455,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     .leader(view)
                     .await?;
                 if leader == self.public_key {
-                    self.handle_view_change(&event_stream, view, *epoch, None)
+                    self.handle_view_change(&event_stream, view, *epoch, None, receiver)
                         .await;
                     return Ok(());
                 }
@@ -448,8 +494,14 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     .leader(next_view)
                     .await?;
                 if leader == self.public_key {
-                    self.handle_view_change(&event_stream, next_view, self.cur_epoch, Some(vid))
-                        .await;
+                    self.handle_view_change(
+                        &event_stream,
+                        next_view,
+                        self.cur_epoch,
+                        Some(vid),
+                        receiver,
+                    )
+                    .await;
                     return Ok(());
                 }
             },
@@ -468,9 +520,9 @@ impl<TYPES: NodeType, V: Versions> TaskState for BlockTaskState<TYPES, V> {
         &mut self,
         event: Arc<Self::Event>,
         sender: &Sender<Arc<Self::Event>>,
-        _receiver: &Receiver<Arc<Self::Event>>,
+        receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
-        self.handle(event, sender.clone()).await
+        self.handle(event, sender.clone(), receiver.clone()).await
     }
 
     fn cancel_subtasks(&mut self) {}
