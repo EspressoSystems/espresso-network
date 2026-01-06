@@ -30,6 +30,13 @@ pub struct NsAvidmGf2Common {
     pub ns_lens: Vec<usize>,
 }
 
+impl NsAvidmGf2Common {
+    /// Return the total payload byte length
+    pub fn payload_byte_len(&self) -> usize {
+        self.ns_lens.iter().sum()
+    }
+}
+
 /// Namespaced share for each storage node, contains one [`AvidmGf2Share`] for each namespace.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq, Default)]
 pub struct NsAvidmGf2Share(pub(crate) Vec<AvidmGf2Share>);
@@ -93,6 +100,16 @@ impl NsAvidmGf2Scheme {
             .map_err(|err| VidError::Internal(err.into()))?
             .commitment();
         Ok((NsAvidmGf2Commit { commit }, common))
+    }
+
+    /// Check whether the namespaced commitment is consistent with the common data
+    pub fn is_consistent(commit: &NsAvidmGf2Commit, common: &NsAvidmGf2Common) -> bool {
+        let Ok(mt) =
+            MerkleTree::from_elems(None, common.ns_commits.iter().map(|commit| commit.commit))
+        else {
+            return false;
+        };
+        commit.commit == mt.commitment()
     }
 
     /// Disperse a payload according to a distribution table and a namespace
