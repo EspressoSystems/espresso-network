@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["advz","avidm"]};
+window.SIDEBAR_ITEMS = {"mod":["advz","avidm","avidm_gf2"]};

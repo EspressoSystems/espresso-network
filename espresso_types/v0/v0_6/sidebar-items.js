@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["VERSION"],"mod":["nsproof","txproof"],"struct":["AvidmGf2NsProof","AvidmGf2TxProof"]};

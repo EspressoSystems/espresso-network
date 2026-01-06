@@ -461,7 +461,7 @@
 <a href=#461 id=461 data-nosnippet>461</a>    <span class="kw">let </span>now = Instant::now();
 <a href=#462 id=462 data-nosnippet>462</a>    <span class="comment">// Add to the storage.
 <a href=#463 id=463 data-nosnippet>463</a>    </span>storage
-<a href=#464 id=464 data-nosnippet>464</a>        .append_vid_general(<span class="kw-2">&amp;</span>vid_share)
+<a href=#464 id=464 data-nosnippet>464</a>        .append_vid(<span class="kw-2">&amp;</span>vid_share)
 <a href=#465 id=465 data-nosnippet>465</a>        .<span class="kw">await
 <a href=#466 id=466 data-nosnippet>466</a>        </span>.wrap()
 <a href=#467 id=467 data-nosnippet>467</a>        .context(<span class="macro">error!</span>(<span class="string">"Failed to store VID share"</span>))<span class="question-mark">?</span>;

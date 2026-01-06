@@ -786,7 +786,7 @@
 <a href=#786 id=786 data-nosnippet>786</a>                    target_epoch,
 <a href=#787 id=787 data-nosnippet>787</a>                );
 <a href=#788 id=788 data-nosnippet>788</a>
-<a href=#789 id=789 data-nosnippet>789</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(()) = share.data.verify_share(total_weight) {
+<a href=#789 id=789 data-nosnippet>789</a>                <span class="kw">if </span>!share.data.verify(total_weight) {
 <a href=#790 id=790 data-nosnippet>790</a>                    <span class="macro">bail!</span>(<span class="string">"Failed to verify VID share"</span>);
 <a href=#791 id=791 data-nosnippet>791</a>                }
 <a href=#792 id=792 data-nosnippet>792</a>

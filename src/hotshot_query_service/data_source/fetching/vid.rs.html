@@ -19,7 +19,7 @@
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>derive_more::From;
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>futures::future::{BoxFuture, FutureExt};
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>hotshot_types::{
-<a href=#22 id=22 data-nosnippet>22</a>    data::VidShare,
+<a href=#22 id=22 data-nosnippet>22</a>    data::{VidCommon, VidShare},
 <a href=#23 id=23 data-nosnippet>23</a>    traits::{block_contents::BlockHeader, node_implementation::NodeType},
 <a href=#24 id=24 data-nosnippet>24</a>};
 <a href=#25 id=25 data-nosnippet>25</a>
@@ -41,7 +41,7 @@
 <a href=#41 id=41 data-nosnippet>41</a>    },
 <a href=#42 id=42 data-nosnippet>42</a>    fetching::{<span class="self">self</span>, request, Callback},
 <a href=#43 id=43 data-nosnippet>43</a>    types::HeightIndexed,
-<a href=#44 id=44 data-nosnippet>44</a>    Header, Payload, QueryResult, VidCommon,
+<a href=#44 id=44 data-nosnippet>44</a>    Header, Payload, QueryResult,
 <a href=#45 id=45 data-nosnippet>45</a>};
 <a href=#46 id=46 data-nosnippet>46</a>
 <a href=#47 id=47 data-nosnippet>47</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">type </span>VidCommonFetcher&lt;Types, S, P&gt; =

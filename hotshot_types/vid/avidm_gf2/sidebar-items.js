@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["init_avidm_gf2_param"],"type":["AvidmGf2Commitment","AvidmGf2Common","AvidmGf2Param","AvidmGf2Scheme","AvidmGf2Share"]};
