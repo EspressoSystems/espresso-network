@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{ensure, Context, Ok, Result};
 use committable::Committable;
 use espresso_types::{Header, Leaf2, SeqTypes};
 use hotshot_query_service::{
@@ -12,11 +12,12 @@ use hotshot_query_service::{
 };
 use hotshot_types::{data::EpochNumber, PeerConfig};
 use serde::{Deserialize, Serialize};
+use serde_json::Number;
 
 use crate::{
     client::Client,
     consensus::{
-        leaf::LeafProofHint,
+        leaf::{self, LeafProofHint},
         quorum::{StakeTable, StakeTablePair, StakeTableQuorum},
     },
     storage::{LeafRequest, Storage},
@@ -87,6 +88,99 @@ where
         };
         let known_finalized = known_finalized.as_ref().map(LeafQueryData::leaf);
         self.fetch_leaf_from_server(id, known_finalized).await
+    }
+
+    /// Fetches leaves in range [start_height, end_height]
+    pub async fn fetch_leaves_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        ensure!(
+            start_height < end_height,
+            "invalid range: start must be < end"
+        );
+        let known_end_leaf = self.fetch_leaf(LeafId::Number(end_height)).await?;
+        ensure!(
+            known_end_leaf.height() == end_height as u64,
+            "fetched end leaf has unexpected height: expected {}, got {}",
+            end_height,
+            known_end_leaf.height()
+        );
+        // at this point, we know the end leaf is valid and is finalized
+        // now we need to fetch all leaves from start to end - 1 from the server
+        let leaves = self.fetch_leaves_in_range_from_server(start_height, end_height, &known_end_leaf)
+            .await
+        // add the known end leaf to the result
+        .map(|mut leaves| {
+            leaves.push(known_end_leaf);
+            leaves
+        })?;
+        Ok(leaves)
+    }
+
+    /// Fetches leaves from the server in range [start_height, end_height) and then verifies them
+    /// by checking if parent commitment of the previous leaf matches
+    /// that of the current leaf
+    async fn fetch_leaves_in_range_from_server(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        known_finalized: &LeafQueryData<SeqTypes>,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        // we will fetch all the leaves till the known finalized leaf
+        let leaves = self
+            .server
+            // `get_leaves_in_range` is exclusive of the end height
+            // which we dont need because we already know the end leaf
+            .get_leaves_in_range(start_height, end_height as usize)
+            .await?;
+
+        ensure!(
+            leaves.len() == end_height.saturating_sub(start_height),
+            "server returned {} leaves for range [{}, {})",
+            leaves.len(),
+            start_height,
+            end_height
+        );
+
+        // Heights must be contiguous and start at `start_height`
+        for (i, leaf) in leaves.iter().enumerate() {
+            let expected_height = (start_height + i) as u64;
+            let leaf_height = leaf.height();
+            ensure!(
+                leaf_height == expected_height,
+                "unexpected height for leaf: expected {}, got {}",
+                expected_height,
+                leaf_height
+            )
+        }
+
+        // Walk backwards from the known finalized leaf, ensuring each parent hash matches
+        let mut expected_parent = known_finalized.leaf().parent_commitment();
+        for leaf in leaves.iter().rev() {
+            let leaf_hash = leaf.hash();
+            ensure!(
+                leaf_hash == expected_parent,
+                "leaf hash mismatch: expected parent hash {:?}, got leaf hash {:?}",
+                expected_parent,
+                leaf_hash
+            );
+            expected_parent = leaf.leaf().parent_commitment();
+        }
+
+        // Cache the fetched leaves, but still return them even if caching fails
+        for leaf in &leaves {
+            if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
+                tracing::warn!(
+                    "failed to cache leaf at height {}: {:#?}",
+                    leaf.height(),
+                    err
+                )
+            }
+        }
+
+        Ok(leaves)
     }
 
     /// Fetch and verify the requested header.

@@ -2,7 +2,10 @@ use std::future::Future;
 
 use anyhow::Result;
 use espresso_types::SeqTypes;
-use hotshot_query_service::{availability::LeafId, node::BlockId};
+use hotshot_query_service::{
+    availability::{LeafId, LeafQueryData},
+    node::BlockId,
+};
 use surf_disco::Url;
 use vbs::version::StaticVersion;
 
@@ -30,6 +33,16 @@ pub trait Client: Send + Sync + 'static {
         root: u64,
         id: BlockId<SeqTypes>,
     ) -> impl Send + Future<Output = Result<HeaderProof>>;
+
+    /// Get all leaves in the given range `[start, end)`.
+    fn get_leaves_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> impl Send
+           + Future<
+        Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
+    >;
 }
 
 /// A [`Client`] connected to the HotShot query service.
@@ -68,6 +81,17 @@ impl Client for QueryServiceClient {
         };
         let proof = self.client.get(&path).send().await?;
         Ok(proof)
+    }
+
+    /// Get all leaves in the given range `[start, end)`.
+    async fn get_leaves_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let path = format!("/availability/leaf/{start}/{end}");
+        let leaves = self.client.get(&path).send().await?;
+        Ok(leaves)
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
