@@ -599,4 +599,16 @@ impl Client for TestClient {
             .clone();
         Ok(HeaderProof::new(header, proof))
     }
+
+    fn get_leaves_in_range(
+        &self,
+        _: usize,
+        _: usize,
+    ) -> impl Send
+           + std::future::Future<
+        Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
+    > {
+        // Still need to implement
+        async move { Ok(vec![]) }
+    }
 }

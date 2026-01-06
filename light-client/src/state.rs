@@ -12,12 +12,11 @@ use hotshot_query_service::{
 };
 use hotshot_types::{data::EpochNumber, PeerConfig};
 use serde::{Deserialize, Serialize};
-use serde_json::Number;
 
 use crate::{
     client::Client,
     consensus::{
-        leaf::{self, LeafProofHint},
+        leaf::LeafProofHint,
         quorum::{StakeTable, StakeTablePair, StakeTableQuorum},
     },
     storage::{LeafRequest, Storage},
@@ -133,7 +132,7 @@ where
             .server
             // `get_leaves_in_range` is exclusive of the end height
             // which we dont need because we already know the end leaf
-            .get_leaves_in_range(start_height, end_height as usize)
+            .get_leaves_in_range(start_height, end_height)
             .await?;
 
         ensure!(
