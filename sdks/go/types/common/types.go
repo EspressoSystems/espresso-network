@@ -47,14 +47,18 @@ type TransactionQueryData struct {
 }
 
 type NamespaceTransactionsRangeData struct {
-	Proof struct {
-		V1 struct {
-			NsIndex   uint64           `json:"ns_index"`
-			NsPayload NamespacePayload `json:"ns_payload"`
-			NsProof   NamespaceProof   `json:"ns_proof"`
-		} `json:"V1"`
-	} `json:"proof"`
-	Transactions []Transaction `json:"transactions"`
+	Proof        NamespaceTransactionsRangeProof `json:"proof"`
+	Transactions []Transaction                   `json:"transactions"`
+}
+
+type NamespaceTransactionsRangeProof struct {
+	V1 V1NamespaceTransactionsRangeProof `json:"V1"`
+}
+
+type V1NamespaceTransactionsRangeProof struct {
+	NsIndex   uint64           `json:"ns_index"`
+	NsPayload NamespacePayload `json:"ns_payload"`
+	NsProof   NamespaceProof   `json:"ns_proof"`
 }
 
 type LimitsData struct {

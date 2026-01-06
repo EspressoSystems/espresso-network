@@ -207,7 +207,7 @@ func TestExplorerFetchTransactionByHash(t *testing.T) {
 
 func TestNamespaceTransactionsInRange(t *testing.T) {
 	ctx := context.Background()
-	client := NewClient("https://query-0.decaf.testnet.espresso.network")
+	client := NewClient("https://query.decaf.testnet.espresso.network")
 
 	namespace := uint64(22266222)
 	startHeight := uint64(6386698)
@@ -218,8 +218,8 @@ func TestNamespaceTransactionsInRange(t *testing.T) {
 		t.Fatal("failed to fetch namespace transactions in range", err)
 	}
 
-	if len(blocksWithNamespaceTransactions) == 0 {
-		t.Fatal("no transactions found in the specified range for the given namespace")
+	if len(blocksWithNamespaceTransactions) != 2 {
+		t.Fatalf("expected 2 blocks with namespace transactions, got %d", len(blocksWithNamespaceTransactions))
 	}
 
 	for _, blocks := range blocksWithNamespaceTransactions {
