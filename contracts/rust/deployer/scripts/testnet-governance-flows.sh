@@ -20,8 +20,8 @@ fi
 
 RPC_URL="${RPC_URL:-http://localhost:8545}"
 ACCOUNT_INDEX="${ESPRESSO_DEPLOYER_ACCOUNT_INDEX:-0}"
-OPS_DELAY="30" # 30 seconds
-SAFE_EXIT_DELAY="60" # 60 seconds
+OPS_DELAY="${OPS_DELAY:-30}" # 30 seconds default
+SAFE_EXIT_DELAY="${SAFE_EXIT_DELAY:-60}" # 60 seconds default
 
 export RUST_LOG=warn
 DEPLOY_CMD="cargo run --quiet --bin deploy --release --"
@@ -29,7 +29,29 @@ DEPLOY_CMD="cargo run --quiet --bin deploy --release --"
 NEW_ESCROW_PERIOD=$((86400 * 2 ))  # 2 days in seconds
 SALT=$(cast keccak "$(date +%s)")
 
+# Helper function to check if RPC URL is localhost
+is_localhost_rpc() {
+    local url="$1"
+    # Check for localhost, 127.0.0.1
+    [[ "$url" =~ ^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?(/.*)?$ ]]
+}
+
+# Function to prompt user for confirmation on real testnets
+confirm() {
+    local message="${1:-Continue?}"
+    if is_localhost_rpc "$RPC_URL"; then
+        return 0
+    fi
+    read -p "$message [y/N] " -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+}
+
 echo "### Test 1: Scheduling timelock operation to update exit escrow period ###"
+confirm "Schedule timelock operation to update exit escrow period?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --perform-timelock-operation \
     --timelock-operation-type schedule \
@@ -46,6 +68,7 @@ sleep "$OPS_DELAY"
 
 echo ""
 echo "### Test 2: Executing timelock operation ###"
+confirm "Execute timelock operation to update exit escrow period?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --perform-timelock-operation \
     --timelock-operation-type execute \
@@ -67,6 +90,7 @@ echo "Exit escrow period updated to: $CURRENT_PERIOD"
 echo ""
 echo "### Test 3: Scheduling then canceling an operation on StakeTable ###"
 CANCEL_SALT=$(cast keccak "$(date +%s)cancel")
+confirm "Schedule operation on StakeTable (to be canceled)?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --perform-timelock-operation \
     --timelock-operation-type schedule \
@@ -77,6 +101,9 @@ $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --timelock-operation-delay "$OPS_DELAY" \
     --timelock-operation-value 0
 
+echo ""
+echo "Perform cancel operation on StakeTable"
+confirm "Cancel the scheduled operation on StakeTable?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --perform-timelock-operation \
     --timelock-operation-type cancel \
@@ -94,6 +121,9 @@ OLD_PAUSER="0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
 NEW_PAUSER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 GRANT_SALT=$(cast keccak "$(date +%s)grant")
 
+echo ""
+echo "Schedule grant role operation on StakeTable"
+confirm "Schedule grant PAUSER_ROLE operation on StakeTable?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --perform-timelock-operation \
     --timelock-operation-type schedule \
@@ -108,6 +138,9 @@ echo ""
 echo "Waiting for timelock delay (${OPS_DELAY} seconds)..."
 sleep "$OPS_DELAY"
 
+echo ""
+echo "Execute grant role operation on StakeTable"
+confirm "Execute grant PAUSER_ROLE operation on StakeTable?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --perform-timelock-operation \
     --timelock-operation-type execute \
