@@ -2,11 +2,14 @@ use std::future::Future;
 
 use anyhow::Result;
 use espresso_types::SeqTypes;
-use hotshot_query_service::availability::LeafId;
+use hotshot_query_service::{availability::LeafId, node::BlockId};
 use surf_disco::Url;
 use vbs::version::StaticVersion;
 
-use crate::consensus::leaf::LeafProof;
+use crate::{
+    consensus::{header::HeaderProof, leaf::LeafProof},
+    storage::LeafRequest,
+};
 
 /// Interface to a query server providing the light client API.
 pub trait Client: Send + Sync + 'static {
@@ -17,9 +20,16 @@ pub trait Client: Send + Sync + 'static {
     /// chain.
     fn leaf_proof(
         &self,
-        id: LeafId<SeqTypes>,
+        id: impl Into<LeafRequest> + Send,
         finalized: Option<u64>,
     ) -> impl Send + Future<Output = Result<LeafProof>>;
+
+    /// Get an inclusion proof for the requested header relative to the Merkle tree at height `root`.
+    fn header_proof(
+        &self,
+        root: u64,
+        id: BlockId<SeqTypes>,
+    ) -> impl Send + Future<Output = Result<HeaderProof>>;
 }
 
 /// A [`Client`] connected to the HotShot query service.
@@ -38,15 +48,34 @@ impl QueryServiceClient {
 }
 
 impl Client for QueryServiceClient {
-    async fn leaf_proof(&self, id: LeafId<SeqTypes>, finalized: Option<u64>) -> Result<LeafProof> {
+    async fn leaf_proof(
+        &self,
+        id: impl Into<LeafRequest> + Send,
+        finalized: Option<u64>,
+    ) -> Result<LeafProof> {
         let path = "/light-client/leaf";
-        let path = match id {
-            LeafId::Number(n) => format!("{path}/{n}"),
-            LeafId::Hash(h) => format!("{path}/hash/{h}"),
+        let path = match id.into() {
+            LeafRequest::Leaf(LeafId::Number(n)) | LeafRequest::Header(BlockId::Number(n)) => {
+                format!("{path}/{n}")
+            },
+            LeafRequest::Leaf(LeafId::Hash(h)) => format!("{path}/hash/{h}"),
+            LeafRequest::Header(BlockId::Hash(h)) => format!("{path}/block-hash/{h}"),
+            LeafRequest::Header(BlockId::PayloadHash(h)) => format!("{path}/payload-hash/{h}"),
         };
         let path = match finalized {
             Some(finalized) => format!("{path}/{finalized}"),
             None => path,
+        };
+        let proof = self.client.get(&path).send().await?;
+        Ok(proof)
+    }
+
+    async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
+        let path = format!("/light-client/header/{root}");
+        let path = match id {
+            BlockId::Number(n) => format!("{path}/{n}"),
+            BlockId::Hash(h) => format!("{path}/hash/{h}"),
+            BlockId::PayloadHash(h) => format!("{path}/payload-hash/{h}"),
         };
         let proof = self.client.get(&path).send().await?;
         Ok(proof)
@@ -59,6 +88,7 @@ mod test {
     use futures::{stream::StreamExt, TryStreamExt};
     use hotshot_query_service::availability::LeafQueryData;
     use portpicker::pick_unused_port;
+    use pretty_assertions::assert_eq;
     use sequencer::{
         api::{
             data_source::testing::TestableSequencerDataSource,
@@ -125,18 +155,37 @@ mod test {
             leaves[0]
         );
 
-        // Get the same proof by hash.
+        // Get the same proof by various other IDs.
+        for req in [
+            LeafRequest::Header(BlockId::Number(1)),
+            LeafRequest::Leaf(LeafId::Hash(leaves[0].hash())),
+            LeafRequest::Header(BlockId::Hash(leaves[0].block_hash())),
+        ] {
+            tracing::info!(?req, "get proof by alternative ID");
+            let proof = client.leaf_proof(req, None).await.unwrap();
+            assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+            assert_eq!(
+                proof
+                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                    .await
+                    .unwrap(),
+                leaves[0]
+            );
+        }
+
+        // Get a proof by payload hash (this doesn't necessarily return a unique leaf, since
+        // multiple) leaves may have the same payload.
         let proof = client
-            .leaf_proof(LeafId::Hash(leaves[0].hash()), None)
+            .leaf_proof(BlockId::PayloadHash(leaves[0].payload_hash()), None)
             .await
             .unwrap();
-        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
                 .await
-                .unwrap(),
-            leaves[0]
+                .unwrap()
+                .payload_hash(),
+            leaves[0].payload_hash()
         );
     }
 }

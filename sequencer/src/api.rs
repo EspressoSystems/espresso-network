@@ -29,11 +29,9 @@ use futures::{
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::{
-    availability::VidCommonQueryData, data_source::ExtensibleDataSource, VidCommon,
-};
+use hotshot_query_service::{availability::VidCommonQueryData, data_source::ExtensibleDataSource};
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
@@ -459,6 +457,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
                     ));
                 },
                 VidCommon::V1(v1) => v1.total_weights,
+                VidCommon::V2(v2) => v2.param.total_weights,
             };
 
             // Create the AvidM parameters from the total weight
@@ -1973,8 +1972,8 @@ mod api_tests {
     };
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, DaProposal2, EpochNumber,
-            QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, DaProposal2, EpochNumber,
+            QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
         },
         event::LeafInfo,
         message::Proposal,
@@ -2278,7 +2277,7 @@ mod api_tests {
                 .unwrap();
 
             // Include VID information for each leaf.
-            let share = VidDisperseShare2::<SeqTypes> {
+            let share: VidDisperseShare<SeqTypes> = AvidMDisperseShare {
                 view_number: leaf.view_number(),
                 payload_commitment,
                 share: shares[0].clone(),
@@ -2286,9 +2285,11 @@ mod api_tests {
                 epoch: Some(EpochNumber::new(0)),
                 target_epoch: Some(EpochNumber::new(0)),
                 common: avidm_param.clone(),
-            };
+            }
+            .into();
+
             persistence
-                .append_vid2(&share.to_proposal(&privkey).unwrap())
+                .append_vid(&share.to_proposal(&privkey).unwrap())
                 .await
                 .unwrap();
 
@@ -2511,7 +2512,10 @@ mod test {
     };
 
     use ::light_client::{
-        consensus::leaf::{LeafProof, LeafProofHint},
+        consensus::{
+            header::HeaderProof,
+            leaf::{LeafProof, LeafProofHint},
+        },
         testing::{EpochChangeQuorum, LegacyVersion},
     };
     use alloy::{
@@ -7261,19 +7265,49 @@ mod test {
                 .await
                 .unwrap();
             tracing::debug!(?leaf, "expected leaf");
-            let leaf_proof: LeafProof = client
-                .get(&format!("light-client/leaf/{i}"))
+
+            // Get the same leaf proof by other IDs.
+            for path in [
+                format!("light-client/leaf/{i}"),
+                format!("light-client/leaf/hash/{}", leaf.hash()),
+                format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
+            ] {
+                tracing::info!(i, path, "get leaf proof");
+                let leaf_proof: LeafProof = client.get(&path).send().await.unwrap();
+                tracing::debug!(?leaf_proof, "fetched proof");
+                assert_eq!(
+                    leaf_proof
+                        .verify(LeafProofHint::Quorum(&quorum))
+                        .await
+                        .unwrap(),
+                    leaf
+                );
+            }
+
+            // Get the corresponding header.
+            let root_height = i + 1;
+            let root: Header = client
+                .get(&format!("availability/header/{root_height}"))
                 .send()
                 .await
                 .unwrap();
-            tracing::debug!(?leaf_proof, "fetched proof");
-            assert_eq!(
-                leaf_proof
-                    .verify(LeafProofHint::Quorum(&quorum))
-                    .await
-                    .unwrap(),
-                leaf
-            );
+            for path in [
+                format!("light-client/header/{root_height}/{i}"),
+                format!(
+                    "light-client/header/{root_height}/hash/{}",
+                    leaf.block_hash()
+                ),
+            ] {
+                tracing::info!(i, path, "get header proof");
+                let header_proof: HeaderProof = client.get(&path).send().await.unwrap();
+                tracing::debug!(?header_proof, "fetched proof");
+                assert_eq!(
+                    header_proof
+                        .verify_ref(root.block_merkle_tree_root())
+                        .unwrap(),
+                    leaf.header()
+                );
+            }
         }
     }
 }
