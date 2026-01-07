@@ -14,9 +14,9 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
     v0_3::{StakeTableEvent, Validator},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NodeState,
-    Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash, StakeTableState,
-    Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NamespaceId,
+    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash,
+    StakeTableState, Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -53,6 +53,7 @@ use crate::{
     consensus::{
         header::HeaderProof,
         leaf::LeafProof,
+        namespace::NamespaceProof,
         payload::PayloadProof,
         quorum::{Certificate, Quorum},
     },
@@ -531,6 +532,12 @@ impl InnerTestClient {
                 .context(format!("missing payload {h}")),
         }
     }
+
+    fn vid_common(&mut self, height: u64, epoch_height: u64) -> VidCommon {
+        let epoch = epoch_from_block_number(height, epoch_height);
+        let quorum = self.quorum_for_epoch(epoch);
+        VidCommon::V1(init_avidm_param(quorum.len()).unwrap())
+    }
 }
 
 impl TestClient {
@@ -617,6 +624,11 @@ impl TestClient {
     pub async fn return_invalid_quorum(&self, epoch: EpochNumber) {
         let mut inner = self.inner.lock().await;
         inner.invalid_quorums.insert(*epoch);
+    }
+
+    pub async fn vid_common(&self, height: u64) -> VidCommon {
+        let mut inner = self.inner.lock().await;
+        inner.vid_common(height, self.epoch_height)
     }
 }
 
@@ -749,15 +761,15 @@ impl Client for TestClient {
         Ok(events)
     }
 
-    async fn payload_proof(&self, id: BlockId<SeqTypes>) -> Result<PayloadProof> {
+    async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
         let mut inner = self.inner.lock().await;
 
-        let height = inner.leaf_height(id.into())?;
-        let epoch = epoch_from_block_number(height as u64, self.epoch_height);
-        let quorum = inner.quorum_for_epoch(epoch);
-        let vid_common = VidCommon::V1(init_avidm_param(quorum.len()).unwrap());
+        let vid_common = inner.vid_common(height, self.epoch_height);
+        let height = height as usize;
+        ensure!(height < inner.payloads.len());
 
         let payload = if inner.invalid_payloads.contains(&height) {
+            tracing::info!(height, "return mock incorrect payload proof");
             Payload::from_transactions_sync(
                 [Transaction::random(&mut rand::thread_rng())],
                 NodeState::mock_v3().chain_config,
@@ -769,6 +781,47 @@ impl Client for TestClient {
         };
 
         Ok(PayloadProof::new(payload, vid_common))
+    }
+
+    async fn namespace_proof(
+        &self,
+        height: u64,
+        mut namespace: NamespaceId,
+    ) -> Result<NamespaceProof> {
+        let mut inner = self.inner.lock().await;
+
+        let vid_common = inner.vid_common(height, self.epoch_height);
+        let height = height as usize;
+        ensure!(height < inner.payloads.len());
+
+        let (payload, ns_table) = if inner.invalid_payloads.contains(&height) {
+            // To mock an invalid proof, we use a different payload which doesn't match the actual
+            // payload for the requested block.
+            tracing::info!(height, "return mock incorrect namespace proof");
+            let mut payload = vec![0; 32];
+            rand::thread_rng().fill_bytes(&mut payload);
+            let tx = Transaction::new(namespace, payload);
+            let node_state = NodeState::mock_v3();
+            Payload::from_transactions_sync([tx], node_state.chain_config).unwrap()
+        } else {
+            (
+                inner.payloads[height].clone(),
+                inner.leaves[height].header().ns_table().clone(),
+            )
+        };
+
+        if inner.invalid_proofs.contains(&height) {
+            // If we are returning a mock invalid proof, return a proof for the wrong namespace so
+            // that verification will fail.
+            namespace = NamespaceId::from(u64::from(namespace) + 1);
+        }
+
+        let Some(ns_index) = ns_table.find_ns_id(&namespace) else {
+            return Ok(NamespaceProof::not_present());
+        };
+        let proof = NsProof::new(&payload, &ns_index, &vid_common)
+            .context("failed to construct NsProof")?;
+        Ok(NamespaceProof::new(proof, vid_common))
     }
 }
 

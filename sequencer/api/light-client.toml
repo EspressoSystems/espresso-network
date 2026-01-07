@@ -99,14 +99,18 @@ Returns
 """
 
 [route.payload]
-PATH = [
-    "/payload/:height",
-    "/payload/hash/:hash",
-    "/payload/payload-hash/:payload-hash",
-]
+PATH = ["/payload/:height"]
 ":height" = "Integer"
-":hash" = "TaggedBase64"
-":payload-hash" = "TaggedBase64"
 DOC = """
 Fetch a payload plus the VID common data needed to recompute and verify its hash.
+"""
+
+[route.namespace]
+PATH = ["/namespace/:height/:namespace"]
+":height" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Fetch a namespace proof plus the VID common data needed to verify it.
+
+The proof can be verified in order to extract all transactions in that namespace.
 """

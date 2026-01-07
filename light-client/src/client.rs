@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use anyhow::Result;
-use espresso_types::{v0_3::StakeTableEvent, SeqTypes};
+use espresso_types::{v0_3::StakeTableEvent, NamespaceId, SeqTypes};
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
@@ -11,7 +11,9 @@ use surf_disco::Url;
 use vbs::version::StaticVersion;
 
 use crate::{
-    consensus::{header::HeaderProof, leaf::LeafProof, payload::PayloadProof},
+    consensus::{
+        header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
+    },
     storage::LeafRequest,
 };
 
@@ -46,10 +48,22 @@ pub trait Client: Send + Sync + 'static {
     >;
 
     /// Get a proof for the requested payload.
-    fn payload_proof(
+    ///
+    /// This method accepts only a `height`, not the more flexible [`BlockId`] type, because a
+    /// [`Header`](espresso_types::Header) is needed to verify the resulting proof, so the height
+    /// must already be known anyways.
+    fn payload_proof(&self, height: u64) -> impl Send + Future<Output = Result<PayloadProof>>;
+
+    /// Get a proof for the requested namespace.
+    ///
+    /// This method accepts only a `height`, not the more flexible [`BlockId`] type, because a
+    /// [`Header`](espresso_types::Header) is needed to verify the resulting proof, so the height
+    /// must already be known anyways.
+    fn namespace_proof(
         &self,
-        id: BlockId<SeqTypes>,
-    ) -> impl Send + Future<Output = Result<PayloadProof>>;
+        height: u64,
+        namespace: NamespaceId,
+    ) -> impl Send + Future<Output = Result<NamespaceProof>>;
 
     /// Get stake table events for the given epoch.
     ///
@@ -116,9 +130,17 @@ impl Client for QueryServiceClient {
         Ok(proof)
     }
 
-    async fn payload_proof(&self, id: BlockId<SeqTypes>) -> Result<PayloadProof> {
-        let path = format!("/light-client/payload/{}", fmt_block_id(id));
+    async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
+        let path = format!("/light-client/payload/{height}");
         Ok(self.client.get(&path).send().await?)
+    }
+
+    async fn namespace_proof(&self, height: u64, namespace: NamespaceId) -> Result<NamespaceProof> {
+        Ok(self
+            .client
+            .get(&format!("/light-client/namespace/{height}/{namespace}"))
+            .send()
+            .await?)
     }
 
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
@@ -140,7 +162,7 @@ fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{EpochVersion, SequencerVersions};
+    use espresso_types::{EpochVersion, SequencerVersions, Transaction};
     use futures::{stream::StreamExt, TryStreamExt};
     use hotshot_query_service::availability::{BlockQueryData, LeafQueryData};
     use portpicker::pick_unused_port;
@@ -152,7 +174,7 @@ mod test {
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
             Options,
         },
-        testing::TestConfigBuilder,
+        testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
 
     use super::*;
@@ -359,13 +381,63 @@ mod test {
             .unwrap()
             .unwrap();
 
-        for id in [
-            BlockId::Number(1),
-            BlockId::Hash(block.hash()),
-            BlockId::PayloadHash(block.payload_hash()),
-        ] {
-            let proof = client.payload_proof(id).await.unwrap();
-            assert_eq!(proof.verify(block.header()).unwrap(), *block.payload());
-        }
+        let proof = client.payload_proof(1).await.unwrap();
+        assert_eq!(proof.verify(block.header()).unwrap(), *block.payload());
+
+        // The block will be empty, but check at least that the namespace proof method hits the
+        // correct endpoint and deserializes correctly.
+        let ns = NamespaceId::from(0u64);
+        let ns_proof = client.namespace_proof(1, ns).await.unwrap();
+        assert_eq!(ns_proof.verify(block.header(), ns).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_namespace_proof() {
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let network = TestNetwork::new(
+            config,
+            SequencerVersions::<EpochVersion, EpochVersion>::new(),
+        )
+        .await;
+
+        // Submit a transaction to form a non-empty block.
+        let mut events = network.server.event_stream().await;
+        let tx = Transaction::random(&mut rand::thread_rng());
+        network
+            .server
+            .consensus()
+            .read()
+            .await
+            .submit_transaction(tx.clone())
+            .await
+            .unwrap();
+        let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
+
+        let client = QueryServiceClient::new(url);
+        let header = client
+            .client
+            .get(&format!("availability/header/{block}"))
+            .send()
+            .await
+            .unwrap();
+        let proof = client.namespace_proof(block, tx.namespace()).await.unwrap();
+        assert_eq!(proof.verify(&header, tx.namespace()).unwrap(), [tx]);
     }
 }

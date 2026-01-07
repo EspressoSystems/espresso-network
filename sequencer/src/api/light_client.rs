@@ -1,7 +1,7 @@
 use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use espresso_types::{BlockMerkleTree, SeqTypes};
+use espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
 use futures::{
     future::{try_join, FutureExt},
     stream::StreamExt,
@@ -16,7 +16,9 @@ use hotshot_query_service::{
 };
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use light_client::consensus::{header::HeaderProof, leaf::LeafProof, payload::PayloadProof};
+use light_client::consensus::{
+    header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
+};
 use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
@@ -260,26 +262,26 @@ where
     })?
     .get("payload", move |req, state| {
         async move {
-            let block = block_id_from_req(&req)?;
+            let height: usize = req.integer_param("height").map_err(bad_param("height"))?;
             let fetch_payload = async move {
                 state
-                    .get_payload(block)
+                    .get_payload(height)
                     .await
                     .with_timeout(fetch_timeout)
                     .await
                     .ok_or_else(|| Error::Custom {
-                        message: format!("missing payload {block}"),
+                        message: format!("missing payload {height}"),
                         status: StatusCode::NOT_FOUND,
                     })
             };
             let fetch_vid_common = async move {
                 state
-                    .get_vid_common(block)
+                    .get_vid_common(height)
                     .await
                     .with_timeout(fetch_timeout)
                     .await
                     .ok_or_else(|| Error::Custom {
-                        message: format!("missing VID common {block}"),
+                        message: format!("missing VID common {height}"),
                         status: StatusCode::NOT_FOUND,
                     })
             };
@@ -288,6 +290,61 @@ where
                 payload.data().clone(),
                 vid_common.common().clone(),
             ))
+        }
+        .boxed()
+    })?
+    .get("namespace", move |req, state| {
+        async move {
+            let height: usize = req.integer_param("height").map_err(bad_param("height"))?;
+            let namespace: u64 = req
+                .integer_param("namespace")
+                .map_err(bad_param("namespace"))?;
+
+            let fetch_header = async move {
+                state
+                    .get_header(height)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing header {height}"),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            };
+            let fetch_payload = async move {
+                state
+                    .get_payload(height)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing payload {height}"),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            };
+            let fetch_vid_common = async move {
+                state
+                    .get_vid_common(height)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing VID common {height}"),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            };
+            let (header, (payload, vid_common)) =
+                try_join(fetch_header, try_join(fetch_payload, fetch_vid_common)).await?;
+
+            let Some(ns_index) = header.ns_table().find_ns_id(&namespace.into()) else {
+                return Ok(NamespaceProof::not_present());
+            };
+            let ns_proof = NsProof::new(payload.data(), &ns_index, vid_common.common())
+                .ok_or_else(|| Error::Custom {
+                    message: "failed to construct namespace proof".into(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?;
+            Ok(NamespaceProof::new(ns_proof, vid_common.common().clone()))
         }
         .boxed()
     })?;
@@ -363,8 +420,8 @@ fn block_id_from_req(req: &RequestParams) -> Result<BlockId<SeqTypes>, Error> {
         Ok(BlockId::PayloadHash(hash))
     } else {
         Err(Error::Custom {
-            message: "missing parameter: requested header must be identified by height, \
-                              hash, or payload hash"
+            message: "missing parameter: requested header must be identified by height, hash, or \
+                      payload hash"
                 .into(),
             status: StatusCode::BAD_REQUEST,
         })
