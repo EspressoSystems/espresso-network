@@ -16,8 +16,11 @@ set -a; source .env; set +a;
 # Note: explicitly want to re-use volumes where postgres/sqlite/filesystem nodes store data
 
 # currently running on mainnet
-base_tag=20250528-patch1
+#base_tag=20250528-patch1
+base_tag=20250228-patch4
 target_tag=${UPGRADE_DOCKER_TAG:-testing}
+compose_file="docker-compose.binary-upgrade-test.$base_tag.yaml"
+#compose_file="docker-compose.binary-upgrade-test.20250528-patch1.yaml"
 
 # do some cleanup
 just down -v || true
@@ -26,7 +29,9 @@ docker rm $(docker ps -aq) || true
 
 # inject some env vars that since changed in the local demo
 export ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT=22001
-#export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
+export RUST_BACKTRACE=1
+export ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS=10
+export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
 export ESPRESSO_SEQUENCER_PERMISSIONED_PROVER=0x14dc79964da2c08b23698b3d3cc7ca32193d9955
 export ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS=0x8ce361602b935680e8dec218b820ff5056beb7af
 export ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS=0xa15bb66138824a1c7167f5e85b957d04dd34e468
@@ -36,11 +41,13 @@ export ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=0xed1db453c3156ff3155a97ad21
 #env DOCKER_TAG=$base_tag just demo-file docker-compose-v2.yaml --wait
 
 # TODO: don't do || true; figure out why this is failing. It claims stake-for-demo exited (0) but then dies?
-env DOCKER_TAG=$base_tag just demo-file "docker-compose.binary-upgrade-test.$base_tag.yaml" --wait -d || true
+env DOCKER_TAG=$base_tag just demo-file "$compose_file" --wait -d || true
 
 #echo "DONE"
 #exit
 scripts/smoke-test-demo
+#echo "DONE"
+#exit
 
 # first upgrade the builder and the first sequencer node
 # docker compose stop permissionless-builder
@@ -56,23 +63,23 @@ scripts/smoke-test-demo
 export ESPRESSO_SEQUENCER_GENESIS_FILE=genesis/demo-binary-upgrade.toml
 
 # upgrade sequencer0 binary
-docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" stop sequencer0 || true
-env DOCKER_TAG=$target_tag docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" up --no-deps sequencer0 --force-recreate --wait || true
+docker compose -f "$compose_file" stop sequencer0 || true
+env DOCKER_TAG=$target_tag docker compose -f "$compose_file" up --no-deps sequencer0 --force-recreate --wait || true
 docker compose logs sequencer0
 #process-compose up --no-deps sequencer0
 
-docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" stop permissionless-builder || true
+docker compose -f "$compose_file" stop permissionless-builder || true
 # HOTSHOT_EVENTS_VERSION=v0 \
 env DOCKER_TAG=$target_tag \
-    docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" up --no-deps permissionless-builder --force-recreate --wait || true
+    docker compose -f "$compose_file" up --no-deps permissionless-builder --force-recreate --wait || true
 docker compose logs permissionless-builder
 #process-compose up --no-deps permissionless-builder
 
 # submit transactions will have exited due to closed stream
-env DOCKER_TAG=$base_tag docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" up --no-deps submit-transactions-public --wait || true
+env DOCKER_TAG=$base_tag docker compose -f "$compose_file" up --no-deps submit-transactions-public --wait || true
 docker compose logs submit-transactions-public
 
-env DOCKER_TAG=$base_tag docker compose -f "docker-compose.binary-upgrade-test.$base_tag.yaml" up --no-deps submit-transactions-private --wait || true
+env DOCKER_TAG=$base_tag docker compose -f "$compose_file" up --no-deps submit-transactions-private --wait || true
 docker compose logs submit-transactions-private
 
 # Now the mainnet builder doesn't work because if we specify the /v0 url for the
