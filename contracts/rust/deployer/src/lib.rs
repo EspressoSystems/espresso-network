@@ -20,7 +20,7 @@ use alloy::{
     transports::http::reqwest::Url,
 };
 use anyhow::{anyhow, Context, Result};
-use clap::{builder::OsStr, Parser};
+use clap::{builder::OsStr, Parser, ValueEnum};
 use derive_more::{derive::Deref, Display};
 use espresso_types::{v0_1::L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::sol_types::*;
@@ -234,6 +234,33 @@ pub enum Contract {
     RewardClaim,
     #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS")]
     RewardClaimProxy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum OwnableContract {
+    #[value(alias = "feecontract", alias = "FeeContract")]
+    FeeContractProxy,
+    #[value(alias = "lightclient", alias = "LightClient")]
+    LightClientProxy,
+    #[value(alias = "staketable", alias = "StakeTable")]
+    StakeTableProxy,
+    #[value(alias = "esptoken", alias = "EspToken")]
+    EspTokenProxy,
+    #[value(alias = "rewardclaim", alias = "RewardClaim")]
+    RewardClaimProxy,
+}
+
+impl From<OwnableContract> for Contract {
+    fn from(c: OwnableContract) -> Contract {
+        match c {
+            OwnableContract::FeeContractProxy => Contract::FeeContractProxy,
+            OwnableContract::LightClientProxy => Contract::LightClientProxy,
+            OwnableContract::StakeTableProxy => Contract::StakeTableProxy,
+            OwnableContract::EspTokenProxy => Contract::EspTokenProxy,
+            OwnableContract::RewardClaimProxy => Contract::RewardClaimProxy,
+        }
+    }
 }
 
 impl From<Contract> for OsStr {
@@ -3719,7 +3746,7 @@ mod tests {
             .deployer(provider.clone())
             .rpc_url(anvil.endpoint_url())
             .transfer_ownership_from_eoa(true)
-            .target_contract("rewardclaim".to_string())
+            .target_contract(OwnableContract::RewardClaimProxy)
             .transfer_ownership_new_owner(new_admin);
         let args = args_builder.build()?;
 
@@ -3791,7 +3818,7 @@ mod tests {
             .deployer(provider.clone())
             .rpc_url(anvil.endpoint_url())
             .timelock_operation_type(TimelockOperationType::Schedule)
-            .target_contract("RewardClaim".to_string())
+            .target_contract(OwnableContract::RewardClaimProxy)
             .timelock_operation_value(U256::ZERO)
             .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
             .timelock_operation_function_values(vec![
@@ -3815,7 +3842,7 @@ mod tests {
             .deployer(provider.clone())
             .rpc_url(anvil.endpoint_url())
             .timelock_operation_type(TimelockOperationType::Execute)
-            .target_contract("RewardClaim".to_string())
+            .target_contract(OwnableContract::RewardClaimProxy)
             .timelock_operation_value(U256::ZERO)
             .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
             .timelock_operation_function_values(vec![
@@ -3886,8 +3913,10 @@ mod tests {
             .await?;
 
         // Verify derivation function returns correct timelock
-        let fee_contract_derived_timelock =
-            derive_timelock_address_from_contract_type(Contract::FeeContractProxy, &contracts)?;
+        let fee_contract_derived_timelock = derive_timelock_address_from_contract_type(
+            OwnableContract::FeeContractProxy,
+            &contracts,
+        )?;
         assert_eq!(fee_contract_derived_timelock, ops_timelock_addr);
 
         // Verify on-chain that FeeContractProxy has OpsTimelock as owner
@@ -3963,8 +3992,10 @@ mod tests {
             .await?;
 
         // Verify derivation
-        let reward_claim_derived_timelock =
-            derive_timelock_address_from_contract_type(Contract::RewardClaimProxy, &contracts)?;
+        let reward_claim_derived_timelock = derive_timelock_address_from_contract_type(
+            OwnableContract::RewardClaimProxy,
+            &contracts,
+        )?;
         assert_eq!(reward_claim_derived_timelock, safe_exit_timelock_addr);
 
         // Verify on-chain
@@ -4002,7 +4033,7 @@ mod tests {
         // Error case - missing timelock
         let empty_contracts = Contracts::new();
         let result = derive_timelock_address_from_contract_type(
-            Contract::FeeContractProxy,
+            OwnableContract::FeeContractProxy,
             &empty_contracts,
         );
         assert!(
@@ -4016,15 +4047,208 @@ mod tests {
             error_msg
         );
 
-        // Error case - invalid contract type
-        let result =
-            derive_timelock_address_from_contract_type(Contract::PlonkVerifier, &contracts);
-        assert!(result.is_err(), "Should error for invalid contract type");
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("Invalid contract type"),
-            "Error should mention invalid contract type, got: {}",
-            error_msg
+        // NOTE: Invalid contract type test removed - OwnableContract enum now provides
+        // compile-time safety so invalid types can't be passed to the function.
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_esp_token_v2_with_timelock_owner() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        let safe_exit_timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        let token_owner = provider_wallet;
+        let init_recipient = provider_wallet;
+        let initial_supply = U256::from(10_000_000u64);
+        let token_name = "Espresso";
+        let token_symbol = "ESP";
+
+        let token_proxy_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            token_name,
+            token_symbol,
+        )
+        .await?;
+
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url);
+        let args = args_builder.build()?;
+
+        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
+
+        let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
+        assert_eq!(esp_token_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(
+            esp_token_v2.owner().call().await?,
+            safe_exit_timelock_addr,
+            "EspTokenProxy should have SafeExitTimelock as owner after V2 upgrade"
+        );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_light_client_v3_with_timelock_owner() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state,
+            genesis_stake,
+            provider_wallet,
+            Some(provider_wallet),
+        )
+        .await?;
+
+        upgrade_light_client_v2(&provider, &mut contracts, false, 10, 22).await?;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url);
+        let args = args_builder.build()?;
+
+        args.deploy(&mut contracts, Contract::LightClientV3).await?;
+
+        let lc_v3 = LightClientV3::new(lc_proxy_addr, &provider);
+        assert_eq!(lc_v3.getVersion().call().await?.majorVersion, 3);
+        assert_eq!(
+            lc_v3.owner().call().await?,
+            ops_timelock_addr,
+            "LightClientProxy should have OpsTimelock as owner after V3 upgrade"
+        );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_stake_table_v2_with_timelock_owner() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        let token_proxy_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Espresso",
+            "ESP",
+        )
+        .await?;
+
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state,
+            genesis_stake,
+            provider_wallet,
+            Some(provider_wallet),
+        )
+        .await?;
+
+        let escrow_period = U256::from(crate::DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
+        let st_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_proxy_addr,
+            lc_proxy_addr,
+            escrow_period,
+            provider_wallet,
+        )
+        .await?;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url);
+        let args = args_builder.build()?;
+
+        args.deploy(&mut contracts, Contract::StakeTableV2).await?;
+
+        let st_v2 = StakeTableV2::new(st_proxy_addr, &provider);
+        assert_eq!(st_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(
+            st_v2.owner().call().await?,
+            ops_timelock_addr,
+            "StakeTableProxy should have OpsTimelock as owner after V2 upgrade"
         );
 
         Ok(())

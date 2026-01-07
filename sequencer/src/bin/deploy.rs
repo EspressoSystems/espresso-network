@@ -15,7 +15,7 @@ use espresso_contract_deployer::{
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
     proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
     provider::connect_ledger,
-    Contract, Contracts, DeployedContracts,
+    Contract, Contracts, DeployedContracts, OwnableContract,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -350,10 +350,10 @@ struct Options {
     timelock_operation_type: Option<TimelockOperationType>,
 
     /// The target contract for timelock operations or ownership transfers.
-    /// Valid values: "FeeContract", "EspToken", "LightClient", "StakeTable", "RewardClaim".
-    /// It's version agnostic
-    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT")]
-    target_contract: Option<String>,
+    /// Valid values: fee-contract-proxy, light-client-proxy, stake-table-proxy, esp-token-proxy, reward-claim-proxy
+    /// Aliases: feecontract, lightclient, staketable, esptoken, rewardclaim (case-insensitive)
+    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT", value_enum, ignore_case = true)]
+    target_contract: Option<OwnableContract>,
 
     /// The value to send with the timelock operation
     #[clap(
@@ -631,7 +631,7 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
         args_builder.timelock_operation_type(timelock_operation_type);
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract or ESPRESSO_TARGET_CONTRACT env var when \
                  scheduling timelock operation"
@@ -692,7 +692,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Add EOA ownership transfer parameters to builder
     if opt.transfer_ownership_from_eoa {
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract when using --transfer-ownership-from-eoa"
             )
@@ -710,7 +710,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Add multisig to timelock transfer parameters to builder
     if opt.propose_transfer_ownership_to_timelock {
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract when using \
                  --propose-transfer-ownership-to-timelock"

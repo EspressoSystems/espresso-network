@@ -24,9 +24,8 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare0,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -794,7 +793,7 @@ impl SequencerPersistence for Persistence {
 
     async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let view_number = proposal.data.view_number().u64();
@@ -812,9 +811,7 @@ impl SequencerPersistence for Persistence {
                 Ok(false)
             },
             |mut file| {
-                let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-                    convert_proposal(proposal.clone());
-                let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                let proposal_bytes = bincode::serialize(proposal).context("serialize proposal")?;
                 let now = Instant::now();
                 file.write_all(&proposal_bytes)?;
                 self.metrics
@@ -824,40 +821,7 @@ impl SequencerPersistence for Persistence {
             },
         )
     }
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let view_number = proposal.data.view_number().u64();
 
-        let dir_path = inner.vid2_dir_path();
-
-        fs::create_dir_all(dir_path.clone()).context("failed to create vid dir")?;
-
-        let file_path = dir_path.join(view_number.to_string()).with_extension("txt");
-
-        inner.replace(
-            &file_path,
-            |_| {
-                // Don't overwrite an existing share, but warn about it as this is likely not intended
-                // behavior from HotShot.
-                tracing::warn!(view_number, "duplicate VID share");
-                Ok(false)
-            },
-            |mut file| {
-                let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-                    convert_proposal(proposal.clone());
-                let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-                let now = Instant::now();
-                file.write_all(&proposal_bytes)?;
-                self.metrics
-                    .internal_append_vid2_duration
-                    .add_point(now.elapsed().as_secs_f64());
-                Ok(())
-            },
-        )
-    }
     async fn append_da(
         &self,
         proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
@@ -1355,7 +1319,7 @@ impl SequencerPersistence for Persistence {
 
             let bytes = fs::read(&path).context(format!("reading vid share {}", path.display()))?;
             let proposal =
-                bincode::deserialize::<Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>>(&bytes)
+                bincode::deserialize::<Proposal<SeqTypes, VidDisperseShare0<SeqTypes>>>(&bytes)
                     .context(format!("parsing vid share {}", path.display()))?;
 
             let new_vid_path = new_vid_dir.join(view.to_string()).with_extension("txt");
@@ -2522,7 +2486,7 @@ mod test {
                 .disperse(payload_bytes.clone())
                 .unwrap();
 
-            let vid = ADVZDisperseShare::<SeqTypes> {
+            let vid = VidDisperseShare0::<SeqTypes> {
                 view_number: ViewNumber::new(i),
                 payload_commitment: Default::default(),
                 share: disperse.shares[0].clone(),
@@ -2552,7 +2516,7 @@ mod test {
 
             tracing::debug!("inserting vid for {view}");
             storage
-                .append_vid(&vid.to_proposal(&privkey).unwrap())
+                .append_vid(&convert_proposal(vid.to_proposal(&privkey).unwrap()))
                 .await
                 .unwrap();
 
