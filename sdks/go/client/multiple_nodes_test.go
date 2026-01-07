@@ -213,7 +213,7 @@ func TestApiWithSingleEspressoDevNode(t *testing.T) {
 
 func TestNamespaceTransactionsInRangeForMultiClient(t *testing.T) {
 	ctx := context.Background()
-	hotshotURLs := []string{"https://query-0.decaf.testnet.espresso.network", "https://query-0.decaf.testnet.espresso.network"}
+	hotshotURLs := []string{"https://query-0.decaf.testnet.espresso.network", "https://query-1.decaf.testnet.espresso.network"}
 	client, err := NewMultipleNodesClient(hotshotURLs)
 	if err != nil {
 		t.Fatal("failed to create multiple nodes client", err)
