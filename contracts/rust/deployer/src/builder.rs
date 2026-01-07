@@ -215,8 +215,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             // - No emergency updates are expected for token functionality
                             // - SafeExitTimelock provides sufficient security for token operations
                             tracing::info!("Transferring ownership to SafeExitTimelock");
-                            let timelock_addr =
-                                derive_timelock_address_from_contract_type(target, contracts)?;
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                Contract::EspTokenProxy,
+                                contracts,
+                            )?;
                             crate::transfer_ownership(provider, target, addr, timelock_addr)
                                 .await?;
                         }
@@ -337,8 +339,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
-                            let timelock_addr =
-                                derive_timelock_address_from_contract_type(target, contracts)?;
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                Contract::LightClientProxy,
+                                contracts,
+                            )?;
                             crate::transfer_ownership(provider, target, addr, timelock_addr)
                                 .await?;
                         }
@@ -405,9 +409,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     // Pick admin from config. StakeTable uses OpsTimelock for faster
                     // emergency updates since it handles critical staking ops.
                     let admin = match self.use_timelock_owner {
-                        Some(true) => {
-                            derive_timelock_address_from_contract_type(target, contracts)?
-                        },
+                        Some(true) => derive_timelock_address_from_contract_type(
+                            Contract::StakeTableProxy,
+                            contracts,
+                        )?,
                         Some(false) => admin, // deployer
                         None => {
                             if let Some(multisig) = self.multisig {
