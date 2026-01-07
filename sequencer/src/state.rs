@@ -235,10 +235,12 @@ async fn store_state_update(
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
+        let num_reward_proofs = reward_proofs.len();
         tracing::debug!(
-            count = reward_proofs.len(),
+            count = num_reward_proofs,
             "inserting v2 reward accounts in batch"
         );
+        let store_start = std::time::Instant::now();
         UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
             tx,
             reward_proofs,
@@ -246,6 +248,12 @@ async fn store_state_update(
         )
         .await
         .context("failed to store reward merkle nodes")?;
+        tracing::info!(
+            duration_ms = store_start.elapsed().as_millis() as u64,
+            count = num_reward_proofs,
+            block_number,
+            "stored v2 reward accounts"
+        );
     }
 
     tracing::debug!(block_number, "updating state height");
