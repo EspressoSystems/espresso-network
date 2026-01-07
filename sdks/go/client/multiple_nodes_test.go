@@ -211,6 +211,47 @@ func TestApiWithSingleEspressoDevNode(t *testing.T) {
 	}
 }
 
+func TestNamespaceTransactionsInRangeForMultiClient(t *testing.T) {
+	ctx := context.Background()
+	hotshotURLs := []string{"https://query-0.decaf.testnet.espresso.network", "https://query-0.decaf.testnet.espresso.network"}
+	client, err := NewMultipleNodesClient(hotshotURLs)
+	if err != nil {
+		t.Fatal("failed to create multiple nodes client", err)
+	}
+	namespace := uint64(22266222)
+	startHeight := uint64(6386698)
+	endHeight := uint64(6386700)
+
+	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
+	if err != nil {
+		t.Fatal("failed to fetch namespace transactions in range", err)
+	}
+
+	if len(blocksWithNamespaceTransactions) != 2 {
+		t.Fatalf("expected 2 blocks with namespace transactions, got %d", len(blocksWithNamespaceTransactions))
+	}
+
+	for _, blocks := range blocksWithNamespaceTransactions {
+		for _, tx := range blocks.Transactions {
+			if tx.Namespace != namespace {
+				t.Fatalf("expected namespace %d, got %d", namespace, tx.Namespace)
+			}
+			if len(tx.Payload) == 0 {
+				t.Fatal("transaction payload is empty")
+			}
+		}
+	}
+
+	startHeight = uint64(6386698)
+	endHeight = uint64(6389700)
+
+	// test if startHeight and endHeight are greater than 100 (which is the limit) then it throws an error
+	_, err = client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
+	if err == nil {
+		t.Fatal("expected error for large range, but got none")
+	}
+}
+
 func getHeaderFromTestFile(path string, t *testing.T) types.HeaderInterface {
 	file, err := os.Open(path)
 	if err != nil {
