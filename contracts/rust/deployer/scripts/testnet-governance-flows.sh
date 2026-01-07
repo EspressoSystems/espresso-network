@@ -1,0 +1,132 @@
+# This script assumes that the contracts have already been deployed and the .env.governance.testnet file has been sourced
+# It is used to test the governance flows for the contracts, specifically the timelock operations
+# It tests the following flows:
+# 1. Scheduling a timelock operation to update the exit escrow period
+# 2. Executing a timelock operation to update the exit escrow period
+# 3. Scheduling a timelock operation to cancel an operation on StakeTable
+# 4. Granting the PAUSER_ROLE via timelock
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+if [[ -f "$REPO_ROOT/.env" ]]; then
+    set -a
+    source "$REPO_ROOT/.env"
+    source "$REPO_ROOT/.env.governance.testnet"
+    set +a
+fi
+
+RPC_URL="${RPC_URL:-http://localhost:8545}"
+ACCOUNT_INDEX="${ESPRESSO_DEPLOYER_ACCOUNT_INDEX:-0}"
+OPS_DELAY="30" # 30 seconds
+SAFE_EXIT_DELAY="60" # 60 seconds
+
+export RUST_LOG=warn
+DEPLOY_CMD="cargo run --quiet --bin deploy --release --"
+
+NEW_ESCROW_PERIOD=$((86400 * 2 ))  # 2 days in seconds
+SALT=$(cast keccak "$(date +%s)")
+
+echo "### Test 1: Scheduling timelock operation to update exit escrow period ###"
+$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+    --perform-timelock-operation \
+    --timelock-operation-type schedule \
+    --target-contract StakeTable \
+    --function-signature "updateExitEscrowPeriod(uint64)" \
+    --function-values "$NEW_ESCROW_PERIOD" \
+    --timelock-operation-salt "$SALT" \
+    --timelock-operation-delay "$OPS_DELAY" \
+    --timelock-operation-value 0
+
+echo ""
+echo "Waiting for timelock delay (${OPS_DELAY} seconds)..."
+sleep "$OPS_DELAY"
+
+echo ""
+echo "### Test 2: Executing timelock operation ###"
+$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+    --perform-timelock-operation \
+    --timelock-operation-type execute \
+    --target-contract StakeTable \
+    --function-signature "updateExitEscrowPeriod(uint64)" \
+    --function-values "$NEW_ESCROW_PERIOD" \
+    --timelock-operation-salt "$SALT" \
+    --timelock-operation-delay "$OPS_DELAY" \
+    --timelock-operation-value 0
+
+echo ""
+echo "Waiting for timelock delay (${OPS_DELAY} seconds)..."
+sleep "$OPS_DELAY"
+
+# Verify the change
+CURRENT_PERIOD=$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "exitEscrowPeriod()(uint256)" --rpc-url "$RPC_URL")
+echo "Exit escrow period updated to: $CURRENT_PERIOD"
+
+echo ""
+echo "### Test 3: Scheduling then canceling an operation on StakeTable ###"
+CANCEL_SALT=$(cast keccak "$(date +%s)cancel")
+$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+    --perform-timelock-operation \
+    --timelock-operation-type schedule \
+    --target-contract StakeTable \
+    --function-signature "updateExitEscrowPeriod(uint64)" \
+    --function-values "172800" \
+    --timelock-operation-salt "$CANCEL_SALT" \
+    --timelock-operation-delay "$OPS_DELAY" \
+    --timelock-operation-value 0
+
+$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+    --perform-timelock-operation \
+    --timelock-operation-type cancel \
+    --target-contract StakeTable \
+    --function-signature "updateExitEscrowPeriod(uint64)" \
+    --function-values "172800" \
+    --timelock-operation-salt "$CANCEL_SALT" \
+    --timelock-operation-delay "$OPS_DELAY" \
+    --timelock-operation-value 0
+
+echo ""
+echo "### Test 4: Granting PAUSER_ROLE via timelock ###"
+PAUSER_ROLE="0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a"  # keccak256("PAUSER_ROLE")
+OLD_PAUSER="0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
+NEW_PAUSER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+GRANT_SALT=$(cast keccak "$(date +%s)grant")
+
+$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+    --perform-timelock-operation \
+    --timelock-operation-type schedule \
+    --target-contract StakeTable \
+    --function-signature "grantRole(bytes32,address)" \
+    --function-values "$PAUSER_ROLE" "$NEW_PAUSER" \
+    --timelock-operation-salt "$GRANT_SALT" \
+    --timelock-operation-delay "$OPS_DELAY" \
+    --timelock-operation-value 0
+
+echo ""
+echo "Waiting for timelock delay (${OPS_DELAY} seconds)..."
+sleep "$OPS_DELAY"
+
+$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+    --perform-timelock-operation \
+    --timelock-operation-type execute \
+    --target-contract StakeTable \
+    --function-signature "grantRole(bytes32,address)" \
+    --function-values "$PAUSER_ROLE" "$NEW_PAUSER" \
+    --timelock-operation-salt "$GRANT_SALT" \
+    --timelock-operation-delay "$OPS_DELAY" \
+    --timelock-operation-value 0
+
+# Verify the new pauser has the PAUSER_ROLE
+if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$NEW_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
+    echo "ERROR: New pauser does not have the PAUSER_ROLE"
+    exit 1
+fi
+# Verify the previous pauser still has the PAUSER_ROLE
+if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$OLD_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
+    echo "ERROR: Previous pauser does not have the PAUSER_ROLE"
+    exit 1
+fi
+
+echo "All tests passed!"
