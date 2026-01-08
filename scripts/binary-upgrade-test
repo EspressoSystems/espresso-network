@@ -50,9 +50,9 @@ env DOCKER_TAG=$base_tag just demo-file "$compose_file" --wait -d || true
 
 #echo "DONE"
 #exit
-scripts/smoke-test-demo
-echo "DONE"
-exit
+ESPRESSO_SCRIPT_SKIP_DOTENV=1 scripts/smoke-test-demo
+#echo "DONE"
+#exit
 
 # first upgrade the builder and the first sequencer node
 # docker compose stop permissionless-builder
@@ -94,7 +94,7 @@ docker compose logs submit-transactions-private
 
 # we now get "invalid builder signature" errors in sequencer1 logs
 
-scripts/smoke-test-demo
+ESPRESSO_SCRIPT_SKIP_DOTENV=1 scripts/smoke-test-demo
 
 # assert sequencer 0 is running and making progress
 echo "Done"

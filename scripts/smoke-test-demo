@@ -11,8 +11,10 @@ error_handler() {
   echo "Failed at line $lineno: msg: $msg"
 }
 
-# load env vars in .env
-set -a; source .env; set +a;
+if [[ -z "$ESPRESSO_SCRIPT_SKIP_DOTENV" ]]; then
+    # load env vars in .env
+    set -a; source .env; set +a;
+fi
 
 LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
