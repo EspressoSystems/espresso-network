@@ -599,4 +599,18 @@ impl Client for TestClient {
             .clone();
         Ok(HeaderProof::new(header, proof))
     }
+
+    async fn get_leaves_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let mut leaves = Vec::new();
+        let mut inner = self.inner.lock().await;
+        for h in start_height..end_height {
+            let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
+            leaves.push(inner.leaf(height, self.epoch_height, &self.quorum).await);
+        }
+        Ok(leaves)
+    }
 }
