@@ -487,8 +487,6 @@ mod test {
             client.clone(),
             client.genesis(),
         );
-        // If there is an invalid proof for any leaf in the range,
-        // the entire fetch should fail
         client.return_invalid_proof(2).await;
         let err = lc.fetch_leaves_in_range(1, 3).await.unwrap_err();
         assert!(
