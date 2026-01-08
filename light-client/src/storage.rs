@@ -41,6 +41,13 @@ pub trait Storage: Sized + Send + Sync + 'static {
         leaf: impl Into<LeafRequest> + Send,
     ) -> impl Send + Future<Output = Result<Option<LeafQueryData<SeqTypes>>>>;
 
+    /// Get all leaves in the given range, exclusive of last element
+    fn get_leaves_in_range(
+        &self,
+        start: u32,
+        end: u32,
+    ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>>;
+
     /// Add a leaf to the cache.
     ///
     /// This may result in an older leaf being removed.
@@ -153,6 +160,29 @@ impl Storage for SqliteStorage {
         tx.commit().await?;
 
         Ok(Some(leaf))
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        start_height: u32,
+        end_height: u32,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let mut tx = self.pool.begin().await?;
+
+        let leaves = query_as::<_, (i64, serde_json::Value)>(
+            "SELECT height, data FROM leaf WHERE height >= $1 AND height < $2 ORDER BY height",
+        )
+        .bind(start_height as i64)
+        .bind(end_height as i64)
+        .fetch_all(tx.as_mut())
+        .await?
+        .into_iter()
+        .map(|(_height, data)| serde_json::from_value(data))
+        .collect::<Result<Vec<_>, _>>()?;
+
+        tx.commit().await?;
+
+        Ok(leaves)
     }
 
     async fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>) -> Result<()> {
@@ -398,5 +428,33 @@ mod test {
                 .unwrap(),
             leaves[2]
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_get_leaves_in_range() {
+        let db = SqliteStorage::default().await.unwrap();
+
+        let leaves = leaf_chain::<EpochVersion>(0..5).await;
+        for leaf in &leaves {
+            db.insert_leaf(leaf.clone()).await.unwrap();
+        }
+
+        let fetched = db.get_leaves_in_range(1, 4).await.unwrap();
+        assert_eq!(fetched, leaves[1..4]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_get_leaves_in_range_not_found() {
+        let db = SqliteStorage::default().await.unwrap();
+
+        let leaves = leaf_chain::<EpochVersion>(0..3).await;
+        for leaf in &leaves {
+            db.insert_leaf(leaf.clone()).await.unwrap();
+        }
+
+        let fetched = db.get_leaves_in_range(3, 5).await.unwrap();
+        assert!(fetched.is_empty());
     }
 }
