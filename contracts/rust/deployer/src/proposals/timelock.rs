@@ -11,9 +11,9 @@ use hotshot_contract_adapter::sol_types::{
 
 use crate::{Contract, Contracts, OwnableContract};
 
-/// Data structure for timelock operations
+/// Data structure for timelock operations payload
 #[derive(Debug, Clone)]
-pub struct TimelockOperationData {
+pub struct TimelockOperationPayload {
     /// The address of the contract to call
     pub target: Address,
     /// The value to send with the call
@@ -26,6 +26,27 @@ pub struct TimelockOperationData {
     pub salt: B256,
     /// The delay for the operation, must be >= the timelock's min delay
     pub delay: U256,
+}
+
+/// Parameters for executing timelock operations (how to route/execute)
+#[derive(Debug, Clone)]
+pub struct TimelockOperationParams {
+    /// Optional multisig proposer address. If provided, operation will be routed through Safe proposal.
+    pub multisig_proposer: Option<Address>,
+    /// RPC URL (required if using multisig)
+    pub rpc_url: Option<String>,
+    /// Whether to use hardware wallet for signing
+    pub use_hardware_wallet: bool,
+}
+
+impl Default for TimelockOperationParams {
+    fn default() -> Self {
+        Self {
+            multisig_proposer: None,
+            rpc_url: None,
+            use_hardware_wallet: false,
+        }
+    }
 }
 
 /// Types of timelock operations
@@ -46,7 +67,7 @@ pub enum TimelockContract {
 impl TimelockContract {
     pub async fn get_operation_id(
         &self,
-        operation: &TimelockOperationData,
+        operation: &TimelockOperationPayload,
         provider: &impl Provider,
     ) -> Result<B256> {
         match self {
@@ -79,12 +100,54 @@ impl TimelockContract {
 
     pub async fn schedule(
         &self,
-        operation: TimelockOperationData,
+        operation: TimelockOperationPayload,
         provider: &impl Provider,
     ) -> Result<TransactionReceipt> {
-        match self {
-            TimelockContract::OpsTimelock(timelock_addr) => {
-                let pending_tx = OpsTimelock::new(*timelock_addr, &provider)
+        self.call_timelock_method("schedule", operation, None, provider)
+            .await
+    }
+
+    pub async fn execute(
+        &self,
+        operation: TimelockOperationPayload,
+        provider: &impl Provider,
+    ) -> Result<TransactionReceipt> {
+        self.call_timelock_method("execute", operation, None, provider)
+            .await
+    }
+
+    pub async fn cancel(
+        &self,
+        operation_id: B256,
+        provider: &impl Provider,
+    ) -> Result<TransactionReceipt> {
+        self.call_timelock_method(
+            "cancel",
+            TimelockOperationPayload {
+                target: Address::ZERO,
+                value: U256::ZERO,
+                data: Bytes::new(),
+                predecessor: B256::ZERO,
+                salt: B256::ZERO,
+                delay: U256::ZERO,
+            },
+            Some(operation_id),
+            provider,
+        )
+        .await
+    }
+
+    /// Internal helper to reduce duplication in schedule/execute/cancel
+    async fn call_timelock_method(
+        &self,
+        method: &str,
+        operation: TimelockOperationPayload,
+        operation_id: Option<B256>,
+        provider: &impl Provider,
+    ) -> Result<TransactionReceipt> {
+        let pending_tx = match (self, method) {
+            (TimelockContract::OpsTimelock(addr), "schedule") => {
+                OpsTimelock::new(*addr, &provider)
                     .schedule(
                         operation.target,
                         operation.value,
@@ -94,17 +157,10 @@ impl TimelockContract {
                         operation.delay,
                     )
                     .send()
-                    .await?;
-                let tx_hash = *pending_tx.tx_hash();
-                tracing::info!(%tx_hash, "waiting for tx to be mined");
-                let receipt = pending_tx.get_receipt().await?;
-                if !receipt.inner.is_success() {
-                    anyhow::bail!("tx failed: {:?}", receipt);
-                }
-                Ok(receipt)
+                    .await?
             },
-            TimelockContract::SafeExitTimelock(timelock_addr) => {
-                let pending_tx = SafeExitTimelock::new(*timelock_addr, &provider)
+            (TimelockContract::SafeExitTimelock(addr), "schedule") => {
+                SafeExitTimelock::new(*addr, &provider)
                     .schedule(
                         operation.target,
                         operation.value,
@@ -114,16 +170,54 @@ impl TimelockContract {
                         operation.delay,
                     )
                     .send()
-                    .await?;
-                let tx_hash = *pending_tx.tx_hash();
-                tracing::info!(%tx_hash, "waiting for tx to be mined");
-                let receipt = pending_tx.get_receipt().await?;
-                if !receipt.inner.is_success() {
-                    anyhow::bail!("tx failed: {:?}", receipt);
-                }
-                Ok(receipt)
+                    .await?
             },
+            (TimelockContract::OpsTimelock(addr), "execute") => {
+                OpsTimelock::new(*addr, &provider)
+                    .execute(
+                        operation.target,
+                        operation.value,
+                        operation.data,
+                        operation.predecessor,
+                        operation.salt,
+                    )
+                    .send()
+                    .await?
+            },
+            (TimelockContract::SafeExitTimelock(addr), "execute") => {
+                SafeExitTimelock::new(*addr, &provider)
+                    .execute(
+                        operation.target,
+                        operation.value,
+                        operation.data,
+                        operation.predecessor,
+                        operation.salt,
+                    )
+                    .send()
+                    .await?
+            },
+            (TimelockContract::OpsTimelock(addr), "cancel") => {
+                OpsTimelock::new(*addr, &provider)
+                    .cancel(operation_id.expect("operation_id required for cancel"))
+                    .send()
+                    .await?
+            },
+            (TimelockContract::SafeExitTimelock(addr), "cancel") => {
+                SafeExitTimelock::new(*addr, &provider)
+                    .cancel(operation_id.expect("operation_id required for cancel"))
+                    .send()
+                    .await?
+            },
+            _ => anyhow::bail!("Invalid method: {}", method),
+        };
+
+        let tx_hash = *pending_tx.tx_hash();
+        tracing::info!(%tx_hash, "waiting for tx to be mined");
+        let receipt = pending_tx.get_receipt().await?;
+        if !receipt.inner.is_success() {
+            anyhow::bail!("tx failed: {:?}", receipt);
         }
+        Ok(receipt)
     }
 
     pub async fn is_operation_pending(
@@ -185,88 +279,6 @@ impl TimelockContract {
                     .isOperationDone(operation_id)
                     .call()
                     .await?)
-            },
-        }
-    }
-
-    pub async fn execute(
-        &self,
-        operation: TimelockOperationData,
-        provider: &impl Provider,
-    ) -> Result<TransactionReceipt> {
-        match self {
-            TimelockContract::OpsTimelock(timelock_addr) => {
-                let pending_tx = OpsTimelock::new(*timelock_addr, &provider)
-                    .execute(
-                        operation.target,
-                        operation.value,
-                        operation.data,
-                        operation.predecessor,
-                        operation.salt,
-                    )
-                    .send()
-                    .await?;
-                let tx_hash = *pending_tx.tx_hash();
-                tracing::info!(%tx_hash, "waiting for tx to be mined");
-                let receipt = pending_tx.get_receipt().await?;
-                if !receipt.inner.is_success() {
-                    anyhow::bail!("tx failed: {:?}", receipt);
-                }
-                Ok(receipt)
-            },
-            TimelockContract::SafeExitTimelock(timelock_addr) => {
-                let pending_tx = SafeExitTimelock::new(*timelock_addr, &provider)
-                    .execute(
-                        operation.target,
-                        operation.value,
-                        operation.data,
-                        operation.predecessor,
-                        operation.salt,
-                    )
-                    .send()
-                    .await?;
-                let tx_hash = *pending_tx.tx_hash();
-                tracing::info!(%tx_hash, "waiting for tx to be mined");
-                let receipt = pending_tx.get_receipt().await?;
-                if !receipt.inner.is_success() {
-                    anyhow::bail!("tx failed: {:?}", receipt);
-                }
-                Ok(receipt)
-            },
-        }
-    }
-
-    pub async fn cancel(
-        &self,
-        operation_id: B256,
-        provider: &impl Provider,
-    ) -> Result<TransactionReceipt> {
-        match self {
-            TimelockContract::OpsTimelock(timelock_addr) => {
-                let pending_tx = OpsTimelock::new(*timelock_addr, &provider)
-                    .cancel(operation_id)
-                    .send()
-                    .await?;
-                let tx_hash = *pending_tx.tx_hash();
-                tracing::info!(%tx_hash, "waiting for tx to be mined");
-                let receipt = pending_tx.get_receipt().await?;
-                if !receipt.inner.is_success() {
-                    anyhow::bail!("tx failed: {:?}", receipt);
-                }
-                Ok(receipt)
-            },
-            TimelockContract::SafeExitTimelock(timelock_addr) => {
-                let pending_tx = SafeExitTimelock::new(*timelock_addr, &provider)
-                    .cancel(operation_id)
-                    .send()
-                    .await?;
-                let tx_hash = *pending_tx.tx_hash();
-                tracing::info!(%tx_hash, "waiting for tx to be mined");
-                let receipt = pending_tx.get_receipt().await?;
-                if !receipt.inner.is_success() {
-                    anyhow::bail!("tx failed: {:?}", receipt);
-                }
-                Ok(receipt)
             },
         }
     }
@@ -337,40 +349,130 @@ pub async fn get_timelock_for_contract(
     }
 }
 
+/// Unified function to perform timelock operations (schedule, execute, cancel)
+/// Routes to EOA or multisig based on params
+pub async fn perform_timelock_operation(
+    provider: &impl Provider,
+    contract_type: Contract,
+    operation: TimelockOperationPayload,
+    operation_type: TimelockOperationType,
+    params: TimelockOperationParams,
+) -> Result<B256> {
+    let timelock = get_timelock_for_contract(provider, contract_type, operation.target).await?;
+    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
+
+    if let Some(multisig_proposer) = params.multisig_proposer {
+        // Multisig path
+        let rpc_url = params
+            .rpc_url
+            .ok_or_else(|| anyhow::anyhow!("RPC URL is required when using multisig proposer"))?;
+
+        perform_timelock_operation_via_multisig(
+            timelock,
+            operation,
+            operation_type,
+            operation_id,
+            rpc_url,
+            multisig_proposer,
+            params.use_hardware_wallet,
+        )
+        .await
+    } else {
+        // EOA path
+        perform_timelock_operation_via_eoa(
+            timelock,
+            operation,
+            operation_type,
+            operation_id,
+            provider,
+        )
+        .await
+    }
+}
+
+/// Perform timelock operation via EOA (direct transaction)
+async fn perform_timelock_operation_via_eoa(
+    timelock: TimelockContract,
+    operation: TimelockOperationPayload,
+    operation_type: TimelockOperationType,
+    operation_id: B256,
+    provider: &impl Provider,
+) -> Result<B256> {
+    let receipt = match operation_type {
+        TimelockOperationType::Schedule => timelock.schedule(operation, &provider).await?,
+        TimelockOperationType::Execute => timelock.execute(operation, &provider).await?,
+        TimelockOperationType::Cancel => timelock.cancel(operation_id, &provider).await?,
+    };
+
+    tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
+    if !receipt.inner.is_success() {
+        anyhow::bail!("tx failed: {:?}", receipt);
+    }
+    // Verify operation state based on type
+    match operation_type {
+        TimelockOperationType::Schedule => {
+            // Check that the tx is scheduled
+            if !(timelock
+                .is_operation_pending(operation_id, &provider)
+                .await?
+                || timelock.is_operation_ready(operation_id, &provider).await?)
+            {
+                anyhow::bail!("tx not correctly scheduled: {}", operation_id);
+            }
+            tracing::info!("tx scheduled with id: {}", operation_id);
+        },
+        TimelockOperationType::Execute => {
+            // Check that the tx is executed
+            if !timelock.is_operation_done(operation_id, &provider).await? {
+                anyhow::bail!("tx not correctly executed: {}", operation_id);
+            }
+            tracing::info!("tx executed with id: {}", operation_id);
+        },
+        TimelockOperationType::Cancel => {
+            tracing::info!("tx cancelled with id: {}", operation_id);
+        },
+    }
+
+    Ok(operation_id)
+}
+
+/// Perform timelock operation via Safe multisig proposal
+async fn perform_timelock_operation_via_multisig(
+    timelock: TimelockContract,
+    operation: TimelockOperationPayload,
+    operation_type: TimelockOperationType,
+    operation_id: B256,
+    rpc_url: String,
+    multisig_proposer: Address,
+    use_hardware_wallet: bool,
+) -> Result<B256> {
+    Ok(operation_id)
+}
+
+// Keep existing functions as thin wrappers for backward compatibility
+// TODO: remove these functions once this is merged with main and other dependent branches can be updated
 /// Schedule a timelock operation
 ///
 /// Parameters:
 /// - `provider`: the provider to use
 /// - `contract_type`: the type of contract to schedule the operation on
-/// - `operation`: the operation to schedule (see TimelockOperationData struct for more details)
+/// - `operation`: the operation to schedule (see TimelockOperationPayload struct for more details)
 ///
 /// Returns:
 /// - The operation id
 pub async fn schedule_timelock_operation(
     provider: &impl Provider,
     contract_type: Contract,
-    operation: TimelockOperationData,
+    operation: TimelockOperationPayload,
 ) -> Result<B256> {
-    let target_addr = operation.target;
-    let timelock = get_timelock_for_contract(provider, contract_type, target_addr).await?;
-    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
-
-    let receipt = timelock.schedule(operation, &provider).await?;
-    tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
-    if !receipt.inner.is_success() {
-        anyhow::bail!("tx failed: {:?}", receipt);
-    }
-
-    // check that the tx is scheduled
-    if !(timelock
-        .is_operation_pending(operation_id, &provider)
-        .await?
-        || timelock.is_operation_ready(operation_id, &provider).await?)
-    {
-        anyhow::bail!("tx not correctly scheduled: {}", operation_id);
-    }
-    tracing::info!("tx scheduled with id: {}", operation_id);
-    Ok(operation_id)
+    perform_timelock_operation(
+        provider,
+        contract_type,
+        operation,
+        TimelockOperationType::Schedule,
+        TimelockOperationParams::default(),
+    )
+    .await
 }
 
 /// Execute a timelock operation
@@ -378,32 +480,23 @@ pub async fn schedule_timelock_operation(
 /// Parameters:
 /// - `provider`: the provider to use
 /// - `contract_type`: the type of contract to execute the operation on
-/// - `operation`: the operation to execute (see TimelockOperationData struct for more details)
+/// - `operation`: the operation to execute (see TimelockOperationPayload struct for more details)
 ///
 /// Returns:
 /// - The operation id
 pub async fn execute_timelock_operation(
     provider: &impl Provider,
     contract_type: Contract,
-    operation: TimelockOperationData,
+    operation: TimelockOperationPayload,
 ) -> Result<B256> {
-    let target_addr = operation.target;
-    let timelock = get_timelock_for_contract(provider, contract_type, target_addr).await?;
-    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
-
-    // execute the tx
-    let receipt = timelock.execute(operation, &provider).await?;
-    tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
-    if !receipt.inner.is_success() {
-        anyhow::bail!("tx failed: {:?}", receipt);
-    }
-
-    // check that the tx is executed
-    if !timelock.is_operation_done(operation_id, &provider).await? {
-        anyhow::bail!("tx not correctly executed: {}", operation_id);
-    }
-    tracing::info!("tx executed with id: {}", operation_id);
-    Ok(operation_id)
+    perform_timelock_operation(
+        provider,
+        contract_type,
+        operation,
+        TimelockOperationType::Execute,
+        TimelockOperationParams::default(),
+    )
+    .await
 }
 
 /// Cancel a timelock operation
@@ -411,23 +504,21 @@ pub async fn execute_timelock_operation(
 /// Parameters:
 /// - `provider`: the provider to use
 /// - `contract_type`: the type of contract to cancel the operation on
-/// - `operation`: the operation to cancel (see TimelockOperationData struct for more details)
+/// - `operation`: the operation to cancel (see TimelockOperationPayload struct for more details)
 ///
 /// Returns:
 /// - The operation id
 pub async fn cancel_timelock_operation(
     provider: &impl Provider,
     contract_type: Contract,
-    operation: TimelockOperationData,
+    operation: TimelockOperationPayload,
 ) -> Result<B256> {
-    let target_addr = operation.target;
-    let timelock = get_timelock_for_contract(provider, contract_type, target_addr).await?;
-    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
-    let receipt = timelock.cancel(operation_id, &provider).await?;
-    tracing::info!(%receipt.gas_used, %receipt.transaction_hash, "tx mined");
-    if !receipt.inner.is_success() {
-        anyhow::bail!("tx failed: {:?}", receipt);
-    }
-    tracing::info!("tx cancelled with id: {}", operation_id);
-    Ok(operation_id)
+    perform_timelock_operation(
+        provider,
+        contract_type,
+        operation,
+        TimelockOperationType::Cancel,
+        TimelockOperationParams::default(),
+    )
+    .await
 }

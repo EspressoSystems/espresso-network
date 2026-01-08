@@ -22,7 +22,7 @@ use crate::{
         },
         timelock::{
             cancel_timelock_operation, derive_timelock_address_from_contract_type,
-            execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
+            execute_timelock_operation, schedule_timelock_operation, TimelockOperationPayload,
             TimelockOperationType,
         },
     },
@@ -621,7 +621,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             B256::from_hex(&salt).context("Invalid salt hex format")?
         };
 
-        let timelock_operation_data = TimelockOperationData {
+        let timelock_operation_data = TimelockOperationPayload {
             target: target_addr,
             value,
             data: function_calldata,

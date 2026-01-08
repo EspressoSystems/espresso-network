@@ -1555,7 +1555,7 @@ mod tests {
             },
             timelock::{
                 cancel_timelock_operation, derive_timelock_address_from_contract_type,
-                execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
+                execute_timelock_operation, schedule_timelock_operation, TimelockOperationPayload,
             },
         },
         Contracts,
@@ -3038,7 +3038,7 @@ mod tests {
             .to_owned();
 
         // propose a timelock operation
-        let mut operation = TimelockOperationData {
+        let mut operation = TimelockOperationPayload {
             target: fee_contract_proxy_addr,
             value: U256::ZERO,
             data: upgrade_data,
@@ -4142,6 +4142,107 @@ mod tests {
             ops_timelock_addr,
             "StakeTableProxy should have OpsTimelock as owner after V2 upgrade"
         );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_perform_timelock_operation_unified() -> Result<()> {
+        use crate::proposals::timelock::{
+            perform_timelock_operation, TimelockOperationParams, TimelockOperationPayload,
+            TimelockOperationType,
+        };
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let another_wallet = provider.get_accounts().await?[1];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+
+        let timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+        let timelock = OpsTimelock::new(timelock_addr, &provider);
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, timelock_addr).await?;
+        let proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+
+        let transfer_ownership_data = proxy
+            .transferOwnership(another_wallet)
+            .calldata()
+            .to_owned();
+
+        assert_eq!(proxy.owner().call().await?, timelock_addr);
+
+        let operation = TimelockOperationPayload {
+            target: fee_contract_proxy_addr,
+            value: U256::ZERO,
+            data: transfer_ownership_data.clone(),
+            predecessor: B256::ZERO,
+            salt: B256::ZERO,
+            delay,
+        };
+
+        // Test Cancel via unified function (schedule and cancel a new operation)
+        let mut cancel_operation = operation.clone();
+        cancel_operation.value = U256::from(1);
+        let cancel_params = TimelockOperationParams::default();
+        let cancel_operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            cancel_operation.clone(),
+            TimelockOperationType::Schedule,
+            cancel_params.clone(),
+        )
+        .await?;
+
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            cancel_operation,
+            TimelockOperationType::Cancel,
+            cancel_params,
+        )
+        .await?;
+
+        assert!(timelock.getTimestamp(cancel_operation_id).call().await? == U256::ZERO);
+
+        // Test schedule transfer ownership operation
+        let params = TimelockOperationParams::default();
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            params,
+        )
+        .await?;
+
+        assert!(timelock.isOperationPending(operation_id).call().await?);
+
+        let params = TimelockOperationParams::default();
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Execute,
+            params,
+        )
+        .await?;
+
+        assert!(timelock.isOperationDone(operation_id).call().await?);
+
+        // confirm that the operation occurred on the fee contract
+        assert_eq!(proxy.owner().call().await?, another_wallet);
 
         Ok(())
     }
