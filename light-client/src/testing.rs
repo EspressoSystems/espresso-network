@@ -11,11 +11,15 @@ use async_lock::Mutex;
 use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    EpochVersion, FeeVersion, Leaf2, NodeState, PrivKey, PubKey, SeqTypes, SequencerVersions,
+    BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NodeState, PrivKey, PubKey, SeqTypes,
+    SequencerVersions, BLOCK_MERKLE_TREE_HEIGHT,
 };
-use hotshot_query_service::availability::{LeafHash, LeafId, LeafQueryData};
+use hotshot_query_service::{
+    availability::{LeafHash, LeafId, LeafQueryData},
+    node::{BlockHash, BlockId},
+};
 use hotshot_types::{
-    data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
@@ -29,15 +33,20 @@ use hotshot_types::{
     vote::Certificate as _,
     PeerConfig,
 };
+use jf_merkle_tree_compat::{
+    prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
+};
 use vbs::version::StaticVersionType;
 
 use crate::{
     client::Client,
     consensus::{
+        header::HeaderProof,
         leaf::LeafProof,
         quorum::{Certificate, Quorum},
     },
     state::Genesis,
+    storage::LeafRequest,
 };
 
 /// Upgrade to epochs during testing.
@@ -151,9 +160,14 @@ pub async fn custom_leaf_chain<V: Versions>(
         },
     };
 
+    let mut block_merkle_tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
     let mut leaves = vec![];
     for height in range {
         *quorum_proposal.proposal.block_header.height_mut() = height;
+        *quorum_proposal
+            .proposal
+            .block_header
+            .block_merkle_tree_root_mut() = block_merkle_tree.commitment();
         quorum_proposal.proposal.view_number = ViewNumber::new(height);
         map(&mut quorum_proposal.proposal);
         let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
@@ -164,6 +178,9 @@ pub async fn custom_leaf_chain<V: Versions>(
             qc.data.block_number = Some(height);
         }
 
+        block_merkle_tree
+            .push(leaf.block_header().commit())
+            .unwrap();
         leaves.push(LeafQueryData::new(leaf, qc.clone()).unwrap());
         quorum_proposal.proposal.justify_qc = qc.clone();
     }
@@ -319,7 +336,12 @@ impl Default for TestClient {
 #[derive(Debug, Default)]
 struct InnerTestClient {
     leaves: Vec<LeafQueryData<SeqTypes>>,
+    // Use an appendable `MerkleTree` rather than a `BlockMerkleTree` (which is a
+    // `LightweightMerkleTree`) so we can look up paths for previously inserted elements.
+    merkle_trees: Vec<SHA3MerkleTree<BlockHash<SeqTypes>>>,
     leaf_hashes: HashMap<LeafHash<SeqTypes>, usize>,
+    block_hashes: HashMap<BlockHash<SeqTypes>, usize>,
+    payload_hashes: HashMap<VidCommitment, usize>,
     missing_leaves: HashSet<usize>,
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
@@ -346,15 +368,19 @@ impl InnerTestClient {
             let view_number = ViewNumber::new(i as u64);
 
             let node_state = NodeState::mock_v3();
-            let justify_qc = if i == 0 {
-                QuorumCertificate2::genesis::<SequencerVersions<EpochVersion, EpochVersion>>(
+            let (justify_qc, mt) =
+                if i == 0 {
+                    (QuorumCertificate2::genesis::<SequencerVersions<EpochVersion, EpochVersion>>(
                     &Default::default(),
                     &node_state,
                 )
-                .await
-            } else {
-                self.leaves[i - 1].qc().clone()
-            };
+                .await, SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT))
+                } else {
+                    let parent = &self.leaves[i - 1];
+                    let mut mt = self.merkle_trees[i - 1].clone();
+                    mt.push(parent.block_hash()).unwrap();
+                    (parent.qc().clone(), mt)
+                };
             let mut block_header = Leaf2::genesis::<SequencerVersions<EpochVersion, EpochVersion>>(
                 &Default::default(),
                 &node_state,
@@ -363,6 +389,7 @@ impl InnerTestClient {
             .block_header()
             .clone();
             *block_header.height_mut() = i as u64;
+            *block_header.block_merkle_tree_root_mut() = mt.commitment();
             let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
                     epoch: Some(epoch),
@@ -404,10 +431,36 @@ impl InnerTestClient {
                 assembled,
                 view_number,
             );
-            self.leaves.push(LeafQueryData::new(leaf, qc).unwrap());
+            let leaf = LeafQueryData::new(leaf, qc).unwrap();
+            self.leaf_hashes.insert(leaf.hash(), i);
+            self.block_hashes.insert(leaf.block_hash(), i);
+            self.payload_hashes.entry(leaf.payload_hash()).or_insert(i);
+            self.leaves.push(leaf);
+            self.merkle_trees.push(mt);
         }
 
         self.leaves[height].clone()
+    }
+
+    fn leaf_height(&self, req: LeafRequest) -> Result<usize> {
+        match req {
+            LeafRequest::Leaf(LeafId::Number(h)) | LeafRequest::Header(BlockId::Number(h)) => Ok(h),
+            LeafRequest::Leaf(LeafId::Hash(h)) => self
+                .leaf_hashes
+                .get(&h)
+                .copied()
+                .context(format!("missing leaf {h}")),
+            LeafRequest::Header(BlockId::Hash(h)) => self
+                .block_hashes
+                .get(&h)
+                .copied()
+                .context(format!("missing block {h}")),
+            LeafRequest::Header(BlockId::PayloadHash(h)) => self
+                .payload_hashes
+                .get(&h)
+                .copied()
+                .context(format!("missing payload {h}")),
+        }
     }
 }
 
@@ -454,24 +507,24 @@ impl TestClient {
 }
 
 impl Client for TestClient {
-    async fn leaf_proof(&self, id: LeafId<SeqTypes>, finalized: Option<u64>) -> Result<LeafProof> {
+    async fn leaf_proof(
+        &self,
+        id: impl Into<LeafRequest> + Send,
+        finalized: Option<u64>,
+    ) -> Result<LeafProof> {
         let mut inner = self.inner.lock().await;
 
-        let mut height = match id {
-            LeafId::Number(h) => h,
-            LeafId::Hash(h) => *inner
-                .leaf_hashes
-                .get(&h)
-                .context(format!("missing leaf {h}"))?,
-        };
+        let mut height = inner.leaf_height(id.into())?;
         ensure!(
             !inner.missing_leaves.contains(&height),
             "missing leaf {height}"
         );
         if inner.invalid_proofs.contains(&height) {
+            tracing::info!(height, "return mock incorrect proof");
             return Ok(LeafProof::default());
         }
         if let Some(sub) = inner.swapped_leaves.get(&height) {
+            tracing::info!(height, sub, "return wrong leaf");
             height = *sub;
         };
 
@@ -506,5 +559,44 @@ impl Client for TestClient {
         ));
 
         Ok(proof)
+    }
+
+    async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
+        let mut inner = self.inner.lock().await;
+
+        let root = root as usize;
+        let mut height = inner.leaf_height(id.into())?;
+        ensure!(
+            !inner.missing_leaves.contains(&height),
+            "missing leaf {height}"
+        );
+        if inner.invalid_proofs.contains(&height) {
+            tracing::info!(root, height, "return mock invalid proof");
+            let leaf = inner.leaf(height, self.epoch_height, &self.quorum).await;
+            // Construct a proof using a Merkle tree of the wrong height.
+            let mt = BlockMerkleTree::from_elems(
+                Some(BLOCK_MERKLE_TREE_HEIGHT + 1),
+                [leaf.block_hash()],
+            )
+            .unwrap();
+            let proof = mt.lookup(0).expect_ok().unwrap().1;
+            return Ok(HeaderProof::new(leaf.header().clone(), proof));
+        }
+        if let Some(sub) = inner.swapped_leaves.get(&height) {
+            tracing::info!(height, sub, "return wrong leaf");
+            height = *sub;
+        };
+
+        ensure!(height < root);
+
+        let mt = &inner.merkle_trees[root];
+        tracing::info!(height, root = %mt.commitment(), "get proof from Merkle tree");
+        let proof = mt.lookup(height as u64).expect_ok().unwrap().1;
+        let header = inner
+            .leaf(height, self.epoch_height, &self.quorum)
+            .await
+            .header()
+            .clone();
+        Ok(HeaderProof::new(header, proof))
     }
 }

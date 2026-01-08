@@ -1,11 +1,14 @@
-use hotshot_query_service::VidCommon;
-use hotshot_types::{data::VidCommitment, vid::avidm::AvidMShare};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    vid::avidm::AvidMShare,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     v0::{NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction},
     v0_1::ADVZNsProof,
     v0_3::{AvidMIncorrectEncodingNsProof, AvidMNsProof},
+    v0_6::AvidmGf2NsProof,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -29,6 +32,8 @@ pub enum NsProof {
     V1(AvidMNsProof),
     /// Incorrect encoding proof for AvidM (only supported after API version 1.1)
     V1IncorrectEncoding(AvidMIncorrectEncodingNsProof),
+    /// V2 proof for AvidmGf2
+    V2(AvidmGf2NsProof),
 }
 
 impl NsProof {
@@ -36,6 +41,9 @@ impl NsProof {
         match common {
             VidCommon::V0(common) => Some(NsProof::V0(ADVZNsProof::new(payload, index, common)?)),
             VidCommon::V1(common) => Some(NsProof::V1(AvidMNsProof::new(payload, index, common)?)),
+            VidCommon::V2(common) => {
+                Some(NsProof::V2(AvidmGf2NsProof::new(payload, index, common)?))
+            },
         }
     }
 
@@ -66,6 +74,7 @@ impl NsProof {
             (Self::V1IncorrectEncoding(proof), VidCommon::V1(common)) => {
                 proof.verify(ns_table, commit, common)
             },
+            (Self::V2(proof), VidCommon::V2(_)) => proof.verify(ns_table, commit, common),
             _ => {
                 tracing::error!("Incompatible version of VidCommon and NsProof.");
                 None
@@ -80,6 +89,9 @@ impl NsProof {
                 NsPayload::from_bytes_slice(&proof.ns_payload).export_all_txs(ns_id)
             },
             Self::V1IncorrectEncoding(_) => vec![],
+            Self::V2(AvidmGf2NsProof(proof)) => {
+                NsPayload::from_bytes_slice(&proof.ns_payload).export_all_txs(ns_id)
+            },
         }
     }
 }

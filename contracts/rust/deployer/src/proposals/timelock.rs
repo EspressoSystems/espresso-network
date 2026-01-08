@@ -9,7 +9,7 @@ use hotshot_contract_adapter::sol_types::{
     EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
 };
 
-use crate::{Contract, Contracts};
+use crate::{Contract, Contracts, OwnableContract};
 
 /// Data structure for timelock operations
 #[derive(Debug, Clone)]
@@ -276,18 +276,16 @@ impl TimelockContract {
 // FeeContract, LightClient, StakeTable => OpsTimelock
 // EspToken, RewardClaim => SafeExitTimelock
 pub fn derive_timelock_address_from_contract_type(
-    contract_type: Contract,
+    contract_type: OwnableContract,
     contracts: &Contracts,
 ) -> Result<Address> {
     let timelock_type = match contract_type {
-        Contract::FeeContractProxy | Contract::LightClientProxy | Contract::StakeTableProxy => {
-            Contract::OpsTimelock
+        OwnableContract::FeeContractProxy
+        | OwnableContract::LightClientProxy
+        | OwnableContract::StakeTableProxy => Contract::OpsTimelock,
+        OwnableContract::EspTokenProxy | OwnableContract::RewardClaimProxy => {
+            Contract::SafeExitTimelock
         },
-        Contract::EspTokenProxy | Contract::RewardClaimProxy => Contract::SafeExitTimelock,
-        _ => anyhow::bail!(
-            "Invalid contract type for timelock derivation: {}",
-            contract_type
-        ),
     };
 
     contracts.address(timelock_type).ok_or_else(|| {

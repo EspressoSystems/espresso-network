@@ -461,7 +461,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     let now = Instant::now();
     // Add to the storage.
     storage
-        .append_vid_general(&vid_share)
+        .append_vid(&vid_share)
         .await
         .wrap()
         .context(error!("Failed to store VID share"))?;
