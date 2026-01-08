@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use anyhow::{ensure, Context, Ok, Result};
+use anyhow::{ensure, Context, Result};
 use committable::Committable;
 use espresso_types::{Header, Leaf2, SeqTypes};
 use hotshot_query_service::{
@@ -111,7 +111,7 @@ where
             return Ok(leaves);
         }
 
-        // We are subtracting 1 from end_height because we want the endpoint to be exclusive of end_height
+        // Fetch the last leaf in the range as our known finalized anchor point
         let known_end_leaf = self.fetch_leaf(LeafId::Number(end_height - 1)).await?;
 
         // at this point, we know the end leaf is valid and is finalized
@@ -126,9 +126,9 @@ where
         Ok(leaves)
     }
 
-    /// Fetches leaves from the server in range [start_height, end_height) and then verifies them
-    /// by checking if parent commitment of the previous leaf matches
-    /// that of the current leaf
+    /// Fetches leaves from the server in range [start_height, end_height) and verifies them by
+    /// walking backwards from the known finalized leaf, ensuring each leaf's hash matches the
+    /// parent commitment of the subsequent leaf.
     async fn fetch_leaves_in_range_from_server(
         &self,
         start_height: usize,
@@ -146,12 +146,6 @@ where
         ensure!(
             leaves.len() == end_height.saturating_sub(start_height),
             "server returned {} leaves for range [{}, {})",
-            leaves.len(),
-            start_height,
-            end_height
-        );
-        tracing::info!(
-            "fetched {} leaves from server in range [{}, {})",
             leaves.len(),
             start_height,
             end_height

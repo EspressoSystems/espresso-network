@@ -41,7 +41,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
         leaf: impl Into<LeafRequest> + Send,
     ) -> impl Send + Future<Output = Result<Option<LeafQueryData<SeqTypes>>>>;
 
-    /// Get all leaves in the given range, exclusive of last element
+    /// Get all leaves in the range [start, end)
     fn get_leaves_in_range(
         &self,
         start: u32,
