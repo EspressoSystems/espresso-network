@@ -89,6 +89,95 @@ where
         self.fetch_leaf_from_server(id, known_finalized).await
     }
 
+    /// Fetches leaves in range [start_height, end_height)
+    pub async fn fetch_leaves_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        ensure!(
+            start_height < end_height,
+            "invalid range: start must be < end"
+        );
+
+        // first try to fetch all the leaves from the local database
+        let leaves = self
+            .db
+            .get_leaves_in_range(start_height as u32, end_height as u32)
+            .await?;
+
+        if leaves.len() == end_height - start_height {
+            // we have all the leaves in the range
+            return Ok(leaves);
+        }
+
+        // Fetch the last leaf in the range as our known finalized anchor point
+        let known_end_leaf = self.fetch_leaf(LeafId::Number(end_height - 1)).await?;
+
+        // at this point, we know the end leaf is valid and is finalized
+        // now we need to fetch all leaves from start to end - 1 from the server
+        let leaves = self.fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf)
+            .await
+        // add the known end leaf to the result
+        .map(|mut leaves| {
+            leaves.push(known_end_leaf);
+            leaves
+        })?;
+        Ok(leaves)
+    }
+
+    /// Fetches leaves from the server in range [start_height, end_height) and verifies them by
+    /// walking backwards from the known finalized leaf, ensuring each leaf's hash matches the
+    /// parent commitment of the subsequent leaf.
+    async fn fetch_leaves_in_range_from_server(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        known_finalized: &LeafQueryData<SeqTypes>,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        // we will fetch all the leaves till the known finalized leaf
+        let leaves = self
+            .server
+            // `get_leaves_in_range` is exclusive of the end height
+            // which we dont need because we already know the end leaf
+            .get_leaves_in_range(start_height, end_height)
+            .await?;
+
+        ensure!(
+            leaves.len() == end_height.saturating_sub(start_height),
+            "server returned {} leaves for range [{}, {})",
+            leaves.len(),
+            start_height,
+            end_height
+        );
+
+        // Walk backwards from the known finalized leaf, ensuring each parent hash matches
+        let mut expected_parent = known_finalized.leaf().parent_commitment();
+        for leaf in leaves.iter().rev() {
+            let leaf_hash = leaf.hash();
+            ensure!(
+                leaf_hash == expected_parent,
+                "leaf hash mismatch: expected parent hash {:?}, got leaf hash {:?}",
+                expected_parent,
+                leaf_hash
+            );
+            expected_parent = leaf.leaf().parent_commitment();
+        }
+
+        // Cache the fetched leaves, but still return them even if caching fails
+        for leaf in &leaves {
+            if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
+                tracing::warn!(
+                    "failed to cache leaf at height {}: {:#?}",
+                    leaf.height(),
+                    err
+                )
+            }
+        }
+
+        Ok(leaves)
+    }
+
     /// Fetch and verify the requested header.
     pub async fn fetch_header(&self, id: BlockId<SeqTypes>) -> Result<Header> {
         if let Some(leaf) = self.db.leaf_upper_bound(id).await? {
@@ -361,5 +450,65 @@ mod test {
                 .contains("server returned a valid header proof for the wrong header"),
             "{err:#}"
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_in_range() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis(),
+        );
+
+        // Fetch leaves in range [1,3) for the first time. We will need to get them from the server.
+        let leaf1 = client.remember_leaf(1).await;
+        let leaf2 = client.remember_leaf(2).await;
+        client.remember_leaf(3).await;
+
+        let leaves = lc.fetch_leaves_in_range(1, 3).await.unwrap();
+
+        assert_eq!(leaves, vec![leaf1.clone(), leaf2.clone()]);
+
+        // now remove from server and this time it should be able to fetch from local db
+        client.forget_leaf(1).await;
+        client.forget_leaf(2).await;
+        let leaves = lc.fetch_leaves_in_range(1, 3).await.unwrap();
+        assert_eq!(leaves, vec![leaf1, leaf2]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_in_range_invalid_proof() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis(),
+        );
+        client.return_invalid_proof(2).await;
+        let err = lc.fetch_leaves_in_range(1, 3).await.unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "server returned proof with assumption, but we have no finalized upper bound to \
+                 verify assumption"
+            ),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_in_range_wrong_leaf() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis(),
+        );
+        client.return_wrong_leaf(1, 2).await;
+        let err = lc.fetch_leaves_in_range(1, 4).await.unwrap_err();
+        assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
     }
 }
