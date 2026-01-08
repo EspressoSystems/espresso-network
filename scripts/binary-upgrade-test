@@ -31,7 +31,12 @@ docker rm $(docker ps -aq) || true
 export ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT=22001
 export RUST_BACKTRACE=1
 export ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS=10
+
+# This breaks 20250528-patch1, but this IS the address that shows up for 20250228-patch4 in deploy-prover-contracts logs.
 export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
+#export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x196dbcbb54b8ec4958c959d8949ebfe87ac2aaaf
+
+
 export ESPRESSO_SEQUENCER_PERMISSIONED_PROVER=0x14dc79964da2c08b23698b3d3cc7ca32193d9955
 export ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS=0x8ce361602b935680e8dec218b820ff5056beb7af
 export ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS=0xa15bb66138824a1c7167f5e85b957d04dd34e468
@@ -46,8 +51,8 @@ env DOCKER_TAG=$base_tag just demo-file "$compose_file" --wait -d || true
 #echo "DONE"
 #exit
 scripts/smoke-test-demo
-#echo "DONE"
-#exit
+echo "DONE"
+exit
 
 # first upgrade the builder and the first sequencer node
 # docker compose stop permissionless-builder
