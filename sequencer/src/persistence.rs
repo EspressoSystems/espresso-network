@@ -1355,7 +1355,7 @@ mod tests {
         stake_table_contract: Address,
     ) -> anyhow::Result<()> {
         // Load persisted events
-        let (stored_l1, events) = persistence.load_events(block).await?;
+        let (stored_l1, events) = persistence.load_events(0, block).await?;
         assert!(!events.is_empty());
         assert!(stored_l1.is_some());
         assert!(events.iter().all(|((l1_block, _), _)| *l1_block <= block));
@@ -1662,7 +1662,7 @@ mod tests {
                 .await
                 .expect("latest l1 block");
 
-            let (read_offset, persisted_events) = persistence.load_events(block).await?;
+            let (read_offset, persisted_events) = persistence.load_events(0, block).await?;
             let read_offset = read_offset.unwrap();
             let l1_block = match read_offset {
                 EventsPersistenceRead::Complete => block,

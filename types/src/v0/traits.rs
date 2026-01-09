@@ -506,6 +506,7 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
 /// Determine the read state based on the queried block range.
 // - If the persistence returned events up to the requested block, the read is complete.
 /// - Otherwise, indicate that the read is up to the last processed block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventsPersistenceRead {
     Complete,
     UntilL1Block(u64),
@@ -539,6 +540,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
     async fn load_events(
         &self,
+        from_l1_block: u64,
         l1_finalized: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
