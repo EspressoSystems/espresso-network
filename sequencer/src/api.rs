@@ -1,5 +1,6 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -26,6 +27,7 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
+use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -53,6 +55,7 @@ use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
+    api::data_source::TokenDataSource,
     catchup::{
         add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state, CatchupStorage,
@@ -180,6 +183,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
 }
 
 impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
+    TokenDataSource<SeqTypes> for StorageState<N, P, D, V>
+{
+    async fn get_total_supply(&self) -> anyhow::Result<U256> {
+        self.as_ref().get_total_supply().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
     SubmitDataSource<N, P> for StorageState<N, P, D, V>
 {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
@@ -250,6 +261,29 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 }
 
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDataSource<SeqTypes>
+    for ApiState<N, P, V>
+{
+    async fn get_total_supply(&self) -> anyhow::Result<U256> {
+        let node_state = self.sequencer_context.as_ref().get().await.node_state();
+
+        let stake_table_address = node_state
+            .chain_config
+            .stake_table_contract
+            .context("No stake table contract in chain config")?;
+        let provider = node_state.l1_client.provider;
+
+        let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
+        let token_address = stake_table.token().call().await?;
+
+        let token = EspToken::new(token_address, provider.clone());
+        token
+            .totalSupply()
+            .call()
+            .await
+            .context("Failed to retrieve totalSupply from the contract")
+    }
+}
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
 {
