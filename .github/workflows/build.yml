@@ -510,6 +510,13 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
+    strategy:
+      # N.B. This needs to be in both the pr and non-pr variants
+      # Tests are in scripts/binary-upgrade-tests/test-*
+      matrix:
+        test-name:
+          - single-node-upgrade
+
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@just
@@ -542,12 +549,19 @@ jobs:
           docker compose pull --policy missing
 
       - name: Binary upgrade test
-        run: ./scripts/binary-upgrade-test
+        run: ./scripts/binary-upgrade-tests/run ${{ matrix.test-name }}
 
   binary-upgrade-test-non-pr:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
+    strategy:
+      # N.B. This needs to be in both the pr and non-pr variants
+      # Tests are in scripts/binary-upgrade-tests/test-*
+      matrix:
+        test-name:
+          - single-node-upgrade
+
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@just

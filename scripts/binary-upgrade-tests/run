@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+BINARY_UPGRADE_TEST_NAME=$1
+shift || (echo "Usage: $0 <binary-upgrade-test-name>" >&2; exit 1)
+
+# load env vars in .env
+set -a; source .env; set +a;
+
+# process
+# - start the network on main tag
+# - upgrade sequencer0
+# - upgrade builder
+# - assert progress
+
+source scripts/binary-upgrade-tests/helpers
+
+. "scripts/binary-upgrade-tests/test-$BINARY_UPGRADE_TEST_NAME"
