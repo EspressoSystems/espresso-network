@@ -1352,7 +1352,7 @@
 <a href=#1352 id=1352 data-nosnippet>1352</a>        stake_table_contract: Address,
 <a href=#1353 id=1353 data-nosnippet>1353</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#1354 id=1354 data-nosnippet>1354</a>        <span class="comment">// Load persisted events
-<a href=#1355 id=1355 data-nosnippet>1355</a>        </span><span class="kw">let </span>(stored_l1, events) = persistence.load_events(block).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1355 id=1355 data-nosnippet>1355</a>        </span><span class="kw">let </span>(stored_l1, events) = persistence.load_events(<span class="number">0</span>, block).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#1356 id=1356 data-nosnippet>1356</a>        <span class="macro">assert!</span>(!events.is_empty());
 <a href=#1357 id=1357 data-nosnippet>1357</a>        <span class="macro">assert!</span>(stored_l1.is_some());
 <a href=#1358 id=1358 data-nosnippet>1358</a>        <span class="macro">assert!</span>(events.iter().all(|((l1_block, <span class="kw">_</span>), <span class="kw">_</span>)| <span class="kw-2">*</span>l1_block &lt;= block));
@@ -1662,7 +1662,7 @@
 <a href=#1662 id=1662 data-nosnippet>1662</a>                .<span class="kw">await
 <a href=#1663 id=1663 data-nosnippet>1663</a>                </span>.expect(<span class="string">"latest l1 block"</span>);
 <a href=#1664 id=1664 data-nosnippet>1664</a>
-<a href=#1665 id=1665 data-nosnippet>1665</a>            <span class="kw">let </span>(read_offset, persisted_events) = persistence.load_events(block).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1665 id=1665 data-nosnippet>1665</a>            <span class="kw">let </span>(read_offset, persisted_events) = persistence.load_events(<span class="number">0</span>, block).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#1666 id=1666 data-nosnippet>1666</a>            <span class="kw">let </span>read_offset = read_offset.unwrap();
 <a href=#1667 id=1667 data-nosnippet>1667</a>            <span class="kw">let </span>l1_block = <span class="kw">match </span>read_offset {
 <a href=#1668 id=1668 data-nosnippet>1668</a>                EventsPersistenceRead::Complete =&gt; block,
