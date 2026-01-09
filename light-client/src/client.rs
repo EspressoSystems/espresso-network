@@ -162,9 +162,14 @@ fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{EpochVersion, SequencerVersions, Transaction};
+    use std::time::Duration;
+
+    use espresso_types::{EpochVersion, Header, SequencerVersions, Transaction};
     use futures::{stream::StreamExt, TryStreamExt};
-    use hotshot_query_service::availability::{BlockQueryData, LeafQueryData};
+    use hotshot_query_service::{
+        availability::{BlockQueryData, LeafQueryData},
+        Resolvable,
+    };
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_eq;
     use sequencer::{
@@ -176,6 +181,7 @@ mod test {
         },
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
+    use tokio::time::sleep;
 
     use super::*;
     use crate::{
@@ -294,10 +300,10 @@ mod test {
         .await;
         let client = QueryServiceClient::new(url);
 
-        // Wait for a chain of leaves to be produced.
-        let leaves: Vec<LeafQueryData<SeqTypes>> = client
+        // Wait for a chain of blocks to be produced.
+        let headers: Vec<Header> = client
             .client
-            .socket("availability/stream/leaves/1")
+            .socket("availability/stream/headers/1")
             .subscribe()
             .await
             .unwrap()
@@ -305,40 +311,50 @@ mod test {
             .try_collect()
             .await
             .unwrap();
+        // Wait for the state API to catch up.
+        loop {
+            let state_height: u64 = client
+                .client
+                .get("block-state/block-height")
+                .send()
+                .await
+                .unwrap();
+            if state_height >= 2 {
+                break;
+            }
+            tracing::info!(state_height, "waiting for block state to reach height 2");
+            sleep(Duration::from_secs(1)).await;
+        }
 
         // Get header proof by height.
         let proof = client.header_proof(2, BlockId::Number(1)).await.unwrap();
         assert_eq!(
-            proof
-                .verify(leaves[1].header().block_merkle_tree_root())
-                .unwrap(),
-            *leaves[0].header()
+            proof.verify(headers[1].block_merkle_tree_root()).unwrap(),
+            headers[0]
         );
 
         // Get the same proof by block hash.
         let proof = client
-            .header_proof(2, BlockId::Hash(leaves[0].block_hash()))
+            .header_proof(2, BlockId::Hash(headers[0].commitment()))
             .await
             .unwrap();
         assert_eq!(
-            proof
-                .verify(leaves[1].header().block_merkle_tree_root())
-                .unwrap(),
-            *leaves[0].header()
+            proof.verify(headers[1].block_merkle_tree_root()).unwrap(),
+            headers[0]
         );
 
         // Get a proof by payload hash (this doesn't necessarily return a unique header, since
         // multiple headers may have the same payload).
         let proof = client
-            .header_proof(2, BlockId::PayloadHash(leaves[0].payload_hash()))
+            .header_proof(2, BlockId::PayloadHash(headers[0].payload_commitment()))
             .await
             .unwrap();
         assert_eq!(
             proof
-                .verify(leaves[1].header().block_merkle_tree_root())
+                .verify(headers[1].block_merkle_tree_root())
                 .unwrap()
                 .payload_commitment(),
-            leaves[0].payload_hash()
+            headers[0].payload_commitment()
         );
     }
 
