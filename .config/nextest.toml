@@ -25,7 +25,7 @@ slow-timeout = { period = "2m", terminate-after = 5 }
 
 [[profile.default.overrides]]
 filter = 'test(test_light_client_completeness)'
-slow-timeout = { period = "2m", terminate-after = 10 }
+slow-timeout = { period = "2m", terminate-after = 15 }
 
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]

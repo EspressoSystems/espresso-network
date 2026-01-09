@@ -1,11 +1,12 @@
 use std::future::Future;
 
 use anyhow::Result;
-use espresso_types::SeqTypes;
+use espresso_types::{v0_3::StakeTableEvent, SeqTypes};
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
 };
+use hotshot_types::data::EpochNumber;
 use surf_disco::Url;
 use vbs::version::StaticVersion;
 
@@ -43,6 +44,15 @@ pub trait Client: Send + Sync + 'static {
            + Future<
         Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
     >;
+
+    /// Get stake table events for the given epoch.
+    ///
+    /// This returns the list of events that must be applied to transform the stake table from
+    /// `epoch - 1` into the stake table for `epoch`.
+    fn stake_table_events(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = Result<Vec<StakeTableEvent>>>;
 }
 
 /// A [`Client`] connected to the HotShot query service.
@@ -103,6 +113,14 @@ impl Client for QueryServiceClient {
         };
         let proof = self.client.get(&path).send().await?;
         Ok(proof)
+    }
+
+    async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
+        Ok(self
+            .client
+            .get(&format!("/light-client/stake-table/{epoch}"))
+            .send()
+            .await?)
     }
 }
 
