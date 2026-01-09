@@ -1,15 +1,16 @@
 use std::time::Duration;
 
 use alloy::{
-    network::{Ethereum, EthereumWallet},
+    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
     primitives::{utils::parse_ether, Address, B256, U256},
     providers::{
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
         layers::AnvilProvider,
         utils::JoinedRecommendedFillers,
-        ProviderBuilder, RootProvider, WalletProvider,
+        Provider, ProviderBuilder, RootProvider, WalletProvider,
     },
+    rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
     sol_types::SolValue as _,
 };
@@ -41,13 +42,8 @@ use url::Url;
 use warp::Filter;
 
 use crate::{
-    delegation::{approve, delegate, undelegate},
-    funding::{send_esp, send_eth},
-    parse::Commission,
-    receipt::ReceiptExt as _,
-    registration::{deregister_validator, fetch_commission, register_validator},
-    signature::NodeSignatures,
-    BLSKeyPair, DEV_MNEMONIC,
+    parse::Commission, receipt::ReceiptExt as _, registration::fetch_commission,
+    signature::NodeSignatures, transaction::Transaction, BLSKeyPair, DEV_MNEMONIC,
 };
 
 type TestProvider = FillProvider<
@@ -70,6 +66,7 @@ pub struct TestSystem {
     pub state_key_pair: StateKeyPair,
     pub commission: Commission,
     pub approval_amount: U256,
+    pub version: StakeTableContractVersion,
 }
 
 impl TestSystem {
@@ -189,6 +186,7 @@ impl TestSystem {
             state_key_pair,
             commission: Commission::try_from("12.34")?,
             approval_amount,
+            version: stake_table_contract_version,
         })
     }
 
@@ -210,13 +208,14 @@ impl TestSystem {
             &self.state_key_pair.clone(),
         );
         let metadata_uri = "https://example.com/metadata".parse()?;
-        register_validator(
-            &self.provider,
-            self.stake_table,
-            self.commission,
+        Transaction::RegisterValidator {
+            stake_table: self.stake_table,
+            commission: self.commission,
             metadata_uri,
             payload,
-        )
+            version: self.version,
+        }
+        .send(&self.provider)
         .await?
         .assert_success()
         .await?;
@@ -224,20 +223,23 @@ impl TestSystem {
     }
 
     pub async fn deregister_validator(&self) -> Result<()> {
-        deregister_validator(&self.provider, self.stake_table)
-            .await?
-            .assert_success()
-            .await?;
+        Transaction::DeregisterValidator {
+            stake_table: self.stake_table,
+        }
+        .send(&self.provider)
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
     pub async fn delegate(&self, amount: U256) -> Result<()> {
-        delegate(
-            &self.provider,
-            self.stake_table,
-            self.deployer_address,
+        Transaction::Delegate {
+            stake_table: self.stake_table,
+            validator: self.deployer_address,
             amount,
-        )
+        }
+        .send(&self.provider)
         .await?
         .assert_success()
         .await?;
@@ -245,12 +247,12 @@ impl TestSystem {
     }
 
     pub async fn undelegate(&self, amount: U256) -> Result<()> {
-        undelegate(
-            &self.provider,
-            self.stake_table,
-            self.deployer_address,
+        Transaction::Undelegate {
+            stake_table: self.stake_table,
+            validator: self.deployer_address,
             amount,
-        )
+        }
+        .send(&self.provider)
         .await?
         .assert_success()
         .await?;
@@ -258,7 +260,9 @@ impl TestSystem {
     }
 
     pub async fn transfer_eth(&self, to: Address, amount: U256) -> Result<()> {
-        send_eth(&self.provider, to, amount)
+        let tx = TransactionRequest::default().with_to(to).with_value(amount);
+        self.provider
+            .send_transaction(tx)
             .await?
             .assert_success()
             .await?;
@@ -266,10 +270,15 @@ impl TestSystem {
     }
 
     pub async fn transfer(&self, to: Address, amount: U256) -> Result<()> {
-        send_esp(&self.provider, self.token, to, amount)
-            .await?
-            .assert_success()
-            .await?;
+        Transaction::Transfer {
+            token: self.token,
+            to,
+            amount,
+        }
+        .send(&self.provider)
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
@@ -308,10 +317,15 @@ impl TestSystem {
     }
 
     pub async fn approve(&self, amount: U256) -> Result<()> {
-        approve(&self.provider, self.token, self.stake_table, amount)
-            .await?
-            .assert_success()
-            .await?;
+        Transaction::Approve {
+            token: self.token,
+            spender: self.stake_table,
+            amount,
+        }
+        .send(&self.provider)
+        .await?
+        .assert_success()
+        .await?;
         assert!(self.allowance(self.deployer_address).await? == amount);
         Ok(())
     }
