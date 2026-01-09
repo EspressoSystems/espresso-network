@@ -204,10 +204,7 @@ where
     })?
     .get("stake_table", move |req, state| {
         async move {
-            let epoch: u64 = req.integer_param("epoch").map_err(|err| Error::Custom {
-                message: format!("epoch: {err:#}"),
-                status: StatusCode::BAD_REQUEST,
-            })?;
+            let epoch: u64 = req.integer_param("epoch").map_err(bad_param("epoch"))?;
 
             let node_state = state.node_state().await;
             let epoch_height = node_state.epoch_height.ok_or_else(|| Error::Custom {
@@ -232,9 +229,8 @@ where
                 .await
                 .with_timeout(fetch_timeout)
                 .await
-                .ok_or_else(|| Error::Custom {
-                    message: format!("missing epoch root header {epoch_root_height}"),
-                    status: StatusCode::NOT_FOUND,
+                .ok_or_else(|| {
+                    not_found(format!("missing epoch root header {epoch_root_height}"))
                 })?;
             let to_l1_block = epoch_root
                 .l1_finalized()
@@ -251,11 +247,10 @@ where
                     .await
                     .with_timeout(fetch_timeout)
                     .await
-                    .ok_or_else(|| Error::Custom {
-                        message: format!(
+                    .ok_or_else(|| {
+                        not_found(format!(
                             "missing previous epoch root header {prev_epoch_root_height}"
-                        ),
-                        status: StatusCode::NOT_FOUND,
+                        ))
                     })?;
                 prev_epoch_root
                     .l1_finalized()

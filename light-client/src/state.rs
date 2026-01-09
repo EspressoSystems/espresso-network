@@ -834,6 +834,10 @@ mod test {
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
         client.return_invalid_quorum(epoch).await;
         let err = lc.quorum_for_epoch(epoch).await.unwrap_err();
-        tracing::info!("quorum_for_epoch failed as expected: {err:#}");
+        assert!(
+            err.to_string()
+                .contains("does not match reconstructed hash"),
+            "{err:#}"
+        );
     }
 }
