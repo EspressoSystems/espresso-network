@@ -516,7 +516,7 @@ jobs:
       matrix:
         test-name:
           - single-node-upgrade
-          - builder-first-upgrade
+          - builder-last-upgrade
 
     steps:
       - uses: actions/checkout@v4
@@ -562,7 +562,7 @@ jobs:
       matrix:
         test-name:
           - single-node-upgrade
-          - builder-first-upgrade
+          - builder-last-upgrade
 
     steps:
       - uses: actions/checkout@v4

@@ -3,7 +3,14 @@ startup_environment
 # Use this genesis file to make sure addresses stay correct to the old version
 export ESPRESSO_SEQUENCER_GENESIS_FILE=genesis/demo-binary-upgrade.toml
 
-# upgrade the builder first
+
+for i in {0..5}; do
+    # upgrade sequencer binary
+    upgrade_container "sequencer$i"
+    smoke_test
+done
+
+# upgrade the builder
 upgrade_container permissionless-builder
 
 # submit transactions will have exited due to closed stream
@@ -12,7 +19,3 @@ start_old_container submit-transactions-private
 
 smoke_test
 
-# upgrade sequencer0 binary
-upgrade_container sequencer0
-
-smoke_test
