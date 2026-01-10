@@ -121,14 +121,14 @@ proxy and read the state history retention period on etherscan.
 
 ## Demonstrating the setPermissionedProver workflow
 
-1. Follow the steps in the deployment script [readme](../../contracts/script/README.md) to set up a Multisig Wallet and
+1. Follow the steps in the deployment script [readme](../README.md) to set up a Multisig Wallet and
    deploy the Light Client contract
 2. Set the environment variables mentioned in the section, [Set Permissioned Prover](#set-permissioned-prover)
 3. Run the `ts-node` command as mentioned in the section, [Set Permissioned Prover](#set-permissioned-prover)
 
 ## Demonstrating the disablePermissionedProver workflow
 
-1. Follow the steps in the deployment script [readme](../../contracts/script/README.md) to set up a Multisig Wallet and
+1. Follow the steps in the deployment script [readme](../README.md) to set up a Multisig Wallet and
    deploy the Light Client contract
 2. Set the environment variables mentioned in the section, [Disable Permissioned Prover](#disable-permissioned-prover)
 3. Run the `ts-node` command as mentioned in the section, [Disable Permissioned Prover](#disable-permissioned-prover)
