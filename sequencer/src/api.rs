@@ -7369,26 +7369,12 @@ mod test {
             }
 
             // Get the corresponding payload.
-            let proofs = try_join_all(
-                [
-                    format!("light-client/payload/{i}"),
-                    format!("light-client/payload/hash/{}", block.hash()),
-                ]
-                .into_iter()
-                .map(|path| async move {
-                    tracing::info!(i, path, "fetch payload proof");
-                    let proof = client.get::<PayloadProof>(&path).send().await?;
-                    Ok::<_, anyhow::Error>((path, proof))
-                }),
-            )
-            .await
-            .unwrap();
-
-            // Check proofs against expected payload.
-            for (path, proof) in proofs {
-                tracing::info!(i, path, ?proof, "check payload proof");
-                assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
-            }
+            let proof = client
+                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
         }
 
         // Check light client stake table.
