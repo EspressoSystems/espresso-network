@@ -21,12 +21,12 @@ use hotshot_task::task::Task;
 #[cfg(feature = "rewind")]
 use hotshot_task_impls::rewind::RewindTaskState;
 use hotshot_task_impls::{
+    block::BlockTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
     stats::StatsTaskState,
-    transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
     vid::VidTaskState,
     view_sync::ViewSyncTaskState,
@@ -229,7 +229,8 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
 ) {
     handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
     handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
-    handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
+    handle.add_task(BlockTaskState::<TYPES, V>::create_from(handle).await);
+    // handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
 
     {
         let mut upgrade_certificate_lock = handle
