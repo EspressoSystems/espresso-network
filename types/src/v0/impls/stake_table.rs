@@ -245,12 +245,17 @@ impl Committable for StakeTableState {
 }
 
 impl StakeTableState {
-    pub fn new() -> Self {
+    pub fn new(
+        validators: ValidatorMap,
+        validator_exits: HashSet<Address>,
+        used_bls_keys: HashSet<BLSPubKey>,
+        used_schnorr_keys: HashSet<SchnorrPubKey>,
+    ) -> Self {
         Self {
-            validators: IndexMap::new(),
-            validator_exits: HashSet::new(),
-            used_bls_keys: HashSet::new(),
-            used_schnorr_keys: HashSet::new(),
+            validators,
+            validator_exits,
+            used_bls_keys,
+            used_schnorr_keys,
         }
     }
 
@@ -260,6 +265,18 @@ impl StakeTableState {
 
     pub fn into_validators(self) -> ValidatorMap {
         self.validators
+    }
+
+    pub fn used_bls_keys(&self) -> &HashSet<BLSPubKey> {
+        &self.used_bls_keys
+    }
+
+    pub fn used_schnorr_keys(&self) -> &HashSet<SchnorrPubKey> {
+        &self.used_schnorr_keys
+    }
+
+    pub fn validator_exits(&self) -> &HashSet<Address> {
+        &self.validator_exits
     }
 
     /// Applies a stake table event to this state.
@@ -582,7 +599,7 @@ impl StakeTableState {
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> Result<(ValidatorMap, StakeTableHash), StakeTableError> {
-    let mut state = StakeTableState::new();
+    let mut state = StakeTableState::default();
     for event in events {
         match state.apply_event(event.clone()) {
             Ok(Ok(())) => {
@@ -606,7 +623,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 ///
 /// Filters out validators without stake and selects the top 100 staked validators.
 /// Returns a new ValidatorMap containing only the selected validators.
-pub(crate) fn select_active_validator_set(
+pub fn select_active_validator_set(
     validators: &ValidatorMap,
 ) -> Result<ValidatorMap, StakeTableError> {
     let total_validators = validators.len();
@@ -865,7 +882,7 @@ impl Fetcher {
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let (read_l1_offset, persistence_events) = {
             let persistence_lock = self.persistence.lock().await;
-            persistence_lock.load_events(to_block).await?
+            persistence_lock.load_events(0, to_block).await?
         };
 
         tracing::info!("loaded events from storage to_block={to_block:?}");
@@ -3004,7 +3021,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_register_validator(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
 
         let event = match version {
@@ -3022,7 +3039,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_validator_already_registered(#[case] version: StakeTableContractVersion) {
-        let mut stake_table_state = StakeTableState::new();
+        let mut stake_table_state = StakeTableState::default();
 
         let test_validator = TestValidator::random();
 
@@ -3064,7 +3081,7 @@ mod tests {
 
     #[test]
     fn test_register_validator_v2_auth_fails() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let mut val = TestValidator::random();
         val.bls_sig = Default::default();
         let event = StakeTableEvent::RegisterV2((&val).into());
@@ -3080,7 +3097,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_deregister_validator(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
 
         let reg = StakeTableEvent::Register((&val).into());
@@ -3101,7 +3118,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_delegate_and_undelegate(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
         state
             .apply_event(StakeTableEvent::Register((&val).into()))
@@ -3143,7 +3160,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_key_update_event(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
 
         // Always register first using V1 to simulate upgrade scenarios
@@ -3168,7 +3185,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_bls_key() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
         let event1 = StakeTableEvent::Register((&val).into());
         let mut val2 = TestValidator::random();
@@ -3191,7 +3208,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_schnorr_key() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
         let event1 = StakeTableEvent::Register((&val).into());
         let mut val2 = TestValidator::random();
@@ -3215,7 +3232,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_schnorr_key_v2_during_update() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
 
         let val1 = TestValidator::random();
 
@@ -3247,7 +3264,7 @@ mod tests {
 
     #[test]
     fn test_register_and_deregister_validator() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let event = StakeTableEvent::Register((&validator).into());
         state.apply_event(event).unwrap().unwrap();
@@ -3260,7 +3277,7 @@ mod tests {
     fn test_commission_validation_exceeds_basis_points() {
         // Create a simple stake table with one validator
         let validator = TestValidator::random();
-        let mut stake_table = StakeTableState::new();
+        let mut stake_table = StakeTableState::default();
 
         // Register the validator first
         let registration_event = ValidatorRegistered::from(&validator).into();
@@ -3303,7 +3320,7 @@ mod tests {
 
     #[test]
     fn test_delegate_zero_amount_is_rejected() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let account = validator.account;
         state
@@ -3331,7 +3348,7 @@ mod tests {
 
     #[test]
     fn test_undelegate_more_than_stake_fails() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let account = validator.account;
         state
@@ -3361,7 +3378,7 @@ mod tests {
 
     #[test]
     fn test_apply_event_does_not_modify_state_on_error() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let delegator = Address::random();
 

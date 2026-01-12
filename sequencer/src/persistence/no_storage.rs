@@ -15,7 +15,6 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
     },
@@ -146,13 +145,7 @@ impl SequencerPersistence for NoStorage {
 
     async fn append_vid(
         &self,
-        _proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn append_vid2(
-        &self,
-        _proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        _proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -339,6 +332,7 @@ impl MembershipPersistence for NoStorage {
     }
     async fn load_events(
         &self,
+        _from_l1_block: u64,
         _l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,

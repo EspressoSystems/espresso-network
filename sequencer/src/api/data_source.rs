@@ -9,7 +9,7 @@ use espresso_types::{
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
-        RewardMerkleTreeV1, Validator,
+        RewardMerkleTreeV1, StakeTableEvent, Validator,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -174,6 +174,13 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         offset: u64,
         limit: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
+
+    /// Get stake table events from L1 blocks `from_l1_block..=to_l1_block`.
+    fn stake_table_events(
+        &self,
+        from_l1_block: u64,
+        to_l1_block: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<StakeTableEvent>>>;
 }
 
 // Thin wrapper trait to access persistence methods from API handlers

@@ -181,6 +181,7 @@ impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Ve
 
     type Epochs = EpochVersion;
     type DrbAndHeaderUpgrade = DrbAndHeaderUpgradeVersion;
+    type Vid2Upgrade = Vid2UpgradeVersion;
 }
 
 pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
@@ -191,6 +192,7 @@ pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type DaUpgradeVersion = StaticVersion<0, 5>;
+pub type Vid2UpgradeVersion = StaticVersion<0, 6>;
 pub type EpochRewardVersion = StaticVersion<0, 6>;
 
 /// The highest protocol version supported by this version of the software.
@@ -208,7 +210,10 @@ pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
 pub use self::impls::{NodeState, UpgradeMap, ValidatedState, ValidatorMap};
 pub use crate::{
-    v0::impls::{calculate_proportion_staked_and_reward_rate, StakeTableHash, StakeTableState},
+    v0::impls::{
+        calculate_proportion_staked_and_reward_rate, select_active_validator_set, StakeTableHash,
+        StakeTableState,
+    },
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
         NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,

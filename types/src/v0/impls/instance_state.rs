@@ -119,6 +119,7 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_events(
         &self,
+        _from_l1_block: u64,
         _l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,

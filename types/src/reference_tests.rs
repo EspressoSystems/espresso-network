@@ -33,15 +33,18 @@ use hotshot_query_service::{
         TransactionWithProofQueryData, VidCommonQueryData,
     },
     testing::mocks::MockVersions,
-    VidCommon,
 };
 use hotshot_types::{
-    data::vid_commitment,
+    data::{vid_commitment, VidCommon},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
     },
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
-    vid::{advz::advz_scheme, avidm::init_avidm_param},
+    vid::{
+        advz::advz_scheme,
+        avidm::init_avidm_param,
+        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+    },
 };
 use jf_advz::VidScheme;
 use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
@@ -614,6 +617,25 @@ async fn test_vid_common_v1_query_data() {
     let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avidm_param));
 
     reference_test_without_committable("v1", "vid_common_v1", &vid);
+}
+
+// v2 is the `VidCommon`` v2 variant
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_vid_common_v2_query_data() {
+    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let payload = reference_payload().await;
+    let encoded = payload.encode();
+    let payload_byte_len = payload.byte_len();
+    let ns_table = payload.ns_table();
+    let ns_table = ns_table
+        .iter()
+        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+        .collect::<Vec<_>>();
+    let param = init_avidm_gf2_param(10).unwrap();
+    let (_, common) = AvidmGf2Scheme::commit(&param, &encoded, ns_table).unwrap();
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V2(common));
+
+    reference_test_without_committable("v2", "vid_common_v2", &vid);
 }
 
 // Transaction query data

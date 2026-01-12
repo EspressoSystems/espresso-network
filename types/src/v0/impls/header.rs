@@ -462,6 +462,16 @@ impl Header {
             _ => None,
         }
     }
+
+    pub fn set_next_stake_table_hash(&mut self, hash: StakeTableHash) -> bool {
+        match self {
+            Self::V4(fields) | Self::V5(fields) => {
+                fields.next_stake_table_hash = Some(hash);
+                true
+            },
+            _ => false,
+        }
+    }
 }
 
 // Getter for a field which is the same across all versions.

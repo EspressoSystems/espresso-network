@@ -19,9 +19,12 @@ pub use super::v0_5::{
 
 pub const VERSION: Version = Version { major: 0, minor: 6 };
 
- 
 pub const MAX_VALIDATORS: usize = 100;
 pub type LeaderCounts = [u16; MAX_VALIDATORS];
 
 mod header;
+mod nsproof;
+mod txproof;
 pub use header::*;
+pub use nsproof::*;
+pub use txproof::*;
