@@ -147,7 +147,7 @@ jobs:
 
   build-test-bins-sqlite:
     name: Build sequencer-sqlite test binary
-    runs-on: ubuntu-24.04-8core
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
@@ -177,7 +177,7 @@ jobs:
   # The go-sdk test job only needs the dev-node binary, compile it separately.
   build-test-bins-dev-node:
     name: Build espresso-dev-node test binary
-    runs-on: ubuntu-24.04-8core
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
