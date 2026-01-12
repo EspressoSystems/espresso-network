@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
+use async_lock::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -22,8 +23,10 @@ use super::{
 };
 use crate::{
     v0::{
-        impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
-        L1Client, Timestamp, Upgrade, UpgradeMode,
+        impls::{reward::EpochRewardsCalculator, StakeTableHash},
+        traits::StateCatchup,
+        v0_3::ChainConfig,
+        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::{RewardAmount, Validator},
     EpochCommittees, PubKey, ValidatorMap,
@@ -61,10 +64,12 @@ pub struct NodeState {
     /// Current version of the sequencer.
     ///
     /// This version is checked to determine if an upgrade is planned,
-    /// and which version variant for versioned types  
+    /// and which version variant for versioned types
     /// to use in functions such as genesis.
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
+    #[debug(skip)]
+    pub epoch_rewards_calculator: Arc<Mutex<EpochRewardsCalculator>>,
 }
 
 impl NodeState {
@@ -171,6 +176,7 @@ impl NodeState {
             coordinator,
             genesis_version,
             epoch_start_block: 0,
+            epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::new())),
         }
     }
 
@@ -432,7 +438,8 @@ pub mod mock {
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Header,
+        Leaf2,
     };
 
     #[derive(Debug, Clone)]
@@ -479,6 +486,10 @@ pub mod mock {
             _success_threshold: U256,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))
+        }
+
+        async fn try_fetch_header(&self, _retry: usize, _height: u64) -> anyhow::Result<Header> {
+            anyhow::bail!("unimplemented")
         }
 
         async fn try_fetch_accounts(

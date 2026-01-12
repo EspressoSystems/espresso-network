@@ -23,7 +23,8 @@ use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
     v0_3::Fetcher,
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
+    BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
+    SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
@@ -634,6 +635,7 @@ where
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::new())),
     };
 
     // Initialize the Libp2p network
