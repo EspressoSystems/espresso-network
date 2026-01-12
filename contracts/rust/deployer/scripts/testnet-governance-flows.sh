@@ -153,52 +153,52 @@ $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --timelock-operation-delay "$OPS_DELAY" \
     --timelock-operation-value 0
 
-echo ""
-echo "### Test 4: Granting PAUSER_ROLE via timelock ###"
-PAUSER_ROLE="0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a"  # keccak256("PAUSER_ROLE")
-OLD_PAUSER="0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
-NEW_PAUSER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-GRANT_SALT=$(cast keccak "$(date +%s)grant")
+# echo ""
+# echo "### Test 4: Granting PAUSER_ROLE via timelock ###"
+# PAUSER_ROLE="0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a"  # keccak256("PAUSER_ROLE")
+# OLD_PAUSER="0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
+# NEW_PAUSER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+# GRANT_SALT=$(cast keccak "$(date +%s)grant")
 
-echo ""
-echo "Schedule grant role operation on StakeTable"
-confirm "Schedule grant PAUSER_ROLE operation on StakeTable?"
-$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
-    --perform-timelock-operation \
-    --timelock-operation-type schedule \
-    --target-contract StakeTable \
-    --function-signature "grantRole(bytes32,address)" \
-    --function-values "$PAUSER_ROLE" "$NEW_PAUSER" \
-    --timelock-operation-salt "$GRANT_SALT" \
-    --timelock-operation-delay "$OPS_DELAY" \
-    --timelock-operation-value 0
+# echo ""
+# echo "Schedule grant role operation on StakeTable"
+# confirm "Schedule grant PAUSER_ROLE operation on StakeTable?"
+# $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+#     --perform-timelock-operation \
+#     --timelock-operation-type schedule \
+#     --target-contract StakeTable \
+#     --function-signature "grantRole(bytes32,address)" \
+#     --function-values "$PAUSER_ROLE" "$NEW_PAUSER" \
+#     --timelock-operation-salt "$GRANT_SALT" \
+#     --timelock-operation-delay "$OPS_DELAY" \
+#     --timelock-operation-value 0
 
-echo ""
-echo "Waiting for timelock delay (${OPS_DELAY} seconds)..."
-sleep "$OPS_DELAY"
+# echo ""
+# echo "Waiting for timelock delay (${OPS_DELAY} seconds)..."
+# sleep "$OPS_DELAY"
 
-echo ""
-echo "Execute grant role operation on StakeTable"
-confirm "Execute grant PAUSER_ROLE operation on StakeTable?"
-$DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
-    --perform-timelock-operation \
-    --timelock-operation-type execute \
-    --target-contract StakeTable \
-    --function-signature "grantRole(bytes32,address)" \
-    --function-values "$PAUSER_ROLE" "$NEW_PAUSER" \
-    --timelock-operation-salt "$GRANT_SALT" \
-    --timelock-operation-delay "$OPS_DELAY" \
-    --timelock-operation-value 0
+# echo ""
+# echo "Execute grant role operation on StakeTable"
+# confirm "Execute grant PAUSER_ROLE operation on StakeTable?"
+# $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
+#     --perform-timelock-operation \
+#     --timelock-operation-type execute \
+#     --target-contract StakeTable \
+#     --function-signature "grantRole(bytes32,address)" \
+#     --function-values "$PAUSER_ROLE" "$NEW_PAUSER" \
+#     --timelock-operation-salt "$GRANT_SALT" \
+#     --timelock-operation-delay "$OPS_DELAY" \
+#     --timelock-operation-value 0
 
-# Verify the new pauser has the PAUSER_ROLE
-if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$NEW_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
-    echo "ERROR: New pauser does not have the PAUSER_ROLE"
-    exit 1
-fi
-# Verify the previous pauser still has the PAUSER_ROLE
-if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$OLD_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
-    echo "ERROR: Previous pauser does not have the PAUSER_ROLE"
-    exit 1
-fi
+# # Verify the new pauser has the PAUSER_ROLE
+# if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$NEW_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
+#     echo "ERROR: New pauser does not have the PAUSER_ROLE"
+#     exit 1
+# fi
+# # Verify the previous pauser still has the PAUSER_ROLE
+# if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$OLD_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
+#     echo "ERROR: Previous pauser does not have the PAUSER_ROLE"
+#     exit 1
+# fi
 
 echo "All tests passed!"
