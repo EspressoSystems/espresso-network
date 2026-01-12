@@ -4,6 +4,14 @@
 2. Ensure that you have an RPC URL for the network the contracts are deployed to
 3. Have your ledger connected (assumes account index = 0 otherwise set `export ACCOUNT_INDEX=YOUR_ACCOUNT_INDEX`)
 
+## Build Optimization
+
+To avoid rebuilds during script execution, pre-build the deploy binary:
+
+# Debug build (faster compilation, slower execution)
+
+cargo build --bin deploy
+
 ```bash
 export RPC_URL=
 ./contracts/rust/deployer/scripts/testnet-governance-flows.sh --ledger --env-file $ENV_FILE
