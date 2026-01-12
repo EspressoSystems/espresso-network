@@ -65,6 +65,14 @@ pub trait Client: Send + Sync + 'static {
         namespace: NamespaceId,
     ) -> impl Send + Future<Output = Result<NamespaceProof>>;
 
+    /// Get proofs for the requested namespace for each block in `[start, end)`.
+    fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> impl Send + Future<Output = Result<Vec<NamespaceProof>>>;
+
     /// Get stake table events for the given epoch.
     ///
     /// This returns the list of events that must be applied to transform the stake table from
@@ -143,6 +151,21 @@ impl Client for QueryServiceClient {
             .await?)
     }
 
+    async fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> Result<Vec<NamespaceProof>> {
+        Ok(self
+            .client
+            .get(&format!(
+                "/light-client/namespace/{start}/{end}/{namespace}"
+            ))
+            .send()
+            .await?)
+    }
+
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
         Ok(self
             .client
@@ -164,6 +187,7 @@ fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
 mod test {
     use std::time::Duration;
 
+    use committable::Committable;
     use espresso_types::{EpochVersion, Header, SequencerVersions, Transaction};
     use futures::{stream::StreamExt, TryStreamExt};
     use hotshot_query_service::{
@@ -172,6 +196,7 @@ mod test {
     };
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_eq;
+    use rand::RngCore;
     use sequencer::{
         api::{
             data_source::testing::TestableSequencerDataSource,
@@ -432,28 +457,74 @@ mod test {
             SequencerVersions::<EpochVersion, EpochVersion>::new(),
         )
         .await;
-
-        // Submit a transaction to form a non-empty block.
-        let mut events = network.server.event_stream().await;
-        let tx = Transaction::random(&mut rand::thread_rng());
-        network
-            .server
-            .consensus()
-            .read()
-            .await
-            .submit_transaction(tx.clone())
-            .await
-            .unwrap();
-        let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
-
         let client = QueryServiceClient::new(url);
-        let header = client
-            .client
-            .get(&format!("availability/header/{block}"))
-            .send()
+
+        // Submit a couple of transactions to form non-empty blocks.
+        let ns = NamespaceId::from(1u64);
+        let mut events = network.server.event_stream().await;
+        let mut txs = vec![];
+        let mut headers = vec![];
+        for _ in 0..2 {
+            let mut bytes = vec![0; 32];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            let tx = Transaction::new(ns, bytes);
+            network
+                .server
+                .consensus()
+                .read()
+                .await
+                .submit_transaction(tx.clone())
+                .await
+                .unwrap();
+            let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
+            tracing::info!(block, hash = %tx.commit(), ?tx, "transaction included");
+
+            let header: Header = client
+                .client
+                .get(&format!("availability/header/{block}"))
+                .send()
+                .await
+                .unwrap();
+
+            txs.push(tx);
+            headers.push(header);
+        }
+
+        // Query namespaces individually.
+        for (tx, header) in txs.iter().zip(&headers) {
+            let proof = client.namespace_proof(header.height(), ns).await.unwrap();
+            assert_eq!(proof.verify(header, ns).unwrap(), std::slice::from_ref(tx));
+        }
+
+        // Query both namespaces by range.
+        let proofs = client
+            .namespace_proofs_in_range(headers[0].height(), headers[1].height() + 1, ns)
             .await
             .unwrap();
-        let proof = client.namespace_proof(block, tx.namespace()).await.unwrap();
-        assert_eq!(proof.verify(&header, tx.namespace()).unwrap(), [tx]);
+        assert_eq!(
+            proofs.len() as u64,
+            headers[1].height() + 1 - headers[0].height()
+        );
+        assert_eq!(
+            proofs[0].verify(&headers[0], ns).unwrap(),
+            std::slice::from_ref(&txs[0])
+        );
+        assert_eq!(
+            proofs[proofs.len() - 1].verify(&headers[0], ns).unwrap(),
+            std::slice::from_ref(&txs[0])
+        );
+        // All other blocks in the range should be empty.
+        for i in 1..proofs.len() - 1 {
+            let header = client
+                .client
+                .get(&format!(
+                    "availability/header/{}",
+                    headers[0].height() + (i as u64)
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(proofs[i].verify(&header, ns).unwrap(), vec![]);
+        }
     }
 }

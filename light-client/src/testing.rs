@@ -823,6 +823,19 @@ impl Client for TestClient {
             .context("failed to construct NsProof")?;
         Ok(NamespaceProof::new(proof, vid_common))
     }
+
+    async fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> Result<Vec<NamespaceProof>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            proofs.push(self.namespace_proof(i, namespace).await?);
+        }
+        Ok(proofs)
+    }
 }
 
 fn register_validator_events(events: &mut Vec<StakeTableEvent>, validator: &Validator<PubKey>) {

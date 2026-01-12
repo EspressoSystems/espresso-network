@@ -264,6 +264,14 @@ where
         .await
     }
 
+    pub async fn fetch_headers_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<Header>> {
+        todo!()
+    }
+
     async fn fetch_header_with_quorum<Q>(
         &self,
         id: BlockId<SeqTypes>,
@@ -332,6 +340,34 @@ where
             .namespace_proof(header.height(), namespace)
             .await?;
         proof.verify(&header, namespace)
+    }
+
+    /// Fetch and verify the transactions in the given namespace of blocks in the range
+    /// `[start_height, end_height)`.
+    pub async fn fetch_namespaces_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        namespace: NamespaceId,
+    ) -> Result<Vec<Vec<Transaction>>> {
+        let headers = self
+            .fetch_headers_in_range(start_height, end_height)
+            .await?;
+        let proofs = self
+            .server
+            .namespace_proofs_in_range(start_height as u64, end_height as u64, namespace)
+            .await?;
+        ensure!(
+            proofs.len() == headers.len(),
+            "server returned wrong number of namespace proofs (expected {}, got {})",
+            headers.len(),
+            proofs.len()
+        );
+        proofs
+            .into_iter()
+            .zip(headers)
+            .map(|(proof, header)| proof.verify(&header, namespace))
+            .collect()
     }
 
     /// Fetch and verify the stake table for the requested epoch.
@@ -1033,6 +1069,19 @@ mod test {
                 assert_eq!(txs, []);
             }
         }
+
+        // Fetch by range.
+        let ns = client
+            .payload(1)
+            .await
+            .transaction(&TransactionIndex {
+                ns_index: 0.into(),
+                position: 0,
+            })
+            .unwrap()
+            .namespace();
+        let namespaces = lc.fetch_namespaces_in_range(1, 10, ns).await.unwrap();
+        assert_eq!(namespaces.len(), 9);
     }
 
     #[tokio::test]
