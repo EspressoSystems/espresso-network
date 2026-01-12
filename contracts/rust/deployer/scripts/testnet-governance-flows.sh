@@ -11,28 +11,42 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-if [[ -f "$REPO_ROOT/.env" ]]; then
-    set -a
-    source "$REPO_ROOT/.env"
-    source "$REPO_ROOT/.env.governance.testnet"
-    set +a
-fi
 
 # Parse command line arguments
 USE_LEDGER=false
+ENV_FILE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --ledger)
             USE_LEDGER=true
             shift
             ;;
+        --env-file)
+            ENV_FILE="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--ledger]"
+            echo "Usage: $0 [--ledger] [--env-file FILE]"
             exit 1
             ;;
     esac
 done
+
+# Source env file if provided, otherwise try default .env
+if [[ -n "$ENV_FILE" ]]; then
+    if [[ ! -f "$ENV_FILE" ]]; then
+        echo "Error: env file not found: $ENV_FILE"
+        exit 1
+    fi
+    set -a
+    source "$ENV_FILE"
+    set +a
+elif [[ -f "$REPO_ROOT/.env" ]]; then
+    set -a
+    source "$REPO_ROOT/.env"
+    set +a
+fi
 
 RPC_URL="${RPC_URL:-http://localhost:8545}"
 ACCOUNT_INDEX="${ACCOUNT_INDEX:-0}"
@@ -40,7 +54,7 @@ OPS_DELAY="${OPS_DELAY:-30}" # 30 seconds default
 SAFE_EXIT_DELAY="${SAFE_EXIT_DELAY:-60}" # 60 seconds default
 
 export RUST_LOG=warn
-DEPLOY_CMD="cargo run --quiet --bin deploy --"
+DEPLOY_CMD="cargo run --bin deploy --"
 if $USE_LEDGER; then
     DEPLOY_CMD="$DEPLOY_CMD --ledger"
     unset ESPRESSO_SEQUENCER_ETH_MNEMONIC
@@ -56,6 +70,10 @@ is_localhost_rpc() {
     # Check for localhost, 127.0.0.1
     [[ "$url" =~ ^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?(/.*)?$ ]]
 }
+
+if is_localhost_rpc "$RPC_URL"; then
+    unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+fi
 
 # Function to prompt user for confirmation on real testnets
 confirm() {
