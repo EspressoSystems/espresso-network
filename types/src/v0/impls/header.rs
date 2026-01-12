@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
 use alloy::primitives::{Keccak256, B256};
 use anyhow::{ensure, Context};
@@ -11,11 +11,12 @@ use hotshot_types::{
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+        election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
+    utils::{epoch_from_block_number, is_ge_epoch_root, is_last_block, BuilderCommitment},
 };
 use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
@@ -34,7 +35,7 @@ use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{distribute_block_reward, reward::RewardDistributor, StakeTableHash},
+        impls::{distribute_block_reward, StakeTableHash},
     },
     v0_1::{self},
     v0_2,
@@ -42,10 +43,12 @@ use crate::{
         self, RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{self, RewardMerkleCommitmentV2},
-    v0_5, BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
-    NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
+    v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2},
+    v0_5,
+    v0_6::{self, LeaderCounts, MAX_VALIDATORS},
+    BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion,
+    FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2,
+    NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -101,6 +104,11 @@ impl Committable for Header {
                 .u64_field("version_minor", 5)
                 .field("fields", fields.commit())
                 .finalize(),
+            Self::V6(fields) => RawCommitmentBuilder::new(&Self::tag())
+                .u64_field("version_major", 0)
+                .u64_field("version_minor", 6)
+                .field("fields", fields.commit())
+                .finalize(),
         }
     }
 
@@ -135,6 +143,11 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V5(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 5 }),
+                fields: fields.clone(),
+            }
+            .serialize(serializer),
+            Self::V6(fields) => VersionedHeader {
+                version: EitherOrVersion::Version(Version { major: 0, minor: 6 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -191,6 +204,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 6 }) => Ok(Header::V6(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -226,6 +243,9 @@ impl<'de> Deserialize<'de> for Header {
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(Version { major: 0, minor: 5 }) => Ok(Header::V5(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 6 }) => Ok(Header::V6(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -287,6 +307,7 @@ impl Header {
             Self::V3(_) => Version { major: 0, minor: 3 },
             Self::V4(_) => Version { major: 0, minor: 4 },
             Self::V5(_) => Version { major: 0, minor: 5 },
+            Self::V6(_) => Version { major: 0, minor: 6 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -309,6 +330,7 @@ impl Header {
         total_reward_distributed: Option<RewardAmount>,
         version: Version,
         next_stake_table_hash: Option<StakeTableHash>,
+        leader_counts: Option<LeaderCounts>,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
         assert!(!fee_info.is_empty(), "Invalid fee_info length: 0");
@@ -397,6 +419,25 @@ impl Header {
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
             }),
+            (0, 6) => Self::V6(v0_6::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root: reward_merkle_tree_root_v2,
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+                leader_counts: leader_counts.unwrap(),
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -406,7 +447,18 @@ impl Header {
 
     pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
         match self {
-            Self::V4(fields) | Self::V5(fields) => fields.next_stake_table_hash,
+            Self::V4(fields) => fields.next_stake_table_hash,
+            Self::V5(fields) => fields.next_stake_table_hash,
+            Self::V6(fields) => fields.next_stake_table_hash,
+            _ => None,
+        }
+    }
+
+    /// Get the leader counts for V6 headers.
+    /// Returns None for earlier versions.
+    pub fn leader_counts(&self) -> Option<&LeaderCounts> {
+        match self {
+            Self::V6(fields) => Some(&fields.leader_counts),
             _ => None,
         }
     }
@@ -431,6 +483,7 @@ macro_rules! field {
             Self::V3(data) => &data.$name,
             Self::V4(data) => &data.$name,
             Self::V5(data) => &data.$name,
+            Self::V6(data) => &data.$name,
         }
     };
 }
@@ -443,6 +496,7 @@ macro_rules! field_mut {
             Self::V3(data) => &mut data.$name,
             Self::V4(data) => &mut data.$name,
             Self::V5(data) => &mut data.$name,
+            Self::V6(data) => &mut data.$name,
         }
     };
 }
@@ -462,8 +516,9 @@ impl Header {
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        reward_distributor: Option<RewardDistributor>,
+        total_reward_distributed: Option<RewardAmount>,
         next_stake_table_hash: Option<StakeTableHash>,
+        leader_counts: Option<LeaderCounts>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -643,9 +698,7 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                total_reward_distributed: reward_distributor
-                    .map(|r| r.total_distributed())
-                    .unwrap_or_default(),
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
             }),
             (0, 5) => Self::V5(v0_5::Header {
@@ -663,10 +716,27 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                total_reward_distributed: reward_distributor
-                    .map(|r| r.total_distributed())
-                    .unwrap_or_default(),
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
+            }),
+            (0, 6) => Self::V6(v0_6::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head: l1.head,
+                l1_finalized: l1.finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts is required for V6 headers"),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -674,6 +744,211 @@ impl Header {
             _ => panic!("invalid version: {version}"),
         };
         Ok(header)
+    }
+
+    /// Calculate leader_counts for V6 headers.
+    pub fn calculate_leader_counts(
+        parent_header: &Header,
+        height: u64,
+        leader_index: usize,
+        epoch_height: u64,
+    ) -> LeaderCounts {
+        let mut leader_counts = [0u16; MAX_VALIDATORS];
+
+        // Get parent's leader counts
+        let parent_counts = parent_header.leader_counts();
+
+        // If parent was the last block of an epoch, current block is epoch start
+        let is_epoch_start = is_last_block(height - 1, epoch_height);
+
+        if is_epoch_start || parent_counts.is_none() {
+            leader_counts[leader_index] = 1;
+        } else if let Some(parent_counts) = parent_counts {
+            leader_counts = *parent_counts;
+            leader_counts[leader_index] = leader_counts[leader_index] + 1;
+        }
+
+        leader_counts
+    }
+
+    /// Get the leader index for V6+ headers.
+    pub async fn get_leader_index(
+        version: Version,
+        height: u64,
+        view_number: u64,
+        instance_state: &NodeState,
+    ) -> anyhow::Result<Option<usize>> {
+        if version < EpochRewardVersion::version() {
+            return Ok(None);
+        }
+
+        let epoch_height = instance_state
+            .epoch_height
+            .context("epoch height not in instance state for V6")?;
+        let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+        let coordinator = instance_state.coordinator.clone();
+        let epoch_membership = coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
+        let membership = epoch_membership.coordinator.membership().read().await;
+
+        let leader = membership
+            .leader(ViewNumber::new(view_number), Some(epoch))
+            .context(format!("leader for epoch {epoch:?} not found"))?;
+
+        let index = membership
+            .get_validator_index(&epoch, &leader)
+            .context(format!(
+                "Leader {leader} not found in stake table for epoch {epoch}"
+            ))?;
+
+        Ok(Some(index))
+    }
+
+    /// Handle epoch rewards for V6+ headers.
+    ///
+    /// For V6+, rewards are distributed per epoch instead of per block.
+    /// This function:
+    /// 1. Triggers background catchup calculation if needed
+    /// 2. At epoch boundary: waits for calculation, applies rewards, starts new calculation
+    /// 3. Not at epoch boundary: just triggers catchup if needed and returns 0
+    ///
+    /// # Returns
+    /// A tuple of (total_rewards_applied, changed_accounts). The changed_accounts set contains
+    /// all reward accounts that were updated by this epoch's rewards distribution.
+    pub async fn handle_epoch_rewards(
+        height: u64,
+        leader_counts: &LeaderCounts,
+        instance_state: &NodeState,
+        validated_state: &mut ValidatedState,
+    ) -> anyhow::Result<(RewardAmount, HashSet<RewardAccountV2>)> {
+        let epoch_height = instance_state.epoch_height.unwrap();
+
+        let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+        let coordinator = instance_state.coordinator.clone();
+        let first_epoch = coordinator.membership().read().await.first_epoch();
+
+        // Check if rewards are enabled for this epoch
+        let distribute_rewards = first_epoch.map(|fe| epoch > fe + 2).unwrap_or(false);
+        if !distribute_rewards {
+            return Ok((RewardAmount::default(), HashSet::new()));
+        }
+
+        let mut manager = instance_state.epoch_rewards_calculator.lock().await;
+
+        // Catchup for late-joining validators: If we have no pending or completed calculation
+        // and this is not the first epoch where rewards can be distributed, trigger
+        // a background calculation by fetching the previous epoch's leader_counts.
+        let needs_catchup = !manager.has_completed() && !manager.is_calculating();
+
+        if needs_catchup {
+            // Start catchup calculation in the background
+            manager
+                .trigger_epoch_reward_calculation(
+                    epoch,
+                    epoch_height,
+                    instance_state,
+                    &coordinator,
+                    validated_state,
+                )
+                .await;
+        }
+
+        // If not at epoch boundary, just return
+        if !is_last_block(height, epoch_height) {
+            return Ok((RewardAmount::default(), HashSet::new()));
+        }
+
+        let membership = coordinator.membership().read().await;
+        let validators: Vec<_> = membership
+            .stake_table(Some(epoch))
+            .iter()
+            .filter_map(|entry| {
+                membership
+                    .get_validator_config(&epoch, entry.stake_table_entry.stake_key.clone())
+                    .ok()
+            })
+            .collect();
+        drop(membership);
+
+        // Fetch missing reward accounts before starting the calculation.
+        // This ensures the tree has all accounts that will be updated.
+        let accounts_to_update: Vec<_> = leader_counts
+            .iter()
+            .enumerate()
+            .filter(|(_, &count)| count > 0)
+            .flat_map(|(index, _)| {
+                validators.get(index).into_iter().flat_map(|v| {
+                    std::iter::once(RewardAccountV2(v.account))
+                        .chain(v.delegators.keys().map(|d| RewardAccountV2(*d)))
+                })
+            })
+            .collect();
+        let missing_accounts = validated_state.forgotten_reward_accounts_v2(accounts_to_update);
+
+        if !missing_accounts.is_empty() {
+            // The tree was last updated at end of epoch-1 with rewards for epoch-2,
+            // so it corresponds to the state at the end of epoch-2.
+            let tree_state_height = (*epoch - 2) * epoch_height;
+            let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
+
+            tracing::info!(
+                %epoch,
+                num_missing = missing_accounts.len(),
+                tree_state_height,
+                %reward_merkle_tree_root,
+                "fetching missing reward accounts for epoch rewards"
+            );
+
+            let proofs = instance_state
+                .state_catchup
+                .fetch_reward_accounts_v2(
+                    instance_state,
+                    tree_state_height,
+                    ViewNumber::new(tree_state_height),
+                    reward_merkle_tree_root,
+                    missing_accounts,
+                )
+                .await
+                .context("failed to fetch missing reward accounts for epoch rewards")?;
+
+            for proof in proofs {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree_v2)
+                    .expect("proof previously verified");
+            }
+        }
+
+        let block_reward = instance_state.block_reward(epoch).await.unwrap_or_default();
+
+        // Apply epoch rewards: wait for pending, apply completed rewards, start new calculation
+        let (epoch_rewards_applied, changed_accounts) = match manager
+            .apply_epoch_rewards(
+                epoch,
+                *leader_counts,
+                validated_state.reward_merkle_tree_v2.clone(),
+                block_reward,
+                validators,
+            )
+            .await?
+        {
+            Some(result) => {
+                tracing::info!(
+                    current_epoch = %epoch,
+                    "applying completed epoch rewards"
+                );
+                validated_state.reward_merkle_tree_v2 = result.reward_tree;
+                (result.total_distributed, result.changed_accounts)
+            },
+            None => {
+                // No rewards ready - catchup calculation may still be running
+                // or this is the first epoch where rewards are distributed
+                (RewardAmount::default(), HashSet::new())
+            },
+        };
+
+        Ok((epoch_rewards_applied, changed_accounts))
     }
 
     async fn get_chain_config(
@@ -711,6 +986,7 @@ impl Header {
             Self::V3(fields) => fields.chain_config,
             Self::V4(fields) => fields.chain_config,
             Self::V5(fields) => fields.chain_config,
+            Self::V6(fields) => fields.chain_config,
         }
     }
 
@@ -729,6 +1005,7 @@ impl Header {
             Self::V3(fields) => fields.timestamp,
             Self::V4(fields) => fields.timestamp,
             Self::V5(fields) => fields.timestamp,
+            Self::V6(fields) => fields.timestamp,
         }
     }
 
@@ -739,6 +1016,7 @@ impl Header {
             Self::V3(fields) => fields.timestamp * 1_000,
             Self::V4(fields) => fields.timestamp_millis.u64(),
             Self::V5(fields) => fields.timestamp_millis.u64(),
+            Self::V6(fields) => fields.timestamp_millis.u64(),
         }
     }
 
@@ -758,6 +1036,10 @@ impl Header {
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
             Self::V5(fields) => {
+                fields.timestamp = timestamp;
+                fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
+            },
+            Self::V6(fields) => {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
@@ -868,6 +1150,7 @@ impl Header {
             Self::V3(fields) => vec![fields.fee_info],
             Self::V4(fields) => vec![fields.fee_info],
             Self::V5(fields) => vec![fields.fee_info],
+            Self::V6(fields) => vec![fields.fee_info],
         }
     }
 
@@ -881,6 +1164,7 @@ impl Header {
             Self::V3(fields) => Either::Left(fields.reward_merkle_tree_root),
             Self::V4(fields) => Either::Right(fields.reward_merkle_tree_root),
             Self::V5(fields) => Either::Right(fields.reward_merkle_tree_root),
+            Self::V6(fields) => Either::Right(fields.reward_merkle_tree_root),
         }
     }
 
@@ -903,13 +1187,16 @@ impl Header {
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V5(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V6(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
 
     pub fn total_reward_distributed(&self) -> Option<RewardAmount> {
         match self {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
-            Self::V4(fields) | Self::V5(fields) => Some(fields.total_reward_distributed),
+            Self::V4(fields) => Some(fields.total_reward_distributed),
+            Self::V5(fields) => Some(fields.total_reward_distributed),
+            Self::V6(fields) => Some(fields.total_reward_distributed),
         }
     }
 }
@@ -1058,16 +1345,57 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let mut rewards = None;
-        if version >= EpochVersion::version() {
-            rewards = distribute_block_reward(
+        // Handle rewards and calculate leader_counts based on version
+        let (leader_counts, total_reward_distributed) = if version >= EpochRewardVersion::version()
+        {
+            let epoch_height = instance_state.epoch_height.unwrap();
+            let leader_index =
+                Header::get_leader_index(version, height, view_number, instance_state)
+                    .await?
+                    .unwrap();
+
+            let leader_counts = Header::calculate_leader_counts(
+                parent_leaf.block_header(),
+                height,
+                leader_index,
+                epoch_height,
+            );
+
+            let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
+                height,
+                &leader_counts,
+                instance_state,
+                &mut validated_state,
+            )
+            .await?;
+
+            // Note: changed_accounts are not used here during header creation.
+            // Delta updates are handled in apply_header during validation.
+
+            let parent_total = parent_leaf
+                .block_header()
+                .total_reward_distributed()
+                .unwrap_or_default();
+
+            (
+                Some(leader_counts),
+                Some(RewardAmount(parent_total.0 + epoch_rewards_applied.0)),
+            )
+        } else if version >= EpochVersion::version() {
+            // V3-V5: per-block distribution returns cumulative total
+            let total = distribute_block_reward(
                 instance_state,
                 &mut validated_state,
                 parent_leaf,
                 ViewNumber::new(view_number),
                 version,
             )
-            .await?;
+            .await?
+            .map(|r| r.total_distributed());
+
+            (None, total)
+        } else {
+            (None, None)
         };
 
         let mut next_stake_table_hash = None;
@@ -1123,8 +1451,9 @@ impl BlockHeader<SeqTypes> for Header {
             validated_state,
             chain_config,
             version,
-            rewards,
+            total_reward_distributed,
             next_stake_table_hash,
+            leader_counts,
         )?)
     }
 
@@ -1185,6 +1514,7 @@ impl BlockHeader<SeqTypes> for Header {
             None,
             instance_state.genesis_version,
             None,
+            None,
         )
     }
 
@@ -1240,6 +1570,30 @@ impl BlockHeader<SeqTypes> for Header {
         match self {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(B256::ZERO),
             Header::V4(header) | Header::V5(header) => {
+                // Temporary placeholder values for future fields
+                let placeholder_1 = B256::ZERO;
+                let placeholder_2 = B256::ZERO;
+                let placeholder_3 = B256::ZERO;
+                let placeholder_4 = B256::ZERO;
+                let placeholder_5 = B256::ZERO;
+                let placeholder_6 = B256::ZERO;
+                let placeholder_7 = B256::ZERO;
+
+                let mut hasher = Keccak256::new();
+
+                let digest = header.reward_merkle_tree_root.digest();
+                hasher.update(digest.0);
+                hasher.update(placeholder_1);
+                hasher.update(placeholder_2);
+                hasher.update(placeholder_3);
+                hasher.update(placeholder_4);
+                hasher.update(placeholder_5);
+                hasher.update(placeholder_6);
+                hasher.update(placeholder_7);
+
+                Ok(hasher.finalize())
+            },
+            Header::V6(header) => {
                 // Temporary placeholder values for future fields
                 let placeholder_1 = B256::ZERO;
                 let placeholder_2 = B256::ZERO;
@@ -1438,8 +1792,9 @@ mod test_headers {
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
-                None,
-                None,
+                None, // total_reward_distributed
+                None, // next_stake_table_hash
+                None, // leader_counts
             )
             .unwrap();
             assert_eq!(header.height(), parent.height() + 1);
@@ -1802,6 +2157,7 @@ mod test_headers {
             None,
             Version { major: 0, minor: 1 },
             None,
+            None, // leader_counts
         );
 
         let serialized = serde_json::to_string(&v1_header).unwrap();
@@ -1834,6 +2190,7 @@ mod test_headers {
             None,
             Version { major: 0, minor: 2 },
             None,
+            None, // leader_counts
         );
 
         let serialized = serde_json::to_string(&v2_header).unwrap();
@@ -1866,6 +2223,7 @@ mod test_headers {
             None,
             Version { major: 0, minor: 3 },
             None,
+            None, // leader_counts
         );
 
         let serialized = serde_json::to_string(&v3_header).unwrap();

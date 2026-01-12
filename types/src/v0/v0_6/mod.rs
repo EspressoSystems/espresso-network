@@ -5,7 +5,7 @@ pub use super::v0_5::{
     ADVZNsProof, ADVZTxProof, AccountQueryData, AvidMIncorrectEncodingNsProof, AvidMNsProof,
     AvidMTxProof, BlockMerkleCommitment, BlockMerkleTree, BlockSize, BuilderSignature, ChainConfig,
     ChainId, Delta, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment,
-    FeeMerkleProof, FeeMerkleTree, Header, Index, Iter, L1BlockInfo, L1Client, L1ClientOptions,
+    FeeMerkleProof, FeeMerkleTree, Index, Iter, L1BlockInfo, L1Client, L1ClientOptions,
     L1Snapshot, NamespaceId, NsIndex, NsIter, NsPayload, NsPayloadBuilder, NsPayloadByteLen,
     NsPayloadOwned, NsPayloadRange, NsTable, NsTableBuilder, NsTableValidationError, NumNss,
     NumTxs, NumTxsRange, NumTxsUnchecked, Payload, PayloadByteLen, ResolvableChainConfig,
@@ -19,7 +19,14 @@ pub use super::v0_5::{
 
 pub const VERSION: Version = Version { major: 0, minor: 6 };
 
+
+pub const MAX_VALIDATORS: usize = 100;
+pub type LeaderCounts = [u16; MAX_VALIDATORS];
+
 mod nsproof;
 mod txproof;
 pub use nsproof::*;
 pub use txproof::*;
+
+mod header;
+pub use header::*;

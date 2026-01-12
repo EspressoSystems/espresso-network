@@ -22,7 +22,9 @@ pub use header::Header;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
 // export reward types for staking-ui-service
-pub use impls::reward::{ComputedRewards, RewardDistributor};
+pub use impls::reward::{
+    ComputedRewards, EpochRewardsCalculator, EpochRewardsResult, RewardDistributor,
+};
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;
 #[allow(unused_imports)]
@@ -190,10 +192,11 @@ pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type DaUpgradeVersion = StaticVersion<0, 5>;
+pub type EpochRewardVersion = StaticVersion<0, 6>;
 pub type Vid2UpgradeVersion = StaticVersion<0, 6>;
 
 /// The highest protocol version supported by this version of the software.
-pub type MaxSupportedVersion = DaUpgradeVersion;
+pub type MaxSupportedVersion = EpochRewardVersion;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;

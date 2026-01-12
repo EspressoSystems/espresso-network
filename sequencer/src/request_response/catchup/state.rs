@@ -7,7 +7,7 @@ use espresso_types::{
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+    Header, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -52,6 +52,10 @@ impl<
         )
         .await
         .with_context(|| "timed out while fetching leaf")?
+    }
+
+    async fn try_fetch_header(&self, _retry: usize, _height: u64) -> anyhow::Result<Header> {
+        anyhow::bail!("header fetching not supported via request-response protocol")
     }
 
     async fn try_fetch_accounts(
