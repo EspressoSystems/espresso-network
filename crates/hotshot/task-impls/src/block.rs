@@ -4,25 +4,28 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::HashMap, num::NonZero, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZero,
+    sync::Arc,
+};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
-    consensus::OuterConsensus,
-    data::{null_block, PackedBundle, VidCommitment},
+    consensus::{OuterConsensus, PayloadWithMetadata},
+    data::{null_block, PackedBundle},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::UpgradeLock,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload, EncodeBytes,
     },
-    utils::{is_epoch_transition, is_last_block, ViewInner},
-    vote::HasViewNumber,
+    utils::{is_epoch_transition, is_last_block},
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
@@ -69,11 +72,12 @@ impl<TYPES: NodeType> Mempool<TYPES> {
     fn decide_block(
         &mut self,
         view: TYPES::View,
-        block_payload: TYPES::BlockPayload,
+        block_payload: &TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) {
         for transaction in block_payload.transactions(metadata) {
-            self.recently_decided_transactions.put(transaction, true);
+            self.recently_decided_transactions
+                .put(transaction.clone(), true);
         }
         self.recently_proposed_blocks.remove(&view);
     }
@@ -132,28 +136,15 @@ pub struct BlockTaskState<TYPES: NodeType, V: Versions> {
 
     /// Mempool for the block task
     pub mempool: Mempool<TYPES>,
-}
 
-async fn vid_from_high_qc<TYPES: NodeType>(
-    consensus: &OuterConsensus<TYPES>,
-) -> Option<VidCommitment> {
-    let consensus_reader = consensus.read().await;
-    let high_qc = consensus_reader.high_qc();
-    let view_number = high_qc.view_number();
-    let view_data = consensus_reader.validated_state_map().get(&view_number)?;
-    match &view_data.view_inner {
-        ViewInner::Da {
-            payload_commitment, ..
-        } => Some(*payload_commitment),
-        ViewInner::Leaf {
-            leaf: leaf_commitment,
-            ..
-        } => {
-            let leaf = consensus_reader.saved_leaves().get(leaf_commitment)?;
-            Some(leaf.payload_commitment())
-        },
-        ViewInner::Failed => None,
-    }
+    /// Base fee for the block task
+    pub base_fee: u64,
+
+    /// Builder key for the block task
+    pub builder_key: TYPES::BuilderSignatureKey,
+
+    /// Builder private key for the block task
+    pub builder_private_key: <TYPES::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
 }
 
 impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
@@ -164,7 +155,6 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
         block_view: TYPES::View,
         block_epoch: Option<TYPES::Epoch>,
-        vid: Option<VidCommitment>,
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<HotShotTaskCompleted> {
         let version = match self.upgrade_lock.version(block_view).await {
@@ -237,18 +227,6 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             }
         }
 
-        let vid = match vid {
-            Some(vid) => vid,
-            None => {
-                let Some(vid) = vid_from_high_qc(&self.consensus).await else {
-                    self.send_empty_block(event_stream, block_view, block_epoch, version)
-                        .await;
-                    return None;
-                };
-                vid
-            },
-        };
-
         // Request a block from the builder unless we are between versions.
         let block = {
             if self
@@ -261,7 +239,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             {
                 None
             } else {
-                self.wait_for_block(block_view, vid, receiver).await
+                self.wait_for_block(block_view, receiver).await
             }
         };
 
@@ -296,27 +274,92 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         block_payload: TYPES::BlockPayload,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) {
+        let _ = self.consensus.write().await.update_saved_payloads(
+            view,
+            Arc::new(PayloadWithMetadata {
+                payload: block_payload.clone(),
+                metadata: metadata.clone(),
+            }),
+        );
         self.mempool.receive_block(view, block_payload, &metadata);
     }
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
-        parent_vid: VidCommitment,
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
         let (previous_block, metadata) = self
-            .wait_for_previous_block(block_view - 1, parent_vid, receiver)
+            .wait_for_previous_block(block_view - 1, receiver)
             .await
             .ok()?;
         self.handle_block(block_view - 1, previous_block, metadata)
             .await;
-        None
+        let PayloadWithMetadata { payload, metadata } = self.build_block(block_view).await?;
+        let encoded_payload = payload.encode();
+        let encoded_txns: Vec<u8> = encoded_payload.to_vec();
+        let block_size: u64 = encoded_txns.len() as u64;
+        let offered_fee: u64 = self.base_fee * block_size;
+
+        let Some(signature_over_fee_info) =
+            TYPES::BuilderSignatureKey::sign_fee(&self.builder_private_key, offered_fee, &metadata)
+                .ok()
+        else {
+            tracing::error!("Failed to sign fee, sending empty block");
+            return None;
+        };
+        let builder_fee = BuilderFee {
+            fee_amount: offered_fee,
+            fee_account: self.builder_key.clone(),
+            fee_signature: signature_over_fee_info,
+        };
+        Some(BuilderResponse {
+            block_payload: payload,
+            metadata,
+            fee: builder_fee,
+        })
+    }
+
+    async fn build_block(&mut self, block_view: TYPES::View) -> Option<PayloadWithMetadata<TYPES>> {
+        let mut transactions = self.mempool.transactions.clone();
+        let mut view = block_view - 1;
+        let mut in_flight_txns = HashSet::new();
+        while let Some(payload) = self.mempool.recently_proposed_blocks.get(&view) {
+            let Some(proposal) = self
+                .consensus
+                .read()
+                .await
+                .last_proposals()
+                .get(&view)
+                .cloned()
+            else {
+                break;
+            };
+            in_flight_txns.extend(payload);
+            view = proposal.data.view_number();
+        }
+        transactions.retain(|transaction| !in_flight_txns.contains(transaction));
+        let validated_state = self
+            .consensus
+            .read()
+            .await
+            .validated_state_map()
+            .get(&(block_view - 1))?
+            .leaf_and_state()?
+            .1
+            .clone();
+        let (payload, metadata) = <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
+            transactions,
+            &validated_state,
+            &self.instance_state,
+        )
+        .await
+        .ok()?;
+        Some(PayloadWithMetadata { payload, metadata })
     }
 
     async fn wait_for_previous_block(
         &mut self,
         parent_view: TYPES::View,
-        _parent_vid: VidCommitment,
         mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<(
         TYPES::BlockPayload,
@@ -455,10 +498,14 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     .leader(view)
                     .await?;
                 if leader == self.public_key {
-                    self.handle_view_change(&event_stream, view, *epoch, None, receiver)
+                    self.handle_view_change(&event_stream, view, *epoch, receiver)
                         .await;
                     return Ok(());
                 }
+            },
+            HotShotEvent::BlockReconstructed(block, metadata, view) => {
+                self.handle_block(*view, block.clone(), metadata.clone())
+                    .await;
             },
             HotShotEvent::QuorumProposalValidated(proposal, _leaf) => {
                 let view_number = proposal.data.view_number();
@@ -476,7 +523,6 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     return Ok(());
                 }
 
-                let vid = proposal.data.block_header().payload_commitment();
                 let block_height = proposal.data.block_header().block_number();
                 if is_epoch_transition(block_height, self.epoch_height) {
                     return Ok(());
@@ -494,15 +540,26 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     .leader(next_view)
                     .await?;
                 if leader == self.public_key {
-                    self.handle_view_change(
-                        &event_stream,
-                        next_view,
-                        self.cur_epoch,
-                        Some(vid),
-                        receiver,
-                    )
-                    .await;
+                    self.handle_view_change(&event_stream, next_view, self.cur_epoch, receiver)
+                        .await;
                     return Ok(());
+                }
+            },
+            HotShotEvent::LeavesDecided(leaves) => {
+                for leaf in leaves {
+                    if let Some(payload) = self
+                        .consensus
+                        .read()
+                        .await
+                        .saved_payloads()
+                        .get(&leaf.view_number())
+                    {
+                        self.mempool.decide_block(
+                            leaf.view_number(),
+                            &payload.payload,
+                            &payload.metadata,
+                        );
+                    }
                 }
             },
             _ => {},

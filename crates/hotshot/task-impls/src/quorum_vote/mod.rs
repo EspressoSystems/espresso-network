@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Instant};
 
 use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_trait::async_trait;
@@ -16,10 +16,10 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::{vid_disperse::vid_total_weight, Leaf2},
+    data::{vid_disperse::vid_total_weight, Leaf2, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
-    message::UpgradeLock,
+    message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
     storage_metrics::StorageMetricsValue,
     traits::{
@@ -495,6 +495,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
         cancel_receiver: Receiver<()>,
     ) -> EventDependency<Arc<HotShotEvent<TYPES>>> {
         let id = self.id;
+        let public_key = self.public_key.clone();
         EventDependency::new(
             event_receiver,
             cancel_receiver,
@@ -514,6 +515,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     },
                     VoteDependency::Vid => {
                         if let HotShotEvent::VidShareValidated(disperse) = event {
+                            if disperse.data.recipient_key() != &public_key {
+                                return false;
+                            }
                             disperse.data.view_number()
                         } else {
                             return false;
@@ -770,15 +774,43 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     bail!("Failed to verify VID share");
                 }
 
+                // if we have the share already we are done
+                if self
+                    .consensus
+                    .read()
+                    .await
+                    .vid_shares()
+                    .get(&view)
+                    .is_some_and(|key_map| key_map.get(share.data.recipient_key()).is_some())
+                {
+                    return Ok(());
+                }
+
                 self.consensus
                     .write()
                     .await
                     .update_vid_shares(view, share.clone());
 
-                ensure!(
-                    *share.data.recipient_key() == self.public_key,
-                    "Got a Valid VID share but it's not for our key"
-                );
+                // ensure!(
+                //     *share.data.recipient_key() == self.public_key,
+                //     "Got a Valid VID share but it's not for our key"
+                // );
+
+                // If it's the first time receiving our share send it to all nodes
+                if *share.data.recipient_key() == self.public_key {
+                    if let VidDisperseShare::V2(ref inner_share) = share.data {
+                        let proposal = Proposal {
+                            signature: share.signature.clone(),
+                            data: inner_share.clone(),
+                            _pd: PhantomData,
+                        };
+                        broadcast_event(
+                            Arc::new(HotShotEvent::VidShareSend(proposal)),
+                            &event_sender.clone(),
+                        )
+                        .await;
+                    }
+                }
 
                 broadcast_event(
                     Arc::new(HotShotEvent::VidShareValidated(share.clone())),

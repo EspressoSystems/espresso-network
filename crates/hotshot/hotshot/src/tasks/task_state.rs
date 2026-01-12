@@ -32,6 +32,7 @@ use hotshot_types::{
     traits::{
         consensus_api::ConsensusApi,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        signature_key::BuilderSignatureKey,
     },
 };
 use tokio::spawn;
@@ -232,6 +233,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
     for BlockTaskState<TYPES, V>
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        let (builder_key, builder_private_key) =
+            TYPES::BuilderSignatureKey::generated_from_seed_indexed([0; 32], handle.hotshot.id);
         Self {
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
@@ -245,6 +248,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
             mempool: Mempool::new(),
+            base_fee: 1,
+            builder_key,
+            builder_private_key,
         }
     }
 }

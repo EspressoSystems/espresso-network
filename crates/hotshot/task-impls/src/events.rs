@@ -12,7 +12,7 @@ use hotshot_task::task::TaskEvent;
 use hotshot_types::{
     data::{
         DaProposal2, Leaf2, PackedBundle, QuorumProposal2, QuorumProposalWrapper, UpgradeProposal,
-        VidCommitment, VidDisperse, VidDisperseShare,
+        VidCommitment, VidDisperse, VidDisperseShare, VidDisperseShare2,
     },
     message::Proposal,
     request_response::ProposalRequestPayload,
@@ -211,6 +211,10 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ///
     /// Like [`HotShotEvent::DaProposalSend`].
     VidDisperseSend(Proposal<TYPES, VidDisperse<TYPES>>, TYPES::SignatureKey),
+
+    /// Broadcast a share to all nodes
+    VidShareSend(Proposal<TYPES, VidDisperseShare2<TYPES>>),
+
     /// Vid disperse share has been received from the network; handled by the consensus task
     ///
     /// Like [`HotShotEvent::DaProposalRecv`].
@@ -370,6 +374,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             | HotShotEvent::TransactionSend(..)
             | HotShotEvent::TransactionsRecv(_) => None,
             HotShotEvent::VidDisperseSend(proposal, _) => Some(proposal.data.view_number()),
+            HotShotEvent::VidShareSend(proposal) => Some(proposal.data.view_number()),
             HotShotEvent::VidShareRecv(_, proposal) | HotShotEvent::VidShareValidated(proposal) => {
                 Some(proposal.data.view_number())
             },
@@ -726,6 +731,11 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             HotShotEvent::BlockReconstructed(_, _, view) => {
                 write!(f, "BlockReconstructed(view_number={:?}", view)
             },
+            HotShotEvent::VidShareSend(proposal) => write!(
+                f,
+                "VidShareSend(view_number={:?})",
+                proposal.data.view_number()
+            ),
         }
     }
 }

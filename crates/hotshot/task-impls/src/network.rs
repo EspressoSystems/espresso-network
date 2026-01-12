@@ -1121,6 +1121,13 @@ impl<
                 self.handle_vid_disperse_proposal(proposal, &sender).await;
                 None
             },
+            HotShotEvent::VidShareSend(proposal) => Some((
+                proposal.data.recipient_key.clone(),
+                MessageKind::<TYPES>::from_consensus_message(SequencingMessage::Da(
+                    DaConsensusMessage::VidDisperseMsg2(proposal),
+                )),
+                TransmitType::Broadcast,
+            )),
             HotShotEvent::DaProposalSend(proposal, sender) => {
                 *maybe_action = Some(HotShotAction::DaPropose);
 
