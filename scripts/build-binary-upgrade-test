@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-#TODO: Remove
-
-echo " --- Building image: builder:testing --- "
-scripts/build-docker-images-native --no-tty --image builder --tag testing
-
-echo " --- Building image: sequencer:testing --- "
-scripts/build-docker-images-native --no-tty --image sequencer --tag testing
