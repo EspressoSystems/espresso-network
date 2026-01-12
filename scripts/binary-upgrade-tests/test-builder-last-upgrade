@@ -7,6 +7,11 @@ export ESPRESSO_SEQUENCER_GENESIS_FILE=genesis/demo-binary-upgrade.toml
 for i in {0..5}; do
     # upgrade sequencer binary
     upgrade_container "sequencer$i"
+    
+    # submit transactions will have exited due to closed stream
+    start_old_container submit-transactions-public
+    start_old_container submit-transactions-private
+
     smoke_test
 done
 
