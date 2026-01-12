@@ -44,6 +44,7 @@ upgrade_container() {
 
     # TODO: don't do || true
     env DOCKER_TAG=$target_tag docker compose -f "$compose_file" up --no-deps "$container_name" --force-recreate --wait || true
+    env DOCKER_TAG=$target_tag docker compose -f "$compose_file" logs "$container_name"
 }
 
 # Starts an exited container from the old version
@@ -52,6 +53,7 @@ start_old_container() {
     shift
 
     env DOCKER_TAG=$base_tag docker compose -f "$compose_file" up --no-deps "$container_name" --wait || true
+    env DOCKER_TAG=$base_tag docker compose -f "$compose_file" logs "$container_name"
 }
 
 # Set up environment
