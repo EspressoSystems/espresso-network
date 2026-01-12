@@ -19,9 +19,25 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
     unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
 fi
 
+# Parse command line arguments
+USE_LEDGER=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ledger)
+            USE_LEDGER=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--ledger]"
+            exit 1
+            ;;
+    esac
+done
+
 RPC_URL="${RPC_URL:-http://localhost:8545}"
 OUTPUT_FILE=".env.governance.testnet"
-ACCOUNT_INDEX="${ESPRESSO_DEPLOYER_ACCOUNT_INDEX:-0}"
+ACCOUNT_INDEX="${ACCOUNT_INDEX:-0}"
 OPS_DELAY="${OPS_DELAY:-30}" # 30 seconds default
 SAFE_EXIT_DELAY="${SAFE_EXIT_DELAY:-60}" # 60 seconds default
 
@@ -61,9 +77,14 @@ else
     ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS="${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:?ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS must be set for non-localhost deployments}"
 fi
 
-DEPLOY_CMD="cargo run --bin deploy --release --"
+DEPLOY_CMD="cargo run --bin deploy --"
+if $USE_LEDGER; then
+    DEPLOY_CMD="$DEPLOY_CMD --ledger"
+    unset ESPRESSO_SEQUENCER_ETH_MNEMONIC
+    unset ESPRESSO_DEPLOYER_ACCOUNT_INDEX
+fi
 
-echo "=== Deploying Governance Contracts ==="
+# echo "=== Deploying Governance Contracts ==="
 echo "RPC URL: $RPC_URL"
 if ! is_localhost_rpc "$RPC_URL"; then
     echo "WARNING: This will deploy to a non-localhost network!"
@@ -72,7 +93,6 @@ fi
 
 echo ""
 echo "### Deploying Ops Timelock ###"
-confirm "Deploy Ops Timelock?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --deploy-ops-timelock \
     --ops-timelock-admin "$ESPRESSO_OPS_TIMELOCK_ADMIN" \
@@ -87,7 +107,6 @@ set +a
 
 echo ""
 echo "### Deploying Safe Exit Timelock ###"
-confirm "Deploy Safe Exit Timelock?"
 $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --deploy-safe-exit-timelock \
     --safe-exit-timelock-admin "$ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN" \
@@ -102,7 +121,6 @@ set +a
 
 echo ""
 echo "### Deploying Core Contracts (v1) ###"
-confirm "Deploy core contracts (Fee, LightClient, ESPToken, StakeTable)?"
 # Deploy contracts without timelock ownership
 BASE_ARGS=(
     --rpc-url "$RPC_URL"
@@ -135,7 +153,6 @@ set +a
 
 echo ""
 echo "### Deploying Upgrades (v2/v3) ###"
-confirm "Deploy contract upgrades (RewardClaim, ESPToken v2, LightClient v3, StakeTable v2)?"
 UPGRADE_OUTPUT_FILE="${OUTPUT_FILE}.upgrade"
 $DEPLOY_CMD "${BASE_ARGS[@]}" \
     --deploy-reward-claim-v1 \
@@ -154,7 +171,6 @@ echo ""
 echo "Fee contract owner: $(cast call "$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS" "owner()(address)" --rpc-url "$RPC_URL")"
 echo ""
 echo "### Transferring Fee Contract Ownership to Timelock ###"
-confirm "Transfer Fee Contract ownership to Ops Timelock?"
 $DEPLOY_CMD "${BASE_ARGS[@]}" \
     --transfer-ownership-from-eoa \
     --target-contract FeeContract \

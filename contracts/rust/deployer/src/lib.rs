@@ -112,6 +112,10 @@ const LIBRARY_PLACEHOLDER_ADDRESS: &str = "fffffffffffffffffffffffffffffffffffff
 pub const MAX_HISTORY_RETENTION_SECONDS: u32 = 864000;
 /// Default exit escrow period for stake table (2 days in seconds)
 pub const DEFAULT_EXIT_ESCROW_PERIOD_SECONDS: u64 = 172800;
+/// Maximum number of retries for state checks after transactions
+pub const MAX_RETRY_ATTEMPTS: u32 = 5;
+/// Initial delay in milliseconds for retry exponential backoff
+pub const RETRY_INITIAL_DELAY_MS: u64 = 500;
 
 /// Set of predeployed contracts.
 #[derive(Clone, Debug, Parser)]
@@ -373,6 +377,11 @@ impl Contracts {
 
         tracing::info!("deployed {name} at {addr:#x}");
 
+        // Cooldown after deployment to avoid rate limiting on public RPC nodes
+        // This helps when deploying multiple contracts in sequence
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        tracing::info!("cooldown 1000ms after deployment");
+
         self.0.insert(name, addr);
         Ok(addr)
     }
@@ -624,10 +633,22 @@ pub async fn upgrade_light_client_v2(
                 .await?
                 .get_receipt()
                 .await?;
+            let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
+
             if receipt.inner.is_success() {
+                // check that the upgrade is complete (with retry for RPC timing)
+                let is_complete = retry_until_true("LightClientProxy V2 version check", || async {
+                    Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+                })
+                .await?;
+
+                if !is_complete {
+                    anyhow::bail!(
+                        "LightClientProxy version check failed after retries: expected V2"
+                    );
+                }
+
                 // post deploy verification checks
-                let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
-                assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
                 assert_eq!(proxy_as_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
                 assert_eq!(
                     proxy_as_v2.epochStartBlock().call().await?,
@@ -642,7 +663,7 @@ pub async fn upgrade_light_client_v2(
                     U256::from(provider.get_block_number().await?)
                 );
 
-                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ");
+                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgraded to V2");
                 tracing::info!(
                     "blocksPerEpoch: {}",
                     proxy_as_v2.blocksPerEpoch().call().await?
@@ -763,11 +784,24 @@ pub async fn upgrade_light_client_v3(
                 .await?
                 .get_receipt()
                 .await?;
+
+            let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
+
             if receipt.inner.is_success() {
-                // post deploy verification checks
-                let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
-                assert_eq!(proxy_as_v3.getVersion().call().await?.majorVersion, 3);
-                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgrade to: ")
+                // check that the upgrade is complete (with retry for RPC timing)
+                let version_is_v3 =
+                    retry_until_true("LightClientProxy V3 version check", || async {
+                        Ok(proxy_as_v3.getVersion().call().await?.majorVersion == 3)
+                    })
+                    .await?;
+
+                if !version_is_v3 {
+                    anyhow::bail!(
+                        "LightClientProxy version check failed after retries: expected V3"
+                    );
+                }
+
+                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgraded to V3");
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
             }
@@ -923,9 +957,17 @@ pub async fn upgrade_esp_token_v2(
         .await?;
 
     if receipt.inner.is_success() {
+        // check that the upgrade is complete (with retry for RPC timing)
+        let version_is_v2 = retry_until_true("EspTokenProxy V2 version check", || async {
+            Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+        })
+        .await?;
+
+        if !version_is_v2 {
+            anyhow::bail!("EspTokenProxy version check failed after retries: expected V2");
+        }
+
         // post deploy verification checks
-        let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
-        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
         assert_eq!(proxy_as_v2.name().call().await?, "Espresso");
         assert_eq!(proxy_as_v2.rewardClaim().call().await?, reward_claim_addr);
         tracing::info!(%v2_addr, "EspToken successfully upgraded to");
@@ -1201,11 +1243,20 @@ pub async fn upgrade_stake_table_v2(
         .get_receipt()
         .await?;
 
-    if receipt.inner.is_success() {
-        // post deploy verification checks
-        let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
-        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+    let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
 
+    if receipt.inner.is_success() {
+        //TODO: check event emission instead as it's more reliable
+        // check that the upgrade is complete (with retry for RPC timing)
+        let version_is_v2 = retry_until_true("StakeTableProxy V2 version check", || async {
+            Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+        })
+        .await?;
+        if !version_is_v2 {
+            anyhow::bail!("StakeTableProxy version check failed after retries: expected V2");
+        }
+
+        // post deploy verification checks
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
         assert!(
             proxy_as_v2.hasRole(pauser_role, pauser).call().await?,
@@ -1328,8 +1379,38 @@ pub async fn read_proxy_impl(provider: impl Provider, addr: Address) -> Result<A
         "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
         16,
     )?;
+
+    // Use retry_until_true to verify storage is readable (non-zero address)
+    let is_readable = retry_until_true("Read proxy implementation", || async {
+        match provider.get_storage_at(addr, impl_slot).await {
+            Ok(storage) => {
+                let impl_addr = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
+                // Return true if we got a non-zero address (storage is readable and valid)
+                Ok(impl_addr != Address::default())
+            },
+            Err(e) => {
+                tracing::debug!("Storage read failed (will retry): {}", e);
+                Ok(false)
+            },
+        }
+    })
+    .await?;
+
+    if !is_readable {
+        anyhow::bail!(
+            "Proxy implementation storage is not readable after retries at address {addr:#x}"
+        );
+    }
+
+    // Final read to get the actual address (we know it's readable now)
     let storage = provider.get_storage_at(addr, impl_slot).await?;
-    Ok(Address::from_slice(&storage.to_be_bytes_vec()[12..]))
+    let impl_addr = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
+
+    // If somehow we got zero after retry verified it's non-zero, that's an error
+    if impl_addr == Address::default() {
+        anyhow::bail!("Proxy implementation address is zero after verification");
+    }
+    Ok(impl_addr)
 }
 
 pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bool> {
@@ -1529,6 +1610,36 @@ pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes>
     let encoded_input = func.abi_encode_input(&arg_values)?;
     let data = Bytes::from(encoded_input);
     Ok(data)
+}
+
+/// retry helper for checking state after transactions
+/// Retries up to 5 times with exponential backoff (500ms, 1s, 2s, 4s, 8s)
+/// Parameters:
+/// - `check_name`: the name of the check
+/// - `check_fn`: the function to check
+/// Returns:
+/// - `true` if the check passed, `false` otherwise
+pub async fn retry_until_true<F, Fut>(check_name: &str, mut check_fn: F) -> Result<bool>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
+    for attempt in 0..MAX_RETRY_ATTEMPTS {
+        match check_fn().await {
+            Ok(true) => return Ok(true),
+            Ok(false) | Err(_) if attempt < MAX_RETRY_ATTEMPTS - 1 => {
+                let delay_ms = RETRY_INITIAL_DELAY_MS * (1 << attempt);
+                tracing::warn!("{} not ready, retrying in {}ms...", check_name, delay_ms);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            },
+            Ok(false) => return Ok(false),
+            Err(e) => {
+                tracing::error!("{} failed: {}", check_name, e);
+                return Err(e);
+            },
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]

@@ -18,13 +18,34 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
     set +a
 fi
 
+# Parse command line arguments
+USE_LEDGER=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ledger)
+            USE_LEDGER=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--ledger]"
+            exit 1
+            ;;
+    esac
+done
+
 RPC_URL="${RPC_URL:-http://localhost:8545}"
-ACCOUNT_INDEX="${ESPRESSO_DEPLOYER_ACCOUNT_INDEX:-0}"
+ACCOUNT_INDEX="${ACCOUNT_INDEX:-0}"
 OPS_DELAY="${OPS_DELAY:-30}" # 30 seconds default
 SAFE_EXIT_DELAY="${SAFE_EXIT_DELAY:-60}" # 60 seconds default
 
 export RUST_LOG=warn
-DEPLOY_CMD="cargo run --quiet --bin deploy --release --"
+DEPLOY_CMD="cargo run --quiet --bin deploy --"
+if $USE_LEDGER; then
+    DEPLOY_CMD="$DEPLOY_CMD --ledger"
+    unset ESPRESSO_SEQUENCER_ETH_MNEMONIC
+    unset ESPRESSO_DEPLOYER_ACCOUNT_INDEX
+fi
 
 NEW_ESCROW_PERIOD=$((86400 * 2 ))  # 2 days in seconds
 SALT=$(cast keccak "$(date +%s)")
