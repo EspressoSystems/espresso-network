@@ -5,6 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! Types and Traits for the `HotShot` consensus module
+// False positive from displaydoc derive macro on struct fields
+#![allow(unused_assignments)]
 use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 
 use alloy::primitives::U256;

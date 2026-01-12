@@ -1,16 +1,23 @@
-use std::{sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use espresso_types::SeqTypes;
+use espresso_types::{BlockMerkleTree, SeqTypes};
 use futures::{future::FutureExt, stream::StreamExt};
 use hotshot_query_service::{
-    availability::AvailabilityDataSource,
+    availability::{AvailabilityDataSource, LeafId},
     data_source::{storage::NodeStorage, VersionedDataSource},
+    merklized_state::{MerklizedStateDataSource, Snapshot},
+    node::BlockId,
+    types::HeightIndexed,
     Error,
 };
-use light_client::consensus::leaf::LeafProof;
-use tide_disco::{method::ReadState, Api, StatusCode};
+use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
+use jf_merkle_tree_compat::MerkleTreeScheme;
+use light_client::consensus::{header::HeaderProof, leaf::LeafProof};
+use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
+
+use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
 async fn get_leaf_proof<State>(
     state: &State,
@@ -62,10 +69,7 @@ where
         let leaf = leaf
             .with_timeout(fetch_timeout)
             .await
-            .ok_or_else(|| Error::Custom {
-                message: "missing leaves".into(),
-                status: StatusCode::NOT_FOUND,
-            })?;
+            .ok_or_else(|| not_found("missing leaves"))?;
 
         if proof.push(leaf) {
             return Ok(proof);
@@ -77,15 +81,51 @@ where
     // by appending two more QCs.
     if finalized.is_none() {
         let Some([committing_qc, deciding_qc]) = qc_chain else {
-            return Err(Error::Custom {
-                message: "missing QC 2-chain to prove finality".into(),
-                status: StatusCode::NOT_FOUND,
-            });
+            return Err(not_found("missing QC 2-chain to prove finality"));
         };
         proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
     }
 
     Ok(proof)
+}
+
+async fn get_header_proof<State>(
+    state: &State,
+    root: u64,
+    requested: BlockId<SeqTypes>,
+    fetch_timeout: Duration,
+) -> Result<HeaderProof, Error>
+where
+    State: AvailabilityDataSource<SeqTypes>
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + VersionedDataSource,
+{
+    let header = state
+        .get_header(requested)
+        .await
+        .with_timeout(fetch_timeout)
+        .await
+        .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
+    if header.height() >= root {
+        return Err(Error::Custom {
+            message: format!(
+                "height ({}) must be less than root ({root})",
+                header.height()
+            ),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+    let path = MerklizedStateDataSource::<SeqTypes, BlockMerkleTree, _>::get_path(
+        state,
+        Snapshot::Index(root),
+        header.height(),
+    )
+    .await
+    .map_err(|source| Error::MerklizedState {
+        source: source.into(),
+    })?;
+
+    Ok(HeaderProof::new(header, path))
 }
 
 #[derive(Debug)]
@@ -112,7 +152,11 @@ pub(super) fn define_api<S, ApiVer: StaticVersionType + 'static>(
 ) -> Result<Api<S, Error, ApiVer>>
 where
     S: ReadState + Send + Sync + 'static,
-    S::State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    S::State: AvailabilityDataSource<SeqTypes>
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + NodeStateDataSource
+        + StakeTableDataSource<SeqTypes>
+        + VersionedDataSource,
     for<'a> <S::State as VersionedDataSource>::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/light-client.toml"))?;
@@ -123,17 +167,110 @@ where
 
     api.get("leaf", move |req, state| {
         async move {
-            let requested = req.integer_param("number").map_err(|err| Error::Custom {
-                message: err.to_string(),
-                status: StatusCode::BAD_REQUEST,
-            })?;
+            let requested = leaf_height_from_req(&req, state, fetch_timeout).await?;
             let finalized = req
                 .opt_integer_param("finalized")
-                .map_err(|err| Error::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::BAD_REQUEST,
-                })?;
+                .map_err(bad_param("finalized"))?;
             get_leaf_proof(state, requested, finalized, fetch_timeout).await
+        }
+        .boxed()
+    })?
+    .get("header", move |req, state| {
+        async move {
+            let root = req.integer_param("root").map_err(bad_param("root"))?;
+            let requested = if let Some(height) = req
+                .opt_integer_param("height")
+                .map_err(bad_param("height"))?
+            {
+                BlockId::Number(height)
+            } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
+                BlockId::Hash(hash)
+            } else if let Some(hash) = req
+                .opt_blob_param("payload-hash")
+                .map_err(bad_param("payload-hash"))?
+            {
+                BlockId::PayloadHash(hash)
+            } else {
+                return Err(Error::Custom {
+                    message: "missing parameter: requested header must be identified by height, \
+                              hash, or payload hash"
+                        .into(),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            };
+            get_header_proof(state, root, requested, fetch_timeout).await
+        }
+        .boxed()
+    })?
+    .get("stake_table", move |req, state| {
+        async move {
+            let epoch: u64 = req.integer_param("epoch").map_err(bad_param("epoch"))?;
+
+            let node_state = state.node_state().await;
+            let epoch_height = node_state.epoch_height.ok_or_else(|| Error::Custom {
+                message: "epoch state not set".into(),
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+            })?;
+            let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
+
+            if epoch < first_epoch + 2 {
+                return Err(Error::Custom {
+                    message: format!("epoch must be at least {}", first_epoch + 2),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
+            // Find the range of L1 block containing events for this epoch. This is determined by
+            // the `l1_finalized` field of the epoch root (from two epochs prior) and the previous
+            // epoch's epoch root.
+            let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
+            let epoch_root = state
+                .get_header(epoch_root_height)
+                .await
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| {
+                    not_found(format!("missing epoch root header {epoch_root_height}"))
+                })?;
+            let to_l1_block = epoch_root
+                .l1_finalized()
+                .ok_or_else(|| Error::Custom {
+                    message: "epoch root header is missing L1 finalized block".into(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?
+                .number();
+
+            let from_l1_block = if epoch >= first_epoch + 3 {
+                let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
+                let prev_epoch_root = state
+                    .get_header(prev_epoch_root_height)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| {
+                        not_found(format!(
+                            "missing previous epoch root header {prev_epoch_root_height}"
+                        ))
+                    })?;
+                prev_epoch_root
+                    .l1_finalized()
+                    .ok_or_else(|| Error::Custom {
+                        message: "previous epoch root header is missing L1 finalized block".into(),
+                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                    })?
+                    .number()
+                    + 1
+            } else {
+                0
+            };
+
+            state
+                .stake_table_events(from_l1_block, to_l1_block)
+                .await
+                .map_err(|err| Error::Custom {
+                    message: format!("failed to load stake table events: {err:#}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })
         }
         .boxed()
     })?;
@@ -141,13 +278,87 @@ where
     Ok(api)
 }
 
+async fn leaf_height_from_req<S>(
+    req: &RequestParams,
+    state: &S,
+    fetch_timeout: Duration,
+) -> Result<usize, Error>
+where
+    S: AvailabilityDataSource<SeqTypes>,
+{
+    if let Some(height) = req
+        .opt_integer_param("height")
+        .map_err(bad_param("height"))?
+    {
+        return Ok(height);
+    } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
+        let leaf = state
+            .get_leaf(LeafId::Hash(hash))
+            .await
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found(format!("unknown leaf hash {hash}")))?;
+        return Ok(leaf.height() as usize);
+    } else if let Some(hash) = req
+        .opt_blob_param("block-hash")
+        .map_err(bad_param("block-hash"))?
+    {
+        let header = state
+            .get_header(BlockId::Hash(hash))
+            .await
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found(format!("unknown block hash {hash}")))?;
+        return Ok(header.height() as usize);
+    } else if let Some(hash) = req
+        .opt_blob_param("payload-hash")
+        .map_err(bad_param("payload-hash"))?
+    {
+        let header = state
+            .get_header(BlockId::PayloadHash(hash))
+            .await
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found(format!("unknown payload hash {hash}")))?;
+        return Ok(header.height() as usize);
+    }
+
+    Err(Error::Custom {
+        message: "missing parameter: requested leaf must be identified by height, hash, block \
+                  hash, or payload hash"
+            .into(),
+        status: StatusCode::BAD_REQUEST,
+    })
+}
+
+fn bad_param<E>(name: &'static str) -> impl FnOnce(E) -> Error
+where
+    E: Display,
+{
+    move |err| Error::Custom {
+        message: format!("{name}: {err:#}"),
+        status: StatusCode::BAD_REQUEST,
+    }
+}
+
+fn not_found(msg: impl Into<String>) -> Error {
+    Error::Custom {
+        message: msg.into(),
+        status: StatusCode::NOT_FOUND,
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use espresso_types::EpochVersion;
-    use hotshot_query_service::data_source::{storage::UpdateAvailabilityStorage, Transaction};
+    use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, BLOCK_MERKLE_TREE_HEIGHT};
+    use hotshot_query_service::{
+        data_source::{storage::UpdateAvailabilityStorage, Transaction},
+        merklized_state::UpdateStateData,
+    };
     use hotshot_types::simple_certificate::CertificatePair;
+    use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath};
     use light_client::{
-        consensus::leaf::FinalityProof,
+        consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
             leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, EnableEpochs, LegacyVersion,
             VersionCheckQuorum,
@@ -185,7 +396,10 @@ mod test {
         // Ask for the first leaf; it is proved finalized by the chain formed along with the second.
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
     }
@@ -215,7 +429,7 @@ mod test {
             .unwrap();
         assert_eq!(
             proof
-                .verify(&AlwaysTrueQuorum, Some(leaves[1].leaf()))
+                .verify(LeafProofHint::assumption(leaves[1].leaf()))
                 .await
                 .unwrap(),
             leaves[0]
@@ -311,7 +525,10 @@ mod test {
 
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
         assert_eq!(
-            proof.verify(&AlwaysTrueQuorum, None).await.unwrap(),
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
             leaves[0]
         );
     }
@@ -332,7 +549,10 @@ mod test {
         // chain we would have required 3.
         let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=4, 2).await;
         assert_eq!(leaves[0].header().version(), LegacyVersion::version());
-        assert_eq!(leaves[1].header().version(), EpochVersion::version());
+        assert_eq!(
+            leaves[1].header().version(),
+            DrbAndHeaderUpgradeVersion::version()
+        );
         let qcs = [
             CertificatePair::for_parent(leaves[2].leaf()),
             CertificatePair::for_parent(leaves[3].leaf()),
@@ -349,14 +569,95 @@ mod test {
         let proof = get_leaf_proof(&ds, 1, None, Duration::MAX).await.unwrap();
         assert_eq!(
             proof
-                .verify(
-                    &VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone())),
-                    None
-                )
+                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                )))
                 .await
                 .unwrap(),
             leaves[0]
         );
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }))
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_header_proof() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Construct a chain of leaves, plus the corresponding block Merkle tree at each leaf.
+        let leaves = leaf_chain::<EpochVersion>(0..=2).await;
+        let mts = leaves
+            .iter()
+            .scan(
+                BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
+                |mt, leaf| {
+                    assert_eq!(mt.commitment(), leaf.header().block_merkle_tree_root());
+                    let item = mt.clone();
+                    mt.push(leaf.block_hash()).unwrap();
+                    Some(item)
+                },
+            )
+            .collect::<Vec<_>>();
+
+        // Save all those objects in the DB.
+        {
+            let mut tx = ds.write().await.unwrap();
+            for (leaf, mt) in leaves.iter().zip(&mts) {
+                tx.insert_leaf(leaf.clone()).await.unwrap();
+
+                if leaf.height() > 0 {
+                    let merkle_path = mt.lookup(leaf.height() - 1).expect_ok().unwrap().1;
+                    UpdateStateData::<SeqTypes, BlockMerkleTree, _>::insert_merkle_nodes(
+                        &mut tx,
+                        merkle_path,
+                        ToTraversalPath::<{ BlockMerkleTree::ARITY }>::to_traversal_path(
+                            &(leaf.height() - 1),
+                            BLOCK_MERKLE_TREE_HEIGHT,
+                        ),
+                        leaf.height(),
+                    )
+                    .await
+                    .unwrap();
+                    UpdateStateData::<SeqTypes, BlockMerkleTree, _>::set_last_state_height(
+                        &mut tx,
+                        leaf.height() as usize,
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // Test happy path.
+        for (root, mt) in mts.iter().enumerate().skip(1) {
+            for (height, leaf) in leaves.iter().enumerate().take(root) {
+                tracing::info!(root, height, "test happy path");
+                let proof =
+                    get_header_proof(&ds, root as u64, BlockId::Number(height), Duration::MAX)
+                        .await
+                        .unwrap();
+                assert_eq!(proof.verify_ref(mt.commitment()).unwrap(), leaf.header());
+            }
+        }
+
+        // Test unknown leaf.
+        let err = get_header_proof(&ds, 5, BlockId::Number(4), Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        // Test height >= root.
+        let err = get_header_proof(&ds, 1, BlockId::Number(1), Duration::MAX)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 }

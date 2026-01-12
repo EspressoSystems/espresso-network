@@ -77,6 +77,12 @@ import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 /// `MetadataUriUpdated` event is emitted when validators update their URI. Metadata URIs can be
 /// empty and cannot exceed 2048 bytes.
 ///
+///12. A minimum delegation amount (`minDelegateAmount`) is enforced to prevent dust delegations
+/// and reduce state bloat. The minimum is initialized to 1 ESP token (1 ether) in `initializeV2`
+/// and
+/// can be updated by governance via the `setMinDelegateAmount` function. The `delegate` function
+/// reverts with `DelegateAmountTooSmall` if the delegation amount is below the minimum.
+///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 ///
@@ -293,6 +299,9 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
     /// The delegate amount is too small
     error DelegateAmountTooSmall();
 
+    /// The minimum delegate amount is too small
+    error MinDelegateAmountTooSmall();
+
     /// @notice Constructor
     /// @dev This function is overridden to disable initializers
     constructor() {
@@ -346,7 +355,8 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         // Initialize undelegation IDs to start at 1 (0 is reserved for V1 undelegations)
         nextUndelegationId = 1;
 
-        // Initialize min delegate amount to 1 ESP token
+        // Initialize min delegate amount to 1 ESP token (the token is hardcoded to 18 decimals, the
+        // same as 1 ether)
         minDelegateAmount = 1 ether;
 
         // initialize commissions (if the contract under upgrade has existing state)
@@ -913,6 +923,10 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         virtual
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
+        if (newMinDelegateAmount < 1 wei) {
+            revert MinDelegateAmountTooSmall();
+        }
+
         minDelegateAmount = newMinDelegateAmount;
         emit MinDelegateAmountUpdated(newMinDelegateAmount);
     }

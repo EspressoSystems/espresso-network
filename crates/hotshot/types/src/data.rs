@@ -540,23 +540,23 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
-        // let version = upgrade_lock.version_infallible(view).await;
         let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
         let upgraded_vid2 = upgrade_lock.upgraded_vid2(view).await;
-        if !epochs_enabled {
-            VidDisperse0::calculate_vid_disperse(
+        if upgraded_vid2 {
+            VidDisperse2::calculate_vid_disperse(
                 payload,
                 membership,
                 view,
                 target_epoch,
                 data_epoch,
+                metadata,
             )
             .await
             .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V0(disperse),
+                disperse: Self::V2(disperse),
                 duration,
             })
-        } else if !upgraded_vid2 {
+        } else if epochs_enabled {
             VidDisperse1::calculate_vid_disperse(
                 payload,
                 membership,
@@ -571,17 +571,16 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 duration,
             })
         } else {
-            VidDisperse2::calculate_vid_disperse(
+            VidDisperse0::calculate_vid_disperse(
                 payload,
                 membership,
                 view,
                 target_epoch,
                 data_epoch,
-                metadata,
             )
             .await
             .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V2(disperse),
+                disperse: Self::V0(disperse),
                 duration,
             })
         }

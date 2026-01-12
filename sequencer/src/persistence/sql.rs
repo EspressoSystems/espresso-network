@@ -369,7 +369,7 @@ impl From<SqliteOptions> for Options {
     fn from(opt: SqliteOptions) -> Self {
         Options {
             sqlite_options: opt,
-            max_connections: 10,
+            max_connections: 5,
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
@@ -2577,6 +2577,7 @@ impl MembershipPersistence for Persistence {
     ///
     async fn load_events(
         &self,
+        from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
@@ -2607,9 +2608,10 @@ impl MembershipPersistence for Persistence {
         };
 
         let rows = query(
-            "SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER \
-             BY l1_block ASC, log_index ASC",
+            "SELECT l1_block, log_index, event FROM stake_table_events WHERE $1 <= l1_block AND \
+             l1_block <= $2 ORDER BY l1_block ASC, log_index ASC",
         )
+        .bind(i64::try_from(from_l1_block)?)
         .bind(query_l1_block)
         .fetch_all(tx.as_mut())
         .await?;

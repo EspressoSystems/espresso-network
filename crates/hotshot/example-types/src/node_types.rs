@@ -383,6 +383,38 @@ impl Versions for DaCommitteeTestVersions {
     type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
+#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Vid2TestVersions {}
+
+impl Versions for Vid2TestVersions {
+    type Base = StaticVersion<0, 6>;
+    type Upgrade = StaticVersion<0, 6>;
+    const UPGRADE_HASH: [u8; 32] = [
+        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    type Epochs = StaticVersion<0, 3>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
+}
+
+#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Vid2UpgradeTestVersions {}
+
+impl Versions for Vid2UpgradeTestVersions {
+    type Base = StaticVersion<0, 5>;
+    type Upgrade = StaticVersion<0, 6>;
+    const UPGRADE_HASH: [u8; 32] = [
+        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    type Epochs = StaticVersion<0, 3>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
+}
+
 #[cfg(test)]
 mod tests {
     use committable::{Commitment, Committable};
