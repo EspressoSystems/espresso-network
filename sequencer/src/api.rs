@@ -1,6 +1,6 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -49,6 +49,7 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
+use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
 use tokio::time::timeout;
@@ -93,12 +94,21 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
     // without waiting.
     #[derivative(Debug = "ignore")]
     sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
+
+    token_contract_address: Cache<(), Address>,
+
+    token_supply: Cache<(), U256>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState<N, P, V> {
     fn new(context_init: impl Future<Output = SequencerContext<N, P, V>> + Send + 'static) -> Self {
         Self {
             sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
+            token_contract_address: Cache::builder().max_capacity(1).build(),
+            token_supply: Cache::builder()
+                .max_capacity(1)
+                .time_to_live(Duration::from_secs(3600))
+                .build(),
         }
     }
 
@@ -265,25 +275,58 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDat
     for ApiState<N, P, V>
 {
     async fn get_total_supply(&self) -> anyhow::Result<U256> {
-        let node_state = self.sequencer_context.as_ref().get().await.node_state();
+        match self.token_supply.get(&()).await {
+            Some(supply) => Ok(supply),
+            None => match self.token_contract_address.get(&()).await {
+                Some(token_contract_address) => {
+                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                    let provider = node_state.l1_client.provider;
 
-        let stake_table_address = node_state
-            .chain_config
-            .stake_table_contract
-            .context("No stake table contract in chain config")?;
-        let provider = node_state.l1_client.provider;
+                    let token = EspToken::new(token_contract_address, provider.clone());
 
-        let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
-        let token_address = stake_table.token().call().await?;
+                    let supply = token
+                        .totalSupply()
+                        .call()
+                        .await
+                        .context("Failed to retrieve totalSupply from the contract")?;
 
-        let token = EspToken::new(token_address, provider.clone());
-        token
-            .totalSupply()
-            .call()
-            .await
-            .context("Failed to retrieve totalSupply from the contract")
+                    self.token_supply.insert((), supply).await;
+
+                    Ok(supply)
+                },
+                None => {
+                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                    let stake_table_address = node_state
+                        .chain_config
+                        .stake_table_contract
+                        .context("No stake table contract in chain config")?;
+
+                    let provider = node_state.l1_client.provider;
+
+                    let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
+                    let token_contract_address = stake_table.token().call().await?;
+
+                    self.token_contract_address
+                        .insert((), token_contract_address)
+                        .await;
+
+                    let token = EspToken::new(token_contract_address, provider.clone());
+
+                    let supply = token
+                        .totalSupply()
+                        .call()
+                        .await
+                        .context("Failed to retrieve totalSupply from the contract")?;
+
+                    self.token_supply.insert((), supply).await;
+
+                    Ok(supply)
+                },
+            },
+        }
     }
 }
+
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
 {
