@@ -189,8 +189,8 @@ pub enum ProposalValidationError {
     LeaderCountsNotReset,
     #[error("Invalid leader counts: expected {expected:?}, proposed {proposed:?}")]
     InvalidLeaderCounts {
-        expected: LeaderCounts,
-        proposed: LeaderCounts,
+        expected: Box<LeaderCounts>,
+        proposed: Box<LeaderCounts>,
     },
 }
 
@@ -537,6 +537,7 @@ pub(crate) struct ValidatedTransition<'a> {
 }
 
 impl<'a> ValidatedTransition<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         state: ValidatedState,
         parent: &'a Header,
@@ -860,8 +861,8 @@ impl<'a> ValidatedTransition<'a> {
 
         if proposed_counts != &expected_counts {
             return Err(ProposalValidationError::InvalidLeaderCounts {
-                expected: expected_counts,
-                proposed: *proposed_counts,
+                expected: Box::new(expected_counts),
+                proposed: Box::new(*proposed_counts),
             });
         }
 

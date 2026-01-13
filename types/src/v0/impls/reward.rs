@@ -1177,7 +1177,7 @@ impl EpochRewardsCalculator {
             .iter()
             .filter_map(|entry| {
                 membership
-                    .get_validator_config(&prev_epoch, entry.stake_table_entry.stake_key.clone())
+                    .get_validator_config(&prev_epoch, entry.stake_table_entry.stake_key)
                     .ok()
             })
             .collect();
@@ -1325,7 +1325,7 @@ impl EpochRewardsCalculator {
         amount: RewardAmount,
     ) -> anyhow::Result<()> {
         let mut err = None;
-        *tree = tree.persistent_update_with(account.clone(), |balance| {
+        *tree = tree.persistent_update_with(*account, |balance| {
             let balance = balance.copied();
             match balance.unwrap_or_default().0.checked_add(amount.0) {
                 Some(updated) => Some(updated.into()),
