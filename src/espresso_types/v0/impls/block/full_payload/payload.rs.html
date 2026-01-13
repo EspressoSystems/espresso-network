@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>    <span class="comment">// PRIVATE HELPERS START HERE
 <a href=#71 id=71 data-nosnippet>71</a>
 <a href=#72 id=72 data-nosnippet>72</a>    </span><span class="doccomment">/// Need a sync version of [`BlockPayload::from_transactions`] in order to impl [`BlockPayload::empty`].
-<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">fn </span>from_transactions_sync(
+<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">pub fn </span>from_transactions_sync(
 <a href=#74 id=74 data-nosnippet>74</a>        transactions: <span class="kw">impl </span>IntoIterator&lt;Item = &lt;<span class="self">Self </span><span class="kw">as </span>BlockPayload&lt;SeqTypes&gt;&gt;::Transaction&gt; + Send,
 <a href=#75 id=75 data-nosnippet>75</a>        chain_config: ChainConfig,
 <a href=#76 id=76 data-nosnippet>76</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;
