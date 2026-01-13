@@ -8,6 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
     sync::Arc,
+    time::Duration,
 };
 
 use async_broadcast::{Receiver, Sender};
@@ -26,8 +27,10 @@ use hotshot_types::{
         BlockPayload, EncodeBytes,
     },
     utils::{is_epoch_transition, is_last_block},
+    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
+use tokio::time::timeout;
 use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
@@ -228,15 +231,15 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         }
 
         // Request a block from the builder unless we are between versions.
+        let upgrade = self
+            .upgrade_lock
+            .decided_upgrade_certificate
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|cert| cert.upgrading_in(block_view));
         let block = {
-            if self
-                .upgrade_lock
-                .decided_upgrade_certificate
-                .read()
-                .await
-                .as_ref()
-                .is_some_and(|cert| cert.upgrading_in(block_view))
-            {
+            if upgrade {
                 None
             } else {
                 self.wait_for_block(block_view, receiver).await
@@ -249,6 +252,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             fee,
         }) = block
         {
+            tracing::error!("broadcasting block to consensus");
             broadcast_event(
                 Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
                     block_payload.encode(),
@@ -288,10 +292,13 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         block_view: TYPES::View,
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
-        let (previous_block, metadata) = self
-            .wait_for_previous_block(block_view - 1, receiver)
-            .await
-            .ok()?;
+        let (previous_block, metadata) = timeout(
+            Duration::from_secs(1),
+            self.wait_for_previous_block(block_view - 1, receiver),
+        )
+        .await
+        .ok()?
+        .ok()?;
         self.handle_block(block_view - 1, previous_block, metadata)
             .await;
         let PayloadWithMetadata { payload, metadata } = self.build_block(block_view).await?;
@@ -335,7 +342,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                 break;
             };
             in_flight_txns.extend(payload);
-            view = proposal.data.view_number();
+            view = proposal.data.justify_qc().view_number();
         }
         transactions.retain(|transaction| !in_flight_txns.contains(transaction));
         let validated_state = self
@@ -365,10 +372,23 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         TYPES::BlockPayload,
         <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     )> {
+        if let Some(payload_with_metadata) = self
+            .consensus
+            .read()
+            .await
+            .saved_payloads()
+            .get(&parent_view)
+        {
+            return Ok((
+                payload_with_metadata.payload.clone(),
+                payload_with_metadata.metadata.clone(),
+            ));
+        }
         // TODO: Handle the case where the block is received before this call
         while let Ok(event) = receiver.recv_direct().await {
             if let HotShotEvent::BlockReconstructed(block, metadata, view) = event.as_ref() {
                 if *view == parent_view {
+                    tracing::error!("Received block for parent view {parent_view}, building block");
                     return Ok((block.clone(), metadata.clone()));
                 }
             }
@@ -385,7 +405,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         version: Version,
     ) {
         // If we couldn't get a block, send an empty block
-        tracing::info!("Failed to get a block for view {block_view}, proposing empty block");
+        tracing::error!("Failed to get a block for view {block_view}, proposing empty block");
 
         // Increment the metric for number of empty blocks proposed
         self.consensus

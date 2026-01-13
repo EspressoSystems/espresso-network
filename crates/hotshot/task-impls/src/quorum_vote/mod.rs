@@ -727,6 +727,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             // },
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();
+                let vid_epoch = share.data.epoch();
+                let target_epoch = share.data.target_epoch();
+                let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
+
+                let leader = membership_reader.leader(view).await?;
                 // Do nothing if the VID share is old
                 tracing::trace!("Received VID share for view {view}");
                 ensure!(
@@ -739,7 +744,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 // Check that the signature is valid
                 ensure!(
-                    sender.validate(&share.signature, payload_commitment.as_ref()),
+                    sender.validate(&share.signature, payload_commitment.as_ref())
+                        || leader.validate(&share.signature, payload_commitment.as_ref()),
                     warn!(
                         "VID share signature is invalid, sender: {}, signature: {:?}, \
                          payload_commitment: {:?}",
@@ -747,9 +753,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     )
                 );
 
-                let vid_epoch = share.data.epoch();
-                let target_epoch = share.data.target_epoch();
-                let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
                 // ensure that the VID share was sent by a DA member OR the view leader
                 ensure!(
                     membership_reader
@@ -799,6 +802,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // If it's the first time receiving our share send it to all nodes
                 if *share.data.recipient_key() == self.public_key {
                     if let VidDisperseShare::V2(ref inner_share) = share.data {
+                        tracing::error!("Received our own VID share for view {view}");
                         let proposal = Proposal {
                             signature: share.signature.clone(),
                             data: inner_share.clone(),
@@ -809,6 +813,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                             &event_sender.clone(),
                         )
                         .await;
+                        self.create_dependency_task_if_new(
+                            view,
+                            event_receiver,
+                            &event_sender,
+                            Arc::clone(&event),
+                        );
                     }
                 }
 
@@ -817,12 +827,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     &event_sender.clone(),
                 )
                 .await;
-                self.create_dependency_task_if_new(
-                    view,
-                    event_receiver,
-                    &event_sender,
-                    Arc::clone(&event),
-                );
             },
             HotShotEvent::Timeout(view, ..) => {
                 let view = TYPES::View::new(view.saturating_sub(1));
