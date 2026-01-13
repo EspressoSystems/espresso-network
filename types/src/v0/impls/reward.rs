@@ -1,4 +1,9 @@
-use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
+use std::{
+    borrow::Borrow,
+    collections::{HashMap, HashSet},
+    iter::once,
+    str::FromStr,
+};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
@@ -1026,10 +1031,10 @@ pub struct EpochRewardsResult {
 /// Manages epoch-based reward calculations in the background.
 #[derive(Debug, Default)]
 pub struct EpochRewardsCalculator {
-    /// Currently running calculation task handle
-    pending: Option<JoinHandle<anyhow::Result<EpochRewardsResult>>>,
-    /// Latest completed calculation result.
-    completed: Option<EpochRewardsResult>,
+    /// Cached results by epoch - multiple consumers can read these
+    results: HashMap<EpochNumber, EpochRewardsResult>,
+    /// Pending calculations by epoch
+    pending: HashMap<EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>>,
 }
 
 impl EpochRewardsCalculator {
@@ -1037,11 +1042,46 @@ impl EpochRewardsCalculator {
         Self::default()
     }
 
+    /// Check if we have a cached result for epoch.
+    pub fn has_result(&self, epoch: EpochNumber) -> bool {
+        self.results.contains_key(&epoch)
+    }
+
+    /// Check if calculation is in progress for epoch.
+    pub fn is_calculating(&self, epoch: EpochNumber) -> bool {
+        self.pending.contains_key(&epoch)
+    }
+
+    /// Get result for epoch, awaiting pending calculation if needed.
+    pub async fn get_result(&mut self, epoch: EpochNumber) -> Option<EpochRewardsResult> {
+        if let Some(result) = self.results.get(&epoch) {
+            return Some(result.clone());
+        }
+
+        // Await pending calculation if exists
+        if let Some(handle) = self.pending.remove(&epoch) {
+            match handle.await {
+                Ok(Ok(result)) => {
+                    tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
+                    self.results.insert(epoch, result.clone());
+                    return Some(result);
+                },
+                Ok(Err(e)) => {
+                    tracing::error!(%epoch, error = %e, "epoch rewards calculation failed");
+                },
+                Err(e) => {
+                    tracing::error!(%epoch, error = %e, "epoch rewards task panicked");
+                },
+            }
+        }
+
+        None
+    }
+
     /// Start a background calculation for the given epoch.
     ///
-    /// Any previously pending/completed calculation is discarded. The new calculation
-    /// will be awaited in `apply_epoch_rewards` at the next epoch boundary.
-    pub fn start_epoch_calculation(
+    /// Does nothing if calculation is already done or in progress for this epoch.
+    pub fn start_calculation(
         &mut self,
         epoch: EpochNumber,
         leader_counts: LeaderCounts,
@@ -1049,63 +1089,28 @@ impl EpochRewardsCalculator {
         block_reward: RewardAmount,
         validators: Vec<Validator<BLSPubKey>>,
     ) {
+        if self.results.contains_key(&epoch) {
+            tracing::debug!(%epoch, "calculation already completed, skipping");
+            return;
+        }
+        if self.pending.contains_key(&epoch) {
+            tracing::debug!(%epoch, "calculation already in progress, skipping");
+            return;
+        }
+
         let handle = tokio::spawn(async move {
             Self::calculate_all_rewards(epoch, leader_counts, reward_tree, block_reward, validators)
                 .await
         });
-        self.pending = Some(handle);
+        self.pending.insert(epoch, handle);
 
         tracing::info!(%epoch, "started epoch rewards calculation");
     }
 
-    /// Check if there's a completed tree ready.
-    pub fn has_completed(&self) -> bool {
-        self.completed.is_some()
-    }
-
-    /// Check if a calculation is in progress.
-    pub fn is_calculating(&self) -> bool {
-        self.pending.is_some()
-    }
-
-    /// Apply epoch rewards at epoch boundary.
-    pub async fn apply_epoch_rewards(
-        &mut self,
-        epoch: EpochNumber,
-        leader_counts: LeaderCounts,
-        reward_tree: RewardMerkleTreeV2,
-        block_reward: RewardAmount,
-        validators: Vec<Validator<BLSPubKey>>,
-    ) -> anyhow::Result<Option<EpochRewardsResult>> {
-        let result: anyhow::Result<Option<EpochRewardsResult>> =
-            match (self.completed.take(), self.pending.take()) {
-                (Some(result), _) => Ok(Some(result)),
-                (None, Some(handle)) => {
-                    tracing::info!("waiting for epoch rewards calculation to complete");
-                    match handle.await {
-                        Ok(Ok(result)) => {
-                            tracing::info!("epoch rewards calculation completed");
-                            Ok(Some(result))
-                        },
-                        Ok(Err(e)) => {
-                            tracing::error!(error = %e, "epoch rewards calculation failed");
-                            Err(e.context("epoch rewards calculation failed"))
-                        },
-                        Err(e) => {
-                            tracing::error!(error = %e, "epoch rewards task panicked");
-                            Err(anyhow::anyhow!("epoch rewards task panicked: {}", e))
-                        },
-                    }
-                },
-                (None, None) => Ok(None),
-            };
-
-        // Always start new calculation for current epoch, even if previous one failed
-        self.start_epoch_calculation(epoch, leader_counts, reward_tree, block_reward, validators);
-
-        // Validate the completed result is for the previous epoch, then propagate any error
-        let expected_epoch = epoch - 1;
-        Ok(result?.filter(|r| r.epoch == expected_epoch))
+    /// Clean up cached results for epochs before the given epoch.
+    pub fn cleanup_before(&mut self, epoch: EpochNumber) {
+        self.results.retain(|&e, _| e >= epoch);
+        // Note: Don't clean up pending calculations - let them complete
     }
 
     /// Trigger a background epoch reward calculation.
@@ -1234,17 +1239,12 @@ impl EpochRewardsCalculator {
         let prev_block_reward = instance_state.block_reward(prev_epoch).await.unwrap();
 
         // Start the background calculation
-        self.start_epoch_calculation(
+        self.start_calculation(
             prev_epoch,
             *prev_leader_counts,
             validated_state.reward_merkle_tree_v2.clone(),
             prev_block_reward,
             prev_validators,
-        );
-
-        tracing::info!(
-            %prev_epoch,
-            "catchup: started background calculation for previous epoch"
         );
     }
 

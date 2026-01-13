@@ -759,7 +759,7 @@ impl Header {
         let parent_counts = parent_header.leader_counts();
 
         // If parent was the last block of an epoch, current block is epoch start
-        let is_epoch_start = is_last_block(height - 1, epoch_height);
+        let is_epoch_start = is_last_block(height.saturating_sub(1), epoch_height);
 
         if is_epoch_start || parent_counts.is_none() {
             leader_counts[leader_index] = 1;
@@ -826,24 +826,26 @@ impl Header {
         let epoch_height = instance_state.epoch_height.unwrap();
 
         let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+        let prev_epoch = EpochNumber::new(*epoch - 1);
         let coordinator = instance_state.coordinator.clone();
-        let first_epoch = coordinator.membership().read().await.first_epoch();
+        let first_epoch = coordinator.membership().read().await.first_epoch().unwrap();
 
         // Check if rewards are enabled for this epoch
-        let distribute_rewards = first_epoch.map(|fe| epoch > fe + 2).unwrap_or(false);
+        let distribute_rewards = epoch > first_epoch + 1;
         if !distribute_rewards {
             return Ok((RewardAmount::default(), HashSet::new()));
         }
 
         let mut manager = instance_state.epoch_rewards_calculator.lock().await;
 
-        // Catchup for late-joining validators: If we have no pending or completed calculation
-        // and this is not the first epoch where rewards can be distributed, trigger
-        // a background calculation by fetching the previous epoch's leader_counts.
-        let needs_catchup = !manager.has_completed() && !manager.is_calculating();
+        // If we have no result or pending calculation
+        // for the previous epoch, trigger a background calculation.
 
-        if needs_catchup {
-            // Start catchup calculation in the background
+        if !manager.has_result(prev_epoch)
+            && !manager.is_calculating(prev_epoch)
+            && epoch > first_epoch + 2
+        {
+            tracing::info!(%epoch, %prev_epoch, "triggering catchup epoch reward calculation");
             manager
                 .trigger_epoch_reward_calculation(
                     epoch,
@@ -873,7 +875,6 @@ impl Header {
         drop(membership);
 
         // Fetch missing reward accounts before starting the calculation.
-        // This ensures the tree has all accounts that will be updated.
         let accounts_to_update: Vec<_> = leader_counts
             .iter()
             .enumerate()
@@ -888,8 +889,6 @@ impl Header {
         let missing_accounts = validated_state.forgotten_reward_accounts_v2(accounts_to_update);
 
         if !missing_accounts.is_empty() {
-            // The tree was last updated at end of epoch-1 with rewards for epoch-2,
-            // so it corresponds to the state at the end of epoch-2.
             let tree_state_height = (*epoch - 2) * epoch_height;
             let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
 
@@ -920,33 +919,36 @@ impl Header {
             }
         }
 
-        let block_reward = instance_state.block_reward(epoch).await.unwrap_or_default();
+        let block_reward = instance_state.block_reward(epoch).await.unwrap();
 
-        // Apply epoch rewards: wait for pending, apply completed rewards, start new calculation
-        let (epoch_rewards_applied, changed_accounts) = match manager
-            .apply_epoch_rewards(
-                epoch,
-                *leader_counts,
-                validated_state.reward_merkle_tree_v2.clone(),
-                block_reward,
-                validators,
-            )
-            .await?
-        {
-            Some(result) => {
-                tracing::info!(
-                    current_epoch = %epoch,
-                    "applying completed epoch rewards"
-                );
-                validated_state.reward_merkle_tree_v2 = result.reward_tree;
-                (result.total_distributed, result.changed_accounts)
-            },
-            None => {
-                // No rewards ready - catchup calculation may still be running
-                // or this is the first epoch where rewards are distributed
-                (RewardAmount::default(), HashSet::new())
-            },
+        let prev_result = manager.get_result(prev_epoch).await;
+
+        let (epoch_rewards_applied, changed_accounts) = if let Some(result) = prev_result {
+            tracing::info!(
+                %epoch,
+                prev_epoch = %result.epoch,
+                total = %result.total_distributed.0,
+                "applying epoch rewards from previous epoch"
+            );
+            validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
+            (result.total_distributed, result.changed_accounts)
+        } else {
+            tracing::info!(%epoch, %prev_epoch, "no epoch rewards available for previous epoch");
+            (RewardAmount::default(), HashSet::new())
         };
+
+        manager.start_calculation(
+            epoch,
+            *leader_counts,
+            validated_state.reward_merkle_tree_v2.clone(),
+            block_reward,
+            validators,
+        );
+
+        // keep last 3 epochs
+        if *epoch > *first_epoch + 3 {
+            manager.cleanup_before(EpochNumber::new(*epoch - 3));
+        }
 
         Ok((epoch_rewards_applied, changed_accounts))
     }
@@ -1349,20 +1351,22 @@ impl BlockHeader<SeqTypes> for Header {
         let (leader_counts, total_reward_distributed) = if version >= EpochRewardVersion::version()
         {
             let epoch_height = instance_state.epoch_height.unwrap();
+            // Use the new block's height (parent + 1), not the parent's height
+            let new_height = height + 1;
             let leader_index =
-                Header::get_leader_index(version, height, view_number, instance_state)
+                Header::get_leader_index(version, new_height, view_number, instance_state)
                     .await?
                     .unwrap();
 
             let leader_counts = Header::calculate_leader_counts(
                 parent_leaf.block_header(),
-                height,
+                new_height,
                 leader_index,
                 epoch_height,
             );
 
             let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
-                height,
+                new_height,
                 &leader_counts,
                 instance_state,
                 &mut validated_state,
@@ -1514,7 +1518,7 @@ impl BlockHeader<SeqTypes> for Header {
             None,
             instance_state.genesis_version,
             None,
-            None,
+            Some([0; 100]),
         )
     }
 
