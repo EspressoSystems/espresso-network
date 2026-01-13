@@ -15,7 +15,10 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
+    command: >-
+      bash -c "deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
+      || deploy --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
+      || deploy --only fee-contract,permissioned-stake-table"
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -38,6 +41,7 @@ services:
       - ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       demo-l1-network:
@@ -45,7 +49,9 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+    command: >-
+      bash -c "deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
+      || deploy --use-mock-contract --only light-client"
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -61,6 +67,7 @@ services:
       - ESPRESSO_OPS_TIMELOCK_PROPOSERS
       - RUST_LOG
       - RUST_LOG_FORMAT
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       demo-l1-network:
@@ -73,6 +80,7 @@ services:
 
   wait-for-v4:
     image: badouralix/curl-jq
+    profiles: [v4]
     command: |
       /scripts/wait-for-header version 4
       /scripts/wait-for-header new-epochs 1
@@ -88,6 +96,7 @@ services:
 
   deploy-lcv3-upgrade:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    profiles: [v4]
     command: deploy --upgrade-light-client-v3 --use-mock
     environment:
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -109,6 +118,7 @@ services:
 
   deploy-pos-contracts-upgrades:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    profiles: [v4]
     command: deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2 --upgrade-stake-table-v2
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
@@ -134,6 +144,7 @@ services:
 
   claim-rewards:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
+    profiles: [v4]
     command: /scripts/claim-rewards-loop 10
     volumes:
       - ./scripts:/scripts:ro
@@ -173,7 +184,7 @@ services:
 
   stake-for-demo:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:${DOCKER_TAG:-main}
-    command: staking-cli stake-for-demo
+    command: bash -c "staking-cli stake-for-demo || echo 'ignoring staking-cli failure'"
     environment:
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
@@ -194,6 +205,14 @@ services:
       - RUST_LOG_FORMAT
     depends_on:
       deploy-sequencer-contracts:
+        condition: service_completed_successfully
+
+  # `docker compose up --wait` only works if exiting services have dependents.
+  stake-for-demo-waiter:
+    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
+    command: sleep infinity
+    depends_on:
+      stake-for-demo:
         condition: service_completed_successfully
 
   orchestrator:
@@ -332,6 +351,10 @@ services:
       - RUST_LOG=INFO,hotshot_state_prover=DEBUG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      # for backwards compatibility
+      - ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS=$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
+      - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
     depends_on:
       sequencer0:
         condition: service_healthy
@@ -629,6 +652,7 @@ services:
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
+      - ESPRESSO_SEQUENCER_URL=${ESPRESSO_SUBMIT_TRANSACTIONS_SEQUENCER_URL-}
       - ESPRESSO_SEQUENCER_URLS=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT},http://sequencer1:${ESPRESSO_SEQUENCER1_API_PORT}
       - RUST_LOG
       - RUST_LOG_FORMAT
@@ -652,6 +676,7 @@ services:
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
+      - ESPRESSO_SEQUENCER_URL=${ESPRESSO_SUBMIT_TRANSACTIONS_SEQUENCER_URL-}
       - ESPRESSO_SEQUENCER_URLS=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT},http://sequencer1:${ESPRESSO_SEQUENCER1_API_PORT}
       - RUST_LOG
       - RUST_LOG_FORMAT
@@ -683,6 +708,8 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
+      # For backwards compatibility
+      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
     depends_on:
       sequencer0:
         condition: service_healthy

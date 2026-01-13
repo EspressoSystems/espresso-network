@@ -3,7 +3,8 @@
 # currently running on mainnet
 base_tag=20250228-patch4
 target_tag=${UPGRADE_DOCKER_TAG:-testing}
-compose_file="docker-compose.binary-upgrade-test.$base_tag.yaml"
+#compose_file="docker-compose.binary-upgrade-test.$base_tag.yaml"
+compose_file="docker-compose.yaml"
 
 # fix the environment to start properly on the mainnet version
 export ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT=22001
@@ -14,7 +15,7 @@ export ESPRESSO_SEQUENCER_PERMISSIONED_PROVER=0x14dc79964da2c08b23698b3d3cc7ca32
 export ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS=0x8ce361602b935680e8dec218b820ff5056beb7af
 export ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS=0xa15bb66138824a1c7167f5e85b957d04dd34e468
 export ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=0xed1db453c3156ff3155a97ad217b3087d5dc5f6e
-
+export ESPRESSO_SUBMIT_TRANSACTIONS_SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
 
 cleanup_docker_compose() {
     # do some cleanup
