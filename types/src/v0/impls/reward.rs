@@ -1110,7 +1110,6 @@ impl EpochRewardsCalculator {
     /// Clean up cached results for epochs before the given epoch.
     pub fn cleanup_before(&mut self, epoch: EpochNumber) {
         self.results.retain(|&e, _| e >= epoch);
-        // Note: Don't clean up pending calculations - let them complete
     }
 
     /// Trigger a background epoch reward calculation.
@@ -1207,32 +1206,47 @@ impl EpochRewardsCalculator {
                 "catchup: fetching missing reward accounts"
             );
 
-            match instance_state
-                .state_catchup
-                .fetch_reward_accounts_v2(
-                    instance_state,
-                    catchup_height,
-                    ViewNumber::new(catchup_height),
-                    reward_merkle_tree_root,
-                    missing_accounts,
-                )
-                .await
-            {
-                Ok(proofs) => {
-                    for proof in proofs {
-                        proof
-                            .remember(&mut validated_state.reward_merkle_tree_v2)
-                            .expect("proof previously verified");
+            const MAX_RETRIES: u32 = 100;
+
+            let proofs = 'retry: {
+                for attempt in 1..=MAX_RETRIES {
+                    match instance_state
+                        .state_catchup
+                        .fetch_reward_accounts_v2(
+                            instance_state,
+                            catchup_height,
+                            ViewNumber::new(catchup_height),
+                            reward_merkle_tree_root,
+                            missing_accounts.clone(),
+                        )
+                        .await
+                    {
+                        Ok(proofs) => break 'retry proofs,
+                        Err(e) => {
+                            tracing::warn!(
+                                %prev_epoch,
+                                attempt,
+                                MAX_RETRIES,
+                                error = %e,
+                                "catchup: failed to fetch missing reward accounts, retrying"
+                            );
+                            if attempt < MAX_RETRIES {
+                                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            }
+                        },
                     }
-                },
-                Err(e) => {
-                    tracing::error!(
-                        %prev_epoch,
-                        error = %e,
-                        "catchup: failed to fetch missing reward accounts, calculation may fail"
-                    );
-                    // Continue anyway - the calculation might still work
-                },
+                }
+                tracing::error!(
+                    %prev_epoch,
+                    "failed to fetch missing reward accounts after {MAX_RETRIES} retries, exiting"
+                );
+                std::process::exit(1);
+            };
+
+            for proof in proofs {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree_v2)
+                    .expect("proof previously verified");
             }
         }
 
