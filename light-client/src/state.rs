@@ -264,14 +264,6 @@ where
         .await
     }
 
-    pub async fn fetch_headers_in_range(
-        &self,
-        start_height: usize,
-        end_height: usize,
-    ) -> Result<Vec<Header>> {
-        todo!()
-    }
-
     async fn fetch_header_with_quorum<Q>(
         &self,
         id: BlockId<SeqTypes>,
@@ -366,7 +358,7 @@ where
         proofs
             .into_iter()
             .zip(headers)
-            .map(|(proof, header)| proof.verify(&header, namespace))
+            .map(|(proof, header)| proof.verify(header.header(), namespace))
             .collect()
     }
 

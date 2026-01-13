@@ -514,7 +514,7 @@ mod test {
             std::slice::from_ref(&txs[0])
         );
         // All other blocks in the range should be empty.
-        for i in 1..proofs.len() - 1 {
+        for (i, proof) in proofs.iter().enumerate().take(proofs.len() - 1).skip(1) {
             let header = client
                 .client
                 .get(&format!(
@@ -524,7 +524,7 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(proofs[i].verify(&header, ns).unwrap(), vec![]);
+            assert_eq!(proof.verify(&header, ns).unwrap(), vec![]);
         }
     }
 }
