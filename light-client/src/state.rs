@@ -184,6 +184,25 @@ where
         Ok(leaves)
     }
 
+    /// Fetches headers in range [start_height, end_height)
+    pub async fn fetch_headers_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<Header>> {
+        ensure!(
+            start_height < end_height,
+            "invalid range: start must be < end"
+        );
+
+        // Reuse the verified leaf path to guarantee header correctness.
+        let leaves = self.fetch_leaves_in_range(start_height, end_height).await?;
+        Ok(leaves
+            .into_iter()
+            .map(|leaf| leaf.header().clone())
+            .collect())
+    }
+
     /// Fetches leaves from the server in range [start_height, end_height) and verifies them by
     /// walking backwards from the known finalized leaf, ensuring each leaf's hash matches the
     /// parent commitment of the subsequent leaf.
@@ -677,6 +696,38 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_headers_in_range() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        // Fetch headers in range [1,3) for the first time. We will need to get them from the server.
+        let leaf1 = client.remember_leaf(1).await;
+        let leaf2 = client.remember_leaf(2).await;
+        client.remember_leaf(3).await;
+
+        let headers = lc.fetch_headers_in_range(1, 3).await.unwrap();
+
+        assert_eq!(
+            headers,
+            vec![leaf1.header().clone(), leaf2.header().clone()]
+        );
+
+        // now remove from server and this time it should be able to fetch from local db
+        client.forget_leaf(1).await;
+        client.forget_leaf(2).await;
+        let headers = lc.fetch_headers_in_range(1, 3).await.unwrap();
+        assert_eq!(
+            headers,
+            vec![leaf1.header().clone(), leaf2.header().clone()]
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_leaves_in_range_invalid_proof() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
@@ -697,6 +748,26 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_headers_in_range_invalid_proof() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.return_invalid_proof(2).await;
+        let err = lc.fetch_headers_in_range(1, 3).await.unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "server returned proof with assumption, but we have no finalized upper bound to \
+                 verify assumption"
+            ),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_leaves_in_range_wrong_leaf() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
@@ -706,6 +777,20 @@ mod test {
         );
         client.return_wrong_leaf(1, 2).await;
         let err = lc.fetch_leaves_in_range(1, 4).await.unwrap_err();
+        assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_headers_in_range_wrong_leaf() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.return_wrong_leaf(1, 2).await;
+        let err = lc.fetch_headers_in_range(1, 4).await.unwrap_err();
         assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
     }
 
