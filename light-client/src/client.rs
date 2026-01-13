@@ -510,8 +510,8 @@ mod test {
             std::slice::from_ref(&txs[0])
         );
         assert_eq!(
-            proofs[proofs.len() - 1].verify(&headers[0], ns).unwrap(),
-            std::slice::from_ref(&txs[0])
+            proofs[proofs.len() - 1].verify(&headers[1], ns).unwrap(),
+            std::slice::from_ref(&txs[1])
         );
         // All other blocks in the range should be empty.
         for (i, proof) in proofs.iter().enumerate().take(proofs.len() - 1).skip(1) {
