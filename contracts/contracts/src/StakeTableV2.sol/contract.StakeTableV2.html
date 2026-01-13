@@ -1,0 +1,982 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>StakeTableV2</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../../favicon.svg">
+        <link rel="shortcut icon" href="../../../favicon.png">
+        <link rel="stylesheet" href="../../../css/variables.css">
+        <link rel="stylesheet" href="../../../css/general.css">
+        <link rel="stylesheet" href="../../../css/chrome.css">
+        <link rel="stylesheet" href="../../../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../../../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../../../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../../../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../../../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../../../book.css">
+
+        <!-- MathJax -->
+        <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title"></h1>
+
+                    <div class="right-buttons">
+                        <a href="../../../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/EspressoSystems/espresso-network" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="staketablev2"><a class="header" href="#staketablev2">StakeTableV2</a></h1>
+<p><a href="https://github.com/EspressoSystems/espresso-network/blob/237062fb1c025188167b240d537e260a26f446d2/contracts/src/StakeTableV2.sol">Git Source</a></p>
+<p><strong>Inherits:</strong>
+<a href="/contracts/src/StakeTable.sol/contract.StakeTable.html">StakeTable</a>, PausableUpgradeable, AccessControlUpgradeable</p>
+<p><strong>Title:</strong>
+Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.</p>
+<p>This contract is an upgrade to the original StakeTable contract. On Espresso mainnet we
+will only use the V2 contract. On decaf the V2 is used to upgrade the V1 that was first deployed
+with the original proof of stake release.</p>
+<p>The V2 contract contains the following changes:</p>
+<ol>
+<li>The functions to register validators and update consensus keys are updated to require both a
+BLS signature and a Schnorr signature and emit the signatures via events so that the GCL can
+verify them. The new functions and events have a V2 postfix. After the upgrade components that
+support registration and key updates must use the V2 functions and listen to the V2 events. The
+original functions revert with a <code>DeprecatedFunction</code> error in V2.</li>
+<li>The exit escrow period can be updated by the owner of the contract
+within valid bounds (15 blocks to 14 days).</li>
+<li>The following functions can be paused by the PAUSER_ROLE:</li>
+</ol>
+<ul>
+<li><code>claimWithdrawal(...)</code></li>
+<li><code>claimValidatorExit(...)</code></li>
+<li><code>delegate(...)</code></li>
+<li><code>undelegate(...)</code></li>
+<li><code>deregisterValidator(...)</code></li>
+<li><code>registerValidatorV2(...)</code></li>
+<li><code>updateConsensusKeysV2(...)</code></li>
+<li><code>updateCommission(...)</code></li>
+<li><code>updateMetadataUri(...)</code>
+When paused, these functions revert with a standard pausable error, <code>EnforcedPause()</code>.
+Only the PAUSER_ROLE can pause/unpause the contract.
+Note: <code>updateExitEscrowPeriod</code> is NOT pausable for emergency governance access.</li>
+</ul>
+<ol start="4">
+<li>The <code>claimValidatorExit</code> function is overridden to ensure
+that the validator's delegatedAmount is updated during this method
+The update is deferred until the funds are actually withdrawn.</li>
+<li>The <code>deregisterValidator</code> function is overridden to ensure
+that the validator's delegatedAmount is not updated during this method as it was in v1.</li>
+<li>The <code>updateExitEscrowPeriod</code> function is added to allow governance to update
+the exit escrow period within valid bounds (15 blocks to 14 days).</li>
+<li>The <code>pause</code> and <code>unpause</code> functions are added for emergency control.</li>
+<li>The commission rate for validators can be updated with the <code>updateCommission</code> function.</li>
+<li>The <code>activeStake</code> variable is added to allow governance to
+track the total stake in the contract. The activeStake is the
+total stake that is not awaiting exit or in exited state.</li>
+<li>Unique undelegation IDs are assigned to each undelegation via an auto-incrementing counter
+for better event tracking. The <code>undelegationIds</code> public mapping stores IDs alongside the base
+<code>undelegations</code> mapping. Events <code>UndelegatedV2</code>, <code>WithdrawalClaimed</code>, and
+<code>ValidatorExitClaimed</code>
+include the undelegation ID as an indexed parameter for efficient querying and tracking.</li>
+<li>Validators must provide a metadata URI during registration and can update it via
+<code>updateMetadataUri</code>. The metadata URI is event-sourced only (not stored on-chain for gas
+efficiency). The <code>ValidatorRegisteredV2</code> event includes the metadata URI, and a new
+<code>MetadataUriUpdated</code> event is emitted when validators update their URI. Metadata URIs can be
+empty and cannot exceed 2048 bytes.</li>
+<li>A minimum delegation amount (<code>minDelegateAmount</code>) is enforced to prevent dust delegations
+and reduce state bloat. The minimum is initialized to 1 ESP token (1 ether) in <code>initializeV2</code>
+and
+can be updated by governance via the <code>setMinDelegateAmount</code> function. The <code>delegate</code> function
+reverts with <code>DelegateAmountTooSmall</code> if the delegation amount is below the minimum.</li>
+</ol>
+<p>The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
+contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
+Governance: This contract enforces a single-admin model. <code>owner()</code> and
+<code>DEFAULT_ADMIN_ROLE</code> always reference the same address and can only be
+changed via <code>transferOwnership()</code> (directly or through
+<code>grantRole(DEFAULT_ADMIN_ROLE, ...)</code>, which delegates to the transfer). Any
+attempt to revoke or renounce the default admin role, or to renounce
+ownership, reverts. This removes governance drift.</p>
+<p>All functions are marked as virtual so that future upgrades can override them.</p>
+<h2 id="state-variables"><a class="header" href="#state-variables">State Variables</a></h2>
+<h3 id="pauser_role"><a class="header" href="#pauser_role">PAUSER_ROLE</a></h3>
+<pre><code class="language-solidity">bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE")
+</code></pre>
+<h3 id="max_metadata_uri_length"><a class="header" href="#max_metadata_uri_length">MAX_METADATA_URI_LENGTH</a></h3>
+<p>Maximum length for metadata URIs (in bytes)</p>
+<pre><code class="language-solidity">uint256 public constant MAX_METADATA_URI_LENGTH = 2048
+</code></pre>
+<h3 id="max_commission_bps"><a class="header" href="#max_commission_bps">MAX_COMMISSION_BPS</a></h3>
+<p>Maximum commission in basis points (100% = 10000 bps)</p>
+<pre><code class="language-solidity">uint16 public constant MAX_COMMISSION_BPS = 10000
+</code></pre>
+<h3 id="min_exit_escrow_period"><a class="header" href="#min_exit_escrow_period">MIN_EXIT_ESCROW_PERIOD</a></h3>
+<p>Minimum exit escrow period (2 days)</p>
+<p>This is a technical minimum bound enforced by the contract. Setting the exit escrow
+period
+to this minimum does not guarantee safety. The actual exit escrow period must be set such
+that the contract holds funds long enough until they are no longer staked in Espresso,
+allowing sufficient time for validators to exit the active validator set and for slashing
+evidence to be submitted. Governance should set a value appropriate for Espresso network
+parameters (e.g., blocksPerEpoch, blockTime, and epoch duration) to ensure security.</p>
+<pre><code class="language-solidity">uint64 public constant MIN_EXIT_ESCROW_PERIOD = 2 days
+</code></pre>
+<h3 id="max_exit_escrow_period"><a class="header" href="#max_exit_escrow_period">MAX_EXIT_ESCROW_PERIOD</a></h3>
+<p>Maximum exit escrow period (14 days)</p>
+<p>Reasonable upper bound to prevent excessive lockup periods</p>
+<pre><code class="language-solidity">uint64 public constant MAX_EXIT_ESCROW_PERIOD = 14 days
+</code></pre>
+<h3 id="mincommissionincreaseinterval"><a class="header" href="#mincommissionincreaseinterval">minCommissionIncreaseInterval</a></h3>
+<p>Minimum time interval between commission increases (in seconds)</p>
+<pre><code class="language-solidity">uint256 public minCommissionIncreaseInterval
+</code></pre>
+<h3 id="maxcommissionincrease"><a class="header" href="#maxcommissionincrease">maxCommissionIncrease</a></h3>
+<p>Maximum commission increase allowed per increase (in basis points)</p>
+<pre><code class="language-solidity">uint16 public maxCommissionIncrease
+</code></pre>
+<h3 id="activestake"><a class="header" href="#activestake">activeStake</a></h3>
+<p>Total stake in active (not marked for exit) validators in the contract</p>
+<pre><code class="language-solidity">uint256 public activeStake
+</code></pre>
+<h3 id="mindelegateamount"><a class="header" href="#mindelegateamount">minDelegateAmount</a></h3>
+<p>min delegate amount</p>
+<pre><code class="language-solidity">uint256 public minDelegateAmount
+</code></pre>
+<h3 id="commissiontracking"><a class="header" href="#commissiontracking">commissionTracking</a></h3>
+<p>Commission tracking for each validator</p>
+<pre><code class="language-solidity">mapping(address validator =&gt; CommissionTracking tracking) public commissionTracking
+</code></pre>
+<h3 id="schnorrkeys"><a class="header" href="#schnorrkeys">schnorrKeys</a></h3>
+<p>Schnorr keys that have been seen by the contract</p>
+<p>ensures a bijective mapping between schnorr key and ethereum account and prevents some
+errors due to
+misconfigurations of validators the contract currently marks keys as used and only allow
+them to be used once. This for example prevents callers from accidentally registering the
+same Schnorr key twice.</p>
+<pre><code class="language-solidity">mapping(bytes32 schnorrKey =&gt; bool used) public schnorrKeys
+</code></pre>
+<h3 id="nextundelegationid"><a class="header" href="#nextundelegationid">nextUndelegationId</a></h3>
+<p>Auto-incrementing counter for unique undelegation IDs</p>
+<p>Initialized to 1 in initializeV2 so that 0 can be used to identify V1 undelegations</p>
+<pre><code class="language-solidity">uint64 private nextUndelegationId
+</code></pre>
+<h3 id="undelegationids"><a class="header" href="#undelegationids">undelegationIds</a></h3>
+<p>Mapping from (validator, delegator) to undelegation ID</p>
+<p>Separate from base Undelegation struct since base contract is immutable</p>
+<pre><code class="language-solidity">mapping(address validator =&gt; mapping(address delegator =&gt; uint64 id)) private undelegationIds
+</code></pre>
+<h2 id="functions"><a class="header" href="#functions">Functions</a></h2>
+<h3 id="constructor"><a class="header" href="#constructor">constructor</a></h3>
+<p>Constructor</p>
+<p>This function is overridden to disable initializers</p>
+<pre><code class="language-solidity">constructor() ;
+</code></pre>
+<h3 id="initializev2"><a class="header" href="#initializev2">initializeV2</a></h3>
+<p>Reinitialize the contract</p>
+<p>initialCommissions must be an empty array if the contract we're
+upgrading has not been used before (e.g. on mainnet). On decaf (sepolia),
+this must be called with the current commissions of pre-existing
+validators read from L1 events.</p>
+<p>Sets up roles and transfers ownership to admin. The deployer picks the admin
+address (timelock, multisig, etc.) based on config.</p>
+<pre><code class="language-solidity">function initializeV2(
+    address pauser,
+    address admin,
+    uint256 initialActiveStake,
+    InitialCommission[] calldata initialCommissions
+) public onlyOwner reinitializer(2);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>pauser</code></td><td><code>address</code></td><td>The address to be granted the pauser role</td></tr>
+<tr><td><code>admin</code></td><td><code>address</code></td><td>The address to be granted the default admin role and ownership. This should be a timelock contract address, multisig, or another governance address.</td></tr>
+<tr><td><code>initialActiveStake</code></td><td><code>uint256</code></td><td>The initial active stake in the contract</td></tr>
+<tr><td><code>initialCommissions</code></td><td><code>InitialCommission[]</code></td><td>commissions of validators</td></tr>
+</tbody></table>
+</div>
+<h3 id="getversion"><a class="header" href="#getversion">getVersion</a></h3>
+<p>Get the version of the contract</p>
+<p>This function is overridden to return the version of the contract</p>
+<pre><code class="language-solidity">function getVersion()
+    public
+    pure
+    virtual
+    override
+    returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
+</code></pre>
+<h3 id="pause"><a class="header" href="#pause">pause</a></h3>
+<p>Pause the contract</p>
+<p>This function is only callable by the PAUSER_ROLE</p>
+<pre><code class="language-solidity">function pause() external onlyRole(PAUSER_ROLE);
+</code></pre>
+<h3 id="unpause"><a class="header" href="#unpause">unpause</a></h3>
+<p>Unpause the contract</p>
+<p>This function is only callable by the PAUSER_ROLE</p>
+<pre><code class="language-solidity">function unpause() external onlyRole(PAUSER_ROLE);
+</code></pre>
+<h3 id="transferownership"><a class="header" href="#transferownership">transferOwnership</a></h3>
+<p>Transfers ownership and keeps DEFAULT_ADMIN_ROLE in sync
+Grants the role to new owner and revokes from old owner.
+Access control is enforced by both onlyRole(DEFAULT_ADMIN_ROLE) and
+super.transferOwnership() which requires onlyOwner.
+This ensures that only the current admin (who holds both ownership and DEFAULT_ADMIN_ROLE)
+can transfer ownership.
+This is intentionally not pausable for emergency governance access.</p>
+<p>Transfers ownership of the contract to a new account (<code>newOwner</code>).
+Can only be called by the current owner.</p>
+<pre><code class="language-solidity">function transferOwnership(address newOwner)
+    public
+    virtual
+    override
+    onlyRole(DEFAULT_ADMIN_ROLE);
+</code></pre>
+<h3 id="grantrole"><a class="header" href="#grantrole">grantRole</a></h3>
+<p>Grants a role. Granting DEFAULT_ADMIN_ROLE transfers ownership first,
+which handles both role grant and ownership transfer atomically.
+This is intentionally not pausable for emergency governance access.</p>
+<p>Grants <code>role</code> to <code>account</code>.
+If <code>account</code> had not been already granted <code>role</code>, emits a {RoleGranted}
+event.
+Requirements:</p>
+<ul>
+<li>the caller must have <code>role</code>'s admin role.
+May emit a {RoleGranted} event.</li>
+</ul>
+<pre><code class="language-solidity">function grantRole(bytes32 role, address account) public virtual override;
+</code></pre>
+<h3 id="revokerole"><a class="header" href="#revokerole">revokeRole</a></h3>
+<p>Prevent revoking DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.</p>
+<p>Revokes <code>role</code> from <code>account</code>.
+If <code>account</code> had been granted <code>role</code>, emits a {RoleRevoked} event.
+Requirements:</p>
+<ul>
+<li>the caller must have <code>role</code>'s admin role.
+May emit a {RoleRevoked} event.</li>
+</ul>
+<pre><code class="language-solidity">function revokeRole(bytes32 role, address account) public virtual override;
+</code></pre>
+<h3 id="renouncerole"><a class="header" href="#renouncerole">renounceRole</a></h3>
+<p>Prevent renouncing DEFAULT_ADMIN_ROLE to preserve the single-admin invariant.</p>
+<p>Revokes <code>role</code> from the calling account.
+Roles are often managed via {grantRole} and {revokeRole}: this function's
+purpose is to provide a mechanism for accounts to lose their privileges
+if they are compromised (such as when a trusted device is misplaced).
+If the calling account had been revoked <code>role</code>, emits a {RoleRevoked}
+event.
+Requirements:</p>
+<ul>
+<li>the caller must be <code>callerConfirmation</code>.
+May emit a {RoleRevoked} event.</li>
+</ul>
+<pre><code class="language-solidity">function renounceRole(bytes32 role, address callerConfirmation) public virtual override;
+</code></pre>
+<h3 id="claimvalidatorexit"><a class="header" href="#claimvalidatorexit">claimValidatorExit</a></h3>
+<p>Withdraw previously delegated funds after a validator has exited</p>
+<p>This function is overridden to deduct the amount from the validator's delegatedAmount</p>
+<p>and to add pausable functionality</p>
+<p>since the delegated Amount is no longer updated during validator exit</p>
+<pre><code class="language-solidity">function claimValidatorExit(address validator) public virtual override whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to withdraw from</td></tr>
+</tbody></table>
+</div>
+<h3 id="claimwithdrawal"><a class="header" href="#claimwithdrawal">claimWithdrawal</a></h3>
+<p>Withdraw previously delegated funds after an undelegation</p>
+<p>This function is overridden to add pausable functionality and emit ID in event</p>
+<pre><code class="language-solidity">function claimWithdrawal(address validator) public virtual override whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to withdraw from</td></tr>
+</tbody></table>
+</div>
+<h3 id="delegate"><a class="header" href="#delegate">delegate</a></h3>
+<p>Delegate funds to a validator</p>
+<p>This function is overridden to add pausable functionality</p>
+<p>The function body is copied from V1 to maintain checks-effects-interactions pattern.</p>
+<pre><code class="language-solidity">function delegate(address validator, uint256 amount) public virtual override whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to delegate to</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>The amount to delegate</td></tr>
+</tbody></table>
+</div>
+<h3 id="undelegate"><a class="header" href="#undelegate">undelegate</a></h3>
+<p>Undelegate funds from a validator</p>
+<p>This function is overridden to add pausable functionality and emit UndelegatedV2</p>
+<p>The undelegation ID can be retrieved from the UndelegatedV2 event or via
+getUndelegation()</p>
+<pre><code class="language-solidity">function undelegate(address validator, uint256 amount) public virtual override whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to undelegate from</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>The amount to undelegate</td></tr>
+</tbody></table>
+</div>
+<h3 id="deregistervalidator"><a class="header" href="#deregistervalidator">deregisterValidator</a></h3>
+<p>Deregister a validator</p>
+<p>This function is overridden to add pausable functionality</p>
+<p>and to ensure that the validator's delegatedAmount is not updated until withdrawal</p>
+<p>delegatedAmount represents the no. of tokens that have been delegated to a validator,
+even if it's not participating in consensus</p>
+<p>emits ValidatorExitV2 instead of ValidatorExit</p>
+<pre><code class="language-solidity">function deregisterValidator() public virtual override whenNotPaused;
+</code></pre>
+<h3 id="registervalidatorv2"><a class="header" href="#registervalidatorv2">registerValidatorV2</a></h3>
+<p>Register a validator in the stake table</p>
+<p>This function is overridden to add pausable functionality</p>
+<p>and to add schnorrSig validation</p>
+<pre><code class="language-solidity">function registerValidatorV2(
+    BN254.G2Point memory blsVK,
+    EdOnBN254.EdOnBN254Point memory schnorrVK,
+    BN254.G1Point memory blsSig,
+    bytes memory schnorrSig,
+    uint16 commission,
+    string memory metadataUri
+) external virtual whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>blsVK</code></td><td><code>BN254.G2Point</code></td><td>The BLS verification key</td></tr>
+<tr><td><code>schnorrVK</code></td><td><code>EdOnBN254.EdOnBN254Point</code></td><td>The Schnorr verification key</td></tr>
+<tr><td><code>blsSig</code></td><td><code>BN254.G1Point</code></td><td>The BLS signature that authenticates the BLS VK</td></tr>
+<tr><td><code>schnorrSig</code></td><td><code>bytes</code></td><td>The Schnorr signature that authenticates the Schnorr VK</td></tr>
+<tr><td><code>commission</code></td><td><code>uint16</code></td><td>in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)</td></tr>
+<tr><td><code>metadataUri</code></td><td><code>string</code></td><td>The metadata URI for the validator</td></tr>
+</tbody></table>
+</div>
+<h3 id="updateconsensuskeysv2"><a class="header" href="#updateconsensuskeysv2">updateConsensusKeysV2</a></h3>
+<p>Update the consensus keys of a validator</p>
+<p>This function is overridden to add pausable functionality</p>
+<p>and to add schnorrSig validation</p>
+<pre><code class="language-solidity">function updateConsensusKeysV2(
+    BN254.G2Point memory blsVK,
+    EdOnBN254.EdOnBN254Point memory schnorrVK,
+    BN254.G1Point memory blsSig,
+    bytes memory schnorrSig
+) public virtual whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>blsVK</code></td><td><code>BN254.G2Point</code></td><td>The new BLS verification key</td></tr>
+<tr><td><code>schnorrVK</code></td><td><code>EdOnBN254.EdOnBN254Point</code></td><td>The new Schnorr verification key</td></tr>
+<tr><td><code>blsSig</code></td><td><code>BN254.G1Point</code></td><td>The BLS signature that authenticates the blsVK</td></tr>
+<tr><td><code>schnorrSig</code></td><td><code>bytes</code></td><td>The Schnorr signature that authenticates the schnorrVK</td></tr>
+</tbody></table>
+</div>
+<h3 id="updatecommission"><a class="header" href="#updatecommission">updateCommission</a></h3>
+<p>Update the commission rate for a validator</p>
+<ol>
+<li>Only one commission <em>increase</em> per minCommissionIncreaseInterval is allowed.</li>
+<li>The commission increase cannot exceed maxCommissionIncrease.
+These limits protect stakers from sudden large commission increases,
+particularly by exiting validators.</li>
+</ol>
+<pre><code class="language-solidity">function updateCommission(uint16 newCommission) external virtual whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newCommission</code></td><td><code>uint16</code></td><td>The new commission rate in % with 2 decimals (0 to 10_000)</td></tr>
+</tbody></table>
+</div>
+<h3 id="updatemetadatauri"><a class="header" href="#updatemetadatauri">updateMetadataUri</a></h3>
+<p>Update the metadata URI for a validator</p>
+<p>The metadata URI is NOT stored on-chain. Off-chain indexers must listen to the
+MetadataUriUpdated event to track the current URI. URIs should be kept reasonably short for
+gas efficiency (max 2048 bytes). Only the validator (msg.sender) can update their own
+metadata URI.</p>
+<p>No format validation is performed on the URI - any string within length limits
+(including empty string) is accepted. Consumers should validate URI format and accessibility
+off-chain.</p>
+<pre><code class="language-solidity">function updateMetadataUri(string memory metadataUri) external virtual whenNotPaused;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>metadataUri</code></td><td><code>string</code></td><td>The new metadata URI</td></tr>
+</tbody></table>
+</div>
+<h3 id="setmincommissionupdateinterval"><a class="header" href="#setmincommissionupdateinterval">setMinCommissionUpdateInterval</a></h3>
+<p>Set the minimum interval between commission updates</p>
+<pre><code class="language-solidity">function setMinCommissionUpdateInterval(uint256 newInterval)
+    external
+    virtual
+    onlyRole(DEFAULT_ADMIN_ROLE);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newInterval</code></td><td><code>uint256</code></td><td>The new minimum interval in seconds</td></tr>
+</tbody></table>
+</div>
+<h3 id="setmaxcommissionincrease"><a class="header" href="#setmaxcommissionincrease">setMaxCommissionIncrease</a></h3>
+<p>Set the maximum commission increase allowed per update</p>
+<pre><code class="language-solidity">function setMaxCommissionIncrease(uint16 newMaxIncrease)
+    external
+    virtual
+    onlyRole(DEFAULT_ADMIN_ROLE);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newMaxIncrease</code></td><td><code>uint16</code></td><td>The new maximum increase in basis points (e.g., 500 = 5%)</td></tr>
+</tbody></table>
+</div>
+<h3 id="_initializecommissions"><a class="header" href="#_initializecommissions">_initializeCommissions</a></h3>
+<p>Initialize validator commissions during V2 migration</p>
+<p>This function is used to retroactively initialize commission storage for validators
+that were registered before the V2 upgrade. On decaf, this will be called with current
+commission values read from L1 events. On mainnet, this will be called with an empty array
+since there are no pre-existing validators.</p>
+<pre><code class="language-solidity">function _initializeCommissions(InitialCommission[] calldata initialCommissions) private;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>initialCommissions</code></td><td><code>InitialCommission[]</code></td><td>Array of InitialCommission structs containing validator addresses and their commissions</td></tr>
+</tbody></table>
+</div>
+<h3 id="_initializeactivestake"><a class="header" href="#_initializeactivestake">_initializeActiveStake</a></h3>
+<p>Initialize the active stake in the contract</p>
+<pre><code class="language-solidity">function _initializeActiveStake(uint256 initialActiveStake) private;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>initialActiveStake</code></td><td><code>uint256</code></td><td>The initial active stake in the contract</td></tr>
+</tbody></table>
+</div>
+<h3 id="validatemetadatauri"><a class="header" href="#validatemetadatauri">validateMetadataUri</a></h3>
+<p>Validate metadata URI length</p>
+<p>Public view function to allow external validation before transaction submission</p>
+<pre><code class="language-solidity">function validateMetadataUri(string memory metadataUri) public pure;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>metadataUri</code></td><td><code>string</code></td><td>The metadata URI to validate</td></tr>
+</tbody></table>
+</div>
+<h3 id="updateexitescrowperiod"><a class="header" href="#updateexitescrowperiod">updateExitEscrowPeriod</a></h3>
+<p>Update the exit escrow period</p>
+<p>This function ensures that the exit escrow period is within the valid range
+(MIN_EXIT_ESCROW_PERIOD
+to MAX_EXIT_ESCROW_PERIOD). However, governance MUST set a value that ensures funds are held
+until they are no longer staked in Espresso, accounting for validator exit time and slashing
+evidence submission windows. This function is not pausable so that governance can perform
+emergency updates in the
+presence of system upgrades.</p>
+<pre><code class="language-solidity">function updateExitEscrowPeriod(uint64 newExitEscrowPeriod)
+    external
+    virtual
+    onlyRole(DEFAULT_ADMIN_ROLE);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newExitEscrowPeriod</code></td><td><code>uint64</code></td><td>The new exit escrow period</td></tr>
+</tbody></table>
+</div>
+<h3 id="getundelegation"><a class="header" href="#getundelegation">getUndelegation</a></h3>
+<p>Get details of an undelegation for a (validator, delegator) pair</p>
+<pre><code class="language-solidity">function getUndelegation(address validator, address delegator)
+    external
+    view
+    returns (uint64 id, uint256 amount, uint256 unlocksAt);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>Address of the validator</td></tr>
+<tr><td><code>delegator</code></td><td><code>address</code></td><td>Address of the delegator</td></tr>
+</tbody></table>
+</div>
+<p><strong>Returns</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>id</code></td><td><code>uint64</code></td><td>Unique ID of the undelegation</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>Amount of tokens undelegated</td></tr>
+<tr><td><code>unlocksAt</code></td><td><code>uint256</code></td><td>Timestamp when tokens can be claimed</td></tr>
+</tbody></table>
+</div>
+<h3 id="_hashschnorrkey"><a class="header" href="#_hashschnorrkey">_hashSchnorrKey</a></h3>
+<pre><code class="language-solidity">function _hashSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK)
+    internal
+    pure
+    returns (bytes32);
+</code></pre>
+<h3 id="ensurenewkeys"><a class="header" href="#ensurenewkeys">ensureNewKeys</a></h3>
+<p>Ensure that the BLS and Schnorr keys are not already used</p>
+<pre><code class="language-solidity">function ensureNewKeys(BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK)
+    internal
+    view;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>blsVK</code></td><td><code>BN254.G2Point</code></td><td>The BLS verification key</td></tr>
+<tr><td><code>schnorrVK</code></td><td><code>EdOnBN254.EdOnBN254Point</code></td><td>The Schnorr verification key</td></tr>
+</tbody></table>
+</div>
+<h3 id="registervalidator"><a class="header" href="#registervalidator">registerValidator</a></h3>
+<p>Deprecate previous registration function</p>
+<p>This function is overridden to revert with a DeprecatedFunction error</p>
+<p>users must call registerValidatorV2 instead</p>
+<pre><code class="language-solidity">function registerValidator(
+    BN254.G2Point memory,
+    EdOnBN254.EdOnBN254Point memory,
+    BN254.G1Point memory,
+    uint16
+) external pure override;
+</code></pre>
+<h3 id="updateconsensuskeys"><a class="header" href="#updateconsensuskeys">updateConsensusKeys</a></h3>
+<p>Deprecate previous updateConsensusKeys function</p>
+<p>This function is overridden to revert with a DeprecatedFunction error</p>
+<p>users must call updateConsensusKeysV2 instead</p>
+<pre><code class="language-solidity">function updateConsensusKeys(
+    BN254.G2Point memory,
+    EdOnBN254.EdOnBN254Point memory,
+    BN254.G1Point memory
+) external pure override;
+</code></pre>
+<h3 id="setmindelegateamount"><a class="header" href="#setmindelegateamount">setMinDelegateAmount</a></h3>
+<p>Set the minimum delegate amount</p>
+<pre><code class="language-solidity">function setMinDelegateAmount(uint256 newMinDelegateAmount)
+    external
+    virtual
+    onlyRole(DEFAULT_ADMIN_ROLE);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newMinDelegateAmount</code></td><td><code>uint256</code></td><td>The new minimum delegate amount in wei</td></tr>
+</tbody></table>
+</div>
+<h3 id="_authorizeupgrade"><a class="header" href="#_authorizeupgrade">_authorizeUpgrade</a></h3>
+<p>Authorize an upgrade to a new implementation</p>
+<p>This function is overridden to use AccessControl instead of Ownable
+Only addresses with DEFAULT_ADMIN_ROLE can authorize upgrades</p>
+<pre><code class="language-solidity">function _authorizeUpgrade(address newImplementation)
+    internal
+    virtual
+    override
+    onlyRole(DEFAULT_ADMIN_ROLE);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newImplementation</code></td><td><code>address</code></td><td>The address of the new implementation</td></tr>
+</tbody></table>
+</div>
+<h2 id="events"><a class="header" href="#events">Events</a></h2>
+<h3 id="validatorregisteredv2"><a class="header" href="#validatorregisteredv2">ValidatorRegisteredV2</a></h3>
+<p>A validator is registered in the stake table</p>
+<p>the blsSig and schnorrSig are validated by the Espresso Network</p>
+<pre><code class="language-solidity">event ValidatorRegisteredV2(
+    address indexed account,
+    BN254.G2Point blsVK,
+    EdOnBN254.EdOnBN254Point schnorrVK,
+    uint16 commission,
+    BN254.G1Point blsSig,
+    bytes schnorrSig,
+    string metadataUri
+);
+</code></pre>
+<h3 id="consensuskeysupdatedv2"><a class="header" href="#consensuskeysupdatedv2">ConsensusKeysUpdatedV2</a></h3>
+<p>A validator updates their consensus keys</p>
+<p>the blsSig and schnorrSig are validated by the Espresso Network</p>
+<pre><code class="language-solidity">event ConsensusKeysUpdatedV2(
+    address indexed account,
+    BN254.G2Point blsVK,
+    EdOnBN254.EdOnBN254Point schnorrVK,
+    BN254.G1Point blsSig,
+    bytes schnorrSig
+);
+</code></pre>
+<h3 id="exitescrowperiodupdated"><a class="header" href="#exitescrowperiodupdated">ExitEscrowPeriodUpdated</a></h3>
+<p>The exit escrow period is updated</p>
+<pre><code class="language-solidity">event ExitEscrowPeriodUpdated(uint64 newExitEscrowPeriod);
+</code></pre>
+<h3 id="commissionupdated"><a class="header" href="#commissionupdated">CommissionUpdated</a></h3>
+<p>A validator updates their commission rate</p>
+<p>the timestamp is emitted to simplify processing in the GCL</p>
+<pre><code class="language-solidity">event CommissionUpdated(
+    address indexed validator, uint256 timestamp, uint16 oldCommission, uint16 newCommission
+);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The address of the validator</td></tr>
+<tr><td><code>timestamp</code></td><td><code>uint256</code></td><td>The timestamp of the update</td></tr>
+<tr><td><code>oldCommission</code></td><td><code>uint16</code></td><td></td></tr>
+<tr><td><code>newCommission</code></td><td><code>uint16</code></td><td>The new commission rate</td></tr>
+</tbody></table>
+</div>
+<h3 id="mincommissionupdateintervalupdated"><a class="header" href="#mincommissionupdateintervalupdated">MinCommissionUpdateIntervalUpdated</a></h3>
+<p>The minimum commission update interval is updated</p>
+<pre><code class="language-solidity">event MinCommissionUpdateIntervalUpdated(uint256 newInterval);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newInterval</code></td><td><code>uint256</code></td><td>The new minimum update interval in seconds</td></tr>
+</tbody></table>
+</div>
+<h3 id="maxcommissionincreaseupdated"><a class="header" href="#maxcommissionincreaseupdated">MaxCommissionIncreaseUpdated</a></h3>
+<p>The maximum commission increase is updated</p>
+<pre><code class="language-solidity">event MaxCommissionIncreaseUpdated(uint16 newMaxIncrease);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newMaxIncrease</code></td><td><code>uint16</code></td><td>The new maximum commission increase in basis points</td></tr>
+</tbody></table>
+</div>
+<h3 id="undelegatedv2"><a class="header" href="#undelegatedv2">UndelegatedV2</a></h3>
+<p>A delegator undelegated funds from a validator (V2 with unlocksAt and
+undelegationId)</p>
+<pre><code class="language-solidity">event UndelegatedV2(
+    address indexed delegator,
+    address indexed validator,
+    uint64 indexed undelegationId,
+    uint256 amount,
+    uint256 unlocksAt
+);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>delegator</code></td><td><code>address</code></td><td>The address of the delegator</td></tr>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The address of the validator</td></tr>
+<tr><td><code>undelegationId</code></td><td><code>uint64</code></td><td>Unique identifier for this undelegation</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>The amount undelegated</td></tr>
+<tr><td><code>unlocksAt</code></td><td><code>uint256</code></td><td>The timestamp when the funds can be claimed</td></tr>
+</tbody></table>
+</div>
+<h3 id="withdrawalclaimed"><a class="header" href="#withdrawalclaimed">WithdrawalClaimed</a></h3>
+<p>A delegator claimed an undelegation (V2 with undelegationId)</p>
+<pre><code class="language-solidity">event WithdrawalClaimed(
+    address indexed delegator,
+    address indexed validator,
+    uint64 indexed undelegationId,
+    uint256 amount
+);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>delegator</code></td><td><code>address</code></td><td>The address of the delegator</td></tr>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The address of the validator</td></tr>
+<tr><td><code>undelegationId</code></td><td><code>uint64</code></td><td>Unique identifier for this undelegation</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>The amount claimed</td></tr>
+</tbody></table>
+</div>
+<h3 id="validatorexitclaimed"><a class="header" href="#validatorexitclaimed">ValidatorExitClaimed</a></h3>
+<p>A delegator claimed funds after validator exit</p>
+<pre><code class="language-solidity">event ValidatorExitClaimed(
+    address indexed delegator, address indexed validator, uint256 amount
+);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>delegator</code></td><td><code>address</code></td><td>The address of the delegator</td></tr>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The address of the validator</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>The amount claimed</td></tr>
+</tbody></table>
+</div>
+<h3 id="validatorexitv2"><a class="header" href="#validatorexitv2">ValidatorExitV2</a></h3>
+<p>A validator initiated an exit (V2 with unlocksAt)</p>
+<pre><code class="language-solidity">event ValidatorExitV2(address indexed validator, uint256 unlocksAt);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The address of the validator</td></tr>
+<tr><td><code>unlocksAt</code></td><td><code>uint256</code></td><td>The timestamp when delegators can claim their funds</td></tr>
+</tbody></table>
+</div>
+<h3 id="metadatauriupdated"><a class="header" href="#metadatauriupdated">MetadataUriUpdated</a></h3>
+<p>A validator updated their metadata URI</p>
+<pre><code class="language-solidity">event MetadataUriUpdated(address indexed validator, string metadataUri);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The address of the validator</td></tr>
+<tr><td><code>metadataUri</code></td><td><code>string</code></td><td>The new metadata URI</td></tr>
+</tbody></table>
+</div>
+<h3 id="mindelegateamountupdated"><a class="header" href="#mindelegateamountupdated">MinDelegateAmountUpdated</a></h3>
+<p>The minimum delegate amount is updated</p>
+<pre><code class="language-solidity">event MinDelegateAmountUpdated(uint256 newMinDelegateAmount);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>newMinDelegateAmount</code></td><td><code>uint256</code></td><td>The new minimum delegate amount in wei</td></tr>
+</tbody></table>
+</div>
+<h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
+<h3 id="invalidschnorrsig"><a class="header" href="#invalidschnorrsig">InvalidSchnorrSig</a></h3>
+<p>The Schnorr signature is invalid (either the wrong length or the wrong key)</p>
+<pre><code class="language-solidity">error InvalidSchnorrSig();
+</code></pre>
+<h3 id="deprecatedfunction"><a class="header" href="#deprecatedfunction">DeprecatedFunction</a></h3>
+<p>The function is deprecated as it was replaced by a new function</p>
+<pre><code class="language-solidity">error DeprecatedFunction();
+</code></pre>
+<h3 id="commissionupdatetoosoon"><a class="header" href="#commissionupdatetoosoon">CommissionUpdateTooSoon</a></h3>
+<p>The commission update is too soon after the last update</p>
+<pre><code class="language-solidity">error CommissionUpdateTooSoon();
+</code></pre>
+<h3 id="commissionincreaseexceedsmax"><a class="header" href="#commissionincreaseexceedsmax">CommissionIncreaseExceedsMax</a></h3>
+<p>The commission increase exceeds the maximum allowed increase</p>
+<pre><code class="language-solidity">error CommissionIncreaseExceedsMax();
+</code></pre>
+<h3 id="commissionunchanged"><a class="header" href="#commissionunchanged">CommissionUnchanged</a></h3>
+<p>The commission value is unchanged</p>
+<pre><code class="language-solidity">error CommissionUnchanged();
+</code></pre>
+<h3 id="invalidratelimitparameters"><a class="header" href="#invalidratelimitparameters">InvalidRateLimitParameters</a></h3>
+<p>The rate limit parameters are invalid</p>
+<pre><code class="language-solidity">error InvalidRateLimitParameters();
+</code></pre>
+<h3 id="commissionalreadyinitialized"><a class="header" href="#commissionalreadyinitialized">CommissionAlreadyInitialized</a></h3>
+<p>The validator commission has already been initialized</p>
+<pre><code class="language-solidity">error CommissionAlreadyInitialized(address validator);
+</code></pre>
+<h3 id="initialactivestakeexceedsbalance"><a class="header" href="#initialactivestakeexceedsbalance">InitialActiveStakeExceedsBalance</a></h3>
+<p>The initial active stake exceeds the balance of the contract</p>
+<pre><code class="language-solidity">error InitialActiveStakeExceedsBalance();
+</code></pre>
+<h3 id="schnorrkeyalreadyused"><a class="header" href="#schnorrkeyalreadyused">SchnorrKeyAlreadyUsed</a></h3>
+<p>The Schnorr key has been previously registered in the contract.</p>
+<pre><code class="language-solidity">error SchnorrKeyAlreadyUsed();
+</code></pre>
+<h3 id="defaultadmincannotberevoked"><a class="header" href="#defaultadmincannotberevoked">DefaultAdminCannotBeRevoked</a></h3>
+<p>Attempted to revoke DEFAULT_ADMIN_ROLE which would break single-admin governance</p>
+<pre><code class="language-solidity">error DefaultAdminCannotBeRevoked();
+</code></pre>
+<h3 id="defaultadmincannotberenounced"><a class="header" href="#defaultadmincannotberenounced">DefaultAdminCannotBeRenounced</a></h3>
+<p>Attempted to renounce DEFAULT_ADMIN_ROLE which would break single-admin governance</p>
+<pre><code class="language-solidity">error DefaultAdminCannotBeRenounced();
+</code></pre>
+<h3 id="noundelegationfound"><a class="header" href="#noundelegationfound">NoUndelegationFound</a></h3>
+<p>No undelegation exists for the given validator and delegator</p>
+<pre><code class="language-solidity">error NoUndelegationFound();
+</code></pre>
+<h3 id="invalidmetadataurilength"><a class="header" href="#invalidmetadataurilength">InvalidMetadataUriLength</a></h3>
+<p>The metadata URI exceeds maximum allowed length</p>
+<pre><code class="language-solidity">error InvalidMetadataUriLength();
+</code></pre>
+<h3 id="delegateamounttoosmall"><a class="header" href="#delegateamounttoosmall">DelegateAmountTooSmall</a></h3>
+<p>The delegate amount is too small</p>
+<pre><code class="language-solidity">error DelegateAmountTooSmall();
+</code></pre>
+<h3 id="mindelegateamounttoosmall"><a class="header" href="#mindelegateamounttoosmall">MinDelegateAmountTooSmall</a></h3>
+<p>The minimum delegate amount is too small</p>
+<pre><code class="language-solidity">error MinDelegateAmountTooSmall();
+</code></pre>
+<h2 id="structs"><a class="header" href="#structs">Structs</a></h2>
+<h3 id="commissiontracking-1"><a class="header" href="#commissiontracking-1">CommissionTracking</a></h3>
+<p>Struct for tracking validator commission and last increase time</p>
+<pre><code class="language-solidity">struct CommissionTracking {
+    uint16 commission;
+    uint256 lastIncreaseTime;
+}
+</code></pre>
+<h3 id="initialcommission"><a class="header" href="#initialcommission">InitialCommission</a></h3>
+<p>Struct for initializing validator commissions during migration</p>
+<pre><code class="language-solidity">struct InitialCommission {
+    address validator;
+    uint16 commission;
+}
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../../contracts/src/StakeTable.sol/contract.StakeTable.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../../contracts/src/StakeTable.sol/contract.StakeTable.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../../elasticlunr.min.js"></script>
+        <script src="../../../mark.min.js"></script>
+        <script src="../../../searcher.js"></script>
+
+        <script src="../../../clipboard.min.js"></script>
+        <script src="../../../highlight.js"></script>
+        <script src="../../../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../../../solidity.min.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
