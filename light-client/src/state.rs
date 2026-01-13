@@ -9,7 +9,7 @@ use espresso_types::{
     select_active_validator_set, Header, Leaf2, PubKey, SeqTypes, StakeTableState,
 };
 use hotshot_query_service::{
-    availability::{HeaderQueryData, LeafId, LeafQueryData},
+    availability::{LeafId, LeafQueryData},
     node::BlockId,
     types::HeightIndexed,
 };
@@ -184,12 +184,12 @@ where
         Ok(leaves)
     }
 
-    /// Fetches header in range [start_height, end_height)
+    /// Fetches headers in range [start_height, end_height)
     pub async fn fetch_headers_in_range(
         &self,
         start_height: usize,
         end_height: usize,
-    ) -> Result<Vec<HeaderQueryData<SeqTypes>>> {
+    ) -> Result<Vec<Header>> {
         ensure!(
             start_height < end_height,
             "invalid range: start must be < end"
@@ -199,7 +199,7 @@ where
         let leaves = self.fetch_leaves_in_range(start_height, end_height).await?;
         Ok(leaves
             .into_iter()
-            .map(|leaf| HeaderQueryData::new(leaf.header().clone()))
+            .map(|leaf| leaf.header().clone())
             .collect())
     }
 
@@ -713,10 +713,7 @@ mod test {
 
         assert_eq!(
             headers,
-            vec![
-                HeaderQueryData::new(leaf1.header().clone()),
-                HeaderQueryData::new(leaf2.header().clone())
-            ]
+            vec![leaf1.header().clone(), leaf2.header().clone()]
         );
 
         // now remove from server and this time it should be able to fetch from local db
@@ -725,10 +722,7 @@ mod test {
         let headers = lc.fetch_headers_in_range(1, 3).await.unwrap();
         assert_eq!(
             headers,
-            vec![
-                HeaderQueryData::new(leaf1.header().clone()),
-                HeaderQueryData::new(leaf2.header().clone())
-            ]
+            vec![leaf1.header().clone(), leaf2.header().clone()]
         );
     }
 
