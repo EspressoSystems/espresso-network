@@ -34,6 +34,7 @@ jobs:
         with:
           name: rust-docs
           path: target/doc
+          if-no-files-found: error
 
   doc-contracts:
     runs-on: ubuntu-24.04
@@ -56,6 +57,7 @@ jobs:
         with:
           name: contract-docs
           path: docs/book
+          if-no-files-found: error
 
   deploy:
     needs: [doc-rust, doc-contracts]

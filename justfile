@@ -7,7 +7,7 @@ doc *args:
     cargo doc --no-deps --document-private-items {{args}}
 
 doc-contracts:
-    forge doc
+    forge doc --build
 
 demo *args:
     #!/usr/bin/env bash
