@@ -370,6 +370,7 @@ where
 pub(crate) async fn update_state_storage_loop<T>(
     storage: Arc<T>,
     instance: impl Future<Output = NodeState>,
+    reward_state_retention: u64,
 ) -> anyhow::Result<()>
 where
     T: SequencerStateDataSource,
@@ -405,6 +406,19 @@ where
         let leaves = storage.subscribe_leaves(height + 1).await;
         (last_height, parent_leaf, leaves)
     };
+
+    let prune_height = last_height.saturating_sub(reward_state_retention as usize);
+
+    if prune_height > 0 {
+        tracing::info!(prune_height, "pruning old reward state at startup");
+        if let Err(err) = storage.prune_reward_state(prune_height as u64).await {
+            tracing::warn!(
+                prune_height,
+                "failed to prune reward state at startup: {err:#}"
+            );
+        }
+    }
+
     // resolve the parent leaf future _after_ dropping our lock on the state, in case it is not
     // ready yet and another task needs a mutable lock on the state to produce the parent leaf.
     let mut parent_leaf = parent_leaf.await;
@@ -442,6 +456,15 @@ where
             .await
             {
                 Ok(state) => {
+                    let height = leaf.height();
+                    if height > reward_state_retention && height % reward_state_retention == 0 {
+                        let prune_height = height - reward_state_retention;
+                        tracing::info!(prune_height, "pruning old reward state");
+                        if let Err(err) = storage.prune_reward_state(prune_height).await {
+                            tracing::warn!(prune_height, "failed to prune reward state: {err:#}");
+                        }
+                    }
+
                     parent_leaf = leaf;
                     parent_state = state;
                     break;
@@ -468,6 +491,7 @@ pub(crate) trait SequencerStateDataSource:
     + RewardAccountProofDataSource
     + PrunedHeightDataSource
     + MerklizedStateHeightPersistence
+    + RewardStatePruning
 {
 }
 
@@ -481,6 +505,7 @@ impl<T> SequencerStateDataSource for T where
         + RewardAccountProofDataSource
         + PrunedHeightDataSource
         + MerklizedStateHeightPersistence
+        + RewardStatePruning
 {
 }
 
@@ -502,4 +527,9 @@ impl<T> SequencerStateUpdate for T where
         + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
 {
+}
+
+#[async_trait::async_trait]
+pub trait RewardStatePruning {
+    async fn prune_reward_state(&self, prune_height: u64) -> anyhow::Result<()>;
 }
