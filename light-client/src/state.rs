@@ -357,8 +357,8 @@ where
         );
         proofs
             .into_iter()
-            .zip(headers)
-            .map(|(proof, header)| proof.verify(header.header(), namespace))
+            .zip(&headers)
+            .map(|(proof, header)| proof.verify(header, namespace))
             .collect()
     }
 
