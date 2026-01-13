@@ -1,0 +1,85 @@
+name: Docs
+on:
+  push:
+    branches:
+      - "main"
+      - "release-*"
+  pull_request:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  # ensure non-PR jobs run in parallel
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  doc-rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@just
+
+      - name: Build Rust Docs
+        run: just doc
+
+      - name: Upload Rust Docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-docs
+          path: target/doc
+
+  doc-contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: taiki-e/install-action@just
+
+      - name: Build Contract Docs
+        run: just doc-contracts
+
+      - name: Upload Contract Docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-docs
+          path: docs/book
+
+  deploy:
+    needs: [doc-rust, doc-contracts]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download Rust Docs
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-docs
+          path: public
+
+      - name: Download Contract Docs
+        uses: actions/download-artifact@v4
+        with:
+          name: contract-docs
+          path: public/contracts
+
+      - name: Create Index
+        run: echo '<meta http-equiv="refresh" content="0; url=sequencer">' > public/index.html
+
+      - name: Deploy
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          cname: sequencer.docs.espressosys.com

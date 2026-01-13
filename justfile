@@ -6,6 +6,9 @@ default:
 doc *args:
     cargo doc --no-deps --document-private-items {{args}}
 
+doc-contracts:
+    forge doc
+
 demo *args:
     #!/usr/bin/env bash
     # The TUI wouldn't work on the CI
