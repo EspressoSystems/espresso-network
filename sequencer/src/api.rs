@@ -63,6 +63,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
+    state::RewardStatePruning,
     state_cert::{validate_state_cert, StateCertFetchError},
     state_signature::StateSigner,
     SeqTypes, SequencerApiVersion, SequencerContext,
@@ -1248,6 +1249,37 @@ where
         self.inner()
             .load_v2_reward_account_proof(height, account)
             .await
+    }
+}
+
+#[async_trait]
+impl RewardStatePruning for hotshot_query_service::data_source::MetricsDataSource {
+    async fn prune_reward_state(&self, _prune_height: u64) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<T, S> RewardStatePruning for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
+where
+    T: RewardStatePruning + Send + Sync,
+    S: Send + Sync,
+{
+    async fn prune_reward_state(&self, prune_height: u64) -> anyhow::Result<()> {
+        self.inner().prune_reward_state(prune_height).await
+    }
+}
+
+#[async_trait]
+impl<Types, S, P> RewardStatePruning
+    for hotshot_query_service::data_source::fetching::FetchingDataSource<Types, S, P>
+where
+    Types: hotshot_types::traits::node_implementation::NodeType,
+    S: RewardStatePruning + Send + Sync,
+    P: Send + Sync,
+{
+    async fn prune_reward_state(&self, prune_height: u64) -> anyhow::Result<()> {
+        self.as_ref().prune_reward_state(prune_height).await
     }
 }
 
@@ -4867,6 +4899,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                ..Default::default()
             },
             tmp_options(node_0_storage),
         );
@@ -5091,6 +5124,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                ..Default::default()
             },
             tmp_options(node_0_storage),
         );
@@ -6186,6 +6220,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                ..Default::default()
             },
             tmp_options(&new_storage),
         );

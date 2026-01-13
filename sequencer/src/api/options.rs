@@ -455,9 +455,10 @@ impl Options {
             let state = state.clone();
             async move { state.node_state().await.clone() }
         };
+        let reward_state_retention = query_opt.reward_state_retention;
         tasks.spawn(
             "merklized state storage update loop",
-            update_state_storage_loop(ds.clone(), get_node_state),
+            update_state_storage_loop(ds.clone(), get_node_state, reward_state_retention),
         );
 
         // Initialize hotshot events API if enabled
@@ -631,6 +632,14 @@ pub struct Query {
     /// Peers for fetching missing data for the query service.
     #[clap(long, env = "ESPRESSO_SEQUENCER_API_PEERS", value_delimiter = ',')]
     pub peers: Vec<Url>,
+
+    /// Number of blocks to retain reward state for.
+    #[clap(
+        long,
+        env = "ESPRESSO_NETWORK_REWARD_STATE_RETENTION",
+        default_value = "30"
+    )]
+    pub reward_state_retention: u64,
 }
 
 /// Options for the state API module.
