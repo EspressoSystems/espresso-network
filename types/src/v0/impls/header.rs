@@ -765,7 +765,7 @@ impl Header {
             leader_counts[leader_index] = 1;
         } else if let Some(parent_counts) = parent_counts {
             leader_counts = *parent_counts;
-            leader_counts[leader_index] = leader_counts[leader_index] + 1;
+            leader_counts[leader_index] += 1;
         }
 
         leader_counts
@@ -868,7 +868,7 @@ impl Header {
             .iter()
             .filter_map(|entry| {
                 membership
-                    .get_validator_config(&epoch, entry.stake_table_entry.stake_key.clone())
+                    .get_validator_config(&epoch, entry.stake_table_entry.stake_key)
                     .ok()
             })
             .collect();
