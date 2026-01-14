@@ -2720,7 +2720,7 @@ mod test {
         endpoint: &str,
         height: u64,
     ) {
-        const MAX_RETRIES: usize = 30;
+        const MAX_RETRIES: usize = 100;
 
         for _retry in 0..=MAX_RETRIES {
             let bh = client
@@ -4561,7 +4561,7 @@ mod test {
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V6::new()).await;
+        let _network = TestNetwork::new(config, V6::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -4614,6 +4614,125 @@ mod test {
             if height == EPOCH_HEIGHT * 5 {
                 let total_distributed = header.total_reward_distributed().unwrap();
                 assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_reward_total_distributed_rewards() -> anyhow::Result<()> {
+        /// Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
+        ///  Epoch 4: Rewards only distributed in the LAST block
+        /// Epoch 5: All blocks before last have same total as epoch 4 last block,
+        ///            last block has higher total because of new distribution
+
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        type V6 = SequencerVersions<StaticVersion<0, 6>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V6>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, V6::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+            assert_eq!(total_distributed.0, U256::ZERO,);
+
+            if height == EPOCH_HEIGHT * 3 {
+                break;
+            }
+        }
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+
+            if height < EPOCH_HEIGHT * 4 {
+                assert_eq!(total_distributed.0, U256::ZERO,);
+            } else {
+                assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        let epoch4_last_reward = {
+            let header = client
+                .get::<Header>(&format!("availability/header/{}", EPOCH_HEIGHT * 4))
+                .send()
+                .await
+                .unwrap();
+            header.total_reward_distributed().unwrap()
+        };
+
+        assert!(
+            epoch4_last_reward.0 > U256::ZERO,
+            "epoch 4 last block should have positive rewards"
+        );
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+
+            if height < EPOCH_HEIGHT * 5 {
+                assert_eq!(total_distributed, epoch4_last_reward,);
+            } else {
+                assert!(total_distributed.0 > epoch4_last_reward.0,);
                 break;
             }
         }
