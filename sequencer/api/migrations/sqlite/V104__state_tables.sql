@@ -10,7 +10,7 @@ CREATE TABLE fee_merkle_tree (
   children_bitvec BLOB, 
   idx JSONB, 
   entry JSONB,
-  PRIMARY KEY (path, created)
+  PRIMARY KEY (path)
 );
 
 CREATE TABLE block_merkle_tree (
@@ -21,5 +21,5 @@ CREATE TABLE block_merkle_tree (
   children_bitvec BLOB, 
   idx JSONB, 
   entry JSONB,
-  PRIMARY KEY (path, created)
+  PRIMARY KEY (path)
 );
