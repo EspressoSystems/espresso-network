@@ -10,5 +10,5 @@ CREATE TABLE reward_merkle_tree_v2 (
   children_bitvec BLOB, 
   idx JSONB, 
   entry JSONB,
-  PRIMARY KEY (path, created)
+  PRIMARY KEY (path)
 );

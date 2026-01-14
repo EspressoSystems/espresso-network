@@ -1431,7 +1431,7 @@ pub mod testing {
                 children_bitvec {bit_vec},
                 idx JSONB,
                 entry JSONB,
-                PRIMARY KEY (path, created)
+                PRIMARY KEY (path)
             );
             CREATE INDEX {name}_created ON {name} (created);"
             )

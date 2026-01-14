@@ -6,7 +6,7 @@ CREATE TABLE reward_merkle_tree (
   children_bitvec BLOB, 
   idx JSONB, 
   entry JSONB,
-  PRIMARY KEY (path, created)
+  PRIMARY KEY (path)
 );
 
 ALTER TABLE header
