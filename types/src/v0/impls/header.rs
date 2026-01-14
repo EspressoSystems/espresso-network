@@ -836,25 +836,25 @@ impl Header {
             return Ok((RewardAmount::default(), HashSet::new()));
         }
 
-        let mut manager = instance_state.epoch_rewards_calculator.lock().await;
+        let mut reward_calculator = instance_state.epoch_rewards_calculator.lock().await;
 
         // If we have no result or pending calculation
         // for the previous epoch, trigger a background calculation.
+        // We don't have leader_counts for prev_epoch here, so pass None (it will fetch).
 
-        if !manager.has_result(prev_epoch)
-            && !manager.is_calculating(prev_epoch)
+        if !reward_calculator.has_result(prev_epoch)
+            && !reward_calculator.is_calculating(prev_epoch)
             && epoch > first_epoch + 2
         {
             tracing::info!(%epoch, %prev_epoch, "triggering catchup epoch reward calculation");
-            manager
-                .trigger_epoch_reward_calculation(
-                    epoch,
-                    epoch_height,
-                    instance_state,
-                    &coordinator,
-                    validated_state,
-                )
-                .await;
+            reward_calculator.spawn_background_task(
+                prev_epoch,
+                epoch_height,
+                validated_state.reward_merkle_tree_v2.clone(),
+                instance_state.clone(),
+                coordinator.clone(),
+                None,
+            );
         }
 
         // If not at epoch boundary, just return
@@ -862,66 +862,9 @@ impl Header {
             return Ok((RewardAmount::default(), HashSet::new()));
         }
 
-        let membership = coordinator.membership().read().await;
-        let validators: Vec<_> = membership
-            .stake_table(Some(epoch))
-            .iter()
-            .filter_map(|entry| {
-                membership
-                    .get_validator_config(&epoch, entry.stake_table_entry.stake_key)
-                    .ok()
-            })
-            .collect();
-        drop(membership);
+        tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
-        // Fetch missing reward accounts before starting the calculation.
-        let accounts_to_update: Vec<_> = leader_counts
-            .iter()
-            .enumerate()
-            .filter(|(_, &count)| count > 0)
-            .flat_map(|(index, _)| {
-                validators.get(index).into_iter().flat_map(|v| {
-                    std::iter::once(RewardAccountV2(v.account))
-                        .chain(v.delegators.keys().map(|d| RewardAccountV2(*d)))
-                })
-            })
-            .collect();
-        let missing_accounts = validated_state.forgotten_reward_accounts_v2(accounts_to_update);
-
-        if !missing_accounts.is_empty() {
-            let tree_state_height = (*epoch - 2) * epoch_height;
-            let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
-
-            tracing::info!(
-                %epoch,
-                num_missing = missing_accounts.len(),
-                tree_state_height,
-                %reward_merkle_tree_root,
-                "fetching missing reward accounts for epoch rewards"
-            );
-
-            let proofs = instance_state
-                .state_catchup
-                .fetch_reward_accounts_v2(
-                    instance_state,
-                    tree_state_height,
-                    ViewNumber::new(tree_state_height),
-                    reward_merkle_tree_root,
-                    missing_accounts,
-                )
-                .await
-                .context("failed to fetch missing reward accounts for epoch rewards")?;
-
-            for proof in proofs {
-                proof
-                    .remember(&mut validated_state.reward_merkle_tree_v2)
-                    .expect("proof previously verified");
-            }
-        }
-
-        let block_reward = instance_state.block_reward(epoch).await.unwrap();
-
-        let prev_result = manager.get_result(prev_epoch).await;
+        let prev_result = reward_calculator.get_result(prev_epoch).await;
 
         let (epoch_rewards_applied, changed_accounts) = if let Some(result) = prev_result {
             tracing::info!(
@@ -937,17 +880,20 @@ impl Header {
             (RewardAmount::default(), HashSet::new())
         };
 
-        manager.start_calculation(
+        // Start background calculation for the current epoch's rewards
+        // to be applied at the end of the next epoch
+        reward_calculator.spawn_background_task(
             epoch,
-            *leader_counts,
+            epoch_height,
             validated_state.reward_merkle_tree_v2.clone(),
-            block_reward,
-            validators,
+            instance_state.clone(),
+            coordinator.clone(),
+            Some(leader_counts.clone()),
         );
 
         // keep last 3 epochs
         if *epoch > *first_epoch + 3 {
-            manager.cleanup_before(EpochNumber::new(*epoch - 3));
+            reward_calculator.cleanup_before(EpochNumber::new(*epoch - 3));
         }
 
         Ok((epoch_rewards_applied, changed_accounts))
