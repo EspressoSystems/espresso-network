@@ -1,10 +1,14 @@
 use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use espresso_types::{BlockMerkleTree, SeqTypes};
-use futures::{future::FutureExt, stream::StreamExt};
+use espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
+use futures::{
+    future::{try_join, FutureExt},
+    stream::StreamExt,
+    TryStreamExt,
+};
 use hotshot_query_service::{
-    availability::{AvailabilityDataSource, LeafId},
+    availability::{self, AvailabilityDataSource, LeafId},
     data_source::{storage::NodeStorage, VersionedDataSource},
     merklized_state::{MerklizedStateDataSource, Snapshot},
     node::BlockId,
@@ -12,8 +16,11 @@ use hotshot_query_service::{
     Error,
 };
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
+use itertools::izip;
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use light_client::consensus::{header::HeaderProof, leaf::LeafProof};
+use light_client::consensus::{
+    header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
+};
 use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
@@ -128,6 +135,101 @@ where
     Ok(HeaderProof::new(header, path))
 }
 
+async fn get_namespace_proof_range<State>(
+    state: &State,
+    start: usize,
+    end: usize,
+    namespace: u64,
+    fetch_timeout: Duration,
+    large_object_range_limit: usize,
+) -> Result<Vec<NamespaceProof>, Error>
+where
+    State: AvailabilityDataSource<SeqTypes>,
+{
+    if end <= start {
+        return Err(Error::Custom {
+            message: format!("requested empty interval [{start}, {end})"),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+    if end - start > large_object_range_limit {
+        return Err(Error::Custom {
+            message: format!(
+                "requested range [{start}, {end}) exceeds maximum size {large_object_range_limit}"
+            ),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+
+    let fetch_headers = async move {
+        state
+            .get_header_range(start..end)
+            .await
+            .enumerate()
+            .then(|(i, fetch)| async move {
+                fetch
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing header {}", start + i),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            })
+            .try_collect::<Vec<_>>()
+            .await
+    };
+    let fetch_payloads = async move {
+        state
+            .get_payload_range(start..end)
+            .await
+            .enumerate()
+            .then(|(i, fetch)| async move {
+                fetch
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing payload {}", start + i),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            })
+            .try_collect::<Vec<_>>()
+            .await
+    };
+    let fetch_vid_commons = async move {
+        state
+            .get_vid_common_range(start..end)
+            .await
+            .enumerate()
+            .then(|(i, fetch)| async move {
+                fetch
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing VID common {}", start + i),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            })
+            .try_collect::<Vec<_>>()
+            .await
+    };
+    let (headers, (payloads, vid_commons)) =
+        try_join(fetch_headers, try_join(fetch_payloads, fetch_vid_commons)).await?;
+
+    izip!(headers, payloads, vid_commons)
+        .map(|(header, payload, vid_common)| {
+            let Some(ns_index) = header.ns_table().find_ns_id(&namespace.into()) else {
+                return Ok(NamespaceProof::not_present());
+            };
+            let ns_proof = NsProof::new(payload.data(), &ns_index, vid_common.common())
+                .ok_or_else(|| Error::Custom {
+                    message: "failed to construct namespace proof".into(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?;
+            Ok(NamespaceProof::new(ns_proof, vid_common.common().clone()))
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 pub(super) struct Options {
     /// Timeout for failing requests due to missing data.
@@ -136,12 +238,22 @@ pub(super) struct Options {
     /// external provider. This parameter controls how long the request handler will wait for
     /// missing data to be fetched before giving up and failing the request.
     pub fetch_timeout: Duration,
+
+    /// The maximum number of large objects which can be loaded in a single range query.
+    ///
+    /// Large objects include anything that _might_ contain a full payload or an object proportional
+    /// in size to a payload. Note that this limit applies to the entire class of objects: we do not
+    /// check the size of objects while loading to determine which limit to apply. If an object
+    /// belongs to a class which might contain a large payload, the large object limit always
+    /// applies.
+    pub large_object_range_limit: usize,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             fetch_timeout: Duration::from_millis(500),
+            large_object_range_limit: availability::Options::default().large_object_range_limit,
         }
     }
 }
@@ -163,7 +275,10 @@ where
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
     api.with_version(api_ver);
 
-    let fetch_timeout = opt.fetch_timeout;
+    let Options {
+        fetch_timeout,
+        large_object_range_limit,
+    } = opt;
 
     api.get("leaf", move |req, state| {
         async move {
@@ -178,26 +293,7 @@ where
     .get("header", move |req, state| {
         async move {
             let root = req.integer_param("root").map_err(bad_param("root"))?;
-            let requested = if let Some(height) = req
-                .opt_integer_param("height")
-                .map_err(bad_param("height"))?
-            {
-                BlockId::Number(height)
-            } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
-                BlockId::Hash(hash)
-            } else if let Some(hash) = req
-                .opt_blob_param("payload-hash")
-                .map_err(bad_param("payload-hash"))?
-            {
-                BlockId::PayloadHash(hash)
-            } else {
-                return Err(Error::Custom {
-                    message: "missing parameter: requested header must be identified by height, \
-                              hash, or payload hash"
-                        .into(),
-                    status: StatusCode::BAD_REQUEST,
-                });
-            };
+            let requested = block_id_from_req(&req)?;
             get_header_proof(state, root, requested, fetch_timeout).await
         }
         .boxed()
@@ -273,6 +369,89 @@ where
                 })
         }
         .boxed()
+    })?
+    .get("payload", move |req, state| {
+        async move {
+            let height: usize = req.integer_param("height").map_err(bad_param("height"))?;
+            let fetch_payload = async move {
+                state
+                    .get_payload(height)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing payload {height}"),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            };
+            let fetch_vid_common = async move {
+                state
+                    .get_vid_common(height)
+                    .await
+                    .with_timeout(fetch_timeout)
+                    .await
+                    .ok_or_else(|| Error::Custom {
+                        message: format!("missing VID common {height}"),
+                        status: StatusCode::NOT_FOUND,
+                    })
+            };
+            let (payload, vid_common) = try_join(fetch_payload, fetch_vid_common).await?;
+            Ok(PayloadProof::new(
+                payload.data().clone(),
+                vid_common.common().clone(),
+            ))
+        }
+        .boxed()
+    })?
+    .get("namespace", move |req, state| {
+        async move {
+            let height = req.integer_param("height").map_err(bad_param("height"))?;
+            let namespace = req
+                .integer_param("namespace")
+                .map_err(bad_param("namespace"))?;
+            let mut proofs = get_namespace_proof_range(
+                state,
+                height,
+                height + 1,
+                namespace,
+                fetch_timeout,
+                large_object_range_limit,
+            )
+            .await?;
+            if proofs.len() != 1 {
+                tracing::error!(
+                    height,
+                    namespace,
+                    ?proofs,
+                    "get_namespace_proof_range should have returned exactly one proof"
+                );
+                return Err(Error::Custom {
+                    message: "internal consistency error".into(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                });
+            }
+            Ok(proofs.remove(0))
+        }
+        .boxed()
+    })?
+    .get("namespace_range", move |req, state| {
+        async move {
+            let start = req.integer_param("start").map_err(bad_param("start"))?;
+            let end = req.integer_param("end").map_err(bad_param("end"))?;
+            let namespace = req
+                .integer_param("namespace")
+                .map_err(bad_param("namespace"))?;
+            get_namespace_proof_range(
+                state,
+                start,
+                end,
+                namespace,
+                fetch_timeout,
+                large_object_range_limit,
+            )
+            .await
+        }
+        .boxed()
     })?;
 
     Ok(api)
@@ -331,6 +510,29 @@ where
     })
 }
 
+fn block_id_from_req(req: &RequestParams) -> Result<BlockId<SeqTypes>, Error> {
+    if let Some(height) = req
+        .opt_integer_param("height")
+        .map_err(bad_param("height"))?
+    {
+        Ok(BlockId::Number(height))
+    } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
+        Ok(BlockId::Hash(hash))
+    } else if let Some(hash) = req
+        .opt_blob_param("payload-hash")
+        .map_err(bad_param("payload-hash"))?
+    {
+        Ok(BlockId::PayloadHash(hash))
+    } else {
+        Err(Error::Custom {
+            message: "missing parameter: requested header must be identified by height, hash, or \
+                      payload hash"
+                .into(),
+            status: StatusCode::BAD_REQUEST,
+        })
+    }
+}
+
 fn bad_param<E>(name: &'static str) -> impl FnOnce(E) -> Error
 where
     E: Display,
@@ -351,7 +553,9 @@ fn not_found(msg: impl Into<String>) -> Error {
 #[cfg(test)]
 mod test {
     use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, BLOCK_MERKLE_TREE_HEIGHT};
+    use futures::future::join_all;
     use hotshot_query_service::{
+        availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
         data_source::{storage::UpdateAvailabilityStorage, Transaction},
         merklized_state::UpdateStateData,
     };
@@ -361,7 +565,7 @@ mod test {
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
             leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, EnableEpochs, LegacyVersion,
-            VersionCheckQuorum,
+            TestClient, VersionCheckQuorum,
         },
     };
     use tide_disco::Error;
@@ -659,5 +863,98 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_namespace_proof() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Construct a chain of blocks.
+        let client = TestClient::default();
+        let leaves = join_all((0..=2).map(|i| client.leaf(i))).await;
+        let payloads = join_all((0..=2).map(|i| client.payload(i))).await;
+        let vid_commons = join_all((0..=2).map(|i| client.vid_common(i))).await;
+
+        // Save all those objects in the DB.
+        {
+            let mut tx = ds.write().await.unwrap();
+            for (leaf, payload, vid_common) in izip!(&leaves, &payloads, &vid_commons) {
+                tx.insert_leaf(leaf.clone()).await.unwrap();
+                tx.insert_block(BlockQueryData::<SeqTypes>::new(
+                    leaf.header().clone(),
+                    payload.clone(),
+                ))
+                .await
+                .unwrap();
+                tx.insert_vid(
+                    VidCommonQueryData::<SeqTypes>::new(leaf.header().clone(), vid_common.clone()),
+                    None,
+                )
+                .await
+                .unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // Test happy path: all blocks.
+        let ns = payloads[0]
+            .transaction(&TransactionIndex {
+                ns_index: 0.into(),
+                position: 0,
+            })
+            .unwrap()
+            .namespace();
+        let proofs = get_namespace_proof_range(&ds, 0, 3, ns.into(), Duration::MAX, 100)
+            .await
+            .unwrap();
+        assert_eq!(proofs.len(), 3);
+        for (leaf, proof) in leaves.iter().zip(proofs) {
+            proof.verify(leaf.header(), ns).unwrap();
+        }
+
+        // Test happy path: subset.
+        let tx = payloads[1]
+            .transaction(&TransactionIndex {
+                ns_index: 0.into(),
+                position: 0,
+            })
+            .unwrap();
+        let ns = tx.namespace();
+        let proofs = get_namespace_proof_range(&ds, 1, 2, ns.into(), Duration::MAX, 100)
+            .await
+            .unwrap();
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(proofs[0].verify(leaves[1].header(), ns).unwrap(), [tx]);
+
+        // Test missing data in range.
+        let err = get_namespace_proof_range(&ds, 0, 4, ns.into(), Duration::from_secs(1), 100)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        // Test invalid range.
+        let err = get_namespace_proof_range(&ds, 1, 0, ns.into(), Duration::from_secs(1), 100)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            err.to_string().contains("requested empty interval"),
+            "{err:#}"
+        );
+
+        // Test large range.
+        let err = get_namespace_proof_range(&ds, 0, 10_000, ns.into(), Duration::from_secs(1), 100)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(err.to_string().contains("exceeds maximum size"), "{err:#}");
     }
 }
