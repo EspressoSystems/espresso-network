@@ -234,7 +234,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
         let (builder_key, builder_private_key) =
-            TYPES::BuilderSignatureKey::generated_from_seed_indexed([0; 32], handle.hotshot.id);
+            TYPES::BuilderSignatureKey::generated_from_seed_indexed([0; 32], 0);
         Self {
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
