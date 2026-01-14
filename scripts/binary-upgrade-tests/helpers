@@ -7,6 +7,7 @@ target_tag=${UPGRADE_DOCKER_TAG:-testing}
 compose_file="docker-compose.yaml"
 
 # fix the environment to start properly on the mainnet version
+export DOCKER_TAG_STAKE_FOR_DEMO=main
 export ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT=22001
 export RUST_BACKTRACE=1
 export ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS=10
