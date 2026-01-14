@@ -2542,6 +2542,7 @@ mod test {
         consensus::{
             header::HeaderProof,
             leaf::{LeafProof, LeafProofHint},
+            payload::PayloadProof,
         },
         testing::{EpochChangeQuorum, LegacyVersion},
     };
@@ -7441,13 +7442,26 @@ mod test {
         // Get a leaf stream so that we can wait for various events. Also keep track of each leaf
         // yielded, which we can use as ground truth later in the test.
         let mut actual_leaves = vec![];
+        let mut actual_blocks = vec![];
         let mut leaves = client
             .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .unwrap()
-            .map(|leaf| leaf.unwrap())
-            .inspect(|leaf| actual_leaves.push(leaf.clone()));
+            .zip(
+                client
+                    .socket("availability/stream/blocks/0")
+                    .subscribe::<BlockQueryData<SeqTypes>>()
+                    .await
+                    .unwrap(),
+            )
+            .map(|(leaf, block)| {
+                let leaf = leaf.unwrap();
+                let block = block.unwrap();
+                actual_leaves.push(leaf.clone());
+                actual_blocks.push(block);
+                leaf
+            });
 
         // Wait for the upgrade to take effect.
         let (upgrade_height, first_epoch) = loop {
@@ -7515,7 +7529,8 @@ mod test {
         let quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
         for i in heights {
             let leaf = &actual_leaves[i as usize];
-            tracing::info!(i, ?leaf, "check leaf");
+            let block = &actual_blocks[i as usize];
+            tracing::info!(i, ?leaf, ?block, "check leaf");
 
             // Get the same leaf proof by various IDs.
             let client = &client;
@@ -7571,6 +7586,14 @@ mod test {
                     leaf.header()
                 );
             }
+
+            // Get the corresponding payload.
+            let proof = client
+                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
         }
 
         // Check light client stake table.

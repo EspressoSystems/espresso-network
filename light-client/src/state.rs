@@ -6,10 +6,11 @@ use anyhow::{ensure, Context, Result};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    select_active_validator_set, Header, Leaf2, PubKey, SeqTypes, StakeTableState,
+    select_active_validator_set, Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState,
+    Transaction,
 };
 use hotshot_query_service::{
-    availability::{LeafId, LeafQueryData},
+    availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData},
     node::BlockId,
     types::HeightIndexed,
 };
@@ -184,6 +185,25 @@ where
         Ok(leaves)
     }
 
+    /// Fetches headers in range [start_height, end_height)
+    pub async fn fetch_headers_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<Header>> {
+        ensure!(
+            start_height < end_height,
+            "invalid range: start must be < end"
+        );
+
+        // Reuse the verified leaf path to guarantee header correctness.
+        let leaves = self.fetch_leaves_in_range(start_height, end_height).await?;
+        Ok(leaves
+            .into_iter()
+            .map(|leaf| leaf.header().clone())
+            .collect())
+    }
+
     /// Fetches leaves from the server in range [start_height, end_height) and verifies them by
     /// walking backwards from the known finalized leaf, ensuring each leaf's hash matches the
     /// parent commitment of the subsequent leaf.
@@ -285,6 +305,61 @@ where
         // header from there.
         let leaf = self.fetch_leaf_from_server(id, None, quorum).await?;
         Ok(leaf.header().clone())
+    }
+
+    /// Fetch and verify the requested payload.
+    pub async fn fetch_payload(&self, id: BlockId<SeqTypes>) -> Result<PayloadQueryData<SeqTypes>> {
+        Ok(self.fetch_block(id).await?.into())
+    }
+
+    /// Fetch and verify the requested block.
+    pub async fn fetch_block(&self, id: BlockId<SeqTypes>) -> Result<BlockQueryData<SeqTypes>> {
+        let header = self.fetch_header(id).await?;
+        let proof = self.server.payload_proof(header.height()).await?;
+        let payload = proof.verify(&header)?;
+        Ok(BlockQueryData::new(header, payload))
+    }
+
+    /// Fetch and verify the transactions in the given namespace of the requested block.
+    pub async fn fetch_namespace(
+        &self,
+        id: BlockId<SeqTypes>,
+        namespace: NamespaceId,
+    ) -> Result<Vec<Transaction>> {
+        let header = self.fetch_header(id).await?;
+        let proof = self
+            .server
+            .namespace_proof(header.height(), namespace)
+            .await?;
+        proof.verify(&header, namespace)
+    }
+
+    /// Fetch and verify the transactions in the given namespace of blocks in the range
+    /// `[start_height, end_height)`.
+    pub async fn fetch_namespaces_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        namespace: NamespaceId,
+    ) -> Result<Vec<Vec<Transaction>>> {
+        let headers = self
+            .fetch_headers_in_range(start_height, end_height)
+            .await?;
+        let proofs = self
+            .server
+            .namespace_proofs_in_range(start_height as u64, end_height as u64, namespace)
+            .await?;
+        ensure!(
+            proofs.len() == headers.len(),
+            "server returned wrong number of namespace proofs (expected {}, got {})",
+            headers.len(),
+            proofs.len()
+        );
+        proofs
+            .into_iter()
+            .zip(&headers)
+            .map(|(proof, header)| proof.verify(header, namespace))
+            .collect()
     }
 
     /// Fetch and verify the stake table for the requested epoch.
@@ -500,6 +575,8 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 
 #[cfg(test)]
 mod test {
+    use espresso_types::NsIndex;
+    use hotshot_query_service::availability::TransactionIndex;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -677,6 +754,38 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_headers_in_range() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        // Fetch headers in range [1,3) for the first time. We will need to get them from the server.
+        let leaf1 = client.remember_leaf(1).await;
+        let leaf2 = client.remember_leaf(2).await;
+        client.remember_leaf(3).await;
+
+        let headers = lc.fetch_headers_in_range(1, 3).await.unwrap();
+
+        assert_eq!(
+            headers,
+            vec![leaf1.header().clone(), leaf2.header().clone()]
+        );
+
+        // now remove from server and this time it should be able to fetch from local db
+        client.forget_leaf(1).await;
+        client.forget_leaf(2).await;
+        let headers = lc.fetch_headers_in_range(1, 3).await.unwrap();
+        assert_eq!(
+            headers,
+            vec![leaf1.header().clone(), leaf2.header().clone()]
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_leaves_in_range_invalid_proof() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
@@ -697,6 +806,26 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_headers_in_range_invalid_proof() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.return_invalid_proof(2).await;
+        let err = lc.fetch_headers_in_range(1, 3).await.unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "server returned proof with assumption, but we have no finalized upper bound to \
+                 verify assumption"
+            ),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_leaves_in_range_wrong_leaf() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
@@ -706,6 +835,20 @@ mod test {
         );
         client.return_wrong_leaf(1, 2).await;
         let err = lc.fetch_leaves_in_range(1, 4).await.unwrap_err();
+        assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_headers_in_range_wrong_leaf() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        client.return_wrong_leaf(1, 2).await;
+        let err = lc.fetch_headers_in_range(1, 4).await.unwrap_err();
         assert!(err.to_string().contains("leaf hash mismatch"), "{err:#}");
     }
 
@@ -837,6 +980,128 @@ mod test {
         assert!(
             err.to_string()
                 .contains("does not match reconstructed hash"),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_payload() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        for i in 1..10 {
+            let payload = client.payload(i).await;
+            let res = lc.fetch_payload(BlockId::Number(i)).await.unwrap();
+            assert_eq!(res.data(), &payload);
+            assert_eq!(res.height(), i as u64);
+            assert_eq!(res.block_hash(), client.leaf(i).await.block_hash());
+            assert_eq!(res.hash(), client.leaf(i).await.payload_hash());
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_payload_invalid() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        client.return_invalid_payload(1).await;
+        let err = lc.fetch_payload(BlockId::Number(1)).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("commitment of payload does not match commitment in header"),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_namespace() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        for i in 1..10 {
+            let leaf = client.leaf(i).await;
+            let payload = client.payload(i).await;
+
+            for id in [
+                BlockId::Number(i),
+                BlockId::Hash(leaf.block_hash()),
+                BlockId::PayloadHash(leaf.payload_hash()),
+            ] {
+                // Request a non-empty namespace.
+                let ns_index = NsIndex::from(0);
+                let tx = payload
+                    .transaction(&TransactionIndex {
+                        ns_index,
+                        position: 0,
+                    })
+                    .unwrap();
+                let txs = lc.fetch_namespace(id, tx.namespace()).await.unwrap();
+                assert_eq!(txs, std::slice::from_ref(&tx));
+
+                // Request an empty namespace.
+                let txs = lc
+                    .fetch_namespace(id, NamespaceId::from(u64::from(tx.namespace()) + 1))
+                    .await
+                    .unwrap();
+                assert_eq!(txs, []);
+            }
+        }
+
+        // Fetch by range.
+        let ns = client
+            .payload(1)
+            .await
+            .transaction(&TransactionIndex {
+                ns_index: 0.into(),
+                position: 0,
+            })
+            .unwrap()
+            .namespace();
+        let namespaces = lc.fetch_namespaces_in_range(1, 10, ns).await.unwrap();
+        assert_eq!(namespaces.len(), 9);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_namespace_invalid() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        let payload = client.payload(1).await;
+        let ns_index = NsIndex::from(0);
+        let tx = payload
+            .transaction(&TransactionIndex {
+                ns_index,
+                position: 0,
+            })
+            .unwrap();
+
+        client.return_invalid_payload(1).await;
+        let err = lc
+            .fetch_namespace(BlockId::Number(1), tx.namespace())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid namespace proof"),
             "{err:#}"
         );
     }

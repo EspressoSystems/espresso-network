@@ -1068,6 +1068,10 @@ impl Header {
         field!(self.ns_table)
     }
 
+    pub fn ns_table_mut(&mut self) -> &mut NsTable {
+        &mut *field_mut!(self.ns_table)
+    }
+
     /// Root Commitment of Block Merkle Tree
     pub fn block_merkle_tree_root(&self) -> BlockMerkleCommitment {
         *field!(self.block_merkle_tree_root)
