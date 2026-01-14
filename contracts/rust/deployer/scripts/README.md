@@ -28,17 +28,18 @@ cp .env $ENV_FILE
   - `ESPRESSO_SEQUENCER_ETH_MNEMONIC`
   - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS`
 
-2. set the RPC_URL and ACCOUNT_INDEX (if it isn't zero)
+2. set the RPC_URL, ACCOUNT_INDEX and OUTPUT_FILE
 
 ```bash
 export RPC_URL={YOUR_RPC_URL}
-export ACCOUNT_INDEX={YOUR_ACCOUNT_INDEX}
+export ACCOUNT_INDEX={YOUR_ACCOUNT_INDEX} # Optional:  if it isn't zero
+export OUTPUT_FILE={YOUR_OUTPUT_FILE}  # Optional: customize output file
 ```
 
 3. Run the script
 
 ```bash
-./contracts/rust/deployer/scripts/testnet-governance-deploy.sh --env-file $ENV_FILE
+./contracts/rust/deployer/scripts/testnet-governance-deploy.sh --env-file $OUTPUT_FILE
 ```
 
 ## Running the test flow

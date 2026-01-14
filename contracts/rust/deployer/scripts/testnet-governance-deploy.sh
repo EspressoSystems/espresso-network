@@ -50,7 +50,7 @@ done
 
 
 RPC_URL="${RPC_URL:-http://localhost:8545}"
-OUTPUT_FILE=".env.governance.testnet"
+OUTPUT_FILE="${OUTPUT_FILE:-.env.governance.testnet}"
 ACCOUNT_INDEX="${ACCOUNT_INDEX:-0}"
 OPS_DELAY="${OPS_DELAY:-30}" # 30 seconds default
 SAFE_EXIT_DELAY="${SAFE_EXIT_DELAY:-60}" # 60 seconds default
