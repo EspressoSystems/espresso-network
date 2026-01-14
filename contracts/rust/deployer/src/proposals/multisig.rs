@@ -693,10 +693,19 @@ pub async fn upgrade_fee_contract_multisig_owner(
 
     // Deploy new implementation (with patch version)
     let fee_contract_addr = if !dry_run {
-        let old_fee_contract_addr = contracts.address(Contract::FeeContract);
+        let cached_fee_contract_addr = contracts.address(Contract::FeeContract);
 
-        // Remove old implementation from cache so we deploy a new one
-        contracts.0.remove(&Contract::FeeContract);
+        // For patch upgrades, we need to deploy a fresh implementation contract.
+        // If FeeContract is already in the cache, the caller must unset it first
+        // to make the redeployment requirement explicit.
+        if let Some(cached_fee_contract_addr) = cached_fee_contract_addr {
+            anyhow::bail!(
+                "FeeContract implementation address is already set in cache ({:#x}). For patch \
+                 upgrades, the implementation must be redeployed. Please unset \
+                 ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first.",
+                cached_fee_contract_addr
+            );
+        }
 
         let new_fee_contract_addr = contracts
             .deploy(
@@ -705,16 +714,16 @@ pub async fn upgrade_fee_contract_multisig_owner(
             )
             .await?;
 
-        if let Some(old_fee_contract_addr) = old_fee_contract_addr {
-            if old_fee_contract_addr == new_fee_contract_addr {
+        if let Some(cached_fee_contract_addr) = cached_fee_contract_addr {
+            if cached_fee_contract_addr == new_fee_contract_addr {
                 anyhow::bail!(
                     "New deployment address ({new_fee_contract_addr:#x}) matches cached address \
-                     ({old_fee_contract_addr:#x}). Cache removal may have failed or deployment \
+                     ({cached_fee_contract_addr:#x}). Cache removal may have failed or deployment \
                      reused cached contract."
                 );
             }
             tracing::info!(
-                old_impl = %old_fee_contract_addr,
+                old_impl = %cached_fee_contract_addr,
                 new_impl = %new_fee_contract_addr,
                 "Fresh FeeContract implementation deployed"
             );

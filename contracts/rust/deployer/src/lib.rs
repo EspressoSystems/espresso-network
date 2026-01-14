@@ -606,8 +606,23 @@ pub async fn upgrade_light_client_v2(
                 tracing::info!("deployed LightClientV2Mock at {addr:#x}");
                 addr
             } else {
-                // Remove old implementation from cache so we deploy a new one
-                contracts.0.remove(&Contract::LightClientV2);
+                // Only check/remove from cache if this is a patch upgrade (V2 -> V2)
+                let is_patch_upgrade = curr_version.majorVersion == 2;
+                if is_patch_upgrade {
+                    let cached_lcv2_addr = contracts.address(Contract::LightClientV2);
+                    // For patch upgrades, we need to deploy a fresh implementation contract.
+                    // If LightClientV2 is already in the cache, the caller must unset it first
+                    // to make the redeployment requirement explicit.
+                    if let Some(addr) = cached_lcv2_addr {
+                        anyhow::bail!(
+                            "LightClientV2 implementation address is already set in cache \
+                             ({:#x}). For patch upgrades, the implementation must be redeployed. \
+                             Please unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS or remove it \
+                             from the cache first.",
+                            addr
+                        );
+                    }
+                }
 
                 contracts
                     .deploy(
@@ -1289,9 +1304,19 @@ pub async fn upgrade_fee_v1(
 
     let old_fee_contract_addr = contracts.address(Contract::FeeContract);
 
-    // Remove old implementation from cache so we deploy a new one
-    contracts.0.remove(&Contract::FeeContract);
+    // For patch upgrades, we need to deploy a fresh implementation contract.
+    // If FeeContract is already in the cache, the caller must unset it first
+    // to make the redeployment requirement explicit.
+    if old_fee_contract_addr.is_some() {
+        anyhow::bail!(
+            "FeeContract implementation address is already set in cache ({:#x}). For patch \
+             upgrades, the implementation must be redeployed. Please unset \
+             ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first.",
+            old_fee_contract_addr.unwrap()
+        );
+    }
 
+    // now deploy the new implementation contract
     let new_fee_contract_addr = contracts
         .deploy(
             Contract::FeeContract,
@@ -4354,18 +4379,19 @@ mod tests {
         assert_eq!(curr_version.minorVersion, 0);
         assert_eq!(curr_version.patchVersion, 1); // since the current version of the contract is 1.0.1 as needed for the patch
 
-        // Store old implementation address for verification
-        let old_impl_addr = contracts.address(Contract::FeeContract);
+        let cached_impl_addr = contracts.address(Contract::FeeContract);
+
+        // For patch upgrades, we need to clear the cache to allow redeployment
+        contracts.0.remove(&Contract::FeeContract);
 
         // Test the upgrade function directly
         let receipt = upgrade_fee_v1(&provider, &mut contracts).await?;
 
-        // Verify upgrade succeeded
         assert!(receipt.inner.is_success());
 
         // Verify a new implementation was deployed (if old one existed)
         let new_impl_addr = contracts.address(Contract::FeeContract);
-        if let Some(old_addr) = old_impl_addr {
+        if let Some(old_addr) = cached_impl_addr {
             assert_ne!(
                 old_addr,
                 new_impl_addr.expect("New implementation should be deployed"),
@@ -4435,6 +4461,10 @@ mod tests {
             cached_impl_addr.expect("LightClientV2 should be in cache"),
             "First upgrade: proxy should point to cached implementation"
         );
+
+        // Second upgrade to V2 (re-applying same version)
+        // For patch upgrades, we need to clear the cache to allow redeployment
+        contracts.0.remove(&Contract::LightClientV2);
 
         // Second upgrade to V2 (re-applying same version)
         upgrade_light_client_v2(
