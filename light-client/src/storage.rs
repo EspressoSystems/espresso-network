@@ -35,6 +35,14 @@ pub trait Storage: Sized + Send + Sync + 'static {
     /// equivalent to `ready(Ok(<Self as Default>::default()))`.
     fn default() -> impl Send + Future<Output = Result<Self>>;
 
+    /// Get the number of blocks known to be in the chain.
+    ///
+    /// This is equivalent to one more than the block number of the latest known block.
+    ///
+    /// Because the database is not constantly being updated, this may be an underestimate of the
+    /// true number of blocks that exist.
+    fn block_height(&self) -> impl Send + Future<Output = Result<u64>>;
+
     /// Get the earliest available leaf which is later than or equal to the requested leaf.
     ///
     /// This will either be the leaf requested, or can be used as the known-finalized endpoint in a
@@ -140,6 +148,14 @@ pub struct SqliteStorage {
 impl Storage for SqliteStorage {
     async fn default() -> Result<Self> {
         SqliteOptions::default().connect().await
+    }
+
+    async fn block_height(&self) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let (height,) = query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
+            .fetch_one(tx.as_mut())
+            .await?;
+        Ok(height)
     }
 
     async fn leaf_upper_bound(
@@ -458,6 +474,20 @@ mod test {
 
     use super::*;
     use crate::testing::{leaf_chain, random_validator};
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_block_height() {
+        let db = SqliteStorage::default().await.unwrap();
+
+        // Test with empty db.
+        assert_eq!(db.block_height().await.unwrap(), 0);
+
+        // Test with nonconsecutive leaves.
+        let leaf = leaf_chain::<EpochVersion>(100..101).await.remove(0);
+        db.insert_leaf(leaf).await.unwrap();
+        assert_eq!(db.block_height().await.unwrap(), 101);
+    }
 
     #[tokio::test]
     #[test_log::test]
