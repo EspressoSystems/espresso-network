@@ -1307,12 +1307,12 @@ pub async fn upgrade_fee_v1(
     // For patch upgrades, we need to deploy a fresh implementation contract.
     // If FeeContract is already in the cache, the caller must unset it first
     // to make the redeployment requirement explicit.
-    if old_fee_contract_addr.is_some() {
+    if let Some(old_fee_contract_addr) = old_fee_contract_addr {
         anyhow::bail!(
             "FeeContract implementation address is already set in cache ({:#x}). For patch \
              upgrades, the implementation must be redeployed. Please unset \
              ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first.",
-            old_fee_contract_addr.unwrap()
+            old_fee_contract_addr
         );
     }
 
