@@ -1383,10 +1383,9 @@ pub async fn read_proxy_impl(provider: impl Provider, addr: Address) -> Result<A
     // Use retry_until_true to verify storage is readable (non-zero address)
     let is_readable = retry_until_true("Read proxy implementation", || async {
         match provider.get_storage_at(addr, impl_slot).await {
-            Ok(storage) => {
-                let impl_addr = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
-                // Return true if we got a non-zero address (storage is readable and valid)
-                Ok(impl_addr != Address::default())
+            Ok(_) => {
+                // storage is readable so return true
+                Ok(true)
             },
             Err(e) => {
                 tracing::debug!("Storage read failed (will retry): {}", e);
@@ -1406,10 +1405,6 @@ pub async fn read_proxy_impl(provider: impl Provider, addr: Address) -> Result<A
     let storage = provider.get_storage_at(addr, impl_slot).await?;
     let impl_addr = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
 
-    // If somehow we got zero after retry verified it's non-zero, that's an error
-    if impl_addr == Address::default() {
-        anyhow::bail!("Proxy implementation address is zero after verification");
-    }
     Ok(impl_addr)
 }
 
@@ -1716,7 +1711,8 @@ mod tests {
 
         let fee_contract = FeeContract::deploy(&provider).await?;
         let init_data = fee_contract.initialize(deployer).calldata().clone();
-        let proxy = ERC1967Proxy::deploy(&provider, *fee_contract.address(), init_data).await?;
+        let proxy =
+            ERC1967Proxy::deploy(&provider, *fee_contract.address(), init_data.clone()).await?;
 
         assert!(is_proxy_contract(&provider, *proxy.address()).await?);
         assert!(!is_proxy_contract(&provider, *fee_contract.address()).await?);
