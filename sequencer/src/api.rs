@@ -1,6 +1,6 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
-use anyhow::{bail, Context};
+use anyhow::{bail, ensure, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
 use async_trait::async_trait;
@@ -13,10 +13,11 @@ use derivative::Derivative;
 use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
+    traits::EventsPersistenceRead,
     v0::traits::{SequencerPersistence, StateCatchup},
     v0_3::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
-        Validator,
+        StakeTableEvent, Validator,
     },
     v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
@@ -248,6 +249,16 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
         self.as_ref().get_all_validators(epoch, offset, limit).await
     }
+
+    async fn stake_table_events(
+        &self,
+        from_l1_block: u64,
+        to_l1_block: u64,
+    ) -> anyhow::Result<Vec<StakeTableEvent>> {
+        self.as_ref()
+            .stake_table_events(from_l1_block, to_l1_block)
+            .await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -398,6 +409,22 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let handle_read = handle.read().await;
         let storage = handle_read.storage();
         storage.load_all_validators(epoch, offset, limit).await
+    }
+
+    async fn stake_table_events(
+        &self,
+        from_l1_block: u64,
+        to_l1_block: u64,
+    ) -> anyhow::Result<Vec<StakeTableEvent>> {
+        let handle = self.consensus().await;
+        let handle_read = handle.read().await;
+        let storage = handle_read.storage();
+        let (status, events) = storage.load_events(from_l1_block, to_l1_block).await?;
+        ensure!(
+            status == Some(EventsPersistenceRead::Complete),
+            "some events in range [{from_l1_block}, {to_l1_block}] are not available ({status:?})"
+        );
+        Ok(events.into_iter().map(|(_, event)| event).collect())
     }
 }
 
@@ -2515,6 +2542,7 @@ mod test {
         consensus::{
             header::HeaderProof,
             leaf::{LeafProof, LeafProofHint},
+            payload::PayloadProof,
         },
         testing::{EpochChangeQuorum, LegacyVersion},
     };
@@ -2532,7 +2560,7 @@ mod test {
     };
     use espresso_types::{
         config::PublicHotShotConfig,
-        traits::{NullEventConsumer, PersistenceOptions},
+        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
         v0_4::{
             RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
@@ -2540,10 +2568,11 @@ mod test {
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
-        SequencerVersions, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        SequencerVersions, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
+        ValidatedState,
     };
     use futures::{
-        future::{self, join_all},
+        future::{self, join_all, try_join_all},
         stream::{StreamExt, TryStreamExt},
         try_join,
     };
@@ -2596,7 +2625,7 @@ mod test {
         TestNetwork, TestNetworkConfigBuilder,
     };
     use tide_disco::{
-        app::AppHealth, error::ServerError, healthcheck::HealthStatus, StatusCode, Url,
+        app::AppHealth, error::ServerError, healthcheck::HealthStatus, Error, StatusCode, Url,
     };
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
@@ -7145,7 +7174,7 @@ mod test {
         // Run the through a protocol upgrade and epoch change, then check that we are able to get a
         // correct light client proof for every finalized leaf.
 
-        const NUM_NODES: usize = 5;
+        const NUM_NODES: usize = 1;
         const EPOCH_HEIGHT: u64 = 200;
 
         let upgrade_version = EpochVersion::version();
@@ -7183,7 +7212,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
+        let mut network = TestNetwork::new(
             config,
             SequencerVersions::<LegacyVersion, EpochVersion>::new(),
         )
@@ -7191,14 +7220,33 @@ mod test {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
-        // Wait for the upgrade to take effect.
+        // Get a leaf stream so that we can wait for various events. Also keep track of each leaf
+        // yielded, which we can use as ground truth later in the test.
+        let mut actual_leaves = vec![];
+        let mut actual_blocks = vec![];
         let mut leaves = client
             .socket("availability/stream/leaves/0")
-            .subscribe()
+            .subscribe::<LeafQueryData<SeqTypes>>()
             .await
-            .unwrap();
+            .unwrap()
+            .zip(
+                client
+                    .socket("availability/stream/blocks/0")
+                    .subscribe::<BlockQueryData<SeqTypes>>()
+                    .await
+                    .unwrap(),
+            )
+            .map(|(leaf, block)| {
+                let leaf = leaf.unwrap();
+                let block = block.unwrap();
+                actual_leaves.push(leaf.clone());
+                actual_blocks.push(block);
+                leaf
+            });
+
+        // Wait for the upgrade to take effect.
         let (upgrade_height, first_epoch) = loop {
-            let leaf: LeafQueryData<SeqTypes> = leaves.next().await.unwrap().unwrap();
+            let leaf: LeafQueryData<SeqTypes> = leaves.next().await.unwrap();
             if leaf.header().version() < EpochVersion::version() {
                 tracing::info!(version = %leaf.header().version(), height = leaf.header().height(), view = ?leaf.leaf().view_number(), "waiting for epoch upgrade");
                 continue;
@@ -7211,9 +7259,9 @@ mod test {
         // table).
         let mut epoch_heights = [0; 2];
         for (i, epoch_height) in epoch_heights.iter_mut().enumerate() {
-            let desired_epoch = first_epoch + (i as u64);
+            let desired_epoch = first_epoch + (i as u64) + 1;
             *epoch_height = loop {
-                let leaf = leaves.next().await.unwrap().unwrap();
+                let leaf = leaves.next().await.unwrap();
                 let epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
                 if epoch > desired_epoch {
                     tracing::info!(
@@ -7234,80 +7282,134 @@ mod test {
         }
 
         // Wait a few more blocks.
-        let neighborhood = 2;
-        let max_block = epoch_heights[1] + neighborhood;
+        let max_block = epoch_heights[1] + 1;
         loop {
-            let leaf = leaves.next().await.unwrap().unwrap();
-            if leaf.height() >= max_block {
+            let leaf = leaves.next().await.unwrap();
+            if leaf.height() > max_block {
                 break;
             }
             tracing::info!(max_block, height = leaf.height(), "waiting for block");
         }
 
+        // Stop consensus. All the blocks we are going to query have already been produced.
+        // Continuing to run consensus would just waste resources while we check stuff.
+        network.stop_consensus().await;
+
         // Check light client. Querying every single block is too slow, so we'll check a few blocks
         // around various critical points:
         let heights =
         // * The first few blocks, including genesis
-            (0..=neighborhood)
+            (0..=1)
         // * A few blocks just before and after the upgrade
-            .chain(upgrade_height-neighborhood..upgrade_height+neighborhood)
+            .chain(upgrade_height-1..=upgrade_height+1)
         // * A few blocks just before and after the first epoch change
-            .chain(epoch_heights[0]-neighborhood..epoch_heights[0] + neighborhood)
+            .chain(epoch_heights[0]-1..=epoch_heights[0] + 1)
         // * A few blocks just before and after the stake table comes into effect
-            .chain(epoch_heights[1]-neighborhood..max_block);
+            .chain(epoch_heights[1]-1..=max_block);
 
         let quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
         for i in heights {
-            tracing::info!(i, "check leaf");
-            let leaf: LeafQueryData<SeqTypes> = client
-                .get(&format!("availability/leaf/{i}"))
-                .send()
-                .await
-                .unwrap();
-            tracing::debug!(?leaf, "expected leaf");
+            let leaf = &actual_leaves[i as usize];
+            let block = &actual_blocks[i as usize];
+            tracing::info!(i, ?leaf, ?block, "check leaf");
 
-            // Get the same leaf proof by other IDs.
-            for path in [
-                format!("light-client/leaf/{i}"),
-                format!("light-client/leaf/hash/{}", leaf.hash()),
-                format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
-            ] {
-                tracing::info!(i, path, "get leaf proof");
-                let leaf_proof: LeafProof = client.get(&path).send().await.unwrap();
-                tracing::debug!(?leaf_proof, "fetched proof");
+            // Get the same leaf proof by various IDs.
+            let client = &client;
+            let proofs = try_join_all(
+                [
+                    format!("light-client/leaf/{i}"),
+                    format!("light-client/leaf/hash/{}", leaf.hash()),
+                    format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
+                ]
+                .into_iter()
+                .map(|path| async move {
+                    tracing::info!(i, path, "fetch leaf proof");
+                    let proof = client.get::<LeafProof>(&path).send().await?;
+                    Ok::<_, anyhow::Error>((path, proof))
+                }),
+            )
+            .await
+            .unwrap();
+
+            // Check proofs against expected leaf.
+            for (path, proof) in proofs {
+                tracing::info!(i, path, ?proof, "check leaf proof");
                 assert_eq!(
-                    leaf_proof
-                        .verify(LeafProofHint::Quorum(&quorum))
-                        .await
-                        .unwrap(),
-                    leaf
+                    proof.verify(LeafProofHint::Quorum(&quorum)).await.unwrap(),
+                    *leaf
                 );
             }
 
             // Get the corresponding header.
             let root_height = i + 1;
-            let root: Header = client
-                .get(&format!("availability/header/{root_height}"))
-                .send()
-                .await
-                .unwrap();
-            for path in [
-                format!("light-client/header/{root_height}/{i}"),
-                format!(
-                    "light-client/header/{root_height}/hash/{}",
-                    leaf.block_hash()
-                ),
-            ] {
-                tracing::info!(i, path, "get header proof");
-                let header_proof: HeaderProof = client.get(&path).send().await.unwrap();
-                tracing::debug!(?header_proof, "fetched proof");
+            let root = actual_leaves[root_height as usize].header();
+            let proofs = try_join_all(
+                [
+                    format!("light-client/header/{root_height}/{i}"),
+                    format!(
+                        "light-client/header/{root_height}/hash/{}",
+                        leaf.block_hash()
+                    ),
+                ]
+                .into_iter()
+                .map(|path| async move {
+                    tracing::info!(i, path, "get header proof");
+                    let proof = client.get::<HeaderProof>(&path).send().await?;
+                    Ok::<_, anyhow::Error>((path, proof))
+                }),
+            )
+            .await
+            .unwrap();
+            for (path, proof) in proofs {
+                tracing::info!(i, path, ?proof, "check header proof");
                 assert_eq!(
-                    header_proof
-                        .verify_ref(root.block_merkle_tree_root())
-                        .unwrap(),
+                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
                     leaf.header()
                 );
             }
+
+            // Get the corresponding payload.
+            let proof = client
+                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
         }
+
+        // Check light client stake table.
+        let events: Vec<StakeTableEvent> = client
+            .get(&format!("light-client/stake-table/{}", first_epoch + 2))
+            .send()
+            .await
+            .unwrap();
+        let mut state_from_events = StakeTableState::default();
+        for event in events {
+            state_from_events.apply_event(event).unwrap().unwrap();
+        }
+
+        assert_eq!(
+            state_from_events.into_validators(),
+            network
+                .server
+                .consensus()
+                .read()
+                .await
+                .storage()
+                .load_all_validators(first_epoch + 2, 0, 1_000_000)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.account, v))
+                .collect::<ValidatorMap>()
+        );
+
+        // Querying for a stake table before the first real epoch is an error.
+        let err = client
+            .get::<Vec<StakeTableEvent>>(&format!("light-client/stake-table/{}", first_epoch + 1))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 }

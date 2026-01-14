@@ -78,3 +78,48 @@ Returns
 }
 ```
 """
+
+[route.stake_table]
+PATH = ["/stake-table/:epoch"]
+":epoch" = "Integer"
+DOC = """
+Get events needed to construct the stake table for the given epoch.
+
+This endpoint assumes the client already has the full `StakeTableState` for epoch `:epoch - 1`. It
+returns just the list of events required to transform `:epoch - 1` stake table into `:epoch` stake
+table.
+
+The resulting stake table can be verified by computing its hash, fetching the header for the epoch
+root of `:epoch`, and comparing against the hash in the header.
+
+Returns
+```json
+[StakeTableEvent]
+```
+"""
+
+[route.payload]
+PATH = ["/payload/:height"]
+":height" = "Integer"
+DOC = """
+Fetch a payload plus the VID common data needed to recompute and verify its hash.
+"""
+
+[route.namespace]
+PATH = ["/namespace/:height/:namespace"]
+":height" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Fetch a namespace proof plus the VID common data needed to verify it.
+
+The proof can be verified in order to extract all transactions in that namespace.
+"""
+
+[route.namespace_range]
+PATH = ["/namespace/:start/:end/:namespace"]
+":start" = "Integer"
+":end" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Fetch a list of namespace proofs for each block in the rang `[:start, end)`.
+"""

@@ -1,13 +1,19 @@
 use std::future::Future;
 
 use anyhow::Result;
-use espresso_types::SeqTypes;
-use hotshot_query_service::{availability::LeafId, node::BlockId};
+use espresso_types::{v0_3::StakeTableEvent, NamespaceId, SeqTypes};
+use hotshot_query_service::{
+    availability::{LeafId, LeafQueryData},
+    node::BlockId,
+};
+use hotshot_types::data::EpochNumber;
 use surf_disco::Url;
 use vbs::version::StaticVersion;
 
 use crate::{
-    consensus::{header::HeaderProof, leaf::LeafProof},
+    consensus::{
+        header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
+    },
     storage::LeafRequest,
 };
 
@@ -30,6 +36,51 @@ pub trait Client: Send + Sync + 'static {
         root: u64,
         id: BlockId<SeqTypes>,
     ) -> impl Send + Future<Output = Result<HeaderProof>>;
+
+    /// Get all leaves in the given range `[start, end)`.
+    fn get_leaves_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> impl Send
+           + Future<
+        Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
+    >;
+
+    /// Get a proof for the requested payload.
+    ///
+    /// This method accepts only a `height`, not the more flexible [`BlockId`] type, because a
+    /// [`Header`](espresso_types::Header) is needed to verify the resulting proof, so the height
+    /// must already be known anyways.
+    fn payload_proof(&self, height: u64) -> impl Send + Future<Output = Result<PayloadProof>>;
+
+    /// Get a proof for the requested namespace.
+    ///
+    /// This method accepts only a `height`, not the more flexible [`BlockId`] type, because a
+    /// [`Header`](espresso_types::Header) is needed to verify the resulting proof, so the height
+    /// must already be known anyways.
+    fn namespace_proof(
+        &self,
+        height: u64,
+        namespace: NamespaceId,
+    ) -> impl Send + Future<Output = Result<NamespaceProof>>;
+
+    /// Get proofs for the requested namespace for each block in `[start, end)`.
+    fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> impl Send + Future<Output = Result<Vec<NamespaceProof>>>;
+
+    /// Get stake table events for the given epoch.
+    ///
+    /// This returns the list of events that must be applied to transform the stake table from
+    /// `epoch - 1` into the stake table for `epoch`.
+    fn stake_table_events(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = Result<Vec<StakeTableEvent>>>;
 }
 
 /// A [`Client`] connected to the HotShot query service.
@@ -70,25 +121,82 @@ impl Client for QueryServiceClient {
         Ok(proof)
     }
 
+    /// Get all leaves in the given range `[start, end)`.
+    async fn get_leaves_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let path = format!("/availability/leaf/{start}/{end}");
+        let leaves = self.client.get(&path).send().await?;
+        Ok(leaves)
+    }
+
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
-        let path = format!("/light-client/header/{root}");
-        let path = match id {
-            BlockId::Number(n) => format!("{path}/{n}"),
-            BlockId::Hash(h) => format!("{path}/hash/{h}"),
-            BlockId::PayloadHash(h) => format!("{path}/payload-hash/{h}"),
-        };
+        let path = format!("/light-client/header/{root}/{}", fmt_block_id(id));
         let proof = self.client.get(&path).send().await?;
         Ok(proof)
+    }
+
+    async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
+        let path = format!("/light-client/payload/{height}");
+        Ok(self.client.get(&path).send().await?)
+    }
+
+    async fn namespace_proof(&self, height: u64, namespace: NamespaceId) -> Result<NamespaceProof> {
+        Ok(self
+            .client
+            .get(&format!("/light-client/namespace/{height}/{namespace}"))
+            .send()
+            .await?)
+    }
+
+    async fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> Result<Vec<NamespaceProof>> {
+        Ok(self
+            .client
+            .get(&format!(
+                "/light-client/namespace/{start}/{end}/{namespace}"
+            ))
+            .send()
+            .await?)
+    }
+
+    async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
+        Ok(self
+            .client
+            .get(&format!("/light-client/stake-table/{epoch}"))
+            .send()
+            .await?)
+    }
+}
+
+fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
+    match id {
+        BlockId::Number(n) => format!("{n}"),
+        BlockId::Hash(h) => format!("hash/{h}"),
+        BlockId::PayloadHash(h) => format!("payload-hash/{h}"),
     }
 }
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{EpochVersion, SequencerVersions};
+    use std::time::Duration;
+
+    use committable::Committable;
+    use espresso_types::{EpochVersion, Header, SequencerVersions, Transaction};
     use futures::{stream::StreamExt, TryStreamExt};
-    use hotshot_query_service::availability::LeafQueryData;
+    use hotshot_query_service::{
+        availability::{BlockQueryData, LeafQueryData},
+        Resolvable,
+    };
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_eq;
+    use rand::RngCore;
     use sequencer::{
         api::{
             data_source::testing::TestableSequencerDataSource,
@@ -96,8 +204,9 @@ mod test {
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
             Options,
         },
-        testing::TestConfigBuilder,
+        testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
+    use tokio::time::sleep;
 
     use super::*;
     use crate::{
@@ -187,5 +296,235 @@ mod test {
                 .payload_hash(),
             leaves[0].payload_hash()
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_header_proof() {
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let _network = TestNetwork::new(
+            config,
+            SequencerVersions::<EpochVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client = QueryServiceClient::new(url);
+
+        // Wait for a chain of blocks to be produced.
+        let headers: Vec<Header> = client
+            .client
+            .socket("availability/stream/headers/1")
+            .subscribe()
+            .await
+            .unwrap()
+            .take(2)
+            .try_collect()
+            .await
+            .unwrap();
+        // Wait for the state API to catch up.
+        loop {
+            let state_height: u64 = client
+                .client
+                .get("block-state/block-height")
+                .send()
+                .await
+                .unwrap();
+            if state_height >= 2 {
+                break;
+            }
+            tracing::info!(state_height, "waiting for block state to reach height 2");
+            sleep(Duration::from_secs(1)).await;
+        }
+
+        // Get header proof by height.
+        let proof = client.header_proof(2, BlockId::Number(1)).await.unwrap();
+        assert_eq!(
+            proof.verify(headers[1].block_merkle_tree_root()).unwrap(),
+            headers[0]
+        );
+
+        // Get the same proof by block hash.
+        let proof = client
+            .header_proof(2, BlockId::Hash(headers[0].commitment()))
+            .await
+            .unwrap();
+        assert_eq!(
+            proof.verify(headers[1].block_merkle_tree_root()).unwrap(),
+            headers[0]
+        );
+
+        // Get a proof by payload hash (this doesn't necessarily return a unique header, since
+        // multiple headers may have the same payload).
+        let proof = client
+            .header_proof(2, BlockId::PayloadHash(headers[0].payload_commitment()))
+            .await
+            .unwrap();
+        assert_eq!(
+            proof
+                .verify(headers[1].block_merkle_tree_root())
+                .unwrap()
+                .payload_commitment(),
+            headers[0].payload_commitment()
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_payload_proof() {
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let _network = TestNetwork::new(
+            config,
+            SequencerVersions::<EpochVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client = QueryServiceClient::new(url);
+
+        // Wait for a block to be produced.
+        let block: BlockQueryData<SeqTypes> = client
+            .client
+            .socket("availability/stream/blocks/1")
+            .subscribe()
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap();
+
+        let proof = client.payload_proof(1).await.unwrap();
+        assert_eq!(proof.verify(block.header()).unwrap(), *block.payload());
+
+        // The block will be empty, but check at least that the namespace proof method hits the
+        // correct endpoint and deserializes correctly.
+        let ns = NamespaceId::from(0u64);
+        let ns_proof = client.namespace_proof(1, ns).await.unwrap();
+        assert_eq!(ns_proof.verify(block.header(), ns).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_namespace_proof() {
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let network = TestNetwork::new(
+            config,
+            SequencerVersions::<EpochVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client = QueryServiceClient::new(url);
+
+        // Submit a couple of transactions to form non-empty blocks.
+        let ns = NamespaceId::from(1u64);
+        let mut events = network.server.event_stream().await;
+        let mut txs = vec![];
+        let mut headers = vec![];
+        for _ in 0..2 {
+            let mut bytes = vec![0; 32];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            let tx = Transaction::new(ns, bytes);
+            network
+                .server
+                .consensus()
+                .read()
+                .await
+                .submit_transaction(tx.clone())
+                .await
+                .unwrap();
+            let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
+            tracing::info!(block, hash = %tx.commit(), ?tx, "transaction included");
+
+            let header: Header = client
+                .client
+                .get(&format!("availability/header/{block}"))
+                .send()
+                .await
+                .unwrap();
+
+            txs.push(tx);
+            headers.push(header);
+        }
+
+        // Query namespaces individually.
+        for (tx, header) in txs.iter().zip(&headers) {
+            let proof = client.namespace_proof(header.height(), ns).await.unwrap();
+            assert_eq!(proof.verify(header, ns).unwrap(), std::slice::from_ref(tx));
+        }
+
+        // Query both namespaces by range.
+        let proofs = client
+            .namespace_proofs_in_range(headers[0].height(), headers[1].height() + 1, ns)
+            .await
+            .unwrap();
+        assert_eq!(
+            proofs.len() as u64,
+            headers[1].height() + 1 - headers[0].height()
+        );
+        assert_eq!(
+            proofs[0].verify(&headers[0], ns).unwrap(),
+            std::slice::from_ref(&txs[0])
+        );
+        assert_eq!(
+            proofs[proofs.len() - 1].verify(&headers[1], ns).unwrap(),
+            std::slice::from_ref(&txs[1])
+        );
+        // All other blocks in the range should be empty.
+        for (i, proof) in proofs.iter().enumerate().take(proofs.len() - 1).skip(1) {
+            let header = client
+                .client
+                .get(&format!(
+                    "availability/header/{}",
+                    headers[0].height() + (i as u64)
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(proof.verify(&header, ns).unwrap(), vec![]);
+        }
     }
 }

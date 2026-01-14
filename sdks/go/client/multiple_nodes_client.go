@@ -70,9 +70,9 @@ func (c *MultipleNodesClient) FetchTransactionByHash(ctx context.Context, hash *
 	return res, nil
 }
 
-func (c *MultipleNodesClient) FetchNamespaceTransactionsInRange(ctx context.Context, namespace uint64, fromHeight uint64, toHeight uint64) ([]types.NamespaceTransactionsRangeData, error) {
+func (c *MultipleNodesClient) FetchNamespaceTransactionsInRange(ctx context.Context, fromBlock uint64, toBlock uint64, namespace uint64) ([]types.NamespaceTransactionsRangeData, error) {
 	var res []types.NamespaceTransactionsRangeData
-	if err := c.getWithMajority(ctx, &res, "availability/namespace/%d/transactions/range/%d/%d", namespace, fromHeight, toHeight); err != nil {
+	if err := c.getWithMajority(ctx, &res, "availability/block/%d/%d/namespace/%d", fromBlock, toBlock, namespace); err != nil {
 		return []types.NamespaceTransactionsRangeData{}, err
 	}
 	return res, nil
