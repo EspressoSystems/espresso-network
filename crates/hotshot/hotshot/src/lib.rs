@@ -78,6 +78,7 @@ use hotshot_types::{
 pub use rand;
 use tokio::{spawn, time::sleep};
 use tracing::{debug, instrument, trace};
+use url::Url;
 
 // -- Rexports
 // External
@@ -111,6 +112,9 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
 
     /// Memberships used by consensus
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+
+    /// The orchestrator url
+    pub orchestrator_url: Option<Url>,
 
     /// the metrics that the implementor is using.
     metrics: Arc<ConsensusMetricsValue>,
@@ -167,6 +171,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
             config: self.config.clone(),
             network: Arc::clone(&self.network),
             membership_coordinator: self.membership_coordinator.clone(),
+            orchestrator_url: self.orchestrator_url.clone(),
             metrics: Arc::clone(&self.metrics),
             consensus: self.consensus.clone(),
             instance_state: Arc::clone(&self.instance_state),
@@ -209,6 +214,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
         storage_metrics: StorageMetricsValue,
+        orchestrator_url: Option<Url>,
     ) -> Arc<Self> {
         let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
         let external_chan = broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
@@ -227,6 +233,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             storage_metrics,
             internal_chan,
             external_chan,
+            orchestrator_url,
         )
         .await
     }
@@ -256,6 +263,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             Receiver<Arc<HotShotEvent<TYPES>>>,
         ),
         external_channel: (Sender<Event<TYPES>>, Receiver<Event<TYPES>>),
+        orchestrator_url: Option<Url>,
     ) -> Arc<Self> {
         debug!("Creating a new hotshot");
 
@@ -452,6 +460,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             storage,
             storage_metrics,
             upgrade_lock,
+            orchestrator_url,
         });
 
         inner
@@ -604,12 +613,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         };
 
         spawn(async move {
-            let memberships_da_committee_members = membership
-                .da_committee_members(view_number)
-                .await
-                .iter()
-                .cloned()
-                .collect();
+            // send the transaction to the leader of the next 3 views
+            let mut leaders = vec![];
+            for view in *view_number + 1..*view_number + 4 {
+                let leader = membership.leader(TYPES::View::new(view)).await.unwrap();
+                leaders.push(leader);
+            }
 
             join! {
                 // TODO We should have a function that can return a network error if there is one
@@ -622,7 +631,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 api
                     .network.da_broadcast_message(
                         serialized_message,
-                        memberships_da_committee_members,
+                        leaders,
                         BroadcastDelay::None,
                     ),
                 api
@@ -714,6 +723,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
         storage_metrics: StorageMetricsValue,
+        orchestrator_url: Option<Url>,
     ) -> Result<
         (
             SystemContextHandle<TYPES, I, V>,
@@ -734,6 +744,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             consensus_metrics,
             storage,
             storage_metrics,
+            orchestrator_url,
         )
         .await;
         let handle = Arc::clone(&hotshot).run_tasks().await;
@@ -896,6 +907,7 @@ where
             consensus_metrics.clone(),
             storage.clone(),
             storage_metrics.clone(),
+            None,
         )
         .await;
         let right_system_context = SystemContext::new(
@@ -910,6 +922,7 @@ where
             consensus_metrics,
             storage,
             storage_metrics,
+            None,
         )
         .await;
 

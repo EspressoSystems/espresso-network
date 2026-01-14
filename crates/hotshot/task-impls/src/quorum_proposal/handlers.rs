@@ -14,6 +14,7 @@ use std::{
 };
 
 use async_broadcast::{Receiver, Sender};
+use collector_common::{send_trace, Trace};
 use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
@@ -654,6 +655,11 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             proposed_leaf.height(),
             proposed_leaf.justify_qc().view_number()
         );
+
+        // Send the trace when we generate the proposal event
+        let _ = send_trace(&Trace::ProposalSendEventGenerated(
+            *(proposed_leaf.view_number()),
+        ));
 
         broadcast_event(
             Arc::new(HotShotEvent::QuorumProposalSend(
