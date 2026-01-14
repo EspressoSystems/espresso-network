@@ -449,7 +449,10 @@ where
             {
                 Ok(state) => {
                     let height = leaf.height();
-                    if height > reward_state_retention && height % reward_state_retention == 0 {
+                    if reward_state_retention > 0
+                        && height > reward_state_retention
+                        && height % reward_state_retention == 0
+                    {
                         let prune_height = height - reward_state_retention;
                         tracing::info!(prune_height, "pruning old reward state");
                         if let Err(err) = storage.prune_reward_state(prune_height).await {
