@@ -13,6 +13,7 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
+use committable::Committable;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
@@ -81,6 +82,8 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         for transaction in block_payload.transactions(metadata) {
             self.recently_decided_transactions
                 .put(transaction.clone(), true);
+            self.transactions
+                .retain(|txn| txn.commit() != transaction.commit());
         }
         self.recently_proposed_blocks.remove(&view);
     }
@@ -487,16 +490,6 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                 for transaction in transactions {
                     self.mempool.receive_transaction(transaction.clone());
                 }
-                broadcast_event(
-                    Event {
-                        view_number: self.cur_view,
-                        event: EventType::Transactions {
-                            transactions: transactions.clone(),
-                        },
-                    },
-                    &self.output_event_stream,
-                )
-                .await;
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 let view = TYPES::View::new(std::cmp::max(1, **view));

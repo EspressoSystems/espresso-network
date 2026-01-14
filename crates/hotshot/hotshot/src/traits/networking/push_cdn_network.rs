@@ -559,7 +559,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
             self.direct_message(message.clone(), recipient)
                 .await
                 .inspect_err(|_e| {
-                    tracing::warn!("failed to send direct message: {recipient}");
+                    tracing::warn!("failed to send direct message");
                 })?;
         }
         Ok(())
