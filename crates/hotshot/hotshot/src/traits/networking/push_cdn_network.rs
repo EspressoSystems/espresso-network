@@ -545,7 +545,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     async fn da_broadcast_message(
         &self,
         message: Vec<u8>,
-        _recipients: Vec<K>,
+        recipients: Vec<K>,
         _broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         // If we're paused, don't send the message
@@ -555,11 +555,14 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
         }
 
         // Broadcast the message
-        self.broadcast_message(message, Topic::Da)
-            .await
-            .inspect_err(|_e| {
-                self.metrics.num_failed_messages.add(1);
-            })
+        for recipient in recipients {
+            self.direct_message(message.clone(), recipient)
+                .await
+                .inspect_err(|_e| {
+                    tracing::warn!("failed to send direct message: {recipient}");
+                })?;
+        }
+        Ok(())
     }
 
     /// Send a direct message to a node with a particular key. Does not retry.

@@ -616,8 +616,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             // send the transaction to the leader of the next 3 views
             let mut leaders = vec![];
             for view in *view_number + 1..*view_number + 4 {
-                let leader = membership.leader(TYPES::View::new(view)).await.unwrap();
-                leaders.push(leader);
+                if let Ok(leader) = membership.leader(TYPES::View::new(view)).await {
+                    leaders.push(leader);
+                }
             }
 
             join! {
