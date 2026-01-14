@@ -47,7 +47,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     use espresso_types::{v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
     use hotshot_example_types::{node_types::TestVersions, storage_types::TestStorage};
     use hotshot_types::{
-        data::vid_disperse::{ADVZDisperse, ADVZDisperseShare},
+        data::vid_disperse::ADVZDisperse,
         epoch_membership::EpochMembershipCoordinator,
         simple_certificate::{
             TimeoutCertificate, ViewSyncCommitCertificate, ViewSyncFinalizeCertificate,
@@ -233,18 +233,17 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             Default::default(),
         )),
         DaConsensusMessage::VidDisperseMsg(Proposal {
-            data: ADVZDisperseShare::from_advz_disperse(
-                ADVZDisperse::calculate_vid_disperse(
-                    &payload,
-                    &membership,
-                    ViewNumber::genesis(),
-                    Some(EpochNumber::genesis()),
-                    Some(EpochNumber::new(1)),
-                )
-                .await
-                .unwrap()
-                .0,
+            data: ADVZDisperse::calculate_vid_disperse(
+                &payload,
+                &membership,
+                ViewNumber::genesis(),
+                Some(EpochNumber::genesis()),
+                Some(EpochNumber::new(1)),
             )
+            .await
+            .unwrap()
+            .0
+            .to_shares()
             .remove(0),
             signature: signature.clone(),
             _pd: Default::default(),

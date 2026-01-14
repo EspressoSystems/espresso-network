@@ -1,13 +1,25 @@
 [route.leaf]
-PATH = ["/leaf/:number", "/leaf/:number/:finalized"]
-":number" = "Integer"
+PATH = [
+    "/leaf/:height",
+    "/leaf/:height/:finalized",
+    "/leaf/hash/:hash",
+    "/leaf/hash/:hash/:finalized",
+    "/leaf/block-hash/:block-hash",
+    "/leaf/block-hash/:block-hash/:finalized",
+    "/leaf/payload-hash/:payload-hash",
+    "/leaf/payload-hash/:payload-hash/:finalized",
+]
+":height" = "Integer"
 ":finalized" = "Integer"
+":hash" = "TaggedBase64"
+":block-hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
 DOC = """
 Fetch a leaf plus a proof of it's finality (a chain of leaves leading from that leaf to either a
 chain of consecutive valid QCs or a known-finalized leaf).
 
-`:number`, and `:finalized` if provided, must both be block numbers. If provided, `:finalized` must
-be greater than `:number`.
+`:height` and `:finalized`, if provided, must both be block numbers. If provided, `:finalized` must
+be greater than `:height`.
 
 The returned proof contains the requested leaf along with sufficient other leaves/QCs to prove the
 requested leaf is finalized (possibly assuming that the leaf at height `:finalized` is already known
@@ -40,4 +52,74 @@ Returns
     }
 }
 ```
+"""
+
+[route.header]
+PATH = [
+    "/header/:root/:height",
+    "/header/:root/hash/:hash",
+    "/header/:root/payload-hash/:payload-hash",
+]
+":root" = "Integer"
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
+DOC = """
+Fetch a header plus a proof of it's inclusion in the blocks Merkle tree.
+
+Returns the header identified by `:height`, `:hash`, or `:payload-hash`, plus a Merkle proof showing
+it belongs to the Merkle tree rooted in the header at height `:root` (`:height` < `:root`).
+
+Returns
+```json
+{
+    "header": Header,
+    "proof": MerkleProof
+}
+```
+"""
+
+[route.stake_table]
+PATH = ["/stake-table/:epoch"]
+":epoch" = "Integer"
+DOC = """
+Get events needed to construct the stake table for the given epoch.
+
+This endpoint assumes the client already has the full `StakeTableState` for epoch `:epoch - 1`. It
+returns just the list of events required to transform `:epoch - 1` stake table into `:epoch` stake
+table.
+
+The resulting stake table can be verified by computing its hash, fetching the header for the epoch
+root of `:epoch`, and comparing against the hash in the header.
+
+Returns
+```json
+[StakeTableEvent]
+```
+"""
+
+[route.payload]
+PATH = ["/payload/:height"]
+":height" = "Integer"
+DOC = """
+Fetch a payload plus the VID common data needed to recompute and verify its hash.
+"""
+
+[route.namespace]
+PATH = ["/namespace/:height/:namespace"]
+":height" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Fetch a namespace proof plus the VID common data needed to verify it.
+
+The proof can be verified in order to extract all transactions in that namespace.
+"""
+
+[route.namespace_range]
+PATH = ["/namespace/:start/:end/:namespace"]
+":start" = "Integer"
+":end" = "Integer"
+":namespace" = "Integer"
+DOC = """
+Fetch a list of namespace proofs for each block in the rang `[:start, end)`.
 """

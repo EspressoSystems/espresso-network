@@ -1,6 +1,5 @@
-use hotshot_query_service::VidCommon;
 use hotshot_types::{
-    data::VidCommitment,
+    data::{VidCommitment, VidCommon},
     traits::EncodeBytes,
     vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
 };
