@@ -369,6 +369,7 @@ services:
     image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER0_API_PORT:$ESPRESSO_SEQUENCER0_API_PORT"
+      - "$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT"
     # Run the full API server with all modules, Postgres storage
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config
     environment:
@@ -407,6 +408,8 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
+      # for backwards compatibility
+      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
     depends_on:
       orchestrator:
         condition: service_healthy

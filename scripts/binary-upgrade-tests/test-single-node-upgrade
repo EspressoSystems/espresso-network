@@ -1,5 +1,6 @@
 startup_environment
 
+exit
 # Use this genesis file to make sure addresses stay correct to the old version
 export ESPRESSO_SEQUENCER_GENESIS_FILE=genesis/demo-binary-upgrade.toml
 
