@@ -149,7 +149,6 @@ BASE_ARGS=(
     --initial-token-supply "$ESP_TOKEN_INITIAL_SUPPLY"
     --initial-token-grant-recipient "$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS"
     --exit-escrow-period "$ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD"
-    --sequencer-url "$ESPRESSO_SEQUENCER_URL"
     --mock-espresso-live-network
 )
 
@@ -157,7 +156,6 @@ BASE_ARGS=(
     BASE_ARGS+=(--permissioned-prover "$ESPRESSO_SEQUENCER_PERMISSIONED_PROVER")
 
 $DEPLOY_CMD "${BASE_ARGS[@]}" \
-    --deploy-fee-v1 \
     --deploy-light-client-v1 \
     --deploy-esp-token-v1 \
     --deploy-stake-table-v1 \
@@ -184,15 +182,12 @@ set -a
 source "${UPGRADE_OUTPUT_FILE}"
 set +a
 
-# print fee contract owner
 echo ""
-echo "Fee contract owner: $(cast call "$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS" "owner()(address)" --rpc-url "$RPC_URL")"
-echo ""
-echo "### Transferring Fee Contract Ownership to Timelock ###"
+echo "### Deploy Fee Contract with timelock owner"
 $DEPLOY_CMD "${BASE_ARGS[@]}" \
-    --transfer-ownership-from-eoa \
-    --target-contract FeeContract \
-    --transfer-ownership-new-owner "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+    --deploy-fee-v1 \
+    --use-timelock-owner \
+    --out "$OUTPUT_FILE"
 
 echo ""
 echo "### Verifying Deployment ###"
