@@ -1,24 +1,68 @@
 #![cfg(any(test, feature = "testing"))]
 
-use std::collections::HashMap;
-
-use anyhow::{bail, ensure, Context, Result};
-use committable::{Commitment, Committable};
-use espresso_types::{EpochVersion, FeeVersion, Leaf2, NodeState, SeqTypes, SequencerVersions};
-use hotshot_query_service::availability::LeafQueryData;
-use hotshot_types::{
-    data::{QuorumProposal2, QuorumProposalWrapper, ViewNumber},
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
-    simple_vote::{NextEpochQuorumData2, UpgradeProposalData},
-    traits::node_implementation::{ConsensusTime, Versions},
-    utils::is_epoch_transition,
+use std::{
+    cmp::max,
+    collections::{HashMap, HashSet},
+    sync::Arc,
 };
+
+use alloy::primitives::{Address, U256};
+use anyhow::{bail, ensure, Context, Result};
+use async_lock::Mutex;
+use bitvec::vec::BitVec;
+use committable::{Commitment, Committable};
+use derivative::Derivative;
+use espresso_types::{
+    v0_3::{StakeTableEvent, Validator},
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NamespaceId,
+    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash,
+    StakeTableState, Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
+};
+use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
+use hotshot_query_service::{
+    availability::{LeafHash, LeafId, LeafQueryData},
+    node::{BlockHash, BlockId},
+};
+use hotshot_types::{
+    data::{
+        vid_commitment, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        VidCommon, ViewNumber,
+    },
+    message::UpgradeLock,
+    signature_key::SchnorrPubKey,
+    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
+    stake_table::{supermajority_threshold, StakeTableEntry},
+    traits::{
+        block_contents::EncodeBytes,
+        node_implementation::{ConsensusTime, Versions},
+        signature_key::{SignatureKey, StateSignatureKey},
+    },
+    utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
+    vid::avidm::init_avidm_param,
+    vote::Certificate as _,
+};
+use jf_merkle_tree_compat::{
+    prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
+};
+use rand::RngCore;
 use vbs::version::StaticVersionType;
 
-use crate::consensus::quorum::{Certificate, Quorum};
+use crate::{
+    client::Client,
+    consensus::{
+        header::HeaderProof,
+        leaf::LeafProof,
+        namespace::NamespaceProof,
+        payload::PayloadProof,
+        quorum::{Certificate, Quorum},
+    },
+    state::Genesis,
+    storage::LeafRequest,
+};
 
 /// Upgrade to epochs during testing.
-pub type EnableEpochs = SequencerVersions<LegacyVersion, EpochVersion>;
+pub type EnableEpochs = SequencerVersions<LegacyVersion, DrbAndHeaderUpgradeVersion>;
 
 /// Test without epochs and with legacy HotStuff.
 pub type LegacyVersion = FeeVersion;
@@ -128,9 +172,14 @@ pub async fn custom_leaf_chain<V: Versions>(
         },
     };
 
+    let mut block_merkle_tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
     let mut leaves = vec![];
     for height in range {
         *quorum_proposal.proposal.block_header.height_mut() = height;
+        *quorum_proposal
+            .proposal
+            .block_header
+            .block_merkle_tree_root_mut() = block_merkle_tree.commitment();
         quorum_proposal.proposal.view_number = ViewNumber::new(height);
         map(&mut quorum_proposal.proposal);
         let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
@@ -141,6 +190,9 @@ pub async fn custom_leaf_chain<V: Versions>(
             qc.data.block_number = Some(height);
         }
 
+        block_merkle_tree
+            .push(leaf.block_header().commit())
+            .unwrap();
         leaves.push(LeafQueryData::new(leaf, qc.clone()).unwrap());
         quorum_proposal.proposal.justify_qc = qc.clone();
     }
@@ -255,5 +307,564 @@ impl Quorum for EpochChangeQuorum {
             cert.verify_next_epoch_qc(self.epoch_height)?;
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TestClient {
+    inner: Arc<Mutex<InnerTestClient>>,
+    epoch_height: u64,
+}
+
+impl Default for TestClient {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+            epoch_height: 100,
+        }
+    }
+}
+
+#[derive(Debug, Derivative)]
+#[derivative(Default)]
+struct InnerTestClient {
+    leaves: Vec<LeafQueryData<SeqTypes>>,
+    payloads: Vec<Payload>,
+    // Use an appendable `MerkleTree` rather than a `BlockMerkleTree` (which is a
+    // `LightweightMerkleTree`) so we can look up paths for previously inserted elements.
+    merkle_trees: Vec<SHA3MerkleTree<BlockHash<SeqTypes>>>,
+    leaf_hashes: HashMap<LeafHash<SeqTypes>, usize>,
+    block_hashes: HashMap<BlockHash<SeqTypes>, usize>,
+    payload_hashes: HashMap<VidCommitment, usize>,
+    missing_leaves: HashSet<usize>,
+    invalid_proofs: HashSet<usize>,
+    swapped_leaves: HashMap<usize, usize>,
+    invalid_payloads: HashSet<usize>,
+    quorum: Vec<(PrivKey, Validator<PubKey>)>,
+    #[derivative(Default(value = "3"))]
+    first_epoch_with_dynamic_stake_table: u64,
+    missing_quorums: HashSet<u64>,
+    invalid_quorums: HashSet<u64>,
+}
+
+impl InnerTestClient {
+    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, Validator<PubKey>)] {
+        // For testing purposes, we will say that one new node joins the quorum each epoch. The
+        // static stake table used before the first epoch with dynamic stake is the same as the
+        // stake table used in that epoch.
+        let quorum_size = max(epoch, self.first_epoch_with_dynamic_stake_table) as usize;
+
+        while self.quorum.len() < quorum_size {
+            let (stake_table_key, priv_key) =
+                PubKey::generated_from_seed_indexed(Default::default(), self.quorum.len() as u64);
+            let (state_ver_key, _) = SchnorrPubKey::generated_from_seed_indexed(
+                Default::default(),
+                self.quorum.len() as u64,
+            );
+            let stake = U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128);
+            let validator = Validator {
+                account: Address::random(),
+                stake_table_key,
+                state_ver_key,
+                stake,
+                commission: 1,
+                delegators: [(Address::random(), stake)].into_iter().collect(),
+            };
+            self.quorum.push((priv_key, validator));
+        }
+
+        &self.quorum[..quorum_size]
+    }
+
+    fn stake_table_hash(&mut self, epoch: u64) -> StakeTableHash {
+        let quorum = self.quorum_for_epoch(epoch);
+        let mut validators = ValidatorMap::default();
+        let mut used_bls_keys = HashSet::default();
+        let mut used_schnorr_keys = HashSet::default();
+        for (_, validator) in quorum {
+            validators.insert(validator.account, validator.clone());
+            used_bls_keys.insert(validator.stake_table_key);
+            used_schnorr_keys.insert(validator.state_ver_key.clone());
+        }
+
+        let state = StakeTableState::new(
+            validators,
+            Default::default(),
+            used_bls_keys,
+            used_schnorr_keys,
+        );
+        state.commit()
+    }
+
+    async fn leaf(&mut self, height: usize, epoch_height: u64) -> LeafQueryData<SeqTypes> {
+        let epoch = epoch_from_block_number(height as u64, epoch_height);
+        let (quorum, stake_table): (Vec<_>, Vec<_>) =
+            self.quorum_for_epoch(epoch).iter().cloned().unzip();
+        let mut stake_entries = vec![];
+        let mut total_stake = U256::ZERO;
+        for validator in &stake_table {
+            stake_entries.push(StakeTableEntry {
+                stake_key: validator.stake_table_key,
+                stake_amount: validator.stake,
+            });
+            total_stake += validator.stake;
+        }
+
+        let pp = PubKey::public_parameter(&stake_entries, supermajority_threshold(total_stake));
+
+        for i in self.leaves.len()..=height {
+            let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
+            let view_number = ViewNumber::new(i as u64);
+
+            let version = DrbAndHeaderUpgradeVersion::version();
+            let node_state = NodeState::mock_v3().with_genesis_version(version);
+            let (justify_qc, mt) = if i == 0 {
+                (
+                    QuorumCertificate2::genesis::<
+                        SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+                    >(&Default::default(), &node_state)
+                    .await,
+                    SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
+                )
+            } else {
+                let parent = &self.leaves[i - 1];
+                let mut mt = self.merkle_trees[i - 1].clone();
+                mt.push(parent.block_hash()).unwrap();
+                (parent.qc().clone(), mt)
+            };
+
+            let transactions = vec![Transaction::random(&mut rand::thread_rng())];
+            let (payload, ns_table) =
+                Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
+            let payload_comm =
+                vid_commitment::<
+                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+                >(&payload.encode(), &ns_table.encode(), quorum.len(), version);
+
+            let mut block_header = Leaf2::genesis::<
+                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+            >(&Default::default(), &node_state)
+            .await
+            .block_header()
+            .clone();
+            *block_header.height_mut() = i as u64;
+            *block_header.block_merkle_tree_root_mut() = mt.commitment();
+            *block_header.payload_commitment_mut() = payload_comm;
+            *block_header.ns_table_mut() = ns_table;
+            if *epoch + 1 >= self.first_epoch_with_dynamic_stake_table
+                && is_ge_epoch_root(block_header.height(), epoch_height)
+            {
+                assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
+            }
+            let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+                proposal: QuorumProposal2::<SeqTypes> {
+                    epoch: Some(epoch),
+                    block_header,
+                    view_number,
+                    justify_qc,
+                    upgrade_certificate: None,
+                    view_change_evidence: None,
+                    next_drb_result: None,
+                    next_epoch_justify_qc: None,
+                    state_cert: None,
+                },
+            };
+            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            let quorum_data = QuorumData2 {
+                leaf_commit: leaf.commit(),
+                epoch: Some(epoch),
+                block_number: Some(i as u64),
+            };
+            let quorum_data_comm = VersionedVoteData::new_infallible(
+                quorum_data.clone(),
+                view_number,
+                &UpgradeLock::<
+                    SeqTypes,
+                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+                >::new(),
+            )
+            .await
+            .commit();
+            let signatures = quorum
+                .iter()
+                .map(|key| PubKey::sign(key, quorum_data_comm.as_ref()).unwrap())
+                .collect::<Vec<_>>();
+            let assembled = PubKey::assemble(
+                &pp,
+                &std::iter::repeat_n(true, quorum.len()).collect::<BitVec>(),
+                &signatures,
+            );
+            let qc = QuorumCertificate2::create_signed_certificate(
+                quorum_data_comm,
+                quorum_data,
+                assembled,
+                view_number,
+            );
+            let leaf = LeafQueryData::new(leaf, qc).unwrap();
+            self.leaf_hashes.insert(leaf.hash(), i);
+            self.block_hashes.insert(leaf.block_hash(), i);
+            self.payload_hashes.entry(leaf.payload_hash()).or_insert(i);
+            self.leaves.push(leaf);
+            self.payloads.push(payload);
+            self.merkle_trees.push(mt);
+        }
+
+        self.leaves[height].clone()
+    }
+
+    fn leaf_height(&self, req: LeafRequest) -> Result<usize> {
+        match req {
+            LeafRequest::Leaf(LeafId::Number(h)) | LeafRequest::Header(BlockId::Number(h)) => Ok(h),
+            LeafRequest::Leaf(LeafId::Hash(h)) => self
+                .leaf_hashes
+                .get(&h)
+                .copied()
+                .context(format!("missing leaf {h}")),
+            LeafRequest::Header(BlockId::Hash(h)) => self
+                .block_hashes
+                .get(&h)
+                .copied()
+                .context(format!("missing block {h}")),
+            LeafRequest::Header(BlockId::PayloadHash(h)) => self
+                .payload_hashes
+                .get(&h)
+                .copied()
+                .context(format!("missing payload {h}")),
+        }
+    }
+
+    fn vid_common(&mut self, height: u64, epoch_height: u64) -> VidCommon {
+        let epoch = epoch_from_block_number(height, epoch_height);
+        let quorum = self.quorum_for_epoch(epoch);
+        VidCommon::V1(init_avidm_param(quorum.len()).unwrap())
+    }
+}
+
+impl TestClient {
+    pub async fn genesis(&self) -> Genesis {
+        let mut inner = self.inner.lock().await;
+        Genesis {
+            epoch_height: self.epoch_height,
+            stake_table: inner
+                .quorum_for_epoch(1)
+                .iter()
+                .map(|(_, validator)| StakeTableEntry {
+                    stake_key: validator.stake_table_key,
+                    stake_amount: validator.stake,
+                })
+                .collect(),
+            first_epoch_with_dynamic_stake_table: EpochNumber::new(
+                inner.first_epoch_with_dynamic_stake_table,
+            ),
+        }
+    }
+
+    pub async fn leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
+        let mut inner = self.inner.lock().await;
+        inner.leaf(height, self.epoch_height).await
+    }
+
+    pub async fn payload(&self, height: usize) -> Payload {
+        let mut inner = self.inner.lock().await;
+        inner.leaf(height, self.epoch_height).await;
+        inner.payloads[height].clone()
+    }
+
+    pub async fn return_invalid_payload(&self, for_height: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.invalid_payloads.insert(for_height);
+    }
+
+    pub async fn remember_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
+        let mut inner = self.inner.lock().await;
+        inner.missing_leaves.remove(&height);
+        inner.invalid_proofs.remove(&height);
+        inner.swapped_leaves.remove(&height);
+        inner.leaf(height, self.epoch_height).await
+    }
+
+    pub async fn forget_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
+        let mut inner = self.inner.lock().await;
+        inner.missing_leaves.insert(height);
+        inner.leaf(height, self.epoch_height).await
+    }
+
+    pub async fn return_invalid_proof(&self, for_height: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.invalid_proofs.insert(for_height);
+    }
+
+    pub async fn return_wrong_leaf(&self, for_height: usize, substitute: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.swapped_leaves.insert(for_height, substitute);
+    }
+
+    pub async fn quorum_for_epoch(&self, epoch: EpochNumber) -> Vec<StakeTableEntry<PubKey>> {
+        let mut inner = self.inner.lock().await;
+        inner
+            .quorum_for_epoch(*epoch)
+            .iter()
+            .map(|(_, validator)| StakeTableEntry {
+                stake_key: validator.stake_table_key,
+                stake_amount: validator.stake,
+            })
+            .collect()
+    }
+
+    pub async fn remember_quorum(&self, epoch: EpochNumber) {
+        let mut inner = self.inner.lock().await;
+        inner.missing_quorums.remove(&*epoch);
+    }
+
+    pub async fn forget_quorum(&self, epoch: EpochNumber) {
+        let mut inner = self.inner.lock().await;
+        inner.missing_quorums.insert(*epoch);
+    }
+
+    pub async fn return_invalid_quorum(&self, epoch: EpochNumber) {
+        let mut inner = self.inner.lock().await;
+        inner.invalid_quorums.insert(*epoch);
+    }
+
+    pub async fn vid_common(&self, height: u64) -> VidCommon {
+        let mut inner = self.inner.lock().await;
+        inner.vid_common(height, self.epoch_height)
+    }
+}
+
+impl Client for TestClient {
+    async fn leaf_proof(
+        &self,
+        id: impl Into<LeafRequest> + Send,
+        finalized: Option<u64>,
+    ) -> Result<LeafProof> {
+        let mut inner = self.inner.lock().await;
+
+        let mut height = inner.leaf_height(id.into())?;
+        ensure!(
+            !inner.missing_leaves.contains(&height),
+            "missing leaf {height}"
+        );
+        if inner.invalid_proofs.contains(&height) {
+            tracing::info!(height, "return mock incorrect proof");
+            return Ok(LeafProof::default());
+        }
+        if let Some(sub) = inner.swapped_leaves.get(&height) {
+            tracing::info!(height, sub, "return wrong leaf");
+            height = *sub;
+        };
+
+        let leaf = inner.leaf(height, self.epoch_height).await;
+
+        let mut proof = LeafProof::default();
+        proof.push(leaf);
+        if let Some(finalized) = finalized {
+            ensure!(
+                finalized > (height as u64),
+                "assumed finalized leaf must be after requested leaf"
+            );
+            if finalized <= (height as u64) + 2 {
+                tracing::info!(
+                    height,
+                    finalized,
+                    "path to finalized is shorter than path to QC-chain, using finalized"
+                );
+                return Ok(proof);
+            }
+        }
+
+        proof.push(inner.leaf(height + 1, self.epoch_height).await);
+        assert!(proof.push(inner.leaf(height + 2, self.epoch_height).await));
+
+        Ok(proof)
+    }
+
+    async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
+        let mut inner = self.inner.lock().await;
+
+        let root = root as usize;
+        let mut height = inner.leaf_height(id.into())?;
+        ensure!(
+            !inner.missing_leaves.contains(&height),
+            "missing leaf {height}"
+        );
+        if inner.invalid_proofs.contains(&height) {
+            tracing::info!(root, height, "return mock invalid proof");
+            let leaf = inner.leaf(height, self.epoch_height).await;
+            // Construct a proof using a Merkle tree of the wrong height.
+            let mt = BlockMerkleTree::from_elems(
+                Some(BLOCK_MERKLE_TREE_HEIGHT + 1),
+                [leaf.block_hash()],
+            )
+            .unwrap();
+            let proof = mt.lookup(0).expect_ok().unwrap().1;
+            return Ok(HeaderProof::new(leaf.header().clone(), proof));
+        }
+        if let Some(sub) = inner.swapped_leaves.get(&height) {
+            tracing::info!(height, sub, "return wrong leaf");
+            height = *sub;
+        };
+
+        ensure!(height < root);
+
+        let mt = &inner.merkle_trees[root];
+        tracing::info!(height, root = %mt.commitment(), "get proof from Merkle tree");
+        let proof = mt.lookup(height as u64).expect_ok().unwrap().1;
+        let header = inner.leaf(height, self.epoch_height).await.header().clone();
+        Ok(HeaderProof::new(header, proof))
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let mut leaves = Vec::new();
+        let mut inner = self.inner.lock().await;
+        for h in start_height..end_height {
+            let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
+            leaves.push(inner.leaf(height, self.epoch_height).await);
+        }
+        Ok(leaves)
+    }
+
+    async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
+        let mut inner = self.inner.lock().await;
+
+        ensure!(
+            !inner.missing_quorums.contains(&*epoch),
+            "missing quorum for epoch {epoch}"
+        );
+
+        if inner.invalid_quorums.contains(&*epoch) {
+            // Return random events to create an invalid stake table.
+            let mut events = vec![];
+            let mut seed = [0; 32];
+            rand::thread_rng().fill_bytes(&mut seed);
+            register_validator_events(&mut events, &random_validator());
+            return Ok(events);
+        }
+
+        let mut events = vec![];
+        if *epoch == inner.first_epoch_with_dynamic_stake_table {
+            // Generate events such that the first dynamic stake table is the same as the static
+            // stake table we started with.
+            for (_, validator) in inner.quorum_for_epoch(*epoch) {
+                register_validator_events(&mut events, validator);
+            }
+        } else if *epoch > inner.first_epoch_with_dynamic_stake_table {
+            // For each subsequent epoch, just generate one event for the new validator which joined
+            // in that epoch.
+            let (_, validator) = &inner.quorum_for_epoch(*epoch)[(*epoch as usize) - 1];
+            register_validator_events(&mut events, validator);
+        }
+        Ok(events)
+    }
+
+    async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
+        let mut inner = self.inner.lock().await;
+
+        let vid_common = inner.vid_common(height, self.epoch_height);
+        let height = height as usize;
+        ensure!(height < inner.payloads.len());
+
+        let payload = if inner.invalid_payloads.contains(&height) {
+            tracing::info!(height, "return mock incorrect payload proof");
+            Payload::from_transactions_sync(
+                [Transaction::random(&mut rand::thread_rng())],
+                NodeState::mock_v3().chain_config,
+            )
+            .unwrap()
+            .0
+        } else {
+            inner.payloads[height].clone()
+        };
+
+        Ok(PayloadProof::new(payload, vid_common))
+    }
+
+    async fn namespace_proof(
+        &self,
+        height: u64,
+        mut namespace: NamespaceId,
+    ) -> Result<NamespaceProof> {
+        let mut inner = self.inner.lock().await;
+
+        let vid_common = inner.vid_common(height, self.epoch_height);
+        let height = height as usize;
+        ensure!(height < inner.payloads.len());
+
+        let (payload, ns_table) = if inner.invalid_payloads.contains(&height) {
+            // To mock an invalid proof, we use a different payload which doesn't match the actual
+            // payload for the requested block.
+            tracing::info!(height, "return mock incorrect namespace proof");
+            let mut payload = vec![0; 32];
+            rand::thread_rng().fill_bytes(&mut payload);
+            let tx = Transaction::new(namespace, payload);
+            let node_state = NodeState::mock_v3();
+            Payload::from_transactions_sync([tx], node_state.chain_config).unwrap()
+        } else {
+            (
+                inner.payloads[height].clone(),
+                inner.leaves[height].header().ns_table().clone(),
+            )
+        };
+
+        if inner.invalid_proofs.contains(&height) {
+            // If we are returning a mock invalid proof, return a proof for the wrong namespace so
+            // that verification will fail.
+            namespace = NamespaceId::from(u64::from(namespace) + 1);
+        }
+
+        let Some(ns_index) = ns_table.find_ns_id(&namespace) else {
+            return Ok(NamespaceProof::not_present());
+        };
+        let proof = NsProof::new(&payload, &ns_index, &vid_common)
+            .context("failed to construct NsProof")?;
+        Ok(NamespaceProof::new(proof, vid_common))
+    }
+
+    async fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> Result<Vec<NamespaceProof>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            proofs.push(self.namespace_proof(i, namespace).await?);
+        }
+        Ok(proofs)
+    }
+}
+
+fn register_validator_events(events: &mut Vec<StakeTableEvent>, validator: &Validator<PubKey>) {
+    events.push(StakeTableEvent::Register(ValidatorRegistered {
+        account: validator.account,
+        blsVk: validator.stake_table_key.into(),
+        schnorrVk: validator.state_ver_key.clone().into(),
+        commission: validator.commission,
+    }));
+    for (&delegator, &amount) in &validator.delegators {
+        events.push(StakeTableEvent::Delegate(Delegated {
+            delegator,
+            validator: validator.account,
+            amount,
+        }));
+    }
+}
+
+pub fn random_validator() -> Validator<PubKey> {
+    let account = Address::random();
+    let mut seed = [0; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+    let stake = U256::from(rand::thread_rng().next_u64());
+    Validator {
+        account,
+        stake_table_key: PubKey::generated_from_seed_indexed(seed, 0).0,
+        state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, 0).0,
+        stake,
+        commission: 1,
+        delegators: [(Address::random(), stake)].into_iter().collect(),
     }
 }
