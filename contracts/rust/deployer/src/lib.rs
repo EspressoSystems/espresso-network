@@ -1617,6 +1617,7 @@ pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes>
 /// Parameters:
 /// - `check_name`: the name of the check
 /// - `check_fn`: the function to check
+///
 /// Returns:
 /// - `true` if the check passed, `false` otherwise
 pub async fn retry_until_true<F, Fut>(check_name: &str, mut check_fn: F) -> Result<bool>
