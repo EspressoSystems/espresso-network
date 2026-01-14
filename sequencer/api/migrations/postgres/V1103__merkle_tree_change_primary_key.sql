@@ -5,7 +5,7 @@
 ALTER TABLE 
   reward_merkle_tree
 DROP 
-  CONSTRAINT reward_merkle_tree_pkey;
+  CONSTRAINT IF EXISTS reward_merkle_tree_pkey;
 
 ALTER TABLE 
   reward_merkle_tree
@@ -17,7 +17,7 @@ ADD
 ALTER TABLE 
   reward_merkle_tree_v2
 DROP 
-  CONSTRAINT reward_merkle_tree_v2_pkey;
+  CONSTRAINT IF EXISTS reward_merkle_tree_v2_pkey;
 
 ALTER TABLE 
   reward_merkle_tree_v2
@@ -29,7 +29,7 @@ ADD
 ALTER TABLE 
   fee_merkle_tree
 DROP 
-  CONSTRAINT fee_merkle_tree_pkey;
+  CONSTRAINT IF EXISTS fee_merkle_tree_pkey;
 
 ALTER TABLE 
   fee_merkle_tree
@@ -41,7 +41,7 @@ ADD
 ALTER TABLE 
   block_merkle_tree
 DROP 
-  CONSTRAINT block_merkle_tree_pkey;
+  CONSTRAINT IF EXISTS block_merkle_tree_pkey;
 
 ALTER TABLE 
   block_merkle_tree
