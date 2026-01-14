@@ -451,30 +451,9 @@ impl Transaction<Write> {
     /// Delete a batch of data for pruning.
     pub(super) async fn delete_batch(
         &mut self,
-        state_tables: Vec<String>,
+        _state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
-        self.execute(query("DELETE FROM header WHERE height <= $1").bind(height as i64))
-            .await?;
-
-        // prune merklized state tables
-        // only delete nodes having created < h AND
-        // is not the newest node with its position
-        for state_table in state_tables {
-            self.execute(
-                query(&format!(
-                    "
-                DELETE FROM {state_table} WHERE (path, created) IN
-                (SELECT path, created FROM 
-                (SELECT path, created, 
-                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank 
-                FROM {state_table} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
-                ))
-                .bind(height as i64),
-            )
-            .await?;
-        }
-
         self.save_pruned_height(height).await?;
         Ok(())
     }

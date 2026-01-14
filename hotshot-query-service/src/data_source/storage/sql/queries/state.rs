@@ -66,7 +66,7 @@ where
 
         // Get all the nodes in the path to the index.
         // Order by pos DESC is to return nodes from the leaf to the root
-        let (query, sql) = build_get_path_query(state_type, traversal_path.clone(), created)?;
+        let (query, sql) = build_get_path_query(state_type, traversal_path.clone())?;
         let rows = query.query(&sql).fetch_all(self.as_mut()).await?;
 
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
@@ -624,7 +624,7 @@ impl Node {
                         "idx",
                         "entry",
                     ],
-                    ["path", "created"],
+                    ["path"],
                     rows,
                 )
                 .await?;
@@ -678,18 +678,18 @@ impl Node {
                 entries.push(node.entry.clone());
             }
 
-            let sql = format!(
-                r#"
-                INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-                SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
-                ON CONFLICT (path, created) DO UPDATE SET
-                    hash_id = EXCLUDED.hash_id,
-                    children = EXCLUDED.children,
-                    children_bitvec = EXCLUDED.children_bitvec,
-                    idx = EXCLUDED.idx,
-                    entry = EXCLUDED.entry
-                "#
-            );
+        let sql = format!(
+            r#"
+            INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            ON CONFLICT (path) DO UPDATE SET
+                hash_id = EXCLUDED.hash_id,
+                children = EXCLUDED.children,
+                children_bitvec = EXCLUDED.children_bitvec,
+                idx = EXCLUDED.idx,
+                entry = EXCLUDED.entry
+            "#
+        );
 
             sqlx::query(&sql)
                 .bind(&paths)
@@ -711,7 +711,6 @@ impl Node {
 fn build_get_path_query<'q>(
     table: &'static str,
     traversal_path: Vec<usize>,
-    created: i64,
 ) -> QueryResult<(QueryBuilder<'q>, String)> {
     let mut query = QueryBuilder::default();
     let mut traversal_path = traversal_path.into_iter().map(|x| x as i32);
@@ -720,17 +719,12 @@ fn build_get_path_query<'q>(
     let len = traversal_path.len();
     let mut sub_queries = Vec::new();
 
-    query.bind(created)?;
-
     for _ in 0..=len {
         let path = traversal_path.clone().rev().collect::<Vec<_>>();
         let path: serde_json::Value = path.into();
         let node_path = query.bind(path)?;
 
-        let sub_query = format!(
-            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
-             ORDER BY created DESC LIMIT 1)",
-        );
+        let sub_query = format!("SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path})",);
 
         sub_queries.push(sub_query);
         traversal_path.next();
