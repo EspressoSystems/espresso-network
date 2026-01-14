@@ -117,6 +117,37 @@ where
         }
     }
 
+    /// Get the number of known blocks in the chain.
+    ///
+    /// This is equivalent to one more than the block number of the latest known block. The latest
+    /// known block may come either from the local light client database or from an untrusted query
+    /// service (in which case the corresponding leaf is fetched and verified to ensure there is in
+    /// fact such a block). Note however that it is always possible that neither this light client
+    /// nor the connected server is aware of the true latest block, and so in rare cases the result
+    /// of this method may be an underestimate.
+    pub async fn block_height(&self) -> Result<u64> {
+        let latest_known = self.db.block_height().await?;
+        let latest_from_server = self.server.block_height().await?;
+        if latest_from_server > latest_known {
+            // The server claims there is a newer block than we previously knew about. Verify that
+            // this is the case by requesting a finality proof for the corresponding leaf.
+            if let Err(err) = self
+                .fetch_leaf(LeafId::Number(latest_from_server as usize - 1))
+                .await
+            {
+                tracing::warn!(
+                    latest_known,
+                    latest_from_server,
+                    "failed to verify block height claimed by server: {err:#}"
+                );
+                return Ok(latest_known);
+            } else {
+                return Ok(latest_from_server);
+            }
+        }
+        Ok(latest_known)
+    }
+
     /// Fetch and verify the requested leaf.
     pub async fn fetch_leaf(&self, id: LeafId<SeqTypes>) -> Result<LeafQueryData<SeqTypes>> {
         self.fetch_leaf_with_quorum(id, |epoch| {
@@ -575,12 +606,46 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::NsIndex;
+    use espresso_types::{DrbAndHeaderUpgradeVersion, NsIndex};
     use hotshot_query_service::availability::TransactionIndex;
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{storage::SqliteStorage, testing::TestClient};
+    use crate::{
+        storage::SqliteStorage,
+        testing::{leaf_chain, TestClient},
+    };
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_block_height() {
+        let client = TestClient::default();
+        let db = SqliteStorage::default().await.unwrap();
+
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), client.genesis().await);
+
+        // Test empty block height.
+        assert_eq!(lc.block_height().await.unwrap(), 0);
+
+        // Local block height greater than server.
+        let leaf = leaf_chain::<DrbAndHeaderUpgradeVersion>(1..2)
+            .await
+            .remove(0);
+        db.insert_leaf(leaf).await.unwrap();
+        assert_eq!(lc.block_height().await.unwrap(), 2);
+
+        // Server block height greater than local.
+        client.leaf(2).await;
+        assert_eq!(lc.block_height().await.unwrap(), 3);
+        // In the process of verifying the block height, we should have fetched and stored the
+        // latest leaf.
+        assert_eq!(db.block_height().await.unwrap(), 3);
+
+        // Server lies about the block height.
+        client.mock_block_height(10).await;
+        client.forget_leaf(9).await;
+        assert_eq!(lc.block_height().await.unwrap(), 3);
+    }
 
     #[tokio::test]
     #[test_log::test]
