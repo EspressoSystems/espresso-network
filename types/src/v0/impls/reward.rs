@@ -1165,7 +1165,6 @@ impl EpochRewardsCalculator {
                 .clone()
         };
 
-       
         let membership = coordinator.membership().read().await;
         let validators: Vec<_> = membership
             .stake_table(Some(epoch))
@@ -1188,7 +1187,6 @@ impl EpochRewardsCalculator {
             "fetch_and_calculate: got validators and block_reward"
         );
 
-        
         let accounts_to_update: Vec<_> = leader_counts
             .iter()
             .enumerate()
@@ -1201,15 +1199,9 @@ impl EpochRewardsCalculator {
             })
             .collect();
 
-       
         let missing_accounts: Vec<_> = accounts_to_update
             .iter()
-            .filter(|account| {
-                reward_tree
-                    .lookup(**account)
-                    .expect_not_in_memory()
-                    .is_ok()
-            })
+            .filter(|account| reward_tree.lookup(**account).expect_not_in_memory().is_ok())
             .cloned()
             .collect();
 
@@ -1252,7 +1244,8 @@ impl EpochRewardsCalculator {
                     Err(e) => {
                         if attempt == MAX_RETRIES {
                             anyhow::bail!(
-                                "failed to fetch missing reward accounts after {MAX_RETRIES} retries: {e}"
+                                "failed to fetch missing reward accounts after {MAX_RETRIES} \
+                                 retries: {e}"
                             );
                         }
                         tracing::warn!(
@@ -1268,7 +1261,6 @@ impl EpochRewardsCalculator {
             }
         }
 
-        
         tracing::info!(
             %epoch,
             reward_tree_commitment = %reward_tree.commitment(),
