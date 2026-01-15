@@ -62,7 +62,7 @@ pub enum Response {
     /// A response for a state certificate at a given epoch
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
     /// A response for the header at the last block of a given epoch
-    EpochHeader(Header),
+    EpochHeader(Box<Header>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response

@@ -105,6 +105,12 @@ demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-feature
 demo-native-da-committees *args: (build "test" "--no-default-features --features da-upgrade")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-epoch-reward *args: (build "test" "--no-default-features --features epoch-reward")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features --features da-upgrade,epoch-reward")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
@@ -198,9 +204,17 @@ test-demo test_name:
 			features="--no-default-features --features da-upgrade"
 			test="test_native_demo_drb_header_base"
 			;;
+		epoch-reward-base)
+			features="--no-default-features --features epoch-reward"
+			test="test_native_demo_epoch_reward_base"
+			;;
+		epoch-reward-upgrade)
+			features="--no-default-features --features da-upgrade,epoch-reward"
+			test="test_native_demo_epoch_reward_upgrade"
+			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees"
+			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade"
 			exit 1
 			;;
 	esac

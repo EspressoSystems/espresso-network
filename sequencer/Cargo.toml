@@ -13,7 +13,7 @@ ignored = ["vergen", "include_dir", "hotshot_builder_api"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
+default = ["fee", "pos", "drb-and-header", "da-upgrade", "epoch-reward"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -27,6 +27,7 @@ fee = []
 pos = []
 drb-and-header = []
 da-upgrade = []
+epoch-reward = []
 
 [dependencies]
 

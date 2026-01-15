@@ -900,7 +900,7 @@ impl Header {
             validated_state.reward_merkle_tree_v2.clone(),
             instance_state.clone(),
             coordinator,
-            Some(leader_counts.clone()),
+            Some(*leader_counts),
         );
 
         // // keep last 3 epochs
@@ -1223,6 +1223,7 @@ impl BlockHeader<SeqTypes> for Header {
                     UpgradeType::Epoch { chain_config } => chain_config,
                     UpgradeType::DrbAndHeader { chain_config } => chain_config,
                     UpgradeType::Da { chain_config } => chain_config,
+                    UpgradeType::EpochReward { chain_config } => chain_config,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }

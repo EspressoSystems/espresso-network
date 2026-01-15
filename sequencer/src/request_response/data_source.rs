@@ -382,7 +382,7 @@ impl<
                     _ => bail!("storage was not initialized"),
                 };
 
-                Ok(Response::EpochHeader(header))
+                Ok(Response::EpochHeader(Box::new(header)))
             },
         }
     }
