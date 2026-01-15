@@ -307,6 +307,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
 
                 let payload = TYPES::BlockPayload::from_bytes(&payload_bytes, metadata);
 
+                tracing::error!("Reconstructed block for view {view}");
+
                 broadcast_event(
                     Arc::new(HotShotEvent::BlockReconstructed(
                         payload,

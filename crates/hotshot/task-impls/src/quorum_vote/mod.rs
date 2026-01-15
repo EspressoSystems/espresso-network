@@ -735,7 +735,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // Do nothing if the VID share is old
                 tracing::trace!("Received VID share for view {view}");
                 ensure!(
-                    view > self.latest_voted_view - 10,
+                    *view > self.latest_voted_view.saturating_sub(10),
                     "Received VID share for an older view."
                 );
 
