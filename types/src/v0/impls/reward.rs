@@ -670,7 +670,7 @@ impl RewardDistributor {
         Ok(())
     }
 
-    fn update_reward_balance<P>(
+    pub fn update_reward_balance<P>(
         tree: &mut P,
         account: &P::Index,
         amount: P::Element,
@@ -1032,7 +1032,7 @@ pub struct EpochRewardsResult {
 #[derive(Debug, Default)]
 pub struct EpochRewardsCalculator {
     /// Cached results by epoch - multiple consumers can read these
-    results: HashMap<EpochNumber, EpochRewardsResult>,
+    pub results: HashMap<EpochNumber, EpochRewardsResult>,
     /// Pending calculations by epoch
     pending: HashMap<EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>>,
 }
@@ -1165,6 +1165,14 @@ impl EpochRewardsCalculator {
                 .clone()
         };
 
+        if let Err(err) = coordinator.stake_table_for_epoch(Some(epoch)).await {
+            tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
+            coordinator
+                .wait_for_catchup(epoch)
+                .await
+                .context(format!("failed to catch up for epoch={epoch}"))?;
+        }
+
         let membership = coordinator.membership().read().await;
         let validators: Vec<_> = membership
             .stake_table(Some(epoch))
@@ -1177,7 +1185,7 @@ impl EpochRewardsCalculator {
             .collect();
         let block_reward = membership
             .epoch_block_reward(epoch)
-            .context("fixed block reward not found")?;
+            .context("block reward not found for epoch")?;
         drop(membership);
 
         tracing::info!(
@@ -1271,11 +1279,6 @@ impl EpochRewardsCalculator {
             .await
     }
 
-    /// Clean up cached results for epochs before the given epoch.
-    pub fn cleanup_before(&mut self, epoch: EpochNumber) {
-        self.results.retain(|&e, _| e >= epoch);
-    }
-
     /// Calculate all rewards for the epoch and update the reward tree.
     pub async fn calculate_all_rewards(
         epoch: EpochNumber,
@@ -1318,18 +1321,15 @@ impl EpochRewardsCalculator {
             let computed_rewards = distributor.compute_rewards()?;
 
             for (address, reward) in computed_rewards.all_rewards() {
-                Self::update_reward_balance(&mut reward_tree, &RewardAccountV2(address), reward)?;
-                tracing::debug!(
-                    %epoch,
-                    %address,
-                    %reward,
-                    "applied epoch reward"
-                );
+                RewardDistributor::update_reward_balance(
+                    &mut reward_tree,
+                    &RewardAccountV2(address),
+                    reward,
+                )?;
+                tracing::debug!(%epoch, %address, %reward, "applied epoch reward");
             }
 
-            total_distributed = total_distributed
-                .checked_add(validator_reward)
-                .context("overflow in total distributed")?;
+            total_distributed = distributor.total_distributed().0;
         }
 
         tracing::info!(
@@ -1345,31 +1345,6 @@ impl EpochRewardsCalculator {
             total_distributed: RewardAmount(total_distributed),
             changed_accounts,
         })
-    }
-
-    fn update_reward_balance(
-        tree: &mut RewardMerkleTreeV2,
-        account: &RewardAccountV2,
-        amount: RewardAmount,
-    ) -> anyhow::Result<()> {
-        let mut err = None;
-        *tree = tree.persistent_update_with(*account, |balance| {
-            let balance = balance.copied();
-            match balance.unwrap_or_default().0.checked_add(amount.0) {
-                Some(updated) => Some(updated.into()),
-                None => {
-                    err = Some(format!("overflowed reward balance for account {account}"));
-                    balance
-                },
-            }
-        })?;
-
-        if let Some(error) = err {
-            tracing::warn!(error);
-            anyhow::bail!(error)
-        }
-
-        Ok(())
     }
 }
 
