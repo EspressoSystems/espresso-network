@@ -5,7 +5,7 @@
 ALTER TABLE 
   reward_merkle_tree
 DROP 
-  CONSTRAINT IF EXISTS reward_merkle_tree_pkey;
+  CONSTRAINT IF EXISTS reward_merkle_tree_pk;
 
 ALTER TABLE 
   reward_merkle_tree
