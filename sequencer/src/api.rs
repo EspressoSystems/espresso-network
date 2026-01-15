@@ -96,8 +96,10 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
     #[derivative(Debug = "ignore")]
     sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
 
+    // we cache `token_contract_address` for the lifetime of the program, since we do not expect this to ever change
     token_contract_address: Cache<(), Address>,
 
+    // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
 
@@ -5548,7 +5550,7 @@ mod test {
             .expect("failed to get total_minted_supply");
         tracing::info!("total_minted_supply={total_minted_supply:?}");
 
-        assert_eq!(total_minted_supply, "test");
+        assert_eq!(total_minted_supply, "100000.0");
 
         Ok(())
     }
