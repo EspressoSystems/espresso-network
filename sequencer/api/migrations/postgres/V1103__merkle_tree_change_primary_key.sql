@@ -41,7 +41,7 @@ ADD
 ALTER TABLE 
   block_merkle_tree
 DROP 
-  CONSTRAINT IF EXISTS block_merkle_tree_pkey;
+  CONSTRAINT IF EXISTS block_merkle_tree_pk;
 
 ALTER TABLE 
   block_merkle_tree
