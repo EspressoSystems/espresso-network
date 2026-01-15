@@ -196,8 +196,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
 impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
     TokenDataSource<SeqTypes> for StorageState<N, P, D, V>
 {
-    async fn get_total_supply(&self) -> anyhow::Result<U256> {
-        self.as_ref().get_total_supply().await
+    async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
+        self.as_ref().get_total_supply_l1().await
     }
 }
 
@@ -285,7 +285,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDataSource<SeqTypes>
     for ApiState<N, P, V>
 {
-    async fn get_total_supply(&self) -> anyhow::Result<U256> {
+    async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         match self.token_supply.get(&()).await {
             Some(supply) => Ok(supply),
             None => match self.token_contract_address.get(&()).await {

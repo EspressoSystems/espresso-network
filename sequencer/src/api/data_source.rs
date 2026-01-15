@@ -120,7 +120,7 @@ pub(crate) trait NodeStateDataSource {
 
 pub(crate) trait TokenDataSource<T: NodeType> {
     /// Get the stake table for a given epoch
-    fn get_total_supply(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
+    fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
 }
 
 #[derive(Serialize, Deserialize)]

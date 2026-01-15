@@ -317,7 +317,7 @@ where
     api.at("total_minted_supply", |_, state| {
         async move {
             let value = state
-                .read(|state| state.get_total_supply().boxed())
+                .read(|state| state.get_total_supply_l1().boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
                     message: format!("failed to get total supply. err={err:#}"),
