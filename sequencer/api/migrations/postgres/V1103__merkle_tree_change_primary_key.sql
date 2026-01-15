@@ -29,7 +29,7 @@ ADD
 ALTER TABLE 
   fee_merkle_tree
 DROP 
-  CONSTRAINT IF EXISTS fee_merkle_tree_pkey;
+  CONSTRAINT IF EXISTS fee_merkle_tree_pk;
 
 ALTER TABLE 
   fee_merkle_tree
