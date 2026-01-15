@@ -2549,7 +2549,7 @@ mod test {
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
-        primitives::U256,
+        primitives::{Address, U256},
         providers::{Provider, ProviderBuilder},
     };
     use async_lock::Mutex;
@@ -2641,9 +2641,7 @@ mod test {
         endpoint: &str,
         height: u64,
     ) {
-        const MAX_RETRIES: usize = 100;
-
-        for _retry in 0..=MAX_RETRIES {
+        for _retry in 0.. {
             let bh = client
                 .get::<u64>(endpoint)
                 .send()
@@ -2655,8 +2653,6 @@ mod test {
             }
             sleep(Duration::from_secs(3)).await;
         }
-
-        panic!("Max retries reached. {endpoint} block height did not exceed {height}");
     }
     use crate::{
         api::{
@@ -4654,6 +4650,106 @@ mod test {
                 assert_eq!(total_distributed, epoch4_last_reward,);
             } else {
                 assert!(total_distributed.0 > epoch4_last_reward.0,);
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    // test actual rewards
+    // todo: test each account rewards by querying merklized state api
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_reward_state_v2_epoch_distribution() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const NUM_EPOCHS: u64 = 6;
+        type V6 = SequencerVersions<StaticVersion<0, 6>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V6>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V6::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let node_state = network.server.node_state();
+        let coordinator = node_state.coordinator;
+
+        let mut expected_total_distributed = U256::ZERO;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+
+            let is_epoch_last_block = height % EPOCH_HEIGHT == 0;
+
+            if epoch <= 3 {
+                continue;
+            }
+
+            let header_total_distributed = header
+                .total_reward_distributed()
+                .expect("total_reward_distributed should exist");
+
+            if is_epoch_last_block {
+                let prev_epoch = epoch - 1;
+                let prev_epoch_number = EpochNumber::new(prev_epoch);
+                let membership = coordinator.membership().read().await;
+                let prev_block_reward = membership
+                    .epoch_block_reward(prev_epoch_number)
+                    .expect("epoch block reward should exist");
+                drop(membership);
+
+                let epoch_total = prev_block_reward.0 * U256::from(EPOCH_HEIGHT);
+                expected_total_distributed += epoch_total;
+            }
+
+            assert_eq!(
+                header_total_distributed.0, expected_total_distributed,
+                "total_reward_distributed mismatch at height {height}"
+            );
+
+            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
                 break;
             }
         }
