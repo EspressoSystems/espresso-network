@@ -1,7 +1,4 @@
 use alloy::{
-    network::Ethereum,
-    primitives::Bytes,
-    providers::PendingTransactionBuilder,
     sol_types::SolInterface,
     transports::{RpcError, TransportErrorKind},
 };
@@ -10,17 +7,12 @@ pub trait DecodeRevert<T> {
     fn maybe_decode_revert<E: SolInterface + std::fmt::Debug>(self) -> anyhow::Result<T>;
 }
 
-impl DecodeRevert<PendingTransactionBuilder<Ethereum>>
-    for alloy::contract::Result<PendingTransactionBuilder<Ethereum>, alloy::contract::Error>
-{
-    fn maybe_decode_revert<E: SolInterface + std::fmt::Debug>(
-        self,
-    ) -> anyhow::Result<PendingTransactionBuilder<Ethereum>> {
+impl<T> DecodeRevert<T> for Result<T, alloy::contract::Error> {
+    fn maybe_decode_revert<E: SolInterface + std::fmt::Debug>(self) -> anyhow::Result<T> {
         match self {
             Ok(ret) => Ok(ret),
             Err(err) => {
-                let decoded = err.as_decoded_interface_error::<E>();
-                let msg = match decoded {
+                let msg = match err.as_decoded_interface_error::<E>() {
                     Some(e) => format!("{e:?}"),
                     None => format!("{err:?}"),
                 };
@@ -30,25 +22,8 @@ impl DecodeRevert<PendingTransactionBuilder<Ethereum>>
     }
 }
 
-impl DecodeRevert<PendingTransactionBuilder<Ethereum>>
-    for Result<PendingTransactionBuilder<Ethereum>, RpcError<TransportErrorKind>>
-{
-    fn maybe_decode_revert<E: SolInterface + std::fmt::Debug>(
-        self,
-    ) -> anyhow::Result<PendingTransactionBuilder<Ethereum>> {
-        match self {
-            Ok(ret) => Ok(ret),
-            Err(RpcError::ErrorResp(payload)) => match payload.as_decoded_interface_error::<E>() {
-                Some(e) => Err(anyhow::anyhow!("{e:?}")),
-                None => Err(anyhow::anyhow!("{payload}")),
-            },
-            Err(err) => Err(anyhow::anyhow!("{err:?}")),
-        }
-    }
-}
-
-impl DecodeRevert<Bytes> for Result<Bytes, RpcError<TransportErrorKind>> {
-    fn maybe_decode_revert<E: SolInterface + std::fmt::Debug>(self) -> anyhow::Result<Bytes> {
+impl<T> DecodeRevert<T> for Result<T, RpcError<TransportErrorKind>> {
+    fn maybe_decode_revert<E: SolInterface + std::fmt::Debug>(self) -> anyhow::Result<T> {
         match self {
             Ok(ret) => Ok(ret),
             Err(RpcError::ErrorResp(payload)) => match payload.as_decoded_interface_error::<E>() {
