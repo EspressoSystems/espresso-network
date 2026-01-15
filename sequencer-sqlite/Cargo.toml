@@ -10,7 +10,8 @@ fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]
 drb-and-header = ["sequencer/drb-and-header"]
 da-upgrade = ["sequencer/da-upgrade"]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
+epoch-reward = ["sequencer/epoch-reward"]
+default = ["fee", "pos", "drb-and-header", "da-upgrade", "epoch-reward"]
 
 [dependencies]
 anyhow = { workspace = true }
