@@ -5486,6 +5486,73 @@ mod test {
         Ok(())
     }
 
+    #[rstest]
+    #[case(PosVersionV4::new())]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_token_supply_api<Ver: Versions>(#[case] versions: Ver) -> anyhow::Result<()> {
+        let epoch_height = 10;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 1;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(DelegationConfig::VariableAmounts, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, versions).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(3)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let total_minted_supply = client
+            .get::<String>("token/total_minted_supply")
+            .send()
+            .await
+            .expect("failed to get total_minted_supply");
+        tracing::info!("total_minted_supply={total_minted_supply:?}");
+
+        assert_eq!(total_minted_supply, "");
+
+        Ok(())
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_scanning_token_contract_initialized_event() -> anyhow::Result<()> {
         use espresso_types::v0_3::ChainConfig;

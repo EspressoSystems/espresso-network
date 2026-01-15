@@ -1,3 +1,3 @@
-[route.total_minted_supply]
-PATH = ["total_minted_supply"]
+[route.get_total_minted_supply]
+PATH = ["total-minted-supply"]
 DOC = "Get the total supply of the espresso token, counting only tokens that have been minted on Ethereum. Notably, this does not include unminted tokens from (for example) unclaimed rewards, or other sources. The value is returned as a decimal equal to the raw number of tokens divided by 10^18. Calls are cached for an hour after retrieval, so this endpoint should not be used if realtime information from the contract is required."

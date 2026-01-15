@@ -314,7 +314,7 @@ where
         node::define_api::<S, SeqTypes, _>(&options, SequencerApiVersion::instance(), api_ver)?;
 
     // Tack on the application logic
-    api.at("total_minted_supply", |_, state| {
+    api.at("get_total_minted_supply", |_, state| {
         async move {
             let value = state
                 .read(|state| state.get_total_supply_l1().boxed())
