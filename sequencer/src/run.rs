@@ -67,6 +67,38 @@ pub async fn main() -> anyhow::Result<()> {
             )
             .await
         },
+        #[cfg(all(feature = "da-upgrade", feature = "epoch-reward"))]
+        (
+            espresso_types::DaUpgradeVersion::VERSION,
+            espresso_types::EpochRewardVersion::VERSION,
+        ) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::DaUpgradeVersion,
+                    espresso_types::EpochRewardVersion,
+                >::new(),
+            )
+            .await
+        },
+        #[cfg(feature = "epoch-reward")]
+        (
+            espresso_types::EpochRewardVersion::VERSION,
+            espresso_types::EpochRewardVersion::VERSION,
+        ) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::EpochRewardVersion,
+                    espresso_types::EpochRewardVersion,
+                >::new(),
+            )
+            .await
+        },
         #[cfg(all(feature = "pos", feature = "drb-and-header"))]
         (
             espresso_types::EpochVersion::VERSION,

@@ -1164,10 +1164,9 @@ impl EpochRewardsCalculator {
                 header.version()
             );
 
-            header
+            *header
                 .leader_counts()
                 .expect("V6+ header must have leader_counts")
-                .clone()
         };
 
         if let Err(err) = coordinator.stake_table_for_epoch(Some(epoch)).await {
