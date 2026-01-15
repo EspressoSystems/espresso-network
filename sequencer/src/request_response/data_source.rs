@@ -16,7 +16,7 @@ use espresso_types::{
 use hotshot::{traits::NodeImplementation, SystemContext};
 use hotshot_query_service::{
     data_source::{
-        storage::{FileSystemStorage, NodeStorage, SqlStorage},
+        storage::{AvailabilityStorage, FileSystemStorage, NodeStorage, SqlStorage},
         VersionedDataSource,
     },
     node::BlockId,
@@ -351,6 +351,38 @@ impl<
                     Some(cert) => Ok(Response::StateCert(cert)),
                     None => bail!("State certificate for epoch {epoch} not found"),
                 }
+            },
+            Request::EpochHeader(epoch) => {
+                let epoch_height = self
+                    .node_state
+                    .epoch_height
+                    .with_context(|| "epoch_height not configured")?;
+
+                let last_block_height = epoch * epoch_height;
+
+                let header = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_header::<SeqTypes>(BlockId::Number(last_block_height as usize))
+                        .await
+                        .with_context(|| {
+                            format!("failed to get header for epoch {epoch} from sql storage")
+                        })?,
+                    Some(Storage::Fs(storage)) => {
+                        let mut transaction = storage
+                            .read()
+                            .await
+                            .with_context(|| "failed to open fs storage transaction")?;
+                        transaction
+                            .get_header(BlockId::Number(last_block_height as usize))
+                            .await
+                            .with_context(|| {
+                                format!("failed to get header for epoch {epoch} from fs storage")
+                            })?
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                Ok(Response::EpochHeader(header))
             },
         }
     }
