@@ -618,6 +618,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             for view in *view_number + 1..*view_number + 4 {
                 if let Ok(leader) = membership.leader(TYPES::View::new(view)).await {
                     leaders.push(leader);
+                } else {
+                    tracing::error!("No leader found for view {view}");
                 }
             }
 
