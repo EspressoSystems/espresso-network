@@ -1,0 +1,671 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>StakeTable</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../../book-be1d94da.css">
+
+        <!-- MathJax -->
+        <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-b1a6ec98.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-7b70ea14.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title"></h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/EspressoSystems/espresso-network" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="staketable"><a class="header" href="#staketable">StakeTable</a></h1>
+<p><a href="https://github.com/EspressoSystems/espresso-network/blob/9d830828290fa19f71c13b8624fb428739fb047f/contracts/src/StakeTable.sol">Git Source</a></p>
+<p><strong>Inherits:</strong>
+Initializable, <a href="/contracts/src/InitializedAt.sol/contract.InitializedAt.html">InitializedAt</a>, OwnableUpgradeable, UUPSUpgradeable</p>
+<p><strong>Title:</strong>
+Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.</p>
+<p>All functions are marked as virtual so that future upgrades can override them.</p>
+<h2 id="state-variables"><a class="header" href="#state-variables">State Variables</a></h2>
+<h3 id="lightclient"><a class="header" href="#lightclient">lightClient</a></h3>
+<p>Reference to the light client contract.</p>
+<p>Currently unused but will be used for slashing therefore already included in the
+contract.</p>
+<pre><code class="language-solidity">ILightClient public lightClient
+</code></pre>
+<h3 id="token"><a class="header" href="#token">token</a></h3>
+<p>The staking token contract.</p>
+<pre><code class="language-solidity">ERC20 public token
+</code></pre>
+<h3 id="validators"><a class="header" href="#validators">validators</a></h3>
+<p>All validators the contract knows about.</p>
+<pre><code class="language-solidity">mapping(address account =&gt; Validator validator) public validators
+</code></pre>
+<h3 id="blskeys"><a class="header" href="#blskeys">blsKeys</a></h3>
+<p>BLS keys that have been seen by the contract</p>
+<p>to simplify the reasoning about what keys and prevent some errors due to
+misconfigurations of validators the contract currently marks keys as used and only allow
+them to be used once. This for example prevents callers from accidentally registering the
+same BLS key twice.</p>
+<pre><code class="language-solidity">mapping(bytes32 blsKeyHash =&gt; bool used) public blsKeys
+</code></pre>
+<h3 id="validatorexits"><a class="header" href="#validatorexits">validatorExits</a></h3>
+<p>Validators that have exited and the time at which delegators can claim their funds.</p>
+<pre><code class="language-solidity">mapping(address validator =&gt; uint256 unlocksAt) public validatorExits
+</code></pre>
+<h3 id="delegations"><a class="header" href="#delegations">delegations</a></h3>
+<p>Currently active delegation amounts.</p>
+<pre><code class="language-solidity">mapping(address validator =&gt; mapping(address delegator =&gt; uint256 amount)) public delegations
+</code></pre>
+<h3 id="undelegations"><a class="header" href="#undelegations">undelegations</a></h3>
+<p>Delegations held in escrow that are to be unlocked at a later time.</p>
+<pre><code class="language-solidity">mapping(address validator =&gt; mapping(address delegator =&gt; Undelegation)) public undelegations
+</code></pre>
+<h3 id="exitescrowperiod"><a class="header" href="#exitescrowperiod">exitEscrowPeriod</a></h3>
+<p>The time (seconds) the contract will hold funds after undelegations are requested.
+Must allow ample time for node to exit active validator set and slashing
+evidence to be submitted.</p>
+<pre><code class="language-solidity">uint256 public exitEscrowPeriod
+</code></pre>
+<h2 id="functions"><a class="header" href="#functions">Functions</a></h2>
+<h3 id="constructor"><a class="header" href="#constructor">constructor</a></h3>
+<p>since the constructor initializes storage on this contract we disable it</p>
+<p>storage is on the proxy contract since it calls this contract via delegatecall</p>
+<p><strong>Note:</strong>
+oz-upgrades-unsafe-allow: constructor</p>
+<pre><code class="language-solidity">constructor() ;
+</code></pre>
+<h3 id="initialize"><a class="header" href="#initialize">initialize</a></h3>
+<pre><code class="language-solidity">function initialize(
+    address _tokenAddress,
+    address _lightClientAddress,
+    uint256 _exitEscrowPeriod,
+    address _timelock
+) public initializer;
+</code></pre>
+<h3 id="initializestate"><a class="header" href="#initializestate">initializeState</a></h3>
+<p>Initialize the state of the contract</p>
+<pre><code class="language-solidity">function initializeState(
+    address _tokenAddress,
+    address _lightClientAddress,
+    uint256 _exitEscrowPeriod
+) internal;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>_tokenAddress</code></td><td><code>address</code></td><td>The address of the staking token</td></tr>
+<tr><td><code>_lightClientAddress</code></td><td><code>address</code></td><td>The address of the light client</td></tr>
+<tr><td><code>_exitEscrowPeriod</code></td><td><code>uint256</code></td><td>The exit escrow period. Set to uint64.max to disable the exit escrow period.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="getversion"><a class="header" href="#getversion">getVersion</a></h3>
+<p>Use this to get the implementation contract version</p>
+<pre><code class="language-solidity">function getVersion()
+    public
+    pure
+    virtual
+    returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
+</code></pre>
+<p><strong>Returns</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>majorVersion</code></td><td><code>uint8</code></td><td>The major version of the contract</td></tr>
+<tr><td><code>minorVersion</code></td><td><code>uint8</code></td><td>The minor version of the contract</td></tr>
+<tr><td><code>patchVersion</code></td><td><code>uint8</code></td><td>The patch version of the contract</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="_authorizeupgrade"><a class="header" href="#_authorizeupgrade">_authorizeUpgrade</a></h3>
+<p>only the timelock can authorize an upgrade</p>
+<pre><code class="language-solidity">function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner;
+</code></pre>
+<h3 id="renounceownership"><a class="header" href="#renounceownership">renounceOwnership</a></h3>
+<p>Prevent renouncing ownership to preserve governance control.</p>
+<p>Override renounceOwnership() to revert, preventing accidental or malicious ownership
+renunciation</p>
+<pre><code class="language-solidity">function renounceOwnership() public virtual override onlyOwner;
+</code></pre>
+<h3 id="_hashblskey"><a class="header" href="#_hashblskey">_hashBlsKey</a></h3>
+<p>Computes a hash value of some G2 point.</p>
+<pre><code class="language-solidity">function _hashBlsKey(BN254.G2Point memory blsVK) public pure returns (bytes32);
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>blsVK</code></td><td><code>BN254.G2Point</code></td><td>BLS verification key in G2</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;none&gt;</code></td><td><code>bytes32</code></td><td>keccak256(blsVK)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="ensurevalidatoractive"><a class="header" href="#ensurevalidatoractive">ensureValidatorActive</a></h3>
+<pre><code class="language-solidity">function ensureValidatorActive(address validator) internal view;
+</code></pre>
+<h3 id="ensurevalidatornotregistered"><a class="header" href="#ensurevalidatornotregistered">ensureValidatorNotRegistered</a></h3>
+<pre><code class="language-solidity">function ensureValidatorNotRegistered(address validator) internal view;
+</code></pre>
+<h3 id="ensurenewkey"><a class="header" href="#ensurenewkey">ensureNewKey</a></h3>
+<pre><code class="language-solidity">function ensureNewKey(BN254.G2Point memory blsVK) internal view;
+</code></pre>
+<h3 id="ensurenonzeroschnorrkey"><a class="header" href="#ensurenonzeroschnorrkey">ensureNonZeroSchnorrKey</a></h3>
+<pre><code class="language-solidity">function ensureNonZeroSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK) internal pure;
+</code></pre>
+<h3 id="registervalidator"><a class="header" href="#registervalidator">registerValidator</a></h3>
+<p>Register a validator in the stake table</p>
+<p>The function will revert if</p>
+<ol>
+<li>the validator is already registered</li>
+<li>the schnorr key is zero</li>
+<li>if the bls signature verification fails (this prevents rogue public-key attacks).</li>
+<li>the commission is &gt; 100%</li>
+</ol>
+<p>No validity check on <code>schnorrVK</code> due to gas cost of Rescue hash, UIs should perform
+checks where possible and alert users.</p>
+<pre><code class="language-solidity">function registerValidator(
+    BN254.G2Point memory blsVK,
+    EdOnBN254.EdOnBN254Point memory schnorrVK,
+    BN254.G1Point memory blsSig,
+    uint16 commission
+) external virtual;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>blsVK</code></td><td><code>BN254.G2Point</code></td><td>The BLS verification key</td></tr>
+<tr><td><code>schnorrVK</code></td><td><code>EdOnBN254.EdOnBN254Point</code></td><td>The Schnorr verification key (as the auxiliary info)</td></tr>
+<tr><td><code>blsSig</code></td><td><code>BN254.G1Point</code></td><td>The BLS signature that authenticates the ethereum account this function is called from</td></tr>
+<tr><td><code>commission</code></td><td><code>uint16</code></td><td>in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="deregistervalidator"><a class="header" href="#deregistervalidator">deregisterValidator</a></h3>
+<p>Deregister a validator</p>
+<pre><code class="language-solidity">function deregisterValidator() public virtual;
+</code></pre>
+<h3 id="delegate"><a class="header" href="#delegate">delegate</a></h3>
+<p>Delegate to a validator</p>
+<pre><code class="language-solidity">function delegate(address validator, uint256 amount) public virtual;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to delegate to</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>The amount to delegate</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="undelegate"><a class="header" href="#undelegate">undelegate</a></h3>
+<p>Undelegate from a validator</p>
+<pre><code class="language-solidity">function undelegate(address validator, uint256 amount) public virtual;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to undelegate from</td></tr>
+<tr><td><code>amount</code></td><td><code>uint256</code></td><td>The amount to undelegate</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="claimwithdrawal"><a class="header" href="#claimwithdrawal">claimWithdrawal</a></h3>
+<p>Withdraw previously delegated funds after an undelegation.</p>
+<pre><code class="language-solidity">function claimWithdrawal(address validator) public virtual;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to withdraw from</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="claimvalidatorexit"><a class="header" href="#claimvalidatorexit">claimValidatorExit</a></h3>
+<p>Withdraw previously delegated funds after a validator has exited</p>
+<pre><code class="language-solidity">function claimValidatorExit(address validator) public virtual;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>validator</code></td><td><code>address</code></td><td>The validator to withdraw from</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="updateconsensuskeys"><a class="header" href="#updateconsensuskeys">updateConsensusKeys</a></h3>
+<p>Update the consensus keys for a validator</p>
+<p>This function is used to update the consensus keys for a validator</p>
+<p>This function can only be called by the validator itself when it hasn’t exited</p>
+<p>The validator will need to give up either its old BLS key and/or old Schnorr key</p>
+<p>The validator will need to provide a BLS signature to prove that the account owns the
+new BLS key</p>
+<pre><code class="language-solidity">function updateConsensusKeys(
+    BN254.G2Point memory newBlsVK,
+    EdOnBN254.EdOnBN254Point memory newSchnorrVK,
+    BN254.G1Point memory newBlsSig
+) external virtual;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>newBlsVK</code></td><td><code>BN254.G2Point</code></td><td>The new BLS verification key</td></tr>
+<tr><td><code>newSchnorrVK</code></td><td><code>EdOnBN254.EdOnBN254Point</code></td><td>The new Schnorr verification key</td></tr>
+<tr><td><code>newBlsSig</code></td><td><code>BN254.G1Point</code></td><td>The BLS signature that the account owns the new BLS key</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="events"><a class="header" href="#events">Events</a></h2>
+<h3 id="validatorregistered"><a class="header" href="#validatorregistered">ValidatorRegistered</a></h3>
+<p>A registration of a new validator.</p>
+<p>Signals to the confirmation layer that a new validator is ready to receive
+delegations in the stake table contract. The confirmation layer uses this event to keep
+track of the validator’s keys for the stake table.</p>
+<p>The commission is in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000).</p>
+<p>A validator registration is only valid if the BLS and Schnorr signature are valid.
+The GCL must verify this and otherwise discard the validator registration when it processes
+the event. The contract cannot verify the validity of the registration event and delegators
+will be able to deposit as soon as this event is emitted. In the event that a delegator
+delegates to an invalid validator the delegator can withdraw the delegation again in the
+same way they can withdraw other delegations.</p>
+<p>UIs should do their best to prevent invalid, or duplicate registrations.</p>
+<p>The verification key of the BLS keypair used for consensus signing is a
+<code>BN254.G2Point</code>.</p>
+<p>The verification key of the state signing schnorr keypair is an
+<code>EdOnBN254.EdOnBN254Point</code>.</p>
+<pre><code class="language-solidity">event ValidatorRegistered(
+    address indexed account,
+    BN254.G2Point blsVk,
+    EdOnBN254.EdOnBN254Point schnorrVk,
+    uint16 commission
+);
+</code></pre>
+<h3 id="validatorexit"><a class="header" href="#validatorexit">ValidatorExit</a></h3>
+<p>A validator initiated an exit from stake table</p>
+<p>All funds delegated to this validator are marked for withdrawal. Users can no longer
+delegate to this validator. Their previously delegated funds are automatically undelegated.
+After <code>exitEscrowPeriod</code> elapsed, delegators can claim the funds delegated to the exited
+validator via <code>claimValidatorExit</code>.</p>
+<p>The GCL removes this validator and all its delegations from the active validator
+set.</p>
+<pre><code class="language-solidity">event ValidatorExit(address indexed validator);
+</code></pre>
+<h3 id="delegated"><a class="header" href="#delegated">Delegated</a></h3>
+<p>A Delegator delegated funds to a validator.</p>
+<p>The tokens are transferred to the stake table contract.</p>
+<p>The GCL adjusts the weight for this validator and the delegators delegation
+associated with it.</p>
+<pre><code class="language-solidity">event Delegated(address indexed delegator, address indexed validator, uint256 amount);
+</code></pre>
+<h3 id="undelegated"><a class="header" href="#undelegated">Undelegated</a></h3>
+<p>A delegator undelegation funds from a validator.</p>
+<p>The tokens are marked to be unlocked for withdrawal.</p>
+<p>The GCL needs to update the stake table and adjust the weight for this validator and
+the delegators delegation associated with it.</p>
+<pre><code class="language-solidity">event Undelegated(address indexed delegator, address indexed validator, uint256 amount);
+</code></pre>
+<h3 id="consensuskeysupdated"><a class="header" href="#consensuskeysupdated">ConsensusKeysUpdated</a></h3>
+<p>A validator updates their signing keys.</p>
+<p>Similarly to registration events, the correctness cannot be fully determined by the
+contracts.</p>
+<p>The confirmation layer needs to update the stake table with the new keys.</p>
+<pre><code class="language-solidity">event ConsensusKeysUpdated(
+    address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
+);
+</code></pre>
+<h3 id="withdrawal"><a class="header" href="#withdrawal">Withdrawal</a></h3>
+<p>A delegator claims unlocked funds.</p>
+<p>This event is not relevant for the GCL. The events that remove stake from the stake
+table are <code>Undelegated</code> and <code>ValidatorExit</code>.</p>
+<pre><code class="language-solidity">event Withdrawal(address indexed account, uint256 amount);
+</code></pre>
+<h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
+<h3 id="validatoralreadyregistered"><a class="header" href="#validatoralreadyregistered">ValidatorAlreadyRegistered</a></h3>
+<p>A user tries to register a validator with the same address</p>
+<pre><code class="language-solidity">error ValidatorAlreadyRegistered();
+</code></pre>
+<h3 id="validatorinactive"><a class="header" href="#validatorinactive">ValidatorInactive</a></h3>
+<pre><code class="language-solidity">error ValidatorInactive();
+</code></pre>
+<h3 id="validatoralreadyexited"><a class="header" href="#validatoralreadyexited">ValidatorAlreadyExited</a></h3>
+<p>A validator has already exited.</p>
+<pre><code class="language-solidity">error ValidatorAlreadyExited();
+</code></pre>
+<h3 id="validatornotexited"><a class="header" href="#validatornotexited">ValidatorNotExited</a></h3>
+<p>A validator has not exited yet.</p>
+<pre><code class="language-solidity">error ValidatorNotExited();
+</code></pre>
+<h3 id="prematurewithdrawal"><a class="header" href="#prematurewithdrawal">PrematureWithdrawal</a></h3>
+<pre><code class="language-solidity">error PrematureWithdrawal();
+</code></pre>
+<h3 id="insufficientallowance"><a class="header" href="#insufficientallowance">InsufficientAllowance</a></h3>
+<pre><code class="language-solidity">error InsufficientAllowance(uint256, uint256);
+</code></pre>
+<h3 id="insufficientbalance"><a class="header" href="#insufficientbalance">InsufficientBalance</a></h3>
+<pre><code class="language-solidity">error InsufficientBalance(uint256);
+</code></pre>
+<h3 id="nothingtowithdraw"><a class="header" href="#nothingtowithdraw">NothingToWithdraw</a></h3>
+<pre><code class="language-solidity">error NothingToWithdraw();
+</code></pre>
+<h3 id="invalidschnorrvk"><a class="header" href="#invalidschnorrvk">InvalidSchnorrVK</a></h3>
+<pre><code class="language-solidity">error InvalidSchnorrVK();
+</code></pre>
+<h3 id="blskeyalreadyused"><a class="header" href="#blskeyalreadyused">BlsKeyAlreadyUsed</a></h3>
+<p>The BLS key has been previously registered in the contract.</p>
+<pre><code class="language-solidity">error BlsKeyAlreadyUsed();
+</code></pre>
+<h3 id="invalidcommission"><a class="header" href="#invalidcommission">InvalidCommission</a></h3>
+<p>The commission value is invalid.</p>
+<pre><code class="language-solidity">error InvalidCommission();
+</code></pre>
+<h3 id="zeroaddress"><a class="header" href="#zeroaddress">ZeroAddress</a></h3>
+<p>Contract dependencies initialized with zero address.</p>
+<pre><code class="language-solidity">error ZeroAddress();
+</code></pre>
+<h3 id="undelegationalreadyexists"><a class="header" href="#undelegationalreadyexists">UndelegationAlreadyExists</a></h3>
+<p>An undelegation already exists for this validator and delegator.</p>
+<pre><code class="language-solidity">error UndelegationAlreadyExists();
+</code></pre>
+<h3 id="zeroamount"><a class="header" href="#zeroamount">ZeroAmount</a></h3>
+<p>A zero amount would lead to a no-op.</p>
+<pre><code class="language-solidity">error ZeroAmount();
+</code></pre>
+<h3 id="ownershipcannotberenounced"><a class="header" href="#ownershipcannotberenounced">OwnershipCannotBeRenounced</a></h3>
+<p>Attempted to renounce ownership which would break governance controls.</p>
+<pre><code class="language-solidity">error OwnershipCannotBeRenounced();
+</code></pre>
+<h3 id="exitescrowperiodinvalid"><a class="header" href="#exitescrowperiodinvalid">ExitEscrowPeriodInvalid</a></h3>
+<p>The exit escrow period is invalid (either too short or too long)</p>
+<pre><code class="language-solidity">error ExitEscrowPeriodInvalid();
+</code></pre>
+<h2 id="structs"><a class="header" href="#structs">Structs</a></h2>
+<h3 id="validator"><a class="header" href="#validator">Validator</a></h3>
+<p>Represents an Espresso validator and tracks funds currently delegated to them.</p>
+<p>The <code>delegatedAmount</code> excludes funds that are currently marked for withdrawal via
+undelegation or validator exit.</p>
+<pre><code class="language-solidity">struct Validator {
+    uint256 delegatedAmount;
+    ValidatorStatus status;
+}
+</code></pre>
+<h3 id="undelegation"><a class="header" href="#undelegation">Undelegation</a></h3>
+<p>Tracks an undelegation from a validator.</p>
+<pre><code class="language-solidity">struct Undelegation {
+    uint256 amount;
+    uint256 unlocksAt;
+}
+</code></pre>
+<h2 id="enums"><a class="header" href="#enums">Enums</a></h2>
+<h3 id="validatorstatus"><a class="header" href="#validatorstatus">ValidatorStatus</a></h3>
+<p>The status of a validator.
+By default a validator is in the <code>Unknown</code> state. This means it has never registered. Upon
+registration the status will become <code>Active</code> and if the validator deregisters its status
+becomes <code>Exited</code>.</p>
+<pre><code class="language-solidity">enum ValidatorStatus {
+    Unknown,
+    Active,
+    Exited
+}
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../src/SafeExitTimelock.sol/contract.SafeExitTimelock.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../src/StakeTableV2.sol/contract.StakeTableV2.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../src/SafeExitTimelock.sol/contract.SafeExitTimelock.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../src/StakeTableV2.sol/contract.StakeTableV2.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../../solidity-8ef9a95c.min.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

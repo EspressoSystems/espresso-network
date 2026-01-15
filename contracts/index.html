@@ -12,24 +12,23 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon.svg">
-        <link rel="shortcut icon" href="favicon.png">
-        <link rel="stylesheet" href="css/variables.css">
-        <link rel="stylesheet" href="css/general.css">
-        <link rel="stylesheet" href="css/chrome.css">
-        <link rel="stylesheet" href="css/print.css" media="print">
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
-        <link rel="stylesheet" href="fonts/fonts.css">
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="highlight-css" href="highlight.css">
-        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
-        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="book.css">
+        <link rel="stylesheet" href="book-be1d94da.css">
 
         <!-- MathJax -->
         <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
@@ -39,10 +38,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex.js";
+            window.path_to_searchindex_js = "searchindex-b1a6ec98.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc.js"></script>
+        <script src="toc-7b70ea14.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -56,7 +55,7 @@
             </div>
         </div>
     </div>
-    <div id="body-container">
+    <div id="mdbook-body-container">
         <!-- Work around some values being stored in localStorage wrapped in quotes -->
         <script>
             try {
@@ -85,12 +84,12 @@
             html.classList.add("js");
         </script>
 
-        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
 
         <!-- Hide / unhide sidebar before it is displayed -->
         <script>
             let sidebar = null;
-            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
             if (document.body.clientWidth >= 1080) {
                 try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
                 sidebar = sidebar || 'visible';
@@ -105,39 +104,39 @@
             }
         </script>
 
-        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
                 <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
-            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
             </div>
         </nav>
 
-        <div id="page-wrapper" class="page-wrapper">
+        <div id="mdbook-page-wrapper" class="page-wrapper">
 
             <div class="page">
-                <div id="menu-bar-hover-placeholder"></div>
-                <div id="menu-bar" class="menu-bar sticky">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
                     <div class="left-buttons">
-                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
-                            <i class="fa fa-bars"></i>
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
                         </label>
-                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
-                            <i class="fa fa-paint-brush"></i>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
                         </button>
-                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
-                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
-                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
-                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
-                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
-                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
-                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
                         </ul>
-                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
-                            <i class="fa fa-search"></i>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
                         </button>
                     </div>
 
@@ -145,232 +144,88 @@
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
-                            <i id="print-button" class="fa fa-print"></i>
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/EspressoSystems/espresso-network" title="Git repository" aria-label="Git repository">
-                            <i id="git-repository-button" class="fa fa-github"></i>
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
                         </a>
 
                     </div>
                 </div>
 
-                <div id="search-wrapper" class="hidden">
-                    <form id="searchbar-outer" class="searchbar-outer">
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
                         <div class="search-wrapper">
-                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
                             <div class="spinner-wrapper">
-                                <i class="fa fa-spinner fa-spin"></i>
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
                             </div>
                         </div>
                     </form>
-                    <div id="searchresults-outer" class="searchresults-outer hidden">
-                        <div id="searchresults-header" class="searchresults-header"></div>
-                        <ul id="searchresults">
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
                         </ul>
                     </div>
                 </div>
 
                 <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
                 <script>
-                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
-                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
-                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
                         link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
                     });
                 </script>
 
-                <div id="content" class="content">
+                <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="espresso-network"><a class="header" href="#espresso-network">Espresso Network</a></h1>
-<p><a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml/badge.svg" alt="Build" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml/badge.svg" alt="Test" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml/badge.svg" alt="Docs rust" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml/badge.svg" alt="Contracts" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml/badge.svg" alt="Lint" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml/badge.svg" alt="Audit" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml/badge.svg" alt="Ubuntu" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml/badge.svg" alt="Build without lockfile" /></a>
-<a href="https://coveralls.io/github/EspressoSystems/espresso-network?branch=main"><img src="https://coveralls.io/repos/github/EspressoSystems/espresso-network/badge.svg?branch=main" alt="Coverage Status" /></a></p>
-<p>The Espresso Network is the global confirmation layer for rollups in the Ethereum ecosystem. Espresso's
-<a href="https://docs.espressosys.com/network">global confirmation layer(GCL)</a> provides agreement on inputs to a collection of
-composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
-confirmations in return.</p>
-<p><a href="https://docs.espressosys.com/network/">Official Documentation</a></p>
-<h3 id="architecture"><a class="header" href="#architecture">Architecture</a></h3>
-<p>The diagram below shows how the Espresso Confirmation Layer fits into the rollup centric Ethereum ecosystem. See
-<a href="./doc/architecture.html">Architecture</a> for details.</p>
-<p><img src="./doc/espresso-overview.svg" alt="Architecture" /></p>
-<h4 id="zk-rollups-integration"><a class="header" href="#zk-rollups-integration">ZK rollups integration</a></h4>
-<p>In order for ZK rollups to rely on blocks produced by Espresso as a source of transactions, it is required to adjust the
-circuit that encodes the state update logic. See <a href="doc/zk-integration.html">zk-rollups integration</a> for more details.</p>
-<h1 id="running-the-demo"><a class="header" href="#running-the-demo">Running the demo</a></h1>
-<p>Refer to <a href="https://github.com/EspressoSystems/sequencer-example-l2">sequencer-example-l2</a> for instructions on how to run
-a dockerized Espresso Sequencer network with an example Layer 2 rollup application.</p>
-<h1 id="development"><a class="header" href="#development">Development</a></h1>
-<ul>
-<li>Obtain code: <code>git clone git@github.com:EspressoSystems/espresso-network</code>.</li>
-<li>Make sure <a href="https://nixos.org/download.html">nix</a> is installed.</li>
-<li>Activate the environment with <code>nix-shell</code>, or <code>nix develop</code>, or <code>direnv allow</code> if using <a href="https://direnv.net/">direnv</a>.</li>
-<li>For installation without nix please see <a href="./doc/ubuntu.html">ubuntu.md</a>.</li>
-</ul>
-<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
-<p>The rust code documentation can be found at <a href="https://sequencer.docs.espressosys.com">sequencer.docs.espressosys.com</a>.
-Please note the disclaimer about API stability at the end of the readme.</p>
-<p>To generate the documentation locally and view it in the browser, run</p>
-<pre><code>just doc --open
-</code></pre>
-<h2 id="run-the-tests"><a class="header" href="#run-the-tests">Run the tests</a></h2>
-<pre><code>just pull # to pull docker images
-just test
-</code></pre>
-<h2 id="building-figures"><a class="header" href="#building-figures">Building figures</a></h2>
-<pre><code>make doc
-</code></pre>
-<h2 id="building-and-running"><a class="header" href="#building-and-running">Building and running</a></h2>
-<p>Docker images and the <a href="docker-compose-demo.yaml">docker-compose-demo.yaml</a> file are provided for convenience. The
-Docker-based demo fetches the images from the <code>ghcr</code> repository, where they are updated with every push to <code>main</code> on
-GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.</p>
-<p>Build all executables with <code>cargo build --release</code>. You may then start an Espresso network. First, start an
-orchestrator. Choose a port <code>$PORT</code> to run it on and decide how many Espresso nodes <code>$N</code> you will use, then run
-<code>target/release/orchestrator -p $PORT -n $N</code>.</p>
-<p>The Espresso Network will distribute a HotShot configuration to all the nodes which connect to it, which specifies
-consensus parameters like view timers. There is a default config, but you can override any parameters you want by
-passing additional options to the <code>orchestrator</code> executable. Run <code>target/release/orchestrator --help</code> to see a list of
-available options.</p>
-<p>Next, you must launch a <code>cdn</code> instance, which is necessary to facilitate consensus.</p>
-<pre><code class="language-bash">just dev-cdn -- -p 1738
-</code></pre>
-<p>In this case, we run it on port 1738.</p>
-<p>Once you have started the orchestrator and the CDN, you must connect <code>$N</code> Espresso nodes to them, after which the
-network will start up automatically. To start one node, run</p>
-<pre><code class="language-bash">target/release/sequencer \
-    --orchestrator-url http://localhost:$PORT \
-    --cdn-endpoint "127.0.0.1:1738"  \
-    -- http --port 8083 -- query --storage-path storage -- submit
-</code></pre>
-<p>A useful Bash snippet for running <code>$N</code> nodes simultaneously in the background of your shell is:</p>
-<pre><code class="language-bash">for i in `seq $N`; do
-    target/release/sequencer \
-        --orchestrator-url http://localhost:$PORT \
-        --cdn-endpoint "127.0.0.1:1738"  \
-done
-</code></pre>
-<p>For running a full demo natively run <code>just demo-native</code>.</p>
+                        <!-- This file serves as the landing page for the published smart contract docs.
+     Links point to .sol files for GitHub. During doc generation (just doc-contracts),
+     they are transformed to point to the generated documentation. -->
+<h1 id="espresso-network-smart-contracts"><a class="header" href="#espresso-network-smart-contracts">Espresso Network Smart Contracts</a></h1>
+<p>Smart contracts for the Espresso Network.</p>
+<p>Upgradeable contracts use the frozen inheritance pattern: each new version (e.g. <code>StakeTableV2</code>) inherits from the
+previous version, preserving storage layout and ensuring upgrade safety.</p>
 <h3 id="contracts"><a class="header" href="#contracts">Contracts</a></h3>
-<h4 id="development-1"><a class="header" href="#development-1">Development</a></h4>
-<p>A foundry project for the contracts specific to HotShot can be found in the directory <code>contracts</code>.</p>
-<p>To compile</p>
-<pre><code class="language-shell">forge build
-</code></pre>
-<p>To run the tests</p>
-<pre><code class="language-shell">just sol-test
-</code></pre>
-<p>In order to avoid constant warnings about checksum mismatches with <a href="https://github.com/roynalnaruto/svm-rs">svm-rs</a>
-managed <code>solc</code> we set <code>FOUNDRY_SRC</code> to solc installed via flake.nix.</p>
 <ul>
-<li>To use the contracts from rust generate the rust contracts bindings: <code>just gen-bindings</code>.</li>
-<li>Bindings are only generated for contracts in the <code>contracts/src</code> folder</li>
+<li><a href="src/EspToken.sol/contract.EspToken.html">EspToken</a></li>
+<li><a href="src/EspTokenV2.sol/contract.EspTokenV2.html">EspTokenV2</a></li>
+<li><a href="src/FeeContract.sol/contract.FeeContract.html">FeeContract</a></li>
+<li><a href="src/InitializedAt.sol/contract.InitializedAt.html">InitializedAt</a></li>
+<li><a href="src/LightClient.sol/contract.LightClient.html">LightClient</a></li>
+<li><a href="src/LightClientArbitrum.sol/contract.LightClientArbitrum.html">LightClientArbitrum</a></li>
+<li><a href="src/LightClientArbitrumV2.sol/contract.LightClientArbitrumV2.html">LightClientArbitrumV2</a></li>
+<li><a href="src/LightClientArbitrumV3.sol/contract.LightClientArbitrumV3.html">LightClientArbitrumV3</a></li>
+<li><a href="src/LightClientV2.sol/contract.LightClientV2.html">LightClientV2</a></li>
+<li><a href="src/LightClientV3.sol/contract.LightClientV3.html">LightClientV3</a></li>
+<li><a href="src/OpsTimelock.sol/contract.OpsTimelock.html">OpsTimelock</a></li>
+<li><a href="src/RewardClaim.sol/contract.RewardClaim.html">RewardClaim</a></li>
+<li><a href="src/SafeExitTimelock.sol/contract.SafeExitTimelock.html">SafeExitTimelock</a></li>
+<li><a href="src/StakeTable.sol/contract.StakeTable.html">StakeTable</a></li>
+<li><a href="src/StakeTableV2.sol/contract.StakeTableV2.html">StakeTableV2</a></li>
 </ul>
-<p>To generate documentation in <code>./docs</code> for solidity code run</p>
-<pre><code class="language-shell">forge doc
-</code></pre>
-<h4 id="deployment-via-foundry"><a class="header" href="#deployment-via-foundry">Deployment via Foundry</a></h4>
-<p>To deploy the contracts to a local testnet, first run a dev chain (e.g. <code>anvil</code>), then run</p>
-<pre><code>forge script DeployHotShot --broadcast --rpc-url local
-</code></pre>
-<p>To deploy to sepolia set <code>SEPOLIA_RPC_URL</code> and <code>MNEMONIC</code> env vars and run</p>
-<pre><code>forge script DeployHotShot --broadcast --rpc-url sepolia
-</code></pre>
-<p>To additionally verify the contract on etherscan set the <code>ETHERSCAN_API_KEY</code> env var and run</p>
-<pre><code>forge script DeployHotShot --broadcast --rpc-url sepolia --verify
-</code></pre>
-<p>Running the script will save a file with details about the deployment in <code>contracts/broadcast/$CHAIN_ID</code>.</p>
-<h4 id="deployment-via-rust"><a class="header" href="#deployment-via-rust">Deployment via Rust</a></h4>
-<p><strong>Build and Run</strong></p>
-<pre><code class="language-bash">cargo run --bin deploy -- [FLAGS/OPTIONS]
-</code></pre>
-<p>Or, for help</p>
-<pre><code class="language-bash">cargo run --bin deploy -- --help
-</code></pre>
-<p><strong>Configuration</strong></p>
-<p>You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
-variables (see the code for the full list <code>sequencer/src/bin/deploy.rs</code>). Common environment variables:</p>
+<h3 id="interfaces"><a class="header" href="#interfaces">Interfaces</a></h3>
 <ul>
-<li><code>ESPRESSO_SEQUENCER_L1_PROVIDER</code> — L1 JSON-RPC endpoint</li>
-<li><code>ESPRESSO_SEQUENCER_ETH_MNEMONIC</code> — Mnemonic for the deployer wallet</li>
-<li><code>ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS</code> — Multisig admin address</li>
-<li><code>ESPRESSO_DEPLOYER_ACCOUNT_INDEX</code> — Account index in the wallet</li>
-<li><code>ESPRESSO_SEQUENCER_URL</code> — Sequencer node URL for HotShot config</li>
+<li><a href="src/interfaces/ILightClient.sol/interface.ILightClient.html">ILightClient</a></li>
+<li><a href="src/interfaces/IPlonkVerifier.sol/interface.IPlonkVerifier.html">IPlonkVerifier</a></li>
+<li><a href="src/interfaces/IRewardClaim.sol/interface.IRewardClaim.html">IRewardClaim</a></li>
 </ul>
-<p>You can use a <code>.env</code> file and load it with:</p>
-<pre><code class="language-bash">set -a
-source .env
-set +a
-</code></pre>
-<h4 id="deployment-via-docker"><a class="header" href="#deployment-via-docker">Deployment via Docker</a></h4>
-<p>You can run the deployer in a container but you need to stand up all services via docker compose</p>
-<pre><code class="language-bash">just pull
-just demo deploy-prover-contracts
-</code></pre>
-<p>If making dev changes locally run, <code>./scripts/build-docker-images-native --image $IMAGE_TO_BE_REBUILT</code> instead of
-<code>just pull</code>.</p>
-<h4 id="dry-run-upgrades-via-docker"><a class="header" href="#dry-run-upgrades-via-docker">Dry run upgrades via Docker</a></h4>
-<p>You can only run a dry run for multisig upgrades but you need to stand up all services via docker compose Example:</p>
-<pre><code class="language-bash">just pull
-just demo
-docker compose run --rm upgrade-prover-contracts-v2 /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
-</code></pre>
-<p>If making dev changes locally run, <code>./scripts/build-docker-images-native</code> instead of <code>just pull</code>.</p>
-<p>For AWS ECS, ensure all required environment variables and secrets are set in your task definition.</p>
-<h3 id="logging"><a class="header" href="#logging">Logging</a></h3>
-<p>You can control the log level using the <code>RUST_LOG</code> environment variable. For example:</p>
-<pre><code class="language-bash">RUST_LOG=info cargo run --bin deploy -- [FLAGS]
-RUST_LOG=debug cargo run --bin deploy -- [FLAGS]
-</code></pre>
-<p>For Docker:</p>
-<pre><code class="language-bash">docker run --env-file .env.docker -e RUST_LOG=debug ...
-</code></pre>
-<p>(see .env.docker.example for the vars required for .env.docker)</p>
-<h3 id="folder-structure-rationale"><a class="header" href="#folder-structure-rationale">Folder Structure Rationale</a></h3>
+<h3 id="libraries"><a class="header" href="#libraries">Libraries</a></h3>
 <ul>
-<li>code for demo purposes goes into the <code>contracts/demo</code> folder</li>
-<li>code that eventually ends up in production goes into the <code>contracts/src</code> folder</li>
+<li><a href="src/libraries/BLSSig.sol/library.BLSSig.html">BLSSig</a></li>
+<li><a href="src/libraries/EdOnBn254.sol/library.EdOnBn254.html">EdOnBN254</a></li>
+<li><a href="src/libraries/PlonkVerifier.sol/library.PlonkVerifier.html">PlonkVerifier</a></li>
+<li><a href="src/libraries/RewardMerkleTreeVerifier.sol/library.RewardMerkleTreeVerifier.html">RewardMerkleTreeVerifier</a></li>
 </ul>
-<h3 id="benchmarking-and-profiling"><a class="header" href="#benchmarking-and-profiling">Benchmarking and profiling</a></h3>
-<p>The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
-by running:</p>
-<pre><code>&gt; just gas-benchmarks
-&gt; cat gas-benchmarks.txt
-[PASS] test_verify_succeeds() (gas: 507774)
-[PASS] testCorrectUpdateBench() (gas: 594533)
-</code></pre>
-<p>In order to profile the gas consumption of the light client contract do the following:</p>
-<ol>
-<li>Set the environment variables <code>SEPOLIA_RPC_URL</code>, <code>MNEMONIC</code> and <code>ETHERSCAN_API_KEY</code>.</li>
-<li><code>just lc-contract-profiling-sepolia</code></li>
-<li>Create an account on <a href="https://app.sentio.xyz/">sentio.xyz</a>.</li>
-<li>Use the hash of the transaction generated in step two when calling the function <code>newFinalizedState</code> in order to
-obtain the gas profile.</li>
-</ol>
-<h1 id="license"><a class="header" href="#license">License</a></h1>
-<h2 id="copyright"><a class="header" href="#copyright">Copyright</a></h2>
-<p><strong>(c) 2022 Espresso Systems</strong> <code>espresso-sequencer</code> was developed by Espresso Systems. While we plan to adopt an open
-source license, we have not yet selected one. As such, all rights are reserved for the time being. Please reach out to
-us if you have thoughts on licensing.</p>
-<h1 id="disclaimer"><a class="header" href="#disclaimer">Disclaimer</a></h1>
-<p><strong>DISCLAIMER:</strong> This software is provided "as is" and its security has not been externally audited. Use at your own
-risk.</p>
-<p><strong>DISCLAIMER:</strong> The Rust library crates provided in this repository are intended primarily for use by the binary targets
-in this repository. We make no guarantees of public API stability. If you are building on these crates, reach out by
-opening an issue to discuss the APIs you need.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
 
-                            <a rel="next prefetch" href="contracts/src/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <i class="fa fa-angle-right"></i>
+                            <a rel="next prefetch" href="src/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
                         <div style="clear: both"></div>
@@ -380,13 +235,18 @@ opening an issue to discuss the APIs you need.</p>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
 
-                    <a rel="next prefetch" href="contracts/src/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <i class="fa fa-angle-right"></i>
+                    <a rel="next prefetch" href="src/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
 
         </div>
 
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
 
 
 
@@ -395,16 +255,16 @@ opening an issue to discuss the APIs you need.</p>
         </script>
 
 
-        <script src="elasticlunr.min.js"></script>
-        <script src="mark.min.js"></script>
-        <script src="searcher.js"></script>
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
 
-        <script src="clipboard.min.js"></script>
-        <script src="highlight.js"></script>
-        <script src="book.js"></script>
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="solidity.min.js"></script>
+        <script src="solidity-8ef9a95c.min.js"></script>
 
 
 
