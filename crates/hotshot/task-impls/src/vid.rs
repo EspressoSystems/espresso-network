@@ -136,7 +136,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 }
                 for share in vid_disperse.clone().to_shares() {
                     if let Some(share) = share.to_proposal(&self.private_key) {
-                        consensus_writer.update_vid_shares(*view_number, share);
+                        // update VID share it it's not our own, we can receive that one in the quorum vote task
+                        if *share.data.recipient_key() != self.public_key {
+                            consensus_writer.update_vid_shares(*view_number, share);
+                        }
                     }
                 }
                 drop(consensus_writer);
