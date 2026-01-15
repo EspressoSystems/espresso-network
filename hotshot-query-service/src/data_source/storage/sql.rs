@@ -791,6 +791,18 @@ impl SqlStorage {
         let common = tx.get_vid_common_metadata(block_id).await?;
         Ok(common)
     }
+
+    pub async fn get_header<Types>(&self, block_id: BlockId<Types>) -> QueryResult<Header<Types>>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+    {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let header = tx.load_header(block_id).await?;
+        Ok(header)
+    }
 }
 
 #[async_trait]

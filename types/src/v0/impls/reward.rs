@@ -1144,7 +1144,12 @@ impl EpochRewardsCalculator {
                 .as_ref()
                 .fetch_header(epoch_last_block_height)
                 .await
-                .context("failed to fetch epoch header")?;
+                .with_context(|| {
+                    format!(
+                        "failed to fetch header at height {epoch_last_block_height} for epoch \
+                         {epoch}"
+                    )
+                })?;
 
             tracing::info!(
                 %epoch,
@@ -1315,7 +1320,7 @@ impl EpochRewardsCalculator {
             let distributor = RewardDistributor::new(
                 validator.clone(),
                 RewardAmount(validator_reward),
-                RewardAmount(total_distributed),
+                Default::default(),
             );
 
             let computed_rewards = distributor.compute_rewards()?;
@@ -1329,7 +1334,7 @@ impl EpochRewardsCalculator {
                 tracing::debug!(%epoch, %address, %reward, "applied epoch reward");
             }
 
-            total_distributed = distributor.total_distributed().0;
+            total_distributed += validator_reward;
         }
 
         tracing::info!(

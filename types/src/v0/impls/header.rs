@@ -835,23 +835,23 @@ impl Header {
 
         let mut reward_calculator = instance_state.epoch_rewards_calculator.lock().await;
 
+        if epoch > first_epoch + 2
+            && !reward_calculator.has_result(prev_epoch)
+            && !reward_calculator.is_calculating(prev_epoch)
+        {
+            tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
+            reward_calculator.spawn_background_task(
+                prev_epoch,
+                epoch_height,
+                validated_state.reward_merkle_tree_v2.clone(),
+                instance_state.clone(),
+                coordinator.clone(),
+                None,
+            );
+        }
+
         // Not at epoch boundary
-        // trigger catchup if needed and return
         if !is_last_block(height, epoch_height) {
-            if epoch > first_epoch + 2
-                && !reward_calculator.has_result(prev_epoch)
-                && !reward_calculator.is_calculating(prev_epoch)
-            {
-                tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
-                reward_calculator.spawn_background_task(
-                    prev_epoch,
-                    epoch_height,
-                    validated_state.reward_merkle_tree_v2.clone(),
-                    instance_state.clone(),
-                    coordinator,
-                    None,
-                );
-            }
             return Ok((RewardAmount::default(), HashSet::new()));
         }
 
@@ -877,7 +877,12 @@ impl Header {
                     .as_ref()
                     .fetch_header(prev_epoch_last_block)
                     .await
-                    .context("failed to fetch prev epoch header")?;
+                    .with_context(|| {
+                        format!(
+                            "failed to fetch header at height {prev_epoch_last_block} for \
+                             prev_epoch {prev_epoch}"
+                        )
+                    })?;
 
                 if prev_epoch_header.version() >= EpochRewardVersion::version() {
                     anyhow::bail!(
@@ -898,10 +903,10 @@ impl Header {
             Some(leader_counts.clone()),
         );
 
-        // keep last 3 epochs
-        if *epoch > *first_epoch + 3 {
-            reward_calculator.results.retain(|&e, _| e >= epoch);
-        }
+        // // keep last 3 epochs
+        // if *epoch > *first_epoch + 3 {
+        //     reward_calculator.results.retain(|&e, _| e >= epoch);
+        // }
 
         Ok((epoch_rewards_applied, changed_accounts))
     }
