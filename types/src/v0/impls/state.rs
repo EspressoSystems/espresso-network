@@ -1052,11 +1052,27 @@ impl ValidatedState {
         let total_rewards_distributed = if version < EpochVersion::version() {
             None
         } else if version >= EpochRewardVersion::version() {
-            // For v0.6+, use epoch-based reward distribution instead of per block.
-            let leader_counts = proposed_header.leader_counts().unwrap();
+            let parent_header = parent_leaf.block_header();
+            let epoch_height = instance
+                .epoch_height
+                .context("epoch height not in instance state for V6")?;
+            let leader_index = Header::get_leader_index(
+                version,
+                proposed_header.height(),
+                view_number.u64(),
+                instance,
+            )
+            .await?
+            .context("leader index not found for V6")?;
+            let leader_counts = Header::calculate_leader_counts(
+                parent_header,
+                proposed_header.height(),
+                leader_index,
+                epoch_height,
+            );
             let (epoch_rewards_applied, changed_accounts) = Header::handle_epoch_rewards(
                 proposed_header.height(),
-                leader_counts,
+                &leader_counts,
                 instance,
                 &mut validated_state,
             )
