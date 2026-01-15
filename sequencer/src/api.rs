@@ -5542,13 +5542,13 @@ mod test {
             .unwrap();
 
         let total_minted_supply = client
-            .get::<String>("token/total_minted_supply")
+            .get::<String>("token/total-minted-supply")
             .send()
             .await
             .expect("failed to get total_minted_supply");
         tracing::info!("total_minted_supply={total_minted_supply:?}");
 
-        assert_eq!(total_minted_supply, "");
+        assert_eq!(total_minted_supply, "test");
 
         Ok(())
     }
