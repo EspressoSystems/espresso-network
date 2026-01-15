@@ -1176,7 +1176,7 @@ impl EpochRewardsCalculator {
             })
             .collect();
         let block_reward = membership
-            .fixed_block_reward()
+            .epoch_block_reward(epoch)
             .context("fixed block reward not found")?;
         drop(membership);
 
