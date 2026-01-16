@@ -19,7 +19,7 @@ use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
     data::{null_block, PackedBundle},
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, EventType},
+    event::Event,
     message::UpgradeLock,
     traits::{
         block_contents::{BlockHeader, BuilderFee},

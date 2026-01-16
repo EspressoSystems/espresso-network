@@ -279,6 +279,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .saved_payloads()
                     .contains_key(&view)
                 {
+                    tracing::warn!(
+                        "We already have the payload for view {view}, skipping reconstruction"
+                    );
                     return None;
                 }
                 let common = share.common.clone();
@@ -301,9 +304,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     reconstruct_shares.push(share.share.clone());
                 }
 
-                let Ok(payload_bytes) = AvidmGf2Scheme::recover(&common, &reconstruct_shares)
-                else {
-                    return None;
+                let reconstruct_result = tokio::task::spawn_blocking(move || {
+                    AvidmGf2Scheme::recover(&common, &reconstruct_shares)
+                })
+                .await
+                .ok()?;
+
+                let payload_bytes = match reconstruct_result {
+                    Ok(payload_bytes) => payload_bytes,
+                    Err(e) => {
+                        tracing::error!("Failed to reconstruct block for view {view}: {e}");
+                        return None;
+                    },
                 };
 
                 let proposal = self
@@ -329,7 +341,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 )
                 .await;
             },
-            HotShotEvent::QuorumProposalValidated(proposal, parent_leaf) => {
+            HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 let view = proposal.data.view_number();
                 // if we already have the payload
                 if self
