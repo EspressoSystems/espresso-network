@@ -1,27 +1,30 @@
-use std::collections::BTreeMap;
-use std::convert::Infallible;
-use std::fmt::{self, Display};
-use std::hash::Hash;
-use std::io::Cursor;
-use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::BTreeMap,
+    convert::Infallible,
+    fmt::{self, Display},
+    hash::Hash,
+    io::Cursor,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use bytes::{Bytes, BytesMut};
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
-use tokio::spawn;
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::Sender;
-use tokio::task::JoinHandle;
-use tokio::time::{self, Duration, Instant};
+use tokio::{
+    spawn,
+    sync::mpsc::{error::TrySendError, Sender},
+    task::JoinHandle,
+    time::{self, Duration, Instant},
+};
 use tracing::warn;
 
-use crate::net::Command;
-use crate::{Address, Id, Network, Role};
+use crate::{net::Command, Address, Id, Network, Role};
 
 type Result<T> = std::result::Result<T, NetworkDown>;
 

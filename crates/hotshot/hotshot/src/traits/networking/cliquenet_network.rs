@@ -5,15 +5,21 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use cliquenet::{Address, NetConf, Network, Retry};
-use cliquenet::retry::Data;
+use cliquenet::{retry::Data, Address, NetConf, Network, Retry};
 use futures::future::ready;
 #[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation};
-use hotshot_types::traits::network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic};
-use hotshot_types::traits::node_implementation::NodeType;
-use hotshot_types::traits::signature_key::SignatureKey;
-use hotshot_types::{boxed_sync, BoxSyncFuture};
+use hotshot_types::traits::network::{
+    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
+};
+use hotshot_types::{
+    boxed_sync,
+    traits::{
+        network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
+        node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
+    BoxSyncFuture,
+};
 
 #[derive(Clone)]
 pub struct Cliquenet<T: NodeType> {
@@ -21,11 +27,16 @@ pub struct Cliquenet<T: NodeType> {
 }
 
 impl<T: NodeType> Cliquenet<T> {
-    pub async fn create<A, B, P>(name: &'static str, k: T::SignatureKey, addr: A, parties: P) -> Result<Self, NetworkError>
+    pub async fn create<A, B, P>(
+        name: &'static str,
+        k: T::SignatureKey,
+        addr: A,
+        parties: P,
+    ) -> Result<Self, NetworkError>
     where
         A: Into<Address>,
         B: Into<Address>,
-        P: IntoIterator<Item = (T::SignatureKey, B)>
+        P: IntoIterator<Item = (T::SignatureKey, B)>,
     {
         let cfg = NetConf::builder()
             .name(name)
@@ -33,10 +44,12 @@ impl<T: NodeType> Cliquenet<T> {
             .bind(addr.into())
             .parties(parties.into_iter().map(|(k, a)| (k, a.into())))
             .build();
-        let net = Network::create(cfg).await.map_err(|e| {
-            NetworkError::ListenError(format!("cliquenet creation failed: {e}"))
-        })?;
-        Ok(Self { net: Retry::new(net) })
+        let net = Network::create(cfg)
+            .await
+            .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
+        Ok(Self {
+            net: Retry::new(net),
+        })
     }
 }
 
@@ -117,11 +130,11 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
         _da_committee_size: usize,
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
-    ) -> AsyncGenerator<Arc<Self>>
-    {
+    ) -> AsyncGenerator<Arc<Self>> {
         let mut parties = Vec::new();
-        for i in 0 .. expected_node_count {
+        for i in 0..expected_node_count {
             use std::net::Ipv4Addr;
+
             use cliquenet::Address;
 
             let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
@@ -139,7 +152,9 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
             let future = async move {
                 let (_, k, a) = &parties[i as usize];
                 let it = parties.iter().map(|(_, k, a)| (k.clone(), a.clone()));
-                let net = Cliquenet::create("test", k.clone(), a.clone(), it).await.unwrap();
+                let net = Cliquenet::create("test", k.clone(), a.clone(), it)
+                    .await
+                    .unwrap();
                 Arc::new(net)
             };
             Box::pin(future)
@@ -152,6 +167,5 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
 }
 
 fn try_copy(bytes: &[u8]) -> Result<Data, NetworkError> {
-    Data::try_from(BytesMut::from(bytes))
-        .map_err(|e| NetworkError::MessageSendError(e.to_string()))
+    Data::try_from(BytesMut::from(bytes)).map_err(|e| NetworkError::MessageSendError(e.to_string()))
 }

@@ -1,8 +1,9 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::LazyLock;
-use std::task::{Context, Poll, Waker};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, LazyLock},
+    task::{Context, Poll, Waker},
+};
 
 use parking_lot::Mutex;
 use tokio::time::{sleep, Duration, Instant, Sleep};
@@ -130,8 +131,9 @@ impl Future for Countdown {
 
 #[cfg(test)]
 mod tests {
-    use super::{Countdown, Timestamp};
     use tokio::time::{sleep, timeout, Duration, Instant};
+
+    use super::{Countdown, Timestamp};
 
     #[tokio::test]
     async fn duration() {

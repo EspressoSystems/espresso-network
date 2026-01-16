@@ -145,8 +145,9 @@ pub struct InvalidHeader(&'static str);
 
 #[cfg(test)]
 mod tests {
-    use super::{Header, Type};
     use quickcheck::quickcheck;
+
+    use super::{Header, Type};
 
     quickcheck! {
         fn data(len: u16) -> bool {

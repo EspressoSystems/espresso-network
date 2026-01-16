@@ -1,8 +1,7 @@
 //! A channel implementation that keeps only a single copy of an item, as
 //! identified by its Id.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use nohash_hasher::IntSet;
 use parking_lot::Mutex;

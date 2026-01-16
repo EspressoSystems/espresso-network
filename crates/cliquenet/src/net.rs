@@ -1,35 +1,34 @@
 #![doc = include_str!("../README.md")]
 
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::future::pending;
-use std::hash::Hash;
-use std::iter::repeat;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::HashMap, fmt::Display, future::pending, hash::Hash, iter::repeat, sync::Arc,
+    time::Duration,
+};
 
 use bon::Builder;
 use bytes::{Bytes, BytesMut};
 use parking_lot::Mutex;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::time::{sleep, timeout, Interval, MissedTickBehavior};
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
     spawn,
-    sync::Mutex as AsyncMutex,
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore,
+    },
     task::{self, AbortHandle, JoinHandle, JoinSet},
+    time::{sleep, timeout, Interval, MissedTickBehavior},
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::chan;
-use crate::error::Empty;
-use crate::frame::{Header, Type};
-use crate::time::{Countdown, Timestamp};
-use crate::{Address, Id, NetworkError, Role, MAX_MESSAGE_SIZE};
+use crate::{
+    chan,
+    error::Empty,
+    frame::{Header, Type},
+    time::{Countdown, Timestamp},
+    Address, Id, NetworkError, Role, MAX_MESSAGE_SIZE,
+};
 
 type Budget = Arc<Semaphore>;
 type Result<T> = std::result::Result<T, NetworkError>;

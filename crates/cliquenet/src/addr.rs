@@ -1,5 +1,7 @@
-use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::{
+    fmt,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -144,8 +146,9 @@ impl<'de> Deserialize<'de> for Address {
 
 #[cfg(test)]
 mod tests {
-    use super::Address;
     use std::net::IpAddr;
+
+    use super::Address;
 
     #[test]
     fn test_parse() {

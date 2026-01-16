@@ -9,7 +9,8 @@ use std::{
 };
 
 use hotshot::traits::{
-    NodeImplementation, implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork}
+    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
+    NodeImplementation,
 };
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,

@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
-    TestTypesRandomizedLeader,
+    CliquenetImpl, CombinedImpl, EpochsTestVersions, PushCdnImpl, TestTwoStakeTablesTypes,
+    TestTypes, TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
