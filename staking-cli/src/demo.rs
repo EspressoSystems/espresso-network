@@ -972,8 +972,12 @@ pub async fn delegate_for_demo(
             }
 
             tracing::info!("signing {} transactions...", tx_inputs.len());
-            let signed_txs =
-                sign_all_transactions(&funder_provider, &wallets, tx_inputs, |input| {
+            let signed_txs = sign_all_transactions(
+                &funder_provider,
+                &wallets,
+                tx_inputs,
+                concurrency,
+                |input| {
                     use alloy::{network::TransactionBuilder as _, rpc::types::TransactionRequest};
                     use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
 
@@ -1010,8 +1014,9 @@ pub async fn delegate_for_demo(
                         },
                         TxPhase::Undelegate => unreachable!(),
                     }
-                })
-                .await?;
+                },
+            )
+            .await?;
 
             let log = TxLog::new(signed_txs);
             log.save(&log_path)?;
@@ -1055,56 +1060,42 @@ pub async fn undelegate_for_demo(
             existing
         },
         None => {
-            let total_queries = num_delegators as usize * validators.len();
-            tracing::info!(
-                "querying {} delegation amounts (concurrency={})",
-                total_queries,
-                concurrency
-            );
-
-            let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
-            let query_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-            let mut query_handles = Vec::with_capacity(total_queries);
+            let mut queries = Vec::new();
             for i in 0..num_delegators {
                 let delegator_index = delegator_start_index + i;
                 let delegator_signer = generate_delegator_signer(delegator_index);
-
                 for validator in &validators {
-                    let sem = semaphore.clone();
-                    let counter = query_counter.clone();
-                    let client = shared_client.clone();
-                    let stake_table_addr = config.stake_table_address;
-                    let validator = *validator;
-                    let signer = delegator_signer.clone();
-
-                    let handle = tokio::spawn(async move {
-                        let _permit = sem.acquire().await.unwrap();
-                        let provider = ProviderBuilder::new().connect_client(client);
-                        let stake_table = StakeTableV2::new(stake_table_addr, &provider);
-                        let delegation_amount = stake_table
-                            .delegations(validator, signer.address())
-                            .call()
-                            .await?;
-
-                        let count = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        if count.is_multiple_of(100) || count == total_queries {
-                            tracing::info!(
-                                "queried {}/{} delegation amounts",
-                                count,
-                                total_queries
-                            );
-                        }
-
-                        Ok::<_, anyhow::Error>((signer, validator, delegation_amount))
-                    });
-                    query_handles.push(handle);
+                    queries.push((delegator_signer.clone(), *validator));
                 }
             }
 
+            tracing::info!(
+                "querying {} delegation amounts (concurrency={})",
+                queries.len(),
+                concurrency
+            );
+
+            let stake_table_addr = config.stake_table_address;
+            let results =
+                crate::concurrent::map_concurrent("querying delegations", queries, concurrency, {
+                    let client = shared_client.clone();
+                    move |(signer, validator): (PrivateKeySigner, Address)| {
+                        let client = client.clone();
+                        async move {
+                            let provider = ProviderBuilder::new().connect_client(client);
+                            let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+                            let amount = stake_table
+                                .delegations(validator, signer.address())
+                                .call()
+                                .await?;
+                            Ok((signer, validator, amount))
+                        }
+                    }
+                })
+                .await?;
+
             let mut undelegations = Vec::new();
-            for handle in query_handles {
-                let (signer, validator, amount) = handle.await??;
+            for (signer, validator, amount) in results {
                 if amount.is_zero() {
                     continue;
                 }
@@ -1148,19 +1139,20 @@ pub async fn undelegate_for_demo(
                 .collect();
 
             tracing::info!("signing {} transactions...", tx_inputs.len());
-            let signed_txs = sign_all_transactions(&query_provider, &wallets, tx_inputs, |input| {
-                use alloy::{network::TransactionBuilder as _, rpc::types::TransactionRequest};
-                use hotshot_contract_adapter::sol_types::StakeTableV2;
+            let signed_txs =
+                sign_all_transactions(&query_provider, &wallets, tx_inputs, concurrency, |input| {
+                    use alloy::{network::TransactionBuilder as _, rpc::types::TransactionRequest};
+                    use hotshot_contract_adapter::sol_types::StakeTableV2;
 
-                let call = StakeTableV2::undelegateCall {
-                    validator: input.to,
-                    amount: input.amount,
-                };
-                TransactionRequest::default()
-                    .with_to(stake_table_address)
-                    .with_call(&call)
-            })
-            .await?;
+                    let call = StakeTableV2::undelegateCall {
+                        validator: input.to,
+                        amount: input.amount,
+                    };
+                    TransactionRequest::default()
+                        .with_to(stake_table_address)
+                        .with_call(&call)
+                })
+                .await?;
 
             let log = TxLog::new(signed_txs);
             log.save(&log_path)?;

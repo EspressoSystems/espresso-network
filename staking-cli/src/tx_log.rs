@@ -1,11 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -19,11 +15,17 @@ use alloy::{
 };
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
+
+use crate::concurrent::map_concurrent;
 
 const MAX_RETRIES: u32 = 10;
 pub const DEFAULT_CONCURRENCY: usize = 20;
 pub const DEFAULT_GAS_LIMIT: u64 = 1_000_000;
+
+/// Geth's default txpool pending limit per account.
+/// Beyond this, transactions go to the "queued" pool where they cannot
+/// be reliably tracked via eth_getTransactionByHash.
+const GETH_PENDING_LIMIT: usize = 64;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
@@ -134,8 +136,9 @@ impl TxParams {
         let fees = provider.estimate_eip1559_fees().await?;
         Ok(Self {
             chain_id,
-            max_fee_per_gas: fees.max_fee_per_gas * 100,
-            max_priority_fee_per_gas: fees.max_priority_fee_per_gas * 10,
+            // 10 x to add some buffer because we're pre-signing many txns
+            max_fee_per_gas: fees.max_fee_per_gas * 10,
+            max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
         })
     }
 }
@@ -171,6 +174,7 @@ pub async fn sign_all_transactions<P: Provider + Clone + 'static>(
     provider: &P,
     wallets: &HashMap<Address, EthereumWallet>,
     inputs: Vec<TxInput>,
+    concurrency: usize,
     build_tx: impl Fn(&TxInput) -> TransactionRequest,
 ) -> Result<Vec<SignedTx>> {
     let params = TxParams::fetch(provider).await?;
@@ -178,26 +182,24 @@ pub async fn sign_all_transactions<P: Provider + Clone + 'static>(
     let addresses: Vec<Address> = inputs
         .iter()
         .map(|i| i.from)
-        .collect::<std::collections::HashSet<_>>()
+        .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-
-    let semaphore = Arc::new(Semaphore::new(DEFAULT_CONCURRENCY));
-    let mut handles = Vec::with_capacity(addresses.len());
-    for addr in addresses {
-        let provider = provider.clone();
-        let sem = semaphore.clone();
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
-            let nonce = provider.get_transaction_count(addr).await?;
-            Ok::<_, anyhow::Error>((addr, nonce))
-        }));
-    }
-    let mut nonces: HashMap<Address, u64> = HashMap::new();
-    for handle in handles {
-        let (addr, nonce) = handle.await??;
-        nonces.insert(addr, nonce);
-    }
+    let nonces: HashMap<Address, u64> =
+        map_concurrent("fetching nonces", addresses, concurrency, {
+            let provider = provider.clone();
+            move |addr| {
+                let provider = provider.clone();
+                async move {
+                    let nonce = provider.get_transaction_count(addr).await?;
+                    Ok((addr, nonce))
+                }
+            }
+        })
+        .await?
+        .into_iter()
+        .collect();
+    let mut nonces = nonces;
 
     let total = inputs.len();
     let mut signed_txs = Vec::with_capacity(total);
@@ -235,7 +237,7 @@ pub async fn sign_all_transactions<P: Provider + Clone + 'static>(
 
 fn is_already_known(err: &str) -> bool {
     let err_lower = err.to_lowercase();
-    err_lower.contains("already known")
+    err_lower.contains("already known") || err_lower.contains("already imported")
 }
 
 fn is_retriable_error(err: &str) -> bool {
@@ -339,7 +341,6 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
     parallelism: usize,
 ) -> Result<()> {
     let total = log.transactions.len();
-    let semaphore = Arc::new(Semaphore::new(parallelism));
     let phases = log.phases();
 
     tracing::info!(
@@ -358,101 +359,167 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
 
         tracing::info!("phase {}: {} txs", phase, phase_txs.len());
 
-        let confirmed_count = Arc::new(AtomicUsize::new(0));
-        let mut handles = Vec::new();
-        for tx in phase_txs.iter() {
-            let provider = provider.clone();
-            let sem = semaphore.clone();
-            let confirmed = confirmed_count.clone();
-            let tx = (*tx).clone();
-
-            let handle = tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
-                let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
-                if let Some(r) = &receipt {
-                    if !r.status() {
-                        bail!("tx {} failed (reverted)", tx.tx_hash);
+        // Step 1: Check which txs are already confirmed
+        let results = map_concurrent(
+            &format!("{} checking", phase),
+            phase_txs.iter().cloned().cloned(),
+            parallelism,
+            {
+                let provider = provider.clone();
+                move |tx: SignedTx| {
+                    let provider = provider.clone();
+                    async move {
+                        let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
+                        if let Some(r) = &receipt {
+                            if !r.status() {
+                                bail!("tx {} failed (reverted)", tx.tx_hash);
+                            }
+                        }
+                        Ok((tx, receipt.is_some()))
                     }
-                    confirmed.fetch_add(1, Ordering::Relaxed);
                 }
-                Ok::<_, anyhow::Error>((tx, receipt.is_some()))
-            });
-            handles.push(handle);
-        }
+            },
+        )
+        .await?;
 
-        let mut pending = Vec::new();
-        for handle in handles {
-            let (tx, is_confirmed) = handle.await??;
-            if !is_confirmed {
-                pending.push(tx);
+        let mut to_submit: Vec<SignedTx> = Vec::new();
+        let mut already_confirmed = 0;
+        for (tx, is_confirmed) in results {
+            if is_confirmed {
+                already_confirmed += 1;
+            } else {
+                to_submit.push(tx);
             }
         }
 
-        let already_confirmed = confirmed_count.load(Ordering::Relaxed);
         if already_confirmed > 0 {
             tracing::info!(
-                "phase {}: {} already confirmed, {} pending",
+                "phase {}: {} already confirmed, {} to submit",
                 phase,
                 already_confirmed,
-                pending.len()
+                to_submit.len()
             );
         }
 
-        if !pending.is_empty() {
-            let pending_count = pending.len();
-            for (i, tx) in pending.iter().enumerate() {
-                submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
-                let count = i + 1;
-                if count % 100 == 0 || count == pending_count {
-                    tracing::info!("phase {}: submitted {}/{}", phase, count, pending_count);
-                }
-            }
+        if to_submit.is_empty() {
+            continue;
         }
 
-        loop {
-            let confirmed = Arc::new(AtomicUsize::new(0));
-            let mut handles = Vec::new();
+        // Detect single-sender phase (e.g., FundEth/FundEsp from funder account)
+        // For single-sender with many txs, batch to avoid geth queue limits
+        let senders: HashSet<_> = to_submit.iter().map(|tx| tx.from).collect();
+        let use_batching = senders.len() == 1 && to_submit.len() > GETH_PENDING_LIMIT;
 
-            for tx in phase_txs.iter() {
-                let provider = provider.clone();
-                let sem = semaphore.clone();
-                let confirmed = confirmed.clone();
-                let tx_hash = tx.tx_hash;
+        let batches: Vec<Vec<SignedTx>> = if use_batching {
+            to_submit
+                .chunks(GETH_PENDING_LIMIT)
+                .map(|c| c.to_vec())
+                .collect()
+        } else {
+            vec![to_submit]
+        };
 
-                let handle = tokio::spawn(async move {
-                    let _permit = sem.acquire().await.unwrap();
-                    let receipt = get_receipt_with_retry(&provider, tx_hash).await?;
-                    if let Some(r) = &receipt {
-                        if !r.status() {
-                            bail!("tx {} failed (reverted)", tx_hash);
+        let num_batches = batches.len();
+        for (batch_idx, batch) in batches.into_iter().enumerate() {
+            if num_batches > 1 {
+                tracing::info!(
+                    "phase {}: batch {}/{} ({} txs)",
+                    phase,
+                    batch_idx + 1,
+                    num_batches,
+                    batch.len()
+                );
+            }
+
+            // Step 2: Submit batch
+            map_concurrent(
+                &format!("{} submitting", phase),
+                batch.clone(),
+                parallelism,
+                {
+                    let provider = provider.clone();
+                    move |tx: SignedTx| {
+                        let provider = provider.clone();
+                        async move {
+                            submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
+                            Ok(())
                         }
-                        confirmed.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok::<_, anyhow::Error>(receipt.is_some())
-                });
-                handles.push(handle);
-            }
+                },
+            )
+            .await?;
 
-            let mut all_confirmed = true;
-            for handle in handles {
-                if !handle.await?? {
-                    all_confirmed = false;
+            // Step 3: Confirm loop for this batch
+            let mut unconfirmed = batch;
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+
+                let results = map_concurrent(
+                    &format!("{} confirming", phase),
+                    unconfirmed.iter().cloned(),
+                    parallelism,
+                    {
+                        let provider = provider.clone();
+                        move |tx: SignedTx| {
+                            let provider = provider.clone();
+                            async move {
+                                let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
+                                if let Some(r) = &receipt {
+                                    if !r.status() {
+                                        bail!("tx {} failed (reverted)", tx.tx_hash);
+                                    }
+                                    return Ok((tx, true));
+                                }
+                                Ok((tx, false))
+                            }
+                        }
+                    },
+                )
+                .await?;
+
+                unconfirmed = results
+                    .into_iter()
+                    .filter_map(|(tx, confirmed)| if confirmed { None } else { Some(tx) })
+                    .collect();
+
+                if unconfirmed.is_empty() {
+                    if num_batches > 1 {
+                        tracing::info!(
+                            "phase {}: batch {}/{} confirmed",
+                            phase,
+                            batch_idx + 1,
+                            num_batches
+                        );
+                    } else {
+                        tracing::info!("phase {}: all {} txs confirmed", phase, phase_txs.len());
+                    }
+                    break;
                 }
-            }
 
-            let count = confirmed.load(Ordering::Relaxed);
-            if all_confirmed {
-                tracing::info!("phase {}: all {} txs confirmed", phase, phase_txs.len());
-                break;
-            }
+                // Resubmit unconfirmed (they may have been dropped)
+                tracing::debug!(
+                    "phase {}: {} unconfirmed, resubmitting",
+                    phase,
+                    unconfirmed.len()
+                );
 
-            tracing::debug!(
-                "phase {}: {}/{} confirmed, waiting...",
-                phase,
-                count,
-                phase_txs.len()
-            );
-            tokio::time::sleep(Duration::from_secs(2)).await;
+                map_concurrent(
+                    &format!("{} resubmitting", phase),
+                    unconfirmed.iter().cloned(),
+                    parallelism,
+                    {
+                        let provider = provider.clone();
+                        move |tx: SignedTx| {
+                            let provider = provider.clone();
+                            async move {
+                                submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
+                                Ok(())
+                            }
+                        }
+                    },
+                )
+                .await?;
+            }
         }
     }
 
@@ -514,5 +581,26 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .contains(".completed."));
+    }
+
+    #[test]
+    fn test_is_already_known() {
+        assert!(is_already_known("transaction already known"));
+        assert!(is_already_known("Transaction Already Known"));
+        assert!(is_already_known("already imported"));
+        assert!(is_already_known("transaction already imported"));
+        assert!(!is_already_known("nonce too low"));
+        assert!(!is_already_known("insufficient funds"));
+    }
+
+    #[test]
+    fn test_is_retriable_error() {
+        assert!(!is_retriable_error("nonce too low"));
+        assert!(!is_retriable_error("nonce too high"));
+        assert!(!is_retriable_error("insufficient funds"));
+        assert!(!is_retriable_error("invalid signature"));
+        assert!(is_retriable_error("connection reset"));
+        assert!(is_retriable_error("timeout"));
+        assert!(is_retriable_error("rate limited"));
     }
 }

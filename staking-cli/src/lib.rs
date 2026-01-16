@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 pub mod claim;
+pub mod concurrent;
 pub mod delegation;
 pub mod demo;
 pub mod funding;
