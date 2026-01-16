@@ -2628,7 +2628,7 @@ mod test {
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
-        primitives::{Address, U256},
+        primitives::U256,
         providers::{Provider, ProviderBuilder},
     };
     use async_lock::Mutex;
@@ -4619,11 +4619,10 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_reward_total_distributed_rewards() -> anyhow::Result<()> {
-        /// Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
-        ///  Epoch 4: Rewards only distributed in the LAST block
-        /// Epoch 5: All blocks before last have same total as epoch 4 last block,
-        ///            last block has higher total because of new distribution
-
+        // Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
+        // Epoch 4: Rewards only distributed in the LAST block
+        // Epoch 5: All blocks before last have same total as epoch 4 last block,
+        //          last block has higher total because of new distribution
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 

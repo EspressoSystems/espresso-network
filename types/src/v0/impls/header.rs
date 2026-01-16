@@ -436,7 +436,7 @@ impl Header {
                 reward_merkle_tree_root: reward_merkle_tree_root_v2,
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
-                leader_counts: leader_counts.unwrap(),
+                leader_counts: leader_counts.expect("leader_counts required for V6 header"),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -823,11 +823,18 @@ impl Header {
         instance_state: &NodeState,
         validated_state: &mut ValidatedState,
     ) -> anyhow::Result<(RewardAmount, HashSet<RewardAccountV2>)> {
-        let epoch_height = instance_state.epoch_height.unwrap();
+        let epoch_height = instance_state
+            .epoch_height
+            .context("epoch_height not configured")?;
         let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
         let prev_epoch = EpochNumber::new(*epoch - 1);
         let coordinator = instance_state.coordinator.clone();
-        let first_epoch = coordinator.membership().read().await.first_epoch().unwrap();
+        let first_epoch = coordinator
+            .membership()
+            .read()
+            .await
+            .first_epoch()
+            .context("first_epoch not available")?;
 
         if epoch <= first_epoch + 1 {
             return Ok((RewardAmount::default(), HashSet::new()));
@@ -1309,13 +1316,15 @@ impl BlockHeader<SeqTypes> for Header {
         // Handle rewards and calculate leader_counts based on version
         let (leader_counts, total_reward_distributed) = if version >= EpochRewardVersion::version()
         {
-            let epoch_height = instance_state.epoch_height.unwrap();
+            let epoch_height = instance_state
+                .epoch_height
+                .context("epoch_height not configured for V6")?;
             // Use the new block's height (parent + 1), not the parent's height
             let new_height = height + 1;
             let leader_index =
                 Header::get_leader_index(version, new_height, view_number, instance_state)
                     .await?
-                    .unwrap();
+                    .context("leader_index must be present for V6")?;
 
             let leader_counts = Header::calculate_leader_counts(
                 parent_leaf.block_header(),
