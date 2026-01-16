@@ -1289,7 +1289,10 @@ pub async fn upgrade_fee_v1(
 
     let owner = fee_contract_proxy.owner().call().await?;
     if is_contract(&provider, owner).await? {
-        anyhow::bail!("FeeContract owner is not an EOA, can't upgrade");
+        anyhow::bail!(
+            "FeeContract owner ({:#x}) is not an EOA, can't upgrade",
+            owner
+        );
     }
 
     let curr_version = fee_contract_proxy.getVersion().call().await?;
@@ -1344,7 +1347,7 @@ pub async fn upgrade_fee_v1(
                 new_version.patchVersion
             );
         }
-        tracing::error!(
+        tracing::info!(
             proxy = %fee_contract_proxy_addr,
             impl = %new_fee_contract_addr,
             "FeeContract successfully upgraded to v1.0.1"
@@ -1461,7 +1464,7 @@ pub async fn get_proxy_initialized_version(
     // From openzeppelin Initializable.sol, the initialized version slot is keccak256("openzeppelin.storage.Initializable");
     let slot: B256 = "0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00"
         .parse()
-        .unwrap();
+        .context("Failed to parse OpenZeppelin Initializable slot")?;
     let value = provider.get_storage_at(proxy_addr, slot.into()).await?;
     let initialized = value.as_le_bytes()[0]; // `_initialized` is u8 stored in the last byte
     Ok(initialized)
