@@ -24,6 +24,8 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateVerKey},
     signature_key::BLSPubKey,
 };
+#[cfg(feature = "testing")]
+use staking_cli::deploy::deploy_contracts_for_testing;
 use staking_cli::{
     claim::{claim_reward, claim_validator_exit, claim_withdrawal, unclaimed_rewards},
     delegation::{approve, delegate, undelegate},
@@ -322,6 +324,27 @@ pub async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Handle deploy-contracts early since it doesn't require stake table address
+    #[cfg(feature = "testing")]
+    if let Commands::Demo(ref demo) = config.commands {
+        if let DemoCommands::DeployContracts { ref output } = demo.command {
+            tracing::info!("Deploying staking contracts for testing");
+            deploy_contracts_for_testing(
+                config.rpc_url.clone(),
+                config
+                    .signer
+                    .mnemonic
+                    .clone()
+                    .expect("mnemonic required for deployment"),
+                config.signer.account_index.unwrap_or(0),
+                output.clone(),
+            )
+            .await
+            .unwrap();
+            return Ok(());
+        }
+    }
+
     let (wallet, account) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone())?
         .wallet()
         .await?;
@@ -482,7 +505,7 @@ pub async fn main() -> Result<()> {
                 min_amount,
                 max_amount,
                 log_path,
-                parallelism,
+                concurrency,
             } => {
                 tracing::info!(
                     "Mass delegating {} delegators to {} validators",
@@ -497,7 +520,7 @@ pub async fn main() -> Result<()> {
                     *min_amount,
                     *max_amount,
                     log_path.clone(),
-                    *parallelism,
+                    *concurrency,
                 )
                 .await
                 .unwrap();
@@ -508,7 +531,7 @@ pub async fn main() -> Result<()> {
                 delegator_start_index,
                 num_delegators,
                 log_path,
-                parallelism,
+                concurrency,
             } => {
                 tracing::info!(
                     "Mass undelegating {} delegators from {} validators",
@@ -521,7 +544,7 @@ pub async fn main() -> Result<()> {
                     *delegator_start_index,
                     *num_delegators,
                     log_path.clone(),
-                    *parallelism,
+                    *concurrency,
                 )
                 .await
                 .unwrap();
@@ -557,6 +580,8 @@ pub async fn main() -> Result<()> {
                 .unwrap();
                 return Ok(());
             },
+            #[cfg(feature = "testing")]
+            DemoCommands::DeployContracts { .. } => unreachable!("handled earlier"),
         },
         Commands::StakeForDemo {
             num_validators,

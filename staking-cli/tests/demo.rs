@@ -185,7 +185,7 @@ async fn test_delegate_with_tx_log() -> Result<()> {
         .arg("100")
         .arg("--log-path")
         .arg(&log_path)
-        .arg("--parallelism")
+        .arg("--concurrency")
         .arg("5")
         .assert()
         .success();
@@ -836,7 +836,7 @@ async fn test_demo_delegate_with_slow_blockchain() -> Result<()> {
             .arg("100")
             .arg("--log-path")
             .arg(&delegate_log)
-            .arg("--parallelism")
+            .arg("--concurrency")
             .arg("10")
             .assert()
             .success();
@@ -874,7 +874,7 @@ async fn test_demo_delegate_with_slow_blockchain() -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_delegate_tx_log_resume_after_partial() -> Result<()> {
     use alloy::providers::ext::AnvilApi;
-    use staking_cli::tx_log::TxInputLog;
+    use staking_cli::tx_log::TxLog;
 
     let system = TestSystem::deploy().await?;
     let validators = system.setup_validators(1).await?;
@@ -930,7 +930,7 @@ async fn test_delegate_tx_log_resume_after_partial() -> Result<()> {
 
     // Verify log file exists (indicates partial execution)
     assert!(log_path.exists(), "log should exist after interrupted run");
-    let log = TxInputLog::load(&log_path)?.expect("log should be loadable");
+    let log = TxLog::load(&log_path)?.expect("log should be loadable");
     assert!(!log.transactions.is_empty(), "log should have transactions");
 
     // Dump state after partial execution (simulates saving state before restart)

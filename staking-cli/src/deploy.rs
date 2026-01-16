@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet},
@@ -8,14 +8,14 @@ use alloy::{
         fillers::{FillProvider, JoinFill, WalletFiller},
         layers::AnvilProvider,
         utils::JoinedRecommendedFillers,
-        ProviderBuilder, RootProvider, WalletProvider,
+        Provider, ProviderBuilder, RootProvider, WalletProvider,
     },
     signers::local::PrivateKeySigner,
     sol_types::SolValue as _,
 };
 use anyhow::Result;
 use espresso_contract_deployer::{
-    build_signer, builder::DeployerArgsBuilder,
+    build_provider, build_signer, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table, Contract, Contracts,
 };
 use espresso_types::{
@@ -48,6 +48,137 @@ use crate::{
     signature::NodeSignatures,
     BLSKeyPair, DEV_MNEMONIC,
 };
+
+#[derive(Debug, Clone)]
+pub struct DeployedContracts {
+    pub token: Address,
+    pub stake_table: Address,
+    pub reward_claim: Option<Address>,
+}
+
+impl DeployedContracts {
+    pub fn write_env(&self, path: &PathBuf) -> Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path)?;
+        writeln!(file, "# Deployed contract addresses")?;
+        writeln!(
+            file,
+            "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS={}",
+            self.stake_table
+        )?;
+        writeln!(
+            file,
+            "ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS={}",
+            self.token
+        )?;
+        if let Some(reward_claim) = self.reward_claim {
+            writeln!(
+                file,
+                "ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS={}",
+                reward_claim
+            )?;
+        }
+        Ok(())
+    }
+}
+
+pub async fn deploy_to_rpc<P>(
+    provider: P,
+    rpc_url: Url,
+    stake_table_contract_version: StakeTableContractVersion,
+    exit_escrow_period: Duration,
+) -> Result<DeployedContracts>
+where
+    P: WalletProvider + Provider + Clone,
+{
+    let deployer_address = provider.default_signer_address();
+
+    let blocks_per_epoch = 100;
+    let epoch_start_block = 1;
+    let (genesis_state, genesis_stake) =
+        light_client_genesis_from_stake_table(&Default::default(), STAKE_TABLE_CAPACITY_FOR_TEST)
+            .map_err(|e| anyhow::anyhow!("failed to create genesis state: {e}"))?;
+
+    let mut contracts = Contracts::new();
+    let args = DeployerArgsBuilder::default()
+        .deployer(provider)
+        .rpc_url(rpc_url)
+        .mock_light_client(true)
+        .genesis_lc_state(genesis_state)
+        .genesis_st_state(genesis_stake)
+        .blocks_per_epoch(blocks_per_epoch)
+        .epoch_start_block(epoch_start_block)
+        .multisig_pauser(deployer_address)
+        .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
+        .token_name("Espresso".to_string())
+        .token_symbol("ESP".to_string())
+        .initial_token_supply(U256::from(3590000000u64))
+        .ops_timelock_delay(U256::from(0))
+        .ops_timelock_admin(deployer_address)
+        .ops_timelock_proposers(vec![deployer_address])
+        .ops_timelock_executors(vec![deployer_address])
+        .safe_exit_timelock_delay(U256::from(10))
+        .safe_exit_timelock_admin(deployer_address)
+        .safe_exit_timelock_proposers(vec![deployer_address])
+        .safe_exit_timelock_executors(vec![deployer_address])
+        .use_timelock_owner(false)
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to build deployer args: {e}"))?;
+
+    match stake_table_contract_version {
+        StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
+        StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
+    };
+
+    let stake_table = contracts
+        .address(Contract::StakeTableProxy)
+        .ok_or_else(|| anyhow::anyhow!("StakeTableProxy not deployed"))?;
+    let token = contracts
+        .address(Contract::EspTokenProxy)
+        .ok_or_else(|| anyhow::anyhow!("EspTokenProxy not deployed"))?;
+    let reward_claim = match stake_table_contract_version {
+        StakeTableContractVersion::V1 => None,
+        StakeTableContractVersion::V2 => contracts.address(Contract::RewardClaimProxy),
+    };
+
+    Ok(DeployedContracts {
+        token,
+        stake_table,
+        reward_claim,
+    })
+}
+
+pub async fn deploy_contracts_for_testing(
+    rpc_url: Url,
+    mnemonic: String,
+    account_index: u32,
+    output: PathBuf,
+) -> Result<DeployedContracts> {
+    tracing::info!("deploying staking contracts for testing");
+
+    let provider = build_provider(mnemonic, account_index, rpc_url.clone(), None);
+    tracing::info!("deployer address: {}", provider.default_signer_address());
+
+    let exit_escrow_period = Duration::from_secs(300);
+    let contracts = deploy_to_rpc(
+        provider,
+        rpc_url,
+        StakeTableContractVersion::V2,
+        exit_escrow_period,
+    )
+    .await?;
+
+    tracing::info!("stake table deployed: {}", contracts.stake_table);
+    tracing::info!("ESP token deployed: {}", contracts.token);
+
+    contracts.write_env(&output)?;
+    tracing::info!("contract addresses written to {}", output.display());
+
+    println!("STAKE_TABLE_ADDRESS={}", contracts.stake_table);
+    println!("ESP_TOKEN_ADDRESS={}", contracts.token);
+
+    Ok(contracts)
+}
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
@@ -111,58 +242,16 @@ impl TestSystem {
             "Signer address mismatch"
         );
 
-        // Create a fake stake table to create a genesis state. This is fine because we don't
-        // currently use the light client contract. Will need to be updated once we implement
-        // slashing and call the light client contract from the stake table contract.
-        let blocks_per_epoch = 100;
-        let epoch_start_block = 1;
-        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
-            &Default::default(),
-            STAKE_TABLE_CAPACITY_FOR_TEST,
+        let contracts = deploy_to_rpc(
+            provider.clone(),
+            rpc_url.clone(),
+            stake_table_contract_version,
+            exit_escrow_period,
         )
-        .unwrap();
-
-        let mut contracts = Contracts::new();
-        let args = DeployerArgsBuilder::default()
-            .deployer(provider.clone())
-            .rpc_url(rpc_url.clone())
-            .mock_light_client(true)
-            .genesis_lc_state(genesis_state)
-            .genesis_st_state(genesis_stake)
-            .blocks_per_epoch(blocks_per_epoch)
-            .epoch_start_block(epoch_start_block)
-            .multisig_pauser(deployer_address)
-            .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
-            .token_name("Espresso".to_string())
-            .token_symbol("ESP".to_string())
-            .initial_token_supply(U256::from(3590000000u64))
-            .ops_timelock_delay(U256::from(0))
-            .ops_timelock_admin(signer.address())
-            .ops_timelock_proposers(vec![signer.address()])
-            .ops_timelock_executors(vec![signer.address()])
-            .safe_exit_timelock_delay(U256::from(10))
-            .safe_exit_timelock_admin(signer.address())
-            .safe_exit_timelock_proposers(vec![signer.address()])
-            .safe_exit_timelock_executors(vec![signer.address()])
-            .use_timelock_owner(false)
-            .build()
-            .unwrap();
-
-        match stake_table_contract_version {
-            StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
-            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
-        };
-
-        let stake_table = contracts
-            .address(Contract::StakeTableProxy)
-            .expect("StakeTableProxy deployed");
-        let token = contracts
-            .address(Contract::EspTokenProxy)
-            .expect("EspTokenProxy deployed");
-        let reward_claim = match stake_table_contract_version {
-            StakeTableContractVersion::V1 => None,
-            StakeTableContractVersion::V2 => contracts.address(Contract::RewardClaimProxy),
-        };
+        .await?;
+        let token = contracts.token;
+        let stake_table = contracts.stake_table;
+        let reward_claim = contracts.reward_claim;
 
         let approval_amount = parse_ether("1000000")?;
         // Approve the stake table contract so it can transfer tokens to itself

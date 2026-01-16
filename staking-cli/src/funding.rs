@@ -15,7 +15,7 @@ pub async fn send_eth(
     to: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    tracing::info!("fund address {to} with {amount} ETH");
+    tracing::debug!("fund address {to} with {amount} ETH");
     let tx = TransactionRequest::default().with_to(to).with_value(amount);
     Ok(provider.send_transaction(tx).await?)
 }
@@ -26,7 +26,7 @@ pub async fn send_esp(
     to: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    tracing::info!("transfer {amount} ESP to {to}");
+    tracing::debug!("transfer {amount} ESP to {to}");
     let token = EspToken::new(token_address, provider);
     token
         .transfer(to, amount)

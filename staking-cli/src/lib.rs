@@ -35,6 +35,16 @@ pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
+pub fn default_tx_log_path() -> std::path::PathBuf {
+    let project_dir = directories::ProjectDirs::from("", "espresso", "espresso-staking-cli");
+    if let Some(project_dir) = project_dir {
+        project_dir.data_dir().join("tx_log.json")
+    } else {
+        tracing::warn!("Unable to find data directory, using current directory");
+        std::path::PathBuf::from("tx_log.json")
+    }
+}
+
 /// CLI to interact with the Espresso stake table contract
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
 #[command(version, about, long_about = None)]
