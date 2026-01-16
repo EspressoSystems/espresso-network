@@ -12,9 +12,9 @@
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>anyhow::{anyhow, Context, <span class="prelude-ty">Result</span>};
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>espresso_types::v0_1::L1Client;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>hotshot_contract_adapter::sol_types::{
-<a href=#15 id=15 data-nosnippet>15</a>    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
-<a href=#16 id=16 data-nosnippet>16</a>    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
-<a href=#17 id=17 data-nosnippet>17</a>    StakeTableV2,
+<a href=#15 id=15 data-nosnippet>15</a>    EspToken, EspTokenV2, FeeContract, LightClient, LightClientV2, LightClientV2Mock,
+<a href=#16 id=16 data-nosnippet>16</a>    LightClientV3, LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3,
+<a href=#17 id=17 data-nosnippet>17</a>    StakeTable, StakeTableV2,
 <a href=#18 id=18 data-nosnippet>18</a>};
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>url::Url;
 <a href=#20 id=20 data-nosnippet>20</a>
@@ -652,4 +652,91 @@
 <a href=#652 id=652 data-nosnippet>652</a>    <span class="macro">tracing::info!</span>(<span class="string">"StakeTableProxy upgrade proposal sent"</span>);
 <a href=#653 id=653 data-nosnippet>653</a>
 <a href=#654 id=654 data-nosnippet>654</a>    <span class="prelude-val">Ok</span>(())
-<a href=#655 id=655 data-nosnippet>655</a>}</code></pre></div></section></main></body></html>
+<a href=#655 id=655 data-nosnippet>655</a>}
+<a href=#656 id=656 data-nosnippet>656</a>
+<a href=#657 id=657 data-nosnippet>657</a><span class="doccomment">/// Upgrade the FeeContract proxy to a new implementation (patch upgrade).
+<a href=#658 id=658 data-nosnippet>658</a>/// Internally, first detect existence of proxy, then deploy new FeeContract implementation, then upgrade.
+<a href=#659 id=659 data-nosnippet>659</a>/// Assumes:
+<a href=#660 id=660 data-nosnippet>660</a>/// - the proxy is already deployed.
+<a href=#661 id=661 data-nosnippet>661</a>/// - the proxy is owned by a multisig.
+<a href=#662 id=662 data-nosnippet>662</a>///
+<a href=#663 id=663 data-nosnippet>663</a>/// Returns the url link to the upgrade proposal
+<a href=#664 id=664 data-nosnippet>664</a>/// This function can only be called on a real network supported by the safeSDK
+<a href=#665 id=665 data-nosnippet>665</a></span><span class="kw">pub async fn </span>upgrade_fee_contract_multisig_owner(
+<a href=#666 id=666 data-nosnippet>666</a>    provider: <span class="kw">impl </span>Provider,
+<a href=#667 id=667 data-nosnippet>667</a>    contracts: <span class="kw-2">&amp;mut </span>Contracts,
+<a href=#668 id=668 data-nosnippet>668</a>    rpc_url: String,
+<a href=#669 id=669 data-nosnippet>669</a>    dry_run: bool,
+<a href=#670 id=670 data-nosnippet>670</a>) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
+<a href=#671 id=671 data-nosnippet>671</a>    <span class="kw">let </span>proxy_addr = contracts
+<a href=#672 id=672 data-nosnippet>672</a>        .address(Contract::FeeContractProxy)
+<a href=#673 id=673 data-nosnippet>673</a>        .ok_or_else(|| <span class="macro">anyhow!</span>(<span class="string">"FeeContractProxy (multisig owner) not found, can't upgrade"</span>))<span class="question-mark">?</span>;
+<a href=#674 id=674 data-nosnippet>674</a>    <span class="macro">tracing::info!</span>(<span class="string">"FeeContractProxy found at {proxy_addr:#x}"</span>);
+<a href=#675 id=675 data-nosnippet>675</a>    <span class="kw">let </span>proxy = FeeContract::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
+<a href=#676 id=676 data-nosnippet>676</a>    <span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#677 id=677 data-nosnippet>677</a>
+<a href=#678 id=678 data-nosnippet>678</a>    <span class="comment">// Verify current version before upgrading
+<a href=#679 id=679 data-nosnippet>679</a>    </span><span class="kw">let </span>curr_version = proxy.getVersion().call().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#680 id=680 data-nosnippet>680</a>    <span class="kw">if </span>curr_version.majorVersion != <span class="number">1 </span>{
+<a href=#681 id=681 data-nosnippet>681</a>        <span class="macro">anyhow::bail!</span>(
+<a href=#682 id=682 data-nosnippet>682</a>            <span class="string">"Expected FeeContract V1.x for upgrade to V1.0.1, found V{}.{}.{}"</span>,
+<a href=#683 id=683 data-nosnippet>683</a>            curr_version.majorVersion,
+<a href=#684 id=684 data-nosnippet>684</a>            curr_version.minorVersion,
+<a href=#685 id=685 data-nosnippet>685</a>            curr_version.patchVersion
+<a href=#686 id=686 data-nosnippet>686</a>        );
+<a href=#687 id=687 data-nosnippet>687</a>    }
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a>    <span class="kw">if </span>!dry_run &amp;&amp; !<span class="kw">crate</span>::is_contract(<span class="kw-2">&amp;</span>provider, owner_addr).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#690 id=690 data-nosnippet>690</a>        <span class="macro">tracing::error!</span>(<span class="string">"Proxy owner is not a contract. Expected: {owner_addr:#x}"</span>);
+<a href=#691 id=691 data-nosnippet>691</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Proxy owner is not a contract. Expected: {owner_addr:#x}"</span>);
+<a href=#692 id=692 data-nosnippet>692</a>    }
+<a href=#693 id=693 data-nosnippet>693</a>
+<a href=#694 id=694 data-nosnippet>694</a>    <span class="comment">// Deploy new implementation (with patch version)
+<a href=#695 id=695 data-nosnippet>695</a>    </span><span class="kw">let </span>fee_contract_addr = <span class="kw">if </span>!dry_run {
+<a href=#696 id=696 data-nosnippet>696</a>        <span class="kw">let </span>cached_fee_contract_addr = contracts.address(Contract::FeeContract);
+<a href=#697 id=697 data-nosnippet>697</a>
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="comment">// For patch upgrades, we need to deploy a fresh implementation contract.
+<a href=#699 id=699 data-nosnippet>699</a>        // If FeeContract is already in the cache, the caller must unset it first
+<a href=#700 id=700 data-nosnippet>700</a>        // to make the redeployment requirement explicit.
+<a href=#701 id=701 data-nosnippet>701</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(cached_fee_contract_addr) = cached_fee_contract_addr {
+<a href=#702 id=702 data-nosnippet>702</a>            <span class="macro">anyhow::bail!</span>(
+<a href=#703 id=703 data-nosnippet>703</a>                <span class="string">"FeeContract implementation address is already set in cache ({:#x}). For patch \
+<a href=#704 id=704 data-nosnippet>704</a>                 upgrades, the implementation must be redeployed. Please unset \
+<a href=#705 id=705 data-nosnippet>705</a>                 ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first."</span>,
+<a href=#706 id=706 data-nosnippet>706</a>                cached_fee_contract_addr
+<a href=#707 id=707 data-nosnippet>707</a>            );
+<a href=#708 id=708 data-nosnippet>708</a>        }
+<a href=#709 id=709 data-nosnippet>709</a>
+<a href=#710 id=710 data-nosnippet>710</a>        <span class="kw">let </span>new_fee_contract_addr = contracts
+<a href=#711 id=711 data-nosnippet>711</a>            .deploy(
+<a href=#712 id=712 data-nosnippet>712</a>                Contract::FeeContract,
+<a href=#713 id=713 data-nosnippet>713</a>                FeeContract::deploy_builder(<span class="kw-2">&amp;</span>provider),
+<a href=#714 id=714 data-nosnippet>714</a>            )
+<a href=#715 id=715 data-nosnippet>715</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#716 id=716 data-nosnippet>716</a>
+<a href=#717 id=717 data-nosnippet>717</a>        new_fee_contract_addr
+<a href=#718 id=718 data-nosnippet>718</a>    } <span class="kw">else </span>{
+<a href=#719 id=719 data-nosnippet>719</a>        <span class="comment">// Use dummy address for dry run
+<a href=#720 id=720 data-nosnippet>720</a>        </span>Address::random()
+<a href=#721 id=721 data-nosnippet>721</a>    };
+<a href=#722 id=722 data-nosnippet>722</a>
+<a href=#723 id=723 data-nosnippet>723</a>    <span class="comment">// invoke upgrade on proxy via the safeSDK
+<a href=#724 id=724 data-nosnippet>724</a>    </span><span class="kw">let </span>result = call_upgrade_proxy_script(
+<a href=#725 id=725 data-nosnippet>725</a>        proxy_addr,
+<a href=#726 id=726 data-nosnippet>726</a>        fee_contract_addr,
+<a href=#727 id=727 data-nosnippet>727</a>        <span class="string">"0x"</span>.to_string(),
+<a href=#728 id=728 data-nosnippet>728</a>        rpc_url,
+<a href=#729 id=729 data-nosnippet>729</a>        owner_addr,
+<a href=#730 id=730 data-nosnippet>730</a>        dry_run,
+<a href=#731 id=731 data-nosnippet>731</a>    )
+<a href=#732 id=732 data-nosnippet>732</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#733 id=733 data-nosnippet>733</a>
+<a href=#734 id=734 data-nosnippet>734</a>    <span class="kw">if </span>!dry_run {
+<a href=#735 id=735 data-nosnippet>735</a>        <span class="macro">tracing::info!</span>(
+<a href=#736 id=736 data-nosnippet>736</a>            <span class="string">"FeeContractProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}"</span>,
+<a href=#737 id=737 data-nosnippet>737</a>            owner_addr
+<a href=#738 id=738 data-nosnippet>738</a>        );
+<a href=#739 id=739 data-nosnippet>739</a>    }
+<a href=#740 id=740 data-nosnippet>740</a>
+<a href=#741 id=741 data-nosnippet>741</a>    <span class="prelude-val">Ok</span>(result)
+<a href=#742 id=742 data-nosnippet>742</a>}</code></pre></div></section></main></body></html>
