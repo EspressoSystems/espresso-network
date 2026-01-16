@@ -28,6 +28,7 @@ pub mod parse;
 pub mod receipt;
 pub mod registration;
 pub mod signature;
+pub mod tx_log;
 
 #[cfg(feature = "testing")]
 pub mod deploy;

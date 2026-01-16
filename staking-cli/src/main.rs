@@ -481,8 +481,8 @@ pub async fn main() -> Result<()> {
                 num_delegators,
                 min_amount,
                 max_amount,
-                batch_size,
-                delay,
+                log_path,
+                parallelism,
             } => {
                 tracing::info!(
                     "Mass delegating {} delegators to {} validators",
@@ -496,8 +496,8 @@ pub async fn main() -> Result<()> {
                     *num_delegators,
                     *min_amount,
                     *max_amount,
-                    *batch_size,
-                    *delay,
+                    log_path.clone(),
+                    *parallelism,
                 )
                 .await
                 .unwrap();
@@ -507,8 +507,8 @@ pub async fn main() -> Result<()> {
                 validators,
                 delegator_start_index,
                 num_delegators,
-                batch_size,
-                delay,
+                log_path,
+                parallelism,
             } => {
                 tracing::info!(
                     "Mass undelegating {} delegators from {} validators",
@@ -520,8 +520,8 @@ pub async fn main() -> Result<()> {
                     validators.clone(),
                     *delegator_start_index,
                     *num_delegators,
-                    *batch_size,
-                    *delay,
+                    log_path.clone(),
+                    *parallelism,
                 )
                 .await
                 .unwrap();

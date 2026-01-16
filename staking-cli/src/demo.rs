@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
+    path::PathBuf,
     time::Duration,
 };
 
@@ -36,6 +37,7 @@ use crate::{
     receipt::ReceiptExt as _,
     registration::register_validator,
     signature::NodeSignatures,
+    tx_log::{TxInput, TxInputLog, TxPhase},
     Config,
 };
 
@@ -112,13 +114,13 @@ pub enum DemoCommands {
         #[clap(long, value_parser = parse_ether)]
         max_amount: U256,
 
-        /// Number of transactions to submit per batch
+        /// Path to transaction log file for recoverable execution
         #[clap(long)]
-        batch_size: Option<usize>,
+        log_path: PathBuf,
 
-        /// Delay between batches (requires --batch-size)
-        #[clap(long, value_parser = parse_duration, requires = "batch_size")]
-        delay: Option<Duration>,
+        /// Number of parallel transaction submissions
+        #[clap(long, default_value_t = crate::tx_log::DEFAULT_PARALLELISM)]
+        parallelism: usize,
     },
     /// Mass undelegate from validators
     Undelegate {
@@ -134,13 +136,13 @@ pub enum DemoCommands {
         #[clap(long)]
         num_delegators: u64,
 
-        /// Number of transactions to submit per batch
+        /// Path to transaction log file for recoverable execution
         #[clap(long)]
-        batch_size: Option<usize>,
+        log_path: PathBuf,
 
-        /// Delay between batches (requires --batch-size)
-        #[clap(long, value_parser = parse_duration, requires = "batch_size")]
-        delay: Option<Duration>,
+        /// Number of parallel transaction submissions
+        #[clap(long, default_value_t = crate::tx_log::DEFAULT_PARALLELISM)]
+        parallelism: usize,
     },
     /// Continuous delegation/undelegation activity
     Churn {
@@ -826,8 +828,8 @@ pub async fn delegate_for_demo(
     num_delegators: u64,
     min_amount: U256,
     max_amount: U256,
-    batch_size: Option<usize>,
-    delay: Option<Duration>,
+    log_path: PathBuf,
+    parallelism: usize,
 ) -> Result<()> {
     tracing::info!("mass delegating to {} validators", validators.len());
 
@@ -872,7 +874,7 @@ pub async fn delegate_for_demo(
             min_amount + random_offset
         };
 
-        tracing::info!(
+        tracing::debug!(
             "delegator {} (index {}) -> validator {}: {} ESP",
             delegator_signer.address(),
             delegator_index,
@@ -897,77 +899,145 @@ pub async fn delegate_for_demo(
         })
         .collect();
 
-    tracing::info!("phase 1/4: funding ETH");
-    let batch_size_val = batch_size.unwrap_or(delegators.len());
-    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
-        if batch_idx > 0 {
-            if let Some(delay_duration) = delay {
-                tokio::time::sleep(delay_duration).await;
+    tracing::info!(
+        "using tx_log for recoverable execution (parallelism={})",
+        parallelism
+    );
+
+    let funder_address = grant_recipient.default_signer_address();
+
+    let mut log = match TxInputLog::load(&log_path)? {
+        Some(existing) => {
+            tracing::info!(
+                "resuming from existing log with {} txs",
+                existing.transactions.len()
+            );
+            existing
+        },
+        None => {
+            let total_txs = delegators.len() * 4;
+            tracing::info!("creating log with {} transaction inputs", total_txs);
+
+            let mut tx_inputs = Vec::with_capacity(total_txs);
+            for (i, d) in delegators.iter().enumerate() {
+                let delegator_index = delegator_start_index + i as u64;
+
+                tx_inputs.push(TxInput {
+                    phase: TxPhase::FundEth,
+                    from: funder_address,
+                    to: d.signer.address(),
+                    amount: fund_amount_eth,
+                    delegator_index: None,
+                    tx_hash: None,
+                });
+
+                tx_inputs.push(TxInput {
+                    phase: TxPhase::FundEsp,
+                    from: funder_address,
+                    to: d.signer.address(),
+                    amount: fund_amount_esp,
+                    delegator_index: None,
+                    tx_hash: None,
+                });
+
+                tx_inputs.push(TxInput {
+                    phase: TxPhase::Approve,
+                    from: d.signer.address(),
+                    to: config.stake_table_address,
+                    amount: d.amount,
+                    delegator_index: Some(delegator_index),
+                    tx_hash: None,
+                });
+
+                tx_inputs.push(TxInput {
+                    phase: TxPhase::Delegate,
+                    from: d.signer.address(),
+                    to: d.validator,
+                    amount: d.amount,
+                    delegator_index: Some(delegator_index),
+                    tx_hash: None,
+                });
             }
+
+            let log = TxInputLog::new(tx_inputs);
+            log.save(&log_path)?;
+            log
+        },
+    };
+
+    let phases = log.phases();
+    tracing::info!(
+        "executing {} txs across {} phases",
+        log.transactions.len(),
+        phases.len()
+    );
+
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(parallelism));
+
+    for phase in phases {
+        let pending: Vec<_> = log.pending_for_phase(phase).into_iter().cloned().collect();
+        if pending.is_empty() {
+            tracing::info!("phase {}: all txs already confirmed", phase);
+            continue;
         }
-        let pending: Vec<_> = future::try_join_all(
-            chunk
-                .iter()
-                .map(|d| send_eth(&funder_provider, d.signer.address(), fund_amount_eth)),
-        )
-        .await?;
-        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
+
+        tracing::info!("phase {}: {} pending txs", phase, pending.len());
+
+        let mut handles = Vec::with_capacity(pending.len());
+
+        for tx in pending.iter().cloned() {
+            let sem = semaphore.clone();
+            let funder = funder_provider.clone();
+            let token_addr = token_address;
+            let stake_table_addr = config.stake_table_address;
+            let delegator_provider = delegator_providers.get(&tx.from).cloned();
+
+            let handle = tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                let receipt = match phase {
+                    TxPhase::FundEth => {
+                        send_eth(&funder, tx.to, tx.amount)
+                            .await?
+                            .get_receipt()
+                            .await?
+                    },
+                    TxPhase::FundEsp => {
+                        send_esp(&funder, token_addr, tx.to, tx.amount)
+                            .await?
+                            .get_receipt()
+                            .await?
+                    },
+                    TxPhase::Approve => {
+                        let provider = delegator_provider.as_ref().unwrap();
+                        approve(provider, token_addr, stake_table_addr, tx.amount)
+                            .await?
+                            .get_receipt()
+                            .await?
+                    },
+                    TxPhase::Delegate => {
+                        let provider = delegator_provider.as_ref().unwrap();
+                        delegate(provider, stake_table_addr, tx.to, tx.amount)
+                            .await?
+                            .get_receipt()
+                            .await?
+                    },
+                    TxPhase::Undelegate => unreachable!(),
+                };
+                Ok::<_, anyhow::Error>((tx, receipt))
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let (tx, receipt) = handle.await??;
+            log.mark_confirmed(tx.from, tx.to, phase, receipt.transaction_hash);
+        }
+        log.save(&log_path)?;
+
+        tracing::info!("phase {}: all {} txs confirmed", phase, pending.len());
     }
 
-    tracing::info!("phase 2/4: funding ESP");
-    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
-        if batch_idx > 0 {
-            if let Some(delay_duration) = delay {
-                tokio::time::sleep(delay_duration).await;
-            }
-        }
-        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|d| {
-            send_esp(
-                &funder_provider,
-                token_address,
-                d.signer.address(),
-                fund_amount_esp,
-            )
-        }))
-        .await?;
-        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
-    }
-
-    tracing::info!("phase 3/4: approvals");
-    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
-        if batch_idx > 0 {
-            if let Some(delay_duration) = delay {
-                tokio::time::sleep(delay_duration).await;
-            }
-        }
-        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|d| {
-            let provider = delegator_providers.get(&d.signer.address()).unwrap();
-            approve(
-                provider,
-                token_address,
-                config.stake_table_address,
-                d.amount,
-            )
-        }))
-        .await?;
-        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
-    }
-
-    tracing::info!("phase 4/4: delegations");
-    for (batch_idx, chunk) in delegators.chunks(batch_size_val).enumerate() {
-        if batch_idx > 0 {
-            if let Some(delay_duration) = delay {
-                tokio::time::sleep(delay_duration).await;
-            }
-        }
-        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|d| {
-            let provider = delegator_providers.get(&d.signer.address()).unwrap();
-            delegate(provider, config.stake_table_address, d.validator, d.amount)
-        }))
-        .await?;
-        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
-    }
-
+    log.archive(&log_path)?;
     tracing::info!("completed mass delegation");
     Ok(())
 }
@@ -977,8 +1047,8 @@ pub async fn undelegate_for_demo(
     validators: Vec<Address>,
     delegator_start_index: u64,
     num_delegators: u64,
-    batch_size: Option<usize>,
-    delay: Option<Duration>,
+    log_path: PathBuf,
+    parallelism: usize,
 ) -> Result<()> {
     tracing::info!("mass undelegating from {} validators", validators.len());
 
@@ -1009,7 +1079,7 @@ pub async fn undelegate_for_demo(
                 continue;
             }
 
-            tracing::info!(
+            tracing::debug!(
                 "undelegating delegator {} (index {}) from validator {}: {} ESP",
                 delegator_address,
                 delegator_index,
@@ -1030,6 +1100,8 @@ pub async fn undelegate_for_demo(
         return Ok(());
     }
 
+    tracing::info!("found {} delegations to undelegate", undelegations.len());
+
     let delegator_providers: HashMap<Address, _> = undelegations
         .iter()
         .map(|u| {
@@ -1040,27 +1112,90 @@ pub async fn undelegate_for_demo(
         })
         .collect();
 
-    tracing::info!("undelegating {} delegations", undelegations.len());
-    let batch_size_val = batch_size.unwrap_or(undelegations.len());
-    for (batch_idx, chunk) in undelegations.chunks(batch_size_val).enumerate() {
-        if batch_idx > 0 {
-            if let Some(delay_duration) = delay {
-                tokio::time::sleep(delay_duration).await;
-            }
+    tracing::info!(
+        "using tx_log for recoverable execution (parallelism={})",
+        parallelism
+    );
+
+    let mut log = match TxInputLog::load(&log_path)? {
+        Some(existing) => {
+            tracing::info!(
+                "resuming from existing log with {} txs",
+                existing.transactions.len()
+            );
+            existing
+        },
+        None => {
+            tracing::info!(
+                "creating log with {} transaction inputs",
+                undelegations.len()
+            );
+
+            let tx_inputs: Vec<_> = undelegations
+                .iter()
+                .enumerate()
+                .map(|(i, u)| TxInput {
+                    phase: TxPhase::Undelegate,
+                    from: u.signer.address(),
+                    to: u.validator,
+                    amount: u.amount,
+                    delegator_index: Some(delegator_start_index + i as u64),
+                    tx_hash: None,
+                })
+                .collect();
+
+            let log = TxInputLog::new(tx_inputs);
+            log.save(&log_path)?;
+            log
+        },
+    };
+
+    let pending: Vec<_> = log
+        .pending_for_phase(TxPhase::Undelegate)
+        .into_iter()
+        .cloned()
+        .collect();
+
+    if pending.is_empty() {
+        tracing::info!("all txs already confirmed");
+    } else {
+        tracing::info!("{} pending txs", pending.len());
+
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(parallelism));
+        let mut handles = Vec::with_capacity(pending.len());
+
+        for tx in pending.iter().cloned() {
+            let sem = semaphore.clone();
+            let provider = delegator_providers.get(&tx.from).cloned().unwrap();
+            let stake_table_addr = config.stake_table_address;
+
+            let handle = tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                let receipt =
+                    crate::delegation::undelegate(&provider, stake_table_addr, tx.to, tx.amount)
+                        .await?
+                        .get_receipt()
+                        .await?;
+                Ok::<_, anyhow::Error>((tx, receipt))
+            });
+            handles.push(handle);
         }
-        let pending: Vec<_> = future::try_join_all(chunk.iter().map(|u| {
-            let provider = delegator_providers.get(&u.signer.address()).unwrap();
-            crate::delegation::undelegate(
-                provider,
-                config.stake_table_address,
-                u.validator,
-                u.amount,
-            )
-        }))
-        .await?;
-        future::try_join_all(pending.into_iter().map(|p| p.assert_success())).await?;
+
+        for handle in handles {
+            let (tx, receipt) = handle.await??;
+            log.mark_confirmed(
+                tx.from,
+                tx.to,
+                TxPhase::Undelegate,
+                receipt.transaction_hash,
+            );
+        }
+        log.save(&log_path)?;
+
+        tracing::info!("all {} txs confirmed", pending.len());
     }
 
+    log.archive(&log_path)?;
     tracing::info!("completed mass undelegation");
     Ok(())
 }

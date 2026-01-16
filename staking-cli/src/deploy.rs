@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use alloy::{
     network::{Ethereum, EthereumWallet},
-    primitives::{utils::parse_ether, Address, B256, U256},
+    primitives::{utils::parse_ether, Address, Bytes, B256, U256},
     providers::{
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
@@ -65,6 +65,7 @@ pub struct TestSystem {
     pub reward_claim: Option<Address>,
     pub exit_escrow_period: Duration,
     pub rpc_url: Url,
+    pub port: u16,
     pub bls_key_pair: BLSKeyPair,
     pub state_key_pair: StateKeyPair,
     pub commission: Commission,
@@ -184,6 +185,7 @@ impl TestSystem {
             reward_claim,
             exit_escrow_period,
             rpc_url,
+            port,
             bls_key_pair,
             state_key_pair,
             commission: Commission::try_from("12.34")?,
@@ -283,6 +285,15 @@ impl TestSystem {
         self.provider
             .anvil_increase_time(seconds.to::<u64>())
             .await?;
+        Ok(())
+    }
+
+    pub async fn dump_state(&self) -> Result<Bytes> {
+        Ok(self.provider.anvil_dump_state().await?)
+    }
+
+    pub async fn load_state(&self, state: Bytes) -> Result<()> {
+        self.provider.anvil_load_state(state).await?;
         Ok(())
     }
 
