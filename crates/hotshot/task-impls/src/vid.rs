@@ -271,6 +271,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     return None;
                 };
                 let view = share.view_number();
+                // if we already have the payload, no need to try to reconstruct it
+                if self
+                    .consensus
+                    .read()
+                    .await
+                    .saved_payloads()
+                    .contains_key(&view)
+                {
+                    return None;
+                }
                 let common = share.common.clone();
                 let epoch = share.epoch;
                 let shares = self
@@ -309,6 +319,65 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
 
                 tracing::error!("Reconstructed block for view {view}");
 
+                broadcast_event(
+                    Arc::new(HotShotEvent::BlockReconstructed(
+                        payload,
+                        metadata.clone(),
+                        view,
+                    )),
+                    &event_stream,
+                )
+                .await;
+            },
+            HotShotEvent::QuorumProposalValidated(proposal, parent_leaf) => {
+                let view = proposal.data.view_number();
+                // if we already have the payload
+                if self
+                    .consensus
+                    .read()
+                    .await
+                    .saved_payloads()
+                    .contains_key(&view)
+                {
+                    return None;
+                }
+                let epoch = proposal.data.epoch();
+                let shares = self
+                    .consensus
+                    .read()
+                    .await
+                    .vid_shares()
+                    .get(&view)
+                    .cloned()?;
+                if shares.is_empty() {
+                    return None;
+                }
+
+                let mut reconstruct_shares = vec![];
+                let common = {
+                    let first_share = shares.values().next()?;
+                    let VidDisperseShare::V2(ref share) = first_share.get(&epoch)?.data else {
+                        return None;
+                    };
+                    share.common.clone()
+                };
+
+                for share in shares.values() {
+                    let share = share.get(&epoch)?;
+                    let VidDisperseShare::V2(ref share) = share.data else {
+                        continue;
+                    };
+                    reconstruct_shares.push(share.share.clone());
+                }
+
+                let Ok(payload_bytes) = AvidmGf2Scheme::recover(&common, &reconstruct_shares)
+                else {
+                    return None;
+                };
+                let metadata = proposal.data.block_header().metadata();
+                let payload = TYPES::BlockPayload::from_bytes(&payload_bytes, metadata);
+
+                tracing::error!("Reconstructed block for view {view}");
                 broadcast_event(
                     Arc::new(HotShotEvent::BlockReconstructed(
                         payload,
