@@ -44,13 +44,13 @@ export OUTPUT_FILE={YOUR_OUTPUT_FILE}  # Optional: customize output file
 
 ## Running the test flow
 
-1. Assuming the contracts are deployed and their proxy addresses are found `$ENV_FILE`
+1. Assuming the contracts are deployed and their proxy addresses are found `$OUTPUT_FILE`
 2. Ensure that you have an RPC URL for the network the contracts are deployed to
 3. Have your ledger connected (assumes account index = 0 otherwise set `export ACCOUNT_INDEX=YOUR_ACCOUNT_INDEX`)
 
 ```bash
 export RPC_URL=
-./contracts/rust/deployer/scripts/testnet-governance-flows.sh --ledger --env-file $ENV_FILE
+./contracts/rust/deployer/scripts/testnet-governance-flows.sh --ledger --env-file $OUTPUT_FILE
 ```
 
 ## Notes
