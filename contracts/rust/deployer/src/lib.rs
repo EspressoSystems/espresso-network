@@ -1334,10 +1334,7 @@ pub async fn upgrade_fee_v1(
 
     if receipt.inner.is_success() {
         let new_version = fee_contract_proxy.getVersion().call().await?;
-        if new_version.majorVersion != 1
-            || new_version.minorVersion != 0
-            || new_version.patchVersion != 1
-        {
+        if new_version != (1, 0, 1).into() {
             anyhow::bail!(
                 "Upgrade transaction succeeded but version is incorrect: V{}.{}.{} (expected \
                  V1.0.1). Proxy: {fee_contract_proxy_addr:#x}, New impl: \
@@ -4361,9 +4358,7 @@ mod tests {
             deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
         let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
         let curr_version = fee_contract_proxy.getVersion().call().await?;
-        assert_eq!(curr_version.majorVersion, 1);
-        assert_eq!(curr_version.minorVersion, 0);
-        assert_eq!(curr_version.patchVersion, 1); // since the current version of the contract is 1.0.1 as needed for the patch
+        assert_eq!(curr_version, (1, 0, 1).into()); // since the current version of the contract is 1.0.1 as needed for the patch
 
         let cached_impl_addr = contracts.address(Contract::FeeContract);
 
@@ -4395,9 +4390,7 @@ mod tests {
 
         // Verify version is correct (this is already checked in upgrade_fee_v1, but explicit here)
         let new_version = fee_contract_proxy.getVersion().call().await?;
-        assert_eq!(new_version.majorVersion, 1);
-        assert_eq!(new_version.minorVersion, 0);
-        assert_eq!(new_version.patchVersion, 1);
+        assert_eq!(new_version, (1, 0, 1).into());
 
         Ok(())
     }
