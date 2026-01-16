@@ -18,7 +18,7 @@ pub async fn approve(
     stake_table_address: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    tracing::info!(
+    tracing::debug!(
         "approve {} ESP for {stake_table_address}",
         format_ether(amount)
     );
@@ -36,7 +36,7 @@ pub async fn delegate(
     validator_address: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    tracing::info!(
+    tracing::debug!(
         "delegate {} ESP to {validator_address}",
         format_ether(amount)
     );
@@ -53,7 +53,7 @@ pub async fn undelegate(
     validator_address: Address,
     amount: U256,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    tracing::info!(
+    tracing::debug!(
         "undelegate {} ESP from {validator_address}",
         format_ether(amount)
     );

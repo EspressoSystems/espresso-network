@@ -3,6 +3,7 @@
 The staking-cli can be used to fund the stake table on L1 for our testnet and demos.
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
+
 **Table of Contents**
 
 - [staking-cli Developer Docs](#staking-cli-developer-docs)
@@ -58,10 +59,12 @@ Options:
 - `--num-delegators`: Number of delegators to create
 - `--min-amount`: Minimum delegation amount in ESP
 - `--max-amount`: Maximum delegation amount in ESP
-- `--batch-size`: Number of transactions to submit per batch (default: all at once)
-- `--delay`: Delay between batches (e.g., "1s", "500ms"); requires `--batch-size`
+- `--log-path`: Path to transaction log file for recoverable execution (default:
+  `~/.local/share/espresso-staking-cli/tx_log.json`)
+- `--concurrency`: Number of concurrent transaction submissions (default: 20)
 
-Delegators are distributed round-robin across validators.
+Delegators are distributed round-robin across validators. The transaction log enables resumable execution if
+interrupted.
 
 ### `demo undelegate`
 
@@ -77,10 +80,11 @@ Options:
 - `--validators`: Comma-separated validator addresses to undelegate from
 - `--delegator-start-index`: Starting index for delegator generation
 - `--num-delegators`: Number of delegators
-- `--batch-size`: Number of transactions to submit per batch (default: all at once)
-- `--delay`: Delay between batches (e.g., "1s", "500ms"); requires `--batch-size`
+- `--log-path`: Path to transaction log file for recoverable execution (default:
+  `~/.local/share/espresso-staking-cli/tx_log.json`)
+- `--concurrency`: Number of concurrent transaction submissions (default: 20)
 
-Skips delegators with zero delegation to a validator.
+Skips delegators with zero delegation to a validator. The transaction log enables resumable execution if interrupted.
 
 ### `demo churn`
 
@@ -112,11 +116,11 @@ The churn loop picks random delegators and either delegates (if idle) or undeleg
 Currently supported delegation configurations for `demo stake`:
 
 1. Equal amounts: each validator self delegates an equal amount. Leading to uniform staking weights.
-2. Variable amounts: validators delegate 100, 200, ..., 500 ESP tokens in order. This is currently the default because it used to be the only option.
+2. Variable amounts: validators delegate 100, 200, ..., 500 ESP tokens in order. This is currently the default because
+   it used to be the only option.
 3. Multiple delegators: Like 2, but also adds a randomly chosen number of other delegators to each validator.
 4. No self-delegation: Validators do not self-delegate, only external delegators.
 
 ## Deprecated Commands
 
-The `stake-for-demo` command is deprecated and will be removed in a future release.
-Use `demo stake` instead.
+The `stake-for-demo` command is deprecated and will be removed in a future release. Use `demo stake` instead.

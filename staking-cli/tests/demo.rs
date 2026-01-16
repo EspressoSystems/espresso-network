@@ -119,6 +119,9 @@ async fn test_delegate_to_validators(
         .collect::<Vec<_>>()
         .join(",");
 
+    let log_dir = tempfile::tempdir()?;
+    let log_path = log_dir.path().join("delegate_log.json");
+
     system
         .cmd(Signer::Mnemonic)
         .arg("demo")
@@ -133,6 +136,8 @@ async fn test_delegate_to_validators(
         .arg("100")
         .arg("--max-amount")
         .arg("500")
+        .arg("--log-path")
+        .arg(&log_path)
         .assert()
         .success();
 
@@ -156,14 +161,14 @@ async fn test_delegate_to_validators(
 }
 
 #[test_log::test(tokio::test)]
-async fn test_delegate_with_delay() -> Result<()> {
+async fn test_delegate_with_tx_log() -> Result<()> {
     let system = TestSystem::deploy().await?;
     let validators = system.setup_validators(1).await?;
 
     let num_delegators = 3;
-    let delay = Duration::from_millis(100);
+    let log_dir = tempfile::tempdir()?;
+    let log_path = log_dir.path().join("delegate_log.json");
 
-    let start = Instant::now();
     system
         .cmd(Signer::Mnemonic)
         .arg("demo")
@@ -178,21 +183,31 @@ async fn test_delegate_with_delay() -> Result<()> {
         .arg("100")
         .arg("--max-amount")
         .arg("100")
-        .arg("--batch-size")
-        .arg("1")
-        .arg("--delay")
-        .arg(format!("{}ms", delay.as_millis()))
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--concurrency")
+        .arg("5")
         .assert()
         .success();
-    let elapsed = start.elapsed();
 
-    let expected_min_time = delay * ((num_delegators as u32 - 1) * 4);
     assert!(
-        elapsed >= expected_min_time,
-        "elapsed time {:?} is less than expected minimum {:?}",
-        elapsed,
-        expected_min_time
+        !log_path.exists(),
+        "log file should be archived after completion"
     );
+
+    let archived_files: Vec<_> = std::fs::read_dir(log_dir.path())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".completed."))
+        .collect();
+    assert_eq!(
+        archived_files.len(),
+        1,
+        "should have exactly one archived log"
+    );
+
+    system
+        .assert_delegations(validators[0], 0, num_delegators as u64, parse_ether("100")?)
+        .await?;
 
     Ok(())
 }
@@ -205,6 +220,8 @@ async fn test_delegate_amount_range() -> Result<()> {
     let num_delegators = 10;
     let min_amount = parse_ether("50")?;
     let max_amount = parse_ether("200")?;
+    let log_dir = tempfile::tempdir()?;
+    let log_path = log_dir.path().join("delegate_log.json");
 
     system
         .cmd(Signer::Mnemonic)
@@ -220,6 +237,8 @@ async fn test_delegate_amount_range() -> Result<()> {
         .arg("50")
         .arg("--max-amount")
         .arg("200")
+        .arg("--log-path")
+        .arg(&log_path)
         .assert()
         .success();
 
@@ -262,6 +281,9 @@ async fn test_undelegate_single_validator() -> Result<()> {
     let validators = system.setup_validators(1).await?;
 
     let num_delegators = 5;
+    let log_dir = tempfile::tempdir()?;
+    let delegate_log = log_dir.path().join("delegate_log.json");
+    let undelegate_log = log_dir.path().join("undelegate_log.json");
 
     system
         .cmd(Signer::Mnemonic)
@@ -277,6 +299,8 @@ async fn test_undelegate_single_validator() -> Result<()> {
         .arg("100")
         .arg("--max-amount")
         .arg("100")
+        .arg("--log-path")
+        .arg(&delegate_log)
         .assert()
         .success();
 
@@ -290,6 +314,8 @@ async fn test_undelegate_single_validator() -> Result<()> {
         .arg("0")
         .arg("--num-delegators")
         .arg(num_delegators.to_string())
+        .arg("--log-path")
+        .arg(&undelegate_log)
         .assert()
         .success();
 
@@ -310,6 +336,9 @@ async fn test_undelegate_multiple_validators() -> Result<()> {
     let validators = system.setup_validators(3).await?;
 
     let num_delegators = 9;
+    let log_dir = tempfile::tempdir()?;
+    let delegate_log = log_dir.path().join("delegate_log.json");
+    let undelegate_log = log_dir.path().join("undelegate_log.json");
 
     let validator_addrs = validators
         .iter()
@@ -331,6 +360,8 @@ async fn test_undelegate_multiple_validators() -> Result<()> {
         .arg("150")
         .arg("--max-amount")
         .arg("150")
+        .arg("--log-path")
+        .arg(&delegate_log)
         .assert()
         .success();
 
@@ -344,6 +375,8 @@ async fn test_undelegate_multiple_validators() -> Result<()> {
         .arg("0")
         .arg("--num-delegators")
         .arg(num_delegators.to_string())
+        .arg("--log-path")
+        .arg(&undelegate_log)
         .assert()
         .success();
 
@@ -361,68 +394,15 @@ async fn test_undelegate_multiple_validators() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
-async fn test_undelegate_with_delay() -> Result<()> {
-    let system = TestSystem::deploy().await?;
-    let validators = system.setup_validators(1).await?;
-
-    let num_delegators = 3;
-
-    system
-        .cmd(Signer::Mnemonic)
-        .arg("demo")
-        .arg("delegate")
-        .arg("--validators")
-        .arg(validators[0].to_string())
-        .arg("--delegator-start-index")
-        .arg("0")
-        .arg("--num-delegators")
-        .arg(num_delegators.to_string())
-        .arg("--min-amount")
-        .arg("100")
-        .arg("--max-amount")
-        .arg("100")
-        .assert()
-        .success();
-
-    let delay = Duration::from_millis(100);
-    let start = Instant::now();
-
-    system
-        .cmd(Signer::Mnemonic)
-        .arg("demo")
-        .arg("undelegate")
-        .arg("--validators")
-        .arg(validators[0].to_string())
-        .arg("--delegator-start-index")
-        .arg("0")
-        .arg("--num-delegators")
-        .arg(num_delegators.to_string())
-        .arg("--batch-size")
-        .arg("1")
-        .arg("--delay")
-        .arg(format!("{}ms", delay.as_millis()))
-        .assert()
-        .success();
-
-    let elapsed = start.elapsed();
-    let expected_min_time = delay * (num_delegators as u32 - 1);
-    assert!(
-        elapsed >= expected_min_time,
-        "elapsed time {:?} is less than expected minimum {:?}",
-        elapsed,
-        expected_min_time
-    );
-
-    Ok(())
-}
-
-#[test_log::test(tokio::test)]
 async fn test_undelegate_skips_zero_delegations() -> Result<()> {
     let system = TestSystem::deploy().await?;
     let validators = system.setup_validators(1).await?;
 
     let num_delegators_to_delegate = 3;
     let num_delegators_total = 10;
+    let log_dir = tempfile::tempdir()?;
+    let delegate_log = log_dir.path().join("delegate_log.json");
+    let undelegate_log = log_dir.path().join("undelegate_log.json");
 
     system
         .cmd(Signer::Mnemonic)
@@ -438,6 +418,8 @@ async fn test_undelegate_skips_zero_delegations() -> Result<()> {
         .arg("100")
         .arg("--max-amount")
         .arg("100")
+        .arg("--log-path")
+        .arg(&delegate_log)
         .assert()
         .success();
 
@@ -451,6 +433,8 @@ async fn test_undelegate_skips_zero_delegations() -> Result<()> {
         .arg("0")
         .arg("--num-delegators")
         .arg(num_delegators_total.to_string())
+        .arg("--log-path")
+        .arg(&undelegate_log)
         .assert()
         .success();
 
@@ -473,6 +457,9 @@ async fn test_undelegate_queries_correct_amounts() -> Result<()> {
     let num_delegators = 5;
     let _min_amount = parse_ether("50")?;
     let _max_amount = parse_ether("200")?;
+    let log_dir = tempfile::tempdir()?;
+    let delegate_log = log_dir.path().join("delegate_log.json");
+    let undelegate_log = log_dir.path().join("undelegate_log.json");
 
     system
         .cmd(Signer::Mnemonic)
@@ -488,6 +475,8 @@ async fn test_undelegate_queries_correct_amounts() -> Result<()> {
         .arg("50")
         .arg("--max-amount")
         .arg("200")
+        .arg("--log-path")
+        .arg(&delegate_log)
         .assert()
         .success();
 
@@ -512,6 +501,8 @@ async fn test_undelegate_queries_correct_amounts() -> Result<()> {
         .arg("0")
         .arg("--num-delegators")
         .arg(num_delegators.to_string())
+        .arg("--log-path")
+        .arg(&undelegate_log)
         .assert()
         .success();
 
@@ -756,6 +747,9 @@ async fn test_demo_all_operations_manual_inspect() -> Result<()> {
         .join(",");
 
     let num_delegators = 5u64;
+    let log_dir = tempfile::tempdir()?;
+    let delegate_log = log_dir.path().join("delegate_log.json");
+    let undelegate_log = log_dir.path().join("undelegate_log.json");
 
     let output = system
         .cmd(Signer::Mnemonic)
@@ -771,12 +765,14 @@ async fn test_demo_all_operations_manual_inspect() -> Result<()> {
         .arg("100")
         .arg("--max-amount")
         .arg("500")
+        .arg("--log-path")
+        .arg(&delegate_log)
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    println!("=== demo delegate (fast mode) ===");
+    println!("=== demo delegate ===");
     println!("{}", String::from_utf8_lossy(&output));
 
     let output = system
@@ -789,75 +785,26 @@ async fn test_demo_all_operations_manual_inspect() -> Result<()> {
         .arg("0")
         .arg("--num-delegators")
         .arg(num_delegators.to_string())
+        .arg("--log-path")
+        .arg(&undelegate_log)
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    println!("=== demo undelegate (fast mode) ===");
-    println!("{}", String::from_utf8_lossy(&output));
-
-    let output = system
-        .cmd(Signer::Mnemonic)
-        .arg("demo")
-        .arg("delegate")
-        .arg("--validators")
-        .arg(&validator_addrs)
-        .arg("--delegator-start-index")
-        .arg("100")
-        .arg("--num-delegators")
-        .arg("3")
-        .arg("--min-amount")
-        .arg("200")
-        .arg("--max-amount")
-        .arg("200")
-        .arg("--batch-size")
-        .arg("1")
-        .arg("--delay")
-        .arg("10ms")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    println!("=== demo delegate (slow mode with delay) ===");
-    println!("{}", String::from_utf8_lossy(&output));
-
-    let output = system
-        .cmd(Signer::Mnemonic)
-        .arg("demo")
-        .arg("undelegate")
-        .arg("--validators")
-        .arg(&validator_addrs)
-        .arg("--delegator-start-index")
-        .arg("100")
-        .arg("--num-delegators")
-        .arg("3")
-        .arg("--batch-size")
-        .arg("1")
-        .arg("--delay")
-        .arg("10ms")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    println!("=== demo undelegate (slow mode with delay) ===");
+    println!("=== demo undelegate ===");
     println!("{}", String::from_utf8_lossy(&output));
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
+async fn test_demo_delegate_with_slow_blockchain() -> Result<()> {
     use alloy::providers::ext::AnvilApi;
 
-    // With 1s block time and batch_size=5, we expect:
-    // - delegate: 4 phases * ceil(5/5) batches = 4 blocks minimum
-    // - undelegate: ceil(5/5) = 1 block minimum
-    // Total ~5 blocks = ~5s, but add buffer for setup and processing
-    // If batching is broken and submits one-by-one, it would take 5*4 + 5 = 25 blocks = 25s
-    tokio::time::timeout(Duration::from_secs(15), async {
+    // With 1s block time and tx_log, we sign all txs upfront then submit them.
+    // The test verifies that delegation works correctly with interval mining.
+    tokio::time::timeout(Duration::from_secs(30), async {
         let system = TestSystem::deploy().await?;
         let num_validators = 1usize;
         let validators = system.setup_validators(num_validators).await?;
@@ -866,13 +813,15 @@ async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
         system.provider.anvil_set_interval_mining(1).await?;
 
         let validator_addrs = validators[0].to_string();
-
         let num_delegators = 5u64;
-        let batch_size = 5;
+
+        let log_dir = tempfile::tempdir()?;
+        let delegate_log = log_dir.path().join("delegate_log.json");
+        let undelegate_log = log_dir.path().join("undelegate_log.json");
 
         system
             .cmd(Signer::Mnemonic)
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(25))
             .arg("demo")
             .arg("delegate")
             .arg("--validators")
@@ -885,8 +834,10 @@ async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
             .arg("100")
             .arg("--max-amount")
             .arg("100")
-            .arg("--batch-size")
-            .arg(batch_size.to_string())
+            .arg("--log-path")
+            .arg(&delegate_log)
+            .arg("--concurrency")
+            .arg("10")
             .assert()
             .success();
 
@@ -896,7 +847,7 @@ async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
 
         system
             .cmd(Signer::Mnemonic)
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
             .arg("demo")
             .arg("undelegate")
             .arg("--validators")
@@ -905,8 +856,8 @@ async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
             .arg("0")
             .arg("--num-delegators")
             .arg(num_delegators.to_string())
-            .arg("--batch-size")
-            .arg(batch_size.to_string())
+            .arg("--log-path")
+            .arg(&undelegate_log)
             .assert()
             .success();
 
@@ -917,7 +868,113 @@ async fn test_demo_batching_with_slow_blockchain() -> Result<()> {
         Ok(())
     })
     .await
-    .map_err(|_| anyhow::anyhow!("test timed out - batching may be broken"))?
+    .map_err(|_| anyhow::anyhow!("test timed out"))?
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_delegate_tx_log_resume_after_partial() -> Result<()> {
+    use alloy::providers::ext::AnvilApi;
+    use staking_cli::tx_log::TxLog;
+
+    let system = TestSystem::deploy().await?;
+    let validators = system.setup_validators(1).await?;
+    let validator_addr = validators[0].to_string();
+
+    let log_dir = tempfile::tempdir()?;
+    let log_path = log_dir.path().join("delegate_log.json");
+
+    // Use slow interval mining - 2 second blocks
+    // This allows txs to be submitted but not all confirmed before timeout
+    system.provider.anvil_set_auto_mine(false).await?;
+    system.provider.anvil_set_interval_mining(2).await?;
+
+    let log_path_clone = log_path.clone();
+    let stake_table_address = system.stake_table;
+    let rpc_url = system.rpc_url.clone();
+    let validator_addr_clone = validator_addr.clone();
+
+    // Start delegation in a thread that will be interrupted
+    let cmd_handle = std::thread::spawn(move || {
+        let output = common::base_cmd()
+            .arg("--rpc-url")
+            .arg(rpc_url.to_string())
+            .arg("--stake-table-address")
+            .arg(stake_table_address.to_string())
+            .arg("--mnemonic")
+            .arg(staking_cli::DEV_MNEMONIC)
+            .arg("--account-index")
+            .arg("0")
+            .arg("demo")
+            .arg("delegate")
+            .arg("--validators")
+            .arg(&validator_addr_clone)
+            .arg("--delegator-start-index")
+            .arg("0")
+            .arg("--num-delegators")
+            .arg("20")
+            .arg("--min-amount")
+            .arg("100")
+            .arg("--max-amount")
+            .arg("100")
+            .arg("--log-path")
+            .arg(&log_path_clone)
+            .timeout(std::time::Duration::from_secs(4))
+            .output()
+            .expect("failed to run command");
+        eprintln!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
+    });
+
+    // Let the command timeout
+    let _ = cmd_handle.join();
+
+    // Verify log file exists (indicates partial execution)
+    assert!(log_path.exists(), "log should exist after interrupted run");
+    let log = TxLog::load(&log_path)?.expect("log should be loadable");
+    assert!(!log.transactions.is_empty(), "log should have transactions");
+
+    // Dump state after partial execution (simulates saving state before restart)
+    let saved_state = system.dump_state().await?;
+
+    // Load state back (simulates restarting with same state)
+    system.load_state(saved_state).await?;
+
+    // Turn automine back on for resume
+    system.provider.anvil_set_interval_mining(0).await?;
+    system.provider.anvil_set_auto_mine(true).await?;
+
+    // Resume the delegation - should complete successfully
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("delegate")
+        .arg("--validators")
+        .arg(&validator_addr)
+        .arg("--delegator-start-index")
+        .arg("0")
+        .arg("--num-delegators")
+        .arg("20")
+        .arg("--min-amount")
+        .arg("100")
+        .arg("--max-amount")
+        .arg("100")
+        .arg("--log-path")
+        .arg(&log_path)
+        .assert()
+        .success();
+
+    // Verify log was archived (indicates completion)
+    assert!(
+        !log_path.exists(),
+        "log should be archived after successful resume"
+    );
+
+    // Verify delegations actually happened
+    system
+        .assert_delegations(validators[0], 0, 20, parse_ether("100")?)
+        .await?;
+
+    Ok(())
 }
 
 #[test_log::test(tokio::test)]
@@ -928,6 +985,10 @@ async fn test_demo_multiple_delegator_batches() -> Result<()> {
 
     let num_delegators = 3u64;
     let amount = "100";
+    let log_dir = tempfile::tempdir()?;
+    let delegate_log1 = log_dir.path().join("delegate_log1.json");
+    let delegate_log2 = log_dir.path().join("delegate_log2.json");
+    let undelegate_log = log_dir.path().join("undelegate_log.json");
 
     // First batch: delegators 0, 1, 2
     system
@@ -944,6 +1005,8 @@ async fn test_demo_multiple_delegator_batches() -> Result<()> {
         .arg(amount)
         .arg("--max-amount")
         .arg(amount)
+        .arg("--log-path")
+        .arg(&delegate_log1)
         .assert()
         .success();
 
@@ -966,6 +1029,8 @@ async fn test_demo_multiple_delegator_batches() -> Result<()> {
         .arg(amount)
         .arg("--max-amount")
         .arg(amount)
+        .arg("--log-path")
+        .arg(&delegate_log2)
         .assert()
         .success();
 
@@ -989,6 +1054,8 @@ async fn test_demo_multiple_delegator_batches() -> Result<()> {
         .arg("3")
         .arg("--num-delegators")
         .arg(num_delegators.to_string())
+        .arg("--log-path")
+        .arg(&undelegate_log)
         .assert()
         .success();
 
