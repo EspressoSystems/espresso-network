@@ -20,7 +20,7 @@ use crate::concurrent::map_concurrent;
 
 const MAX_RETRIES: u32 = 10;
 pub const DEFAULT_CONCURRENCY: usize = 20;
-pub const DEFAULT_GAS_LIMIT: u64 = 1_000_000;
+const DEFAULT_GAS_LIMIT: u64 = 1_000_000;
 
 /// Geth's default txpool pending limit per account.
 /// Beyond this, transactions go to the "queued" pool where they cannot
@@ -118,10 +118,6 @@ impl TxLog {
             .filter(|tx| tx.phase == phase)
             .collect()
     }
-}
-
-pub fn max_retries() -> u32 {
-    MAX_RETRIES
 }
 
 pub struct TxParams {
@@ -323,16 +319,95 @@ pub async fn get_receipt_with_retry(
     }
 }
 
-pub async fn get_confirmed_receipt(
-    provider: &impl Provider,
-    tx_hash: TxHash,
-) -> Result<alloy::rpc::types::TransactionReceipt> {
-    let receipt = get_receipt_with_retry(provider, tx_hash).await?;
-    let receipt = receipt.ok_or_else(|| anyhow::anyhow!("no receipt for tx {}", tx_hash))?;
-    if !receipt.status() {
-        bail!("tx {} failed (reverted)", tx_hash);
+/// Execute transactions from a single sender in nonce-ordered batches.
+/// Submits batches of GETH_PENDING_LIMIT txs, waiting for submission (not confirmation)
+/// before starting the next batch. This ensures geth sees consecutive nonces together.
+async fn execute_single_sender_batched<P: Provider + Clone + 'static>(
+    provider: P,
+    phase: TxPhase,
+    mut txs: Vec<SignedTx>,
+    parallelism: usize,
+) -> Result<()> {
+    let total = txs.len();
+
+    // Sort by nonce to ensure consecutive ordering
+    txs.sort_by_key(|tx| tx.nonce);
+
+    // Submit in batches, waiting only for RPC completion (not confirmation)
+    let mut submitted = 0;
+    for batch in txs.chunks(GETH_PENDING_LIMIT) {
+        map_concurrent(
+            &format!("{} submitting", phase),
+            batch.iter().cloned(),
+            parallelism,
+            {
+                let provider = provider.clone();
+                move |tx: SignedTx| {
+                    let provider = provider.clone();
+                    async move {
+                        submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await?;
+
+        submitted += batch.len();
+        tracing::info!("phase {}: submitted {}/{}", phase, submitted, total);
     }
-    Ok(receipt)
+
+    // Confirmation loop with resubmission
+    let mut unconfirmed = txs;
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let results = map_concurrent(
+            &format!("{} confirming", phase),
+            unconfirmed.iter().cloned(),
+            parallelism,
+            {
+                let provider = provider.clone();
+                move |tx: SignedTx| {
+                    let provider = provider.clone();
+                    async move {
+                        let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
+                        if let Some(r) = &receipt {
+                            if !r.status() {
+                                bail!("tx {} reverted", tx.tx_hash);
+                            }
+                        }
+                        Ok((tx, receipt.is_some()))
+                    }
+                }
+            },
+        )
+        .await?;
+
+        unconfirmed = results
+            .into_iter()
+            .filter_map(|(tx, confirmed)| if confirmed { None } else { Some(tx) })
+            .collect();
+
+        if unconfirmed.is_empty() {
+            tracing::info!("phase {}: all {} txs confirmed", phase, total);
+            break;
+        }
+
+        tracing::debug!(
+            "phase {}: {} unconfirmed, resubmitting",
+            phase,
+            unconfirmed.len()
+        );
+
+        // Resubmit unconfirmed in nonce order (sort to be safe)
+        unconfirmed.sort_by_key(|tx| tx.nonce);
+        for tx in &unconfirmed {
+            let _ = submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await;
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
@@ -352,17 +427,18 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
 
     for phase in phases {
         let phase_txs = log.transactions_for_phase(phase);
+        let phase_total = phase_txs.len();
 
         if phase_txs.is_empty() {
             continue;
         }
 
-        tracing::info!("phase {}: {} txs", phase, phase_txs.len());
+        tracing::info!("phase {}: {} txs", phase, phase_total);
 
         // Step 1: Check which txs are already confirmed
         let results = map_concurrent(
             &format!("{} checking", phase),
-            phase_txs.iter().cloned().cloned(),
+            phase_txs.into_iter().cloned(),
             parallelism,
             {
                 let provider = provider.clone();
@@ -406,35 +482,17 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
         }
 
         // Detect single-sender phase (e.g., FundEth/FundEsp from funder account)
-        // For single-sender with many txs, batch to avoid geth queue limits
         let senders: HashSet<_> = to_submit.iter().map(|tx| tx.from).collect();
-        let use_batching = senders.len() == 1 && to_submit.len() > GETH_PENDING_LIMIT;
+        let is_single_sender = senders.len() == 1 && to_submit.len() > GETH_PENDING_LIMIT;
 
-        let batches: Vec<Vec<SignedTx>> = if use_batching {
-            to_submit
-                .chunks(GETH_PENDING_LIMIT)
-                .map(|c| c.to_vec())
-                .collect()
+        if is_single_sender {
+            // Use nonce-ordered batching for single-sender phases
+            execute_single_sender_batched(provider.clone(), phase, to_submit, parallelism).await?;
         } else {
-            vec![to_submit]
-        };
-
-        let num_batches = batches.len();
-        for (batch_idx, batch) in batches.into_iter().enumerate() {
-            if num_batches > 1 {
-                tracing::info!(
-                    "phase {}: batch {}/{} ({} txs)",
-                    phase,
-                    batch_idx + 1,
-                    num_batches,
-                    batch.len()
-                );
-            }
-
-            // Step 2: Submit batch
+            // Multi-sender phases: submit all in parallel, then confirm
             map_concurrent(
                 &format!("{} submitting", phase),
-                batch.clone(),
+                to_submit.clone(),
                 parallelism,
                 {
                     let provider = provider.clone();
@@ -449,8 +507,8 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
             )
             .await?;
 
-            // Step 3: Confirm loop for this batch
-            let mut unconfirmed = batch;
+            // Confirm loop
+            let mut unconfirmed = to_submit;
             loop {
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -483,27 +541,19 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
                     .collect();
 
                 if unconfirmed.is_empty() {
-                    if num_batches > 1 {
-                        tracing::info!(
-                            "phase {}: batch {}/{} confirmed",
-                            phase,
-                            batch_idx + 1,
-                            num_batches
-                        );
-                    } else {
-                        tracing::info!("phase {}: all {} txs confirmed", phase, phase_txs.len());
-                    }
+                    tracing::info!("phase {}: all {} txs confirmed", phase, phase_total);
                     break;
                 }
 
-                // Resubmit unconfirmed (they may have been dropped)
+                // Resubmit unconfirmed in parallel, sorted by (from, nonce)
                 tracing::debug!(
                     "phase {}: {} unconfirmed, resubmitting",
                     phase,
                     unconfirmed.len()
                 );
 
-                map_concurrent(
+                unconfirmed.sort_by_key(|tx| (tx.from, tx.nonce));
+                let _ = map_concurrent(
                     &format!("{} resubmitting", phase),
                     unconfirmed.iter().cloned(),
                     parallelism,
@@ -512,13 +562,14 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
                         move |tx: SignedTx| {
                             let provider = provider.clone();
                             async move {
-                                submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
-                                Ok(())
+                                let _ = submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash)
+                                    .await;
+                                Ok::<_, anyhow::Error>(())
                             }
                         }
                     },
                 )
-                .await?;
+                .await;
             }
         }
     }
