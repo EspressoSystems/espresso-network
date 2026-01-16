@@ -5,10 +5,12 @@ use std::{
     time::Duration,
 };
 
+use bimap::BiHashMap;
 use bon::Builder;
 use bytes::{Bytes, BytesMut};
 use parking_lot::Mutex;
 use serde::{de::DeserializeOwned, Serialize};
+use snow::{Builder, HandshakeState, TransportState};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -27,14 +29,23 @@ use crate::{
     error::Empty,
     frame::{Header, Type},
     time::{Countdown, Timestamp},
-    Address, Id, NetworkError, Role, MAX_MESSAGE_SIZE,
+    Address, Id, NetworkError, Role, MAX_MESSAGE_SIZE, Keypair, PublicKey
 };
 
 type Budget = Arc<Semaphore>;
 type Result<T> = std::result::Result<T, NetworkError>;
 
+/// Max. message size using noise handshake.
+const MAX_NOISE_HANDSHAKE_SIZE: usize = 1024;
+
+/// Max. message size using noise protocol.
+const MAX_NOISE_MESSAGE_SIZE: usize = 64 * 1024;
+
 /// Max. number of bytes for payload data.
-const MAX_PAYLOAD_SIZE: usize = u16::MAX as usize;
+const MAX_PAYLOAD_SIZE: usize = 63 * 1024;
+
+/// Noise parameters to initialize the builders.
+const NOISE_PARAMS: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
 
 /// Interval between ping protocol.
 const PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -90,12 +101,15 @@ pub struct NetConf<K> {
     /// Network public key.
     label: K,
 
+    /// DH keypair
+    keypair: Keypair,
+
     /// Address to bind to.
     bind: Address,
 
     /// Committee members with key material and bind address.
     #[builder(with = <_>::from_iter)]
-    parties: Vec<(K, Address)>,
+    parties: Vec<(K, PublicKey, Address)>,
 
     /// Total egress channel capacity.
     ///
@@ -132,7 +146,7 @@ impl<K> NetConf<K> {
 #[derive(Debug)]
 pub(crate) enum Command<K> {
     /// Add the given peers.
-    Add(Vec<(K, Address)>),
+    Add(Vec<(K, PublicKey, Address)>),
     /// Remove the given peers.
     Remove(Vec<K>),
     /// Assign a `Role` to the given peers.
@@ -167,6 +181,10 @@ struct Server<K> {
     /// All parties of the network and their addresses.
     peers: HashMap<K, Peer>,
 
+    /// Bi-directional mapping of signing key and X25519 keys to identify
+    /// remote parties.
+    index: BiHashMap<K, PublicKey>,
+
     /// Find the public key given a tokio task ID.
     task2key: HashMap<task::Id, K>,
 
@@ -177,10 +195,10 @@ struct Server<K> {
     active: HashMap<K, IoTask>,
 
     /// Tasks performing a handshake with a remote party.
-    handshake_tasks: JoinSet<Result<(TcpStream, K)>>,
+    handshake_tasks: JoinSet<Result<(TcpStream, TransportState)>>,
 
     /// Tasks connecting to a remote party and performing a handshake.
-    connect_tasks: JoinSet<(TcpStream, K)>,
+    connect_tasks: JoinSet<(TcpStream, TransportState)>,
 
     /// Active I/O tasks, exchanging data with remote parties.
     io_tasks: JoinSet<Result<()>>,
@@ -256,9 +274,11 @@ where
 
         let mut parties = HashMap::new();
         let mut peers = HashMap::new();
+        let mut index = BiHashMap::new();
 
-        for (k, a) in cfg.parties.iter().cloned() {
+        for (k, x, a) in cfg.parties.iter().cloned() {
             parties.insert(k.clone(), Role::Active);
+            index.insert(k.clone(), x);
             peers.insert(
                 k,
                 Peer {
@@ -286,6 +306,7 @@ where
             ibound: itx,
             obound: orx,
             peers,
+            index,
             connecting: HashMap::new(),
             active: HashMap::new(),
             task2key: HashMap::new(),
@@ -367,7 +388,7 @@ where
     ///
     /// NB that peers added here are passive. See `Network::assign` for
     /// giving peers a different `Role`.
-    pub async fn add(&self, peers: Vec<(K, Address)>) -> Result<()> {
+    pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
         self.parties
             .lock()
             .extend(peers.iter().map(|(p, ..)| (p.clone(), Role::Passive)));
@@ -475,11 +496,12 @@ where
                 },
                 // The handshake of an inbound connection completed.
                 Some(h) = self.handshake_tasks.join_next() => match h {
-                    Ok(Ok((s, k))) => {
-                        let Some(peer) = self.lookup_peer(&k) else {
+                    Ok(Ok((s, t))) => {
+                        let Some((k, peer)) = self.lookup_peer(&t) else {
                             info!(
                                 name = %self.conf.name,
                                 node = %self.conf.label,
+                                peer = ?t.get_remote_static().and_then(|k| PublicKey::try_from(k).ok()),
                                 addr = ?s.peer_addr().ok(),
                                 "unknown peer"
                             );
@@ -498,7 +520,7 @@ where
                         // is larger than ours, or if we do not have a connection for
                         // that key at the moment.
                         if k > self.conf.label || !self.active.contains_key(&k) {
-                            self.spawn_io(k, s, peer.budget.clone())
+                            self.spawn_io(k, s, t, peer.budget.clone())
                         } else {
                             debug!(
                                 name = %self.conf.name,
@@ -530,12 +552,13 @@ where
                 // One of our connection attempts completed.
                 Some(tt) = self.connect_tasks.join_next_with_id() => {
                     match tt {
-                        Ok((id, (s, k))) => {
+                        Ok((id, (s, t))) => {
                             self.on_connect_task_end(id);
-                            let Some(peer) = self.lookup_peer(&k) else {
+                            let Some((k, peer)) = self.lookup_peer(&t) else {
                                 warn!(
                                     name = %self.conf.name,
                                     node = %self.conf.label,
+                                    peer = ?t.get_remote_static().and_then(|k| PublicKey::try_from(k).ok()),
                                     addr = ?s.peer_addr().ok(),
                                     "connected to unknown peer"
                                 );
@@ -544,7 +567,7 @@ where
                             // We only keep the connection if our key is larger than the remote,
                             // or if we do not have a connection for that key at the moment.
                             if k < self.conf.label || !self.active.contains_key(&k) {
-                                self.spawn_io(k, s, peer.budget.clone())
+                                self.spawn_io(k, s, t, peer.budget.clone())
                             } else {
                                 debug!(
                                     name = %self.conf.name,
@@ -603,7 +626,7 @@ where
                 },
                 cmd = self.obound.recv() => match cmd {
                     Some(Command::Add(peers)) => {
-                        for (k, a) in peers {
+                        for (k, x, a) in peers {
                             if self.peers.contains_key(&k) {
                                 warn!(
                                     name = %self.conf.name,
@@ -625,6 +648,7 @@ where
                                 budget: self.conf.new_budget()
                             };
                             self.peers.insert(k.clone(), p);
+                            self.index.insert(k.clone(), x);
                             self.spawn_connect(k)
                         }
                     }
@@ -637,6 +661,7 @@ where
                                 "removing peer"
                             );
                             self.peers.remove(k);
+                            self.index.remove_by_left(k);
                             self.connecting.remove(k);
                             self.active.remove(k);
                         }
@@ -837,11 +862,12 @@ where
             );
             return;
         }
+        let x = self.index.get_by_left(&k).expect("known public key");
         let p = self.peers.get(&k).expect("known peer");
         let h = self.connect_tasks.spawn(connect(
             self.conf.name,
-            self.conf.label.clone(),
-            k.clone(),
+            (self.conf.label.clone(), self.conf.keypair.clone()),
+            (k.clone(), *x),
             p.addr.clone(),
         ));
         assert!(self.task2key.insert(h.id(), k.clone()).is_none());
@@ -854,9 +880,15 @@ where
     /// own private key and then spawn a task that awaits an initiator handshake
     /// to which it will respond.
     fn spawn_handshake(&mut self, s: TcpStream) {
-        let ours = self.conf.label.clone();
+        let h = Builder::new(NOISE_PARAMS.parse().expect("valid noise params"))
+            .local_private_key(&self.conf.keypair.secret_key().as_bytes())
+            .expect("valid private key")
+            .prologue(self.conf.name.as_bytes())
+            .expect("1st time we set the prologue")
+            .build_responder()
+            .expect("valid noise params yield valid handshake state");
         self.handshake_tasks.spawn(async move {
-            timeout(HANDSHAKE_TIMEOUT, on_handshake(ours, s))
+            timeout(HANDSHAKE_TIMEOUT, on_handshake(h, s))
                 .await
                 .or(Err(NetworkError::Timeout))?
         });
@@ -865,7 +897,7 @@ where
     /// Spawns a new I/O task for handling communication with a remote peer over
     /// a TCP connection using the noise framework to create an authenticated
     /// secure link.
-    fn spawn_io(&mut self, k: K, s: TcpStream, b: Budget) {
+    fn spawn_io(&mut self, k: K, s: TcpStream, t: TransportState, b: Budget) {
         debug!(
             name = %self.conf.name,
             node = %self.conf.label,
@@ -875,6 +907,8 @@ where
         );
         let (to_remote, from_remote) = chan::channel(self.conf.peer_capacity_egress);
         let (r, w) = s.into_split();
+        let t1 = Arc::new(Mutex::new(t));
+        let t2 = t1.clone();
         let ibound = self.ibound.clone();
         let to_write = to_remote.clone();
         let countdown = Countdown::new();
@@ -882,12 +916,15 @@ where
             self.conf.name,
             k.clone(),
             r,
+            t1,
             ibound,
             to_write,
             b,
             countdown.clone(),
         ));
-        let wh = self.io_tasks.spawn(send_loop(w, from_remote, countdown));
+        let wh = self
+            .io_tasks
+            .spawn(send_loop(w, t2, from_remote, countdown));
         assert!(self.task2key.insert(rh.id(), k.clone()).is_none());
         assert!(self.task2key.insert(wh.id(), k.clone()).is_none());
         let io = IoTask {
@@ -899,8 +936,11 @@ where
     }
 
     /// Get the public key of a party by their static X25519 public key.
-    fn lookup_peer(&self, k: &K) -> Option<&Peer> {
-        self.peers.get(k)
+    fn lookup_peer(&self, t: &TransportState) -> Option<(K, &Peer)> {
+        let x = t.get_remote_static()?;
+        let x = PublicKey::try_from(x).ok()?;
+        let k = self.index.get_by_right(&x)?;
+        self.peers.get(k).map(|p| (k.clone(), p))
     }
 
     /// Check if the socket's peer IP address corresponds to the configured one.
@@ -921,11 +961,28 @@ where
 ///
 /// This function will only return, when a connection has been established and the handshake
 /// has been completed.
-async fn connect<K>(name: &'static str, this: K, to: K, addr: Address) -> (TcpStream, K)
+async fn connect<K>(
+    name: &'static str,
+    this: (K, Keypair),
+    to: (K, PublicKey),
+    addr: Address,
+) -> (TcpStream, TransportState)
 where
     K: Display + Serialize + DeserializeOwned + PartialEq + Send + Clone,
 {
     use rand::prelude::*;
+
+    let new_handshake_state = || {
+        Builder::new(NOISE_PARAMS.parse().expect("valid noise params"))
+            .local_private_key(this.1.secret_key().as_slice())
+            .expect("valid private key")
+            .remote_public_key(to.1.as_slice())
+            .expect("valid remote pub key")
+            .prologue(name.as_bytes())
+            .expect("1st time we set the prologue")
+            .build_initiator()
+            .expect("valid noise params yield valid handshake state")
+    };
 
     let i = rand::rng().random_range(0..=1000);
     let addr = addr.to_string();
@@ -935,70 +992,69 @@ where
         .chain(repeat(30_000))
     {
         sleep(Duration::from_millis(d)).await;
-        debug!(%name, node = %this, peer = %to, %addr, "connecting");
+        debug!(%name, node = %this.0, peer = %to.0, %addr, "connecting");
         match timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await {
             Ok(Ok(s)) => {
                 if let Err(err) = s.set_nodelay(true) {
-                    error!(%name, node = %this, %err, "failed to set NO_DELAY socket option");
+                    error!(%name, node = %this.0, %err, "failed to set NO_DELAY socket option");
                     continue;
                 }
-                match timeout(HANDSHAKE_TIMEOUT, handshake(this.clone(), s)).await {
-                    Ok(Ok((s, x))) if x == to => {
-                        debug!(%name, node = %this, peer = %to, %addr, "connection established");
-                        return (s, x);
-                    },
-                    Ok(Ok((_, x))) => {
-                        error!(%name, node = %this, peer = %to, actual = %x, %addr, "peer id mismatch");
-                    },
+                match timeout(HANDSHAKE_TIMEOUT, handshake(new_handshake_state(), s)).await {
+                    Ok(Ok(x)) => {
+                        debug!(%name, node = %this.0, peer = %to.0, %addr, "connection established");
+                        return x;
+                    }
                     Ok(Err(err)) => {
-                        warn!(%name, node = %this, peer = %to, %addr, %err, "handshake failure");
-                    },
+                        warn!(%name, node = %this.0, peer = %to.0, %addr, %err, "handshake failure");
+                    }
                     Err(_) => {
-                        warn!(%name, node = %this, peer = %to, %addr, "handshake timeout");
-                    },
+                        warn!(%name, node = %this.0, peer = %to.0, %addr, "handshake timeout");
+                    }
                 }
-            },
+            }
             Ok(Err(err)) => {
-                warn!(%name, node = %this, peer = %to, %addr, %err, "failed to connect");
-            },
+                warn!(%name, node = %this.0, peer = %to.0, %addr, %err, "failed to connect");
+            }
             Err(_) => {
-                warn!(%name, node = %this, peer = %to, %addr, "connect timeout");
-            },
+                warn!(%name, node = %this.0, peer = %to.0, %addr, "connect timeout");
+            }
         }
     }
 
     unreachable!("for loop repeats forever")
 }
 
-/// Perform a handshake as initiator with the remote party.
-async fn handshake<K>(ours: K, mut stream: TcpStream) -> Result<(TcpStream, K)>
-where
-    K: Serialize + DeserializeOwned,
-{
-    let hello = bincode::serialize(&ours)?;
-    send_frame(&mut stream, Header::data(hello.len() as u16), &hello).await?;
+/// Perform a noise handshake as initiator with the remote party.
+async fn handshake(
+    mut hs: HandshakeState,
+    mut stream: TcpStream
+) -> Result<(TcpStream, TransportState)> {
+    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
+    let n = hs.write_message(&[], &mut b)?;
+    send_frame(&mut stream, Header::data(n as u16), &b[..n]).await?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    let theirs = bincode::deserialize(&m)?;
-    Ok((stream, theirs))
+    hs.read_message(&m, &mut b)?;
+    Ok((stream, hs.into_transport_mode()?))
 }
 
-/// Perform a handshake as responder with a remote party.
-async fn on_handshake<K>(ours: K, mut stream: TcpStream) -> Result<(TcpStream, K)>
-where
-    K: Serialize + DeserializeOwned,
-{
+/// Perform a noise handshake as responder with a remote party.
+async fn on_handshake(
+    mut hs: HandshakeState,
+    mut stream: TcpStream
+) -> Result<(TcpStream, TransportState)> {
     stream.set_nodelay(true)?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    let theirs = bincode::deserialize(&m)?;
-    let hello = bincode::serialize(&ours)?;
-    send_frame(&mut stream, Header::data(hello.len() as u16), &hello).await?;
-    Ok((stream, theirs))
+    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
+    hs.read_message(&m, &mut b)?;
+    let n = hs.write_message(&[], &mut b)?;
+    send_frame(&mut stream, Header::data(n as u16), &b[..n]).await?;
+    Ok((stream, hs.into_transport_mode()?))
 }
 
 /// Read messages from the remote by assembling frames together.
@@ -1009,6 +1065,7 @@ async fn recv_loop<R, K>(
     name: &'static str,
     id: K,
     mut reader: R,
+    state: Arc<Mutex<TransportState>>,
     to_deliver: Sender<(K, Bytes, Option<OwnedSemaphorePermit>)>,
     to_writer: chan::Sender<Message>,
     budget: Arc<Semaphore>,
@@ -1018,6 +1075,7 @@ where
     R: AsyncRead + Unpin,
     K: Display + Clone,
 {
+    let mut buf = vec![0; MAX_NOISE_MESSAGE_SIZE];
     loop {
         let permit = budget
             .clone()
@@ -1033,17 +1091,22 @@ where
                         Ok((h, f)) => {
                             match h.frame_type() {
                                 Ok(Type::Ping) => {
-                                    if let Some(ping) = Timestamp::try_from_slice(&f) {
+                                    // Received ping message; sending pong to writer
+                                    let n = state.lock().read_message(&f, &mut buf)?;
+                                    if let Some(ping) = Timestamp::try_from_slice(&buf[..n]) {
                                         to_writer.send(None, Message::Pong(ping))
                                     }
                                 }
                                 Ok(Type::Pong) => {
-                                    if let Some(_) = Timestamp::try_from_slice(&f) {
-                                        // update metrics
+                                    // Received pong message; measure elapsed time
+                                    let _n = state.lock().read_message(&f, &mut buf)?;
+                                    if let Some(_ping) = Timestamp::try_from_slice(&buf[.._n]) {
+                                        // TODO: update metrics
                                     }
                                 }
                                 Ok(Type::Data) => {
-                                    msg.extend_from_slice(&f);
+                                    let n = state.lock().read_message(&f, &mut buf)?;
+                                    msg.extend_from_slice(&buf[..n]);
                                     if !h.is_partial() {
                                         break;
                                     }
@@ -1078,34 +1141,42 @@ where
 ///
 /// The function automatically splits large messages into chunks that fit into
 /// a noise package.
-async fn send_loop<W>(mut writer: W, rx: chan::Receiver<Message>, ctr: Countdown) -> Result<()>
+async fn send_loop<W>(
+    mut writer: W,
+    state: Arc<Mutex<TransportState>>,
+    rx: chan::Receiver<Message>,
+    countdown: Countdown,
+) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
+    let mut buf = vec![0; MAX_NOISE_MESSAGE_SIZE];
+
     while let Some(msg) = rx.recv().await {
         match msg {
             Message::Ping(ping) => {
-                let b = ping.to_bytes();
-                let h = Header::ping(b.len() as u16);
-                send_frame(&mut writer, h, &b).await?;
-                ctr.start(REPLY_TIMEOUT)
-            },
+                let n = state.lock().write_message(&ping.to_bytes()[..], &mut buf)?;
+                let h = Header::ping(n as u16);
+                send_frame(&mut writer, h, &buf[..n]).await?;
+                countdown.start(REPLY_TIMEOUT)
+            }
             Message::Pong(pong) => {
-                let b = pong.to_bytes();
-                let h = Header::pong(b.len() as u16);
-                send_frame(&mut writer, h, &b).await?;
-            },
+                let n = state.lock().write_message(&pong.to_bytes()[..], &mut buf)?;
+                let h = Header::pong(n as u16);
+                send_frame(&mut writer, h, &buf[..n]).await?;
+            }
             Message::Data(msg) => {
                 let mut it = msg.chunks(MAX_PAYLOAD_SIZE).peekable();
                 while let Some(m) = it.next() {
+                    let n = state.lock().write_message(m, &mut buf)?;
                     let h = if it.peek().is_some() {
-                        Header::data(m.len() as u16).partial()
+                        Header::data(n as u16).partial()
                     } else {
-                        Header::data(m.len() as u16)
+                        Header::data(n as u16)
                     };
-                    send_frame(&mut writer, h, &m).await?
+                    send_frame(&mut writer, h, &buf[..n]).await?
                 }
-            },
+            }
         }
     }
     Ok(())

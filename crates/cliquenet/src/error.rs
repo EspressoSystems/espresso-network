@@ -30,6 +30,10 @@ pub enum NetworkError {
     #[error("bincode error: {0}")]
     Bincode(#[from] bincode::Error),
 
+    /// Generic Noise error.
+    #[error("noise error: {0}")]
+    Noise(#[from] snow::Error),
+
     /// The Noise handshake message is not valid.
     #[error("invalid handshake message")]
     InvalidHandshakeMessage,

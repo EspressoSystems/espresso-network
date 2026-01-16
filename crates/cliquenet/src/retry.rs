@@ -24,7 +24,7 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::{net::Command, Address, Id, Network, Role};
+use crate::{net::Command, Address, Id, Network, PublicKey, Role};
 
 type Result<T> = std::result::Result<T, NetworkDown>;
 
@@ -171,7 +171,7 @@ where
         self.send(b.into(), Target::Single(to), data).await
     }
 
-    pub async fn add(&self, peers: Vec<(K, Address)>) -> Result<()> {
+    pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
         self.inner.net.add(peers).await.map_err(|_| NetworkDown(()))
     }
 

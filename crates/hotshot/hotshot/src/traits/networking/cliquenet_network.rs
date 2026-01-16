@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use cliquenet::{retry::Data, Address, NetConf, Network, Retry};
+use cliquenet::{retry::Data, Address, Keypair, NetConf, Network, PublicKey, Retry, SecretKey};
 use futures::future::ready;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
@@ -16,7 +16,7 @@ use hotshot_types::{
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::NodeType,
-        signature_key::SignatureKey,
+        signature_key::{PrivateSignatureKey, SignatureKey},
     },
     BoxSyncFuture,
 };
@@ -29,20 +29,22 @@ pub struct Cliquenet<T: NodeType> {
 impl<T: NodeType> Cliquenet<T> {
     pub async fn create<A, B, P>(
         name: &'static str,
-        k: T::SignatureKey,
+        key: T::SignatureKey,
+        keypair: Keypair,
         addr: A,
-        parties: P,
+        parties: P
     ) -> Result<Self, NetworkError>
     where
         A: Into<Address>,
         B: Into<Address>,
-        P: IntoIterator<Item = (T::SignatureKey, B)>,
+        P: IntoIterator<Item = (T::SignatureKey, PublicKey, B)>,
     {
         let cfg = NetConf::builder()
             .name(name)
-            .label(k)
+            .label(key)
+            .keypair(keypair)
             .bind(addr.into())
-            .parties(parties.into_iter().map(|(k, a)| (k, a.into())))
+            .parties(parties.into_iter().map(|(k, x, a)| (k, x, a.into())))
             .build();
         let net = Network::create(cfg)
             .await
@@ -51,6 +53,12 @@ impl<T: NodeType> Cliquenet<T> {
             net: Retry::new(net),
         })
     }
+}
+
+pub fn derive_keypair<K: SignatureKey>(k: &K::PrivateKey) -> Keypair {
+    SecretKey::from(blake3::derive_key("cliquenet key", &k.to_bytes())).into()
+
+
 }
 
 #[async_trait]
@@ -139,10 +147,11 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
 
             let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
             let public = T::SignatureKey::from_private(&secret);
+            let kpair = derive_keypair::<<T as NodeType>::SignatureKey>(&secret);
             let port = portpicker::pick_unused_port().expect("an unused port is available");
             let addr = Address::Inet(Ipv4Addr::LOCALHOST.into(), port);
 
-            parties.push((secret, public, addr));
+            parties.push((kpair, public, addr));
         }
 
         let parties = Arc::new(parties);
@@ -150,9 +159,9 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
         Box::pin(move |i| {
             let parties = parties.clone();
             let future = async move {
-                let (_, k, a) = &parties[i as usize];
-                let it = parties.iter().map(|(_, k, a)| (k.clone(), a.clone()));
-                let net = Cliquenet::create("test", k.clone(), a.clone(), it)
+                let (s, k, a) = &parties[i as usize];
+                let it = parties.iter().map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
+                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it)
                     .await
                     .unwrap();
                 Arc::new(net)
