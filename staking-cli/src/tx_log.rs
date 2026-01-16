@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -11,10 +12,14 @@ use alloy::{
     network::{EthereumWallet, TransactionBuilder as _},
     primitives::{Address, Bytes, TxHash, U256},
     providers::Provider,
-    rpc::types::TransactionRequest,
+    rpc::types::{TransactionReceipt, TransactionRequest},
 };
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+use tokio::{
+    sync::{OwnedSemaphorePermit, Semaphore},
+    task::JoinSet,
+};
 
 use crate::concurrent::map_concurrent;
 
@@ -26,6 +31,14 @@ const DEFAULT_GAS_LIMIT: u64 = 1_000_000;
 /// Beyond this, transactions go to the "queued" pool where they cannot
 /// be reliably tracked via eth_getTransactionByHash.
 const GETH_PENDING_LIMIT: usize = 64;
+
+/// Maximum unconfirmed transactions in flight (outer semaphore).
+/// Provides backpressure: we don't submit faster than confirmations.
+/// Set high enough that blocks are mostly full (~1000 txs/sec throughput).
+const MAX_UNCONFIRMED: usize = 4000;
+
+/// Timeout for waiting on a single transaction confirmation.
+const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
@@ -319,97 +332,97 @@ pub async fn get_receipt_with_retry(
     }
 }
 
-/// Execute transactions from a single sender in nonce-ordered batches.
-/// Submits batches of GETH_PENDING_LIMIT txs, waiting for submission (not confirmation)
-/// before starting the next batch. This ensures geth sees consecutive nonces together.
+/// Wait for a transaction to be confirmed, holding the permit until confirmation.
+/// Returns the receipt on success, releases permit on drop. Times out after CONFIRMATION_TIMEOUT.
+async fn wait_for_confirmation<P: Provider>(
+    provider: P,
+    tx: SignedTx,
+    _permit: OwnedSemaphorePermit,
+) -> Result<TransactionReceipt> {
+    let start = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if let Some(receipt) = get_receipt_with_retry(&provider, tx.tx_hash).await? {
+            if !receipt.status() {
+                bail!("tx {} reverted", tx.tx_hash);
+            }
+            return Ok(receipt);
+        }
+        if start.elapsed() > CONFIRMATION_TIMEOUT {
+            bail!(
+                "tx {} not confirmed after {:?}",
+                tx.tx_hash,
+                CONFIRMATION_TIMEOUT
+            );
+        }
+    }
+}
+
+/// Execute transactions from a single sender with backpressure.
+/// Uses semaphore to limit unconfirmed txs, batches of 64 to avoid geth txpool drops.
 async fn execute_single_sender_batched<P: Provider + Clone + 'static>(
     provider: P,
     phase: TxPhase,
     mut txs: Vec<SignedTx>,
-    parallelism: usize,
 ) -> Result<()> {
     let total = txs.len();
+    let unconfirmed_sem = Arc::new(Semaphore::new(MAX_UNCONFIRMED));
 
-    // Sort by nonce to ensure consecutive ordering
+    // Sort by nonce
     txs.sort_by_key(|tx| tx.nonce);
 
-    // Submit in batches, waiting only for RPC completion (not confirmation)
+    let mut confirm_tasks: JoinSet<Result<TransactionReceipt>> = JoinSet::new();
     let mut submitted = 0;
+
     for batch in txs.chunks(GETH_PENDING_LIMIT) {
-        map_concurrent(
-            &format!("{} submitting", phase),
-            batch.iter().cloned(),
-            parallelism,
-            {
-                let provider = provider.clone();
-                move |tx: SignedTx| {
-                    let provider = provider.clone();
-                    async move {
-                        submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
-                        Ok(())
-                    }
-                }
-            },
-        )
-        .await?;
+        // Acquire permits for batch (blocks if would exceed MAX_UNCONFIRMED)
+        let mut permits = vec![];
+        for _ in 0..batch.len() {
+            permits.push(unconfirmed_sem.clone().acquire_owned().await?);
+        }
+
+        // Submit batch
+        for tx in batch {
+            submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
+        }
 
         submitted += batch.len();
         tracing::info!("phase {}: submitted {}/{}", phase, submitted, total);
+
+        // Spawn confirm tasks (release permit on confirmation)
+        for (tx, permit) in batch.iter().cloned().zip(permits) {
+            let provider = provider.clone();
+            confirm_tasks.spawn(async move { wait_for_confirmation(provider, tx, permit).await });
+        }
     }
 
-    // Confirmation loop with resubmission
-    let mut unconfirmed = txs;
-    loop {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        let results = map_concurrent(
-            &format!("{} confirming", phase),
-            unconfirmed.iter().cloned(),
-            parallelism,
-            {
-                let provider = provider.clone();
-                move |tx: SignedTx| {
-                    let provider = provider.clone();
-                    async move {
-                        let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
-                        if let Some(r) = &receipt {
-                            if !r.status() {
-                                bail!("tx {} reverted", tx.tx_hash);
-                            }
-                        }
-                        Ok((tx, receipt.is_some()))
-                    }
-                }
-            },
-        )
-        .await?;
-
-        unconfirmed = results
-            .into_iter()
-            .filter_map(|(tx, confirmed)| if confirmed { None } else { Some(tx) })
-            .collect();
-
-        if unconfirmed.is_empty() {
-            tracing::info!("phase {}: all {} txs confirmed", phase, total);
-            break;
-        }
-
-        tracing::debug!(
-            "phase {}: {} unconfirmed, resubmitting",
-            phase,
-            unconfirmed.len()
-        );
-
-        // Resubmit unconfirmed in nonce order (sort to be safe)
-        unconfirmed.sort_by_key(|tx| tx.nonce);
-        for tx in &unconfirmed {
-            let _ = submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await;
+    // Wait for all confirmations (aborts all on first failure)
+    let mut confirmed = 0;
+    while let Some(result) = confirm_tasks.join_next().await {
+        result??;
+        confirmed += 1;
+        if confirmed % 100 == 0 || confirmed == total {
+            tracing::info!("phase {}: confirmed {}/{}", phase, confirmed, total);
         }
     }
 
     Ok(())
 }
 
+/// Execute pre-signed transactions with two-level flow control:
+///
+/// 1. **Outer semaphore** (`MAX_UNCONFIRMED`): Limits total unconfirmed txs in flight.
+///    Provides backpressure - submission pauses when confirmations lag behind.
+///    Set high enough to keep blocks full (~2000 txs for ~1000 tx/sec throughput).
+///
+/// 2. **Inner semaphore** (`parallelism`): Limits concurrent RPC requests to the node.
+///    Prevents overwhelming the RPC endpoint with too many simultaneous calls.
+///
+/// For single-sender phases (FundEth, FundEsp): submits in batches of 64 to avoid
+/// geth txpool drops, with outer semaphore for backpressure.
+///
+/// For multi-sender phases (Approve, Delegate): spawns one task per tx, both
+/// semaphores control submission rate and RPC load.
 pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
     provider: P,
     log: &TxLog,
@@ -486,90 +499,41 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
         let is_single_sender = senders.len() == 1 && to_submit.len() > GETH_PENDING_LIMIT;
 
         if is_single_sender {
-            // Use nonce-ordered batching for single-sender phases
-            execute_single_sender_batched(provider.clone(), phase, to_submit, parallelism).await?;
+            // Use batching for single-sender phases (avoids geth txpool drops)
+            execute_single_sender_batched(provider.clone(), phase, to_submit).await?;
         } else {
-            // Multi-sender phases: submit all in parallel, then confirm
-            map_concurrent(
-                &format!("{} submitting", phase),
-                to_submit.clone(),
-                parallelism,
-                {
-                    let provider = provider.clone();
-                    move |tx: SignedTx| {
-                        let provider = provider.clone();
-                        async move {
-                            submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
-                            Ok(())
-                        }
-                    }
-                },
-            )
-            .await?;
+            // Multi-sender: semaphore for unconfirmed + semaphore for concurrency
+            let total = to_submit.len();
+            let unconfirmed_sem = Arc::new(Semaphore::new(MAX_UNCONFIRMED));
+            let concurrency_sem = Arc::new(Semaphore::new(parallelism));
 
-            // Confirm loop
-            let mut unconfirmed = to_submit;
-            loop {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+            let mut tasks: JoinSet<Result<TransactionReceipt>> = JoinSet::new();
+            for tx in to_submit {
+                let provider = provider.clone();
+                let unconfirmed_sem = unconfirmed_sem.clone();
+                let concurrency_sem = concurrency_sem.clone();
+                tasks.spawn(async move {
+                    // Acquire unconfirmed permit (limits total in-flight)
+                    let unconfirmed_permit = unconfirmed_sem.acquire_owned().await?;
 
-                let results = map_concurrent(
-                    &format!("{} confirming", phase),
-                    unconfirmed.iter().cloned(),
-                    parallelism,
-                    {
-                        let provider = provider.clone();
-                        move |tx: SignedTx| {
-                            let provider = provider.clone();
-                            async move {
-                                let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
-                                if let Some(r) = &receipt {
-                                    if !r.status() {
-                                        bail!("tx {} failed (reverted)", tx.tx_hash);
-                                    }
-                                    return Ok((tx, true));
-                                }
-                                Ok((tx, false))
-                            }
-                        }
-                    },
-                )
-                .await?;
+                    // Acquire concurrency permit (limits concurrent RPC calls)
+                    let concurrency_permit = concurrency_sem.acquire().await?;
+                    submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
+                    drop(concurrency_permit);
 
-                unconfirmed = results
-                    .into_iter()
-                    .filter_map(|(tx, confirmed)| if confirmed { None } else { Some(tx) })
-                    .collect();
+                    // Wait for confirmation (holds unconfirmed_permit)
+                    wait_for_confirmation(provider, tx, unconfirmed_permit).await
+                });
+            }
 
-                if unconfirmed.is_empty() {
-                    tracing::info!("phase {}: all {} txs confirmed", phase, phase_total);
-                    break;
+            // Wait for all confirmations (aborts all on first failure)
+            let mut confirmed = 0;
+            while let Some(result) = tasks.join_next().await {
+                result??;
+                confirmed += 1;
+                if confirmed % 100 == 0 || confirmed == total {
+                    tracing::info!("phase {}: confirmed {}/{}", phase, confirmed, total);
                 }
-
-                // Resubmit unconfirmed in parallel, sorted by (from, nonce)
-                tracing::debug!(
-                    "phase {}: {} unconfirmed, resubmitting",
-                    phase,
-                    unconfirmed.len()
-                );
-
-                unconfirmed.sort_by_key(|tx| (tx.from, tx.nonce));
-                let _ = map_concurrent(
-                    &format!("{} resubmitting", phase),
-                    unconfirmed.iter().cloned(),
-                    parallelism,
-                    {
-                        let provider = provider.clone();
-                        move |tx: SignedTx| {
-                            let provider = provider.clone();
-                            async move {
-                                let _ = submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash)
-                                    .await;
-                                Ok::<_, anyhow::Error>(())
-                            }
-                        }
-                    },
-                )
-                .await;
             }
         }
     }
