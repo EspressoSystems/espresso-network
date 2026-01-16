@@ -128,6 +128,7 @@ chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
+cliquenet = { path = "crates/cliquenet" }
 dashmap = "6"
 derive_builder = "0.20"
 derive_more = { version = "2.0", features = ["full"] }

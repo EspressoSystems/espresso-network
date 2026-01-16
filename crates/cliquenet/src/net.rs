@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use bon::Builder;
 use bytes::{Bytes, BytesMut};
-use minicbor::{Decode, Encode};
+use parking_lot::Mutex;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -18,6 +20,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{sleep, timeout, Interval, MissedTickBehavior};
 use tokio::{
     spawn,
+    sync::Mutex as AsyncMutex,
     task::{self, AbortHandle, JoinHandle, JoinSet},
 };
 use tracing::{debug, error, info, trace, warn};
@@ -60,7 +63,7 @@ pub struct Network<K> {
     label: K,
 
     /// The network participants.
-    parties: HashMap<K, Role>,
+    parties: Mutex<HashMap<K, Role>>,
 
     /// MPSC sender of server task instructions.
     tx: Sender<Command<K>>,
@@ -68,7 +71,7 @@ pub struct Network<K> {
     /// MPSC receiver of messages from a remote party.
     ///
     /// The public key identifies the remote.
-    rx: Receiver<(K, Bytes, Option<OwnedSemaphorePermit>)>,
+    rx: AsyncMutex<Receiver<(K, Bytes, Option<OwnedSemaphorePermit>)>>,
 
     /// Handle of the server task that has been spawned by `Network`.
     srv: JoinHandle<Result<Empty>>,
@@ -238,16 +241,7 @@ enum Message {
 
 impl<K> Network<K>
 where
-    K: Encode<()>
-        + for<'a> Decode<'a, ()>
-        + Eq
-        + Ord
-        + Send
-        + Clone
-        + Copy
-        + Display
-        + Hash
-        + 'static,
+    K: Serialize + DeserializeOwned + Eq + Ord + Send + Clone + Display + Hash + 'static,
 {
     pub async fn create(cfg: NetConf<K>) -> Result<Self> {
         let listener = TcpListener::bind(cfg.bind.to_string())
@@ -265,7 +259,7 @@ where
         let mut peers = HashMap::new();
 
         for (k, a) in cfg.parties.iter().cloned() {
-            parties.insert(k, Role::Active);
+            parties.insert(k.clone(), Role::Active);
             peers.insert(
                 k,
                 Peer {
@@ -286,7 +280,7 @@ where
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         let name = cfg.name;
-        let label = cfg.label;
+        let label = cfg.label.clone();
         let server = Server {
             conf: cfg,
             role: Role::Active,
@@ -305,8 +299,8 @@ where
         Ok(Self {
             name,
             label,
-            parties,
-            rx: irx,
+            parties: Mutex::new(parties),
+            rx: AsyncMutex::new(irx),
             tx: otx,
             srv: spawn(server.run(listener)),
         })
@@ -320,8 +314,12 @@ where
         self.name
     }
 
-    pub fn parties(&self) -> impl Iterator<Item = (&K, &Role)> {
-        self.parties.iter()
+    pub fn parties(&self, r: Role) -> Vec<K> {
+        self.parties
+            .lock()
+            .iter()
+            .filter_map(|(k, x)| (r == *x).then(|| k.clone()))
+            .collect()
     }
 
     /// Send a message to a party, identified by the given public key.
@@ -360,8 +358,9 @@ where
     }
 
     /// Receive a message from a remote party.
-    pub async fn receive(&mut self) -> Result<(K, Bytes)> {
-        let (k, b, _) = self.rx.recv().await.ok_or(NetworkError::ChannelClosed)?;
+    pub async fn receive(&self) -> Result<(K, Bytes)> {
+        let mut rx = self.rx.lock().await;
+        let (k, b, _) = rx.recv().await.ok_or(NetworkError::ChannelClosed)?;
         Ok((k, b))
     }
 
@@ -369,8 +368,9 @@ where
     ///
     /// NB that peers added here are passive. See `Network::assign` for
     /// giving peers a different `Role`.
-    pub async fn add(&mut self, peers: Vec<(K, Address)>) -> Result<()> {
+    pub async fn add(&self, peers: Vec<(K, Address)>) -> Result<()> {
         self.parties
+            .lock()
             .extend(peers.iter().map(|(p, ..)| (p.clone(), Role::Passive)));
         self.tx
             .send(Command::Add(peers))
@@ -379,9 +379,12 @@ where
     }
 
     /// Remove the given peers from the network.
-    pub async fn remove(&mut self, peers: Vec<K>) -> Result<()> {
-        for p in &peers {
-            self.parties.remove(p);
+    pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
+        {
+            let mut parties = self.parties.lock();
+            for p in &peers {
+                parties.remove(p);
+            }
         }
         self.tx
             .send(Command::Remove(peers))
@@ -390,10 +393,13 @@ where
     }
 
     /// Assign the given role to the given peers.
-    pub async fn assign(&mut self, r: Role, peers: Vec<K>) -> Result<()> {
-        for p in &peers {
-            if let Some(role) = self.parties.get_mut(p) {
-                *role = r
+    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
+        {
+            let mut parties = self.parties.lock();
+            for p in &peers {
+                if let Some(role) = parties.get_mut(p) {
+                    *role = r
+                }
             }
         }
         self.tx
@@ -410,16 +416,7 @@ where
 
 impl<K> Server<K>
 where
-    K: Encode<()>
-        + for<'a> Decode<'a, ()>
-        + Eq
-        + Ord
-        + Send
-        + Clone
-        + Copy
-        + Display
-        + Hash
-        + 'static,
+    K: Serialize + DeserializeOwned + Eq + Ord + Send + Clone + Display + Hash + Clone + 'static,
 {
     /// Runs the main loop of this network node.
     ///
@@ -437,7 +434,7 @@ where
             .peers
             .keys()
             .filter(|k| **k != self.conf.label)
-            .copied()
+            .cloned()
             .collect::<Vec<_>>()
         {
             self.spawn_connect(k)
@@ -670,7 +667,7 @@ where
                                 queue = self.ibound.capacity(),
                                 "sending message"
                             );
-                            if let Err(err) = self.ibound.try_send((self.conf.label, m, None)) {
+                            if let Err(err) = self.ibound.try_send((self.conf.label.clone(), m, None)) {
                                 warn!(
                                     name = %self.conf.name,
                                     node = %self.conf.label,
@@ -703,7 +700,7 @@ where
                                 queue = self.ibound.capacity(),
                                 "sending message"
                             );
-                            if let Err(err) = self.ibound.try_send((self.conf.label, m.clone(), None)) {
+                            if let Err(err) = self.ibound.try_send((self.conf.label.clone(), m.clone(), None)) {
                                 warn!(
                                     name = %self.conf.name,
                                     node = %self.conf.label,
@@ -738,7 +735,7 @@ where
                                 queue = self.ibound.capacity(),
                                 "sending message"
                             );
-                            if let Err(err) = self.ibound.try_send((self.conf.label, m.clone(), None)) {
+                            if let Err(err) = self.ibound.try_send((self.conf.label.clone(), m.clone(), None)) {
                                 warn!(
                                     name = %self.conf.name,
                                     node = %self.conf.label,
@@ -842,10 +839,13 @@ where
             return;
         }
         let p = self.peers.get(&k).expect("known peer");
-        let h =
-            self.connect_tasks
-                .spawn(connect(self.conf.name, self.conf.label, k, p.addr.clone()));
-        assert!(self.task2key.insert(h.id(), k).is_none());
+        let h = self.connect_tasks.spawn(connect(
+            self.conf.name,
+            self.conf.label.clone(),
+            k.clone(),
+            p.addr.clone(),
+        ));
+        assert!(self.task2key.insert(h.id(), k.clone()).is_none());
         self.connecting.insert(k, ConnectTask { h });
     }
 
@@ -855,7 +855,7 @@ where
     /// own private key and then spawn a task that awaits an initiator handshake
     /// to which it will respond.
     fn spawn_handshake(&mut self, s: TcpStream) {
-        let ours = self.conf.label;
+        let ours = self.conf.label.clone();
         self.handshake_tasks.spawn(async move {
             timeout(HANDSHAKE_TIMEOUT, on_handshake(ours, s))
                 .await
@@ -881,7 +881,7 @@ where
         let countdown = Countdown::new();
         let rh = self.io_tasks.spawn(recv_loop(
             self.conf.name,
-            k,
+            k.clone(),
             r,
             ibound,
             to_write,
@@ -889,8 +889,8 @@ where
             countdown.clone(),
         ));
         let wh = self.io_tasks.spawn(send_loop(w, from_remote, countdown));
-        assert!(self.task2key.insert(rh.id(), k).is_none());
-        assert!(self.task2key.insert(wh.id(), k).is_none());
+        assert!(self.task2key.insert(rh.id(), k.clone()).is_none());
+        assert!(self.task2key.insert(wh.id(), k.clone()).is_none());
         let io = IoTask {
             rh,
             wh,
@@ -924,7 +924,7 @@ where
 /// has been completed.
 async fn connect<K>(name: &'static str, this: K, to: K, addr: Address) -> (TcpStream, K)
 where
-    K: Display + Encode<()> + for<'a> Decode<'a, ()> + Copy + PartialEq + Send,
+    K: Display + Serialize + DeserializeOwned + PartialEq + Send + Clone,
 {
     use rand::prelude::*;
 
@@ -943,7 +943,7 @@ where
                     error!(%name, node = %this, %err, "failed to set NO_DELAY socket option");
                     continue;
                 }
-                match timeout(HANDSHAKE_TIMEOUT, handshake(this, s)).await {
+                match timeout(HANDSHAKE_TIMEOUT, handshake(this.clone(), s)).await {
                     Ok(Ok((s, x))) if x == to => {
                         debug!(%name, node = %this, peer = %to, %addr, "connection established");
                         return (s, x);
@@ -974,30 +974,30 @@ where
 /// Perform a handshake as initiator with the remote party.
 async fn handshake<K>(ours: K, mut stream: TcpStream) -> Result<(TcpStream, K)>
 where
-    K: Encode<()> + for<'a> Decode<'a, ()>,
+    K: Serialize + DeserializeOwned,
 {
-    let hello = minicbor::to_vec(ours)?;
+    let hello = bincode::serialize(&ours)?;
     send_frame(&mut stream, Header::data(hello.len() as u16), &hello).await?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    let theirs = minicbor::decode(&m)?;
+    let theirs = bincode::deserialize(&m)?;
     Ok((stream, theirs))
 }
 
 /// Perform a handshake as responder with a remote party.
 async fn on_handshake<K>(ours: K, mut stream: TcpStream) -> Result<(TcpStream, K)>
 where
-    K: Encode<()> + for<'a> Decode<'a, ()>,
+    K: Serialize + DeserializeOwned,
 {
     stream.set_nodelay(true)?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    let theirs = minicbor::decode(&m)?;
-    let hello = minicbor::to_vec(ours)?;
+    let theirs = bincode::deserialize(&m)?;
+    let hello = bincode::serialize(&ours)?;
     send_frame(&mut stream, Header::data(hello.len() as u16), &hello).await?;
     Ok((stream, theirs))
 }
@@ -1017,7 +1017,7 @@ async fn recv_loop<R, K>(
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
-    K: Display + Copy,
+    K: Display + Clone,
 {
     loop {
         let permit = budget
@@ -1065,7 +1065,7 @@ where
             }
         }
         if to_deliver
-            .send((id, msg.freeze(), Some(permit)))
+            .send((id.clone(), msg.freeze(), Some(permit)))
             .await
             .is_err()
         {

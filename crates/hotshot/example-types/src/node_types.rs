@@ -9,8 +9,7 @@ use std::{
 };
 
 use hotshot::traits::{
-    implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
-    NodeImplementation,
+    NodeImplementation, implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork}
 };
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
@@ -290,6 +289,10 @@ pub struct MemoryImpl;
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct Libp2pImpl;
 
+/// Cliquenet network implementation
+#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
+pub struct CliquenetImpl;
+
 /// Web server network implementation
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct WebImpl;
@@ -315,6 +318,11 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for CombinedImpl {
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
     type Network = Libp2pNetwork<TYPES>;
+    type Storage = TestStorage<TYPES>;
+}
+
+impl<TYPES: NodeType> NodeImplementation<TYPES> for CliquenetImpl {
+    type Network = Cliquenet<TYPES>;
     type Storage = TestStorage<TYPES>;
 }
 

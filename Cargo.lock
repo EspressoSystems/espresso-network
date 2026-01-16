@@ -2900,9 +2900,9 @@ dependencies = [
 name = "cliquenet"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "bon",
  "bytes 1.11.0",
- "minicbor",
  "nohash-hasher",
  "parking_lot",
  "quickcheck",
@@ -5357,10 +5357,12 @@ dependencies = [
  "bimap",
  "bincode",
  "blake3",
+ "bytes 1.11.0",
  "cdn-broker",
  "cdn-client",
  "cdn-marshal",
  "chrono",
+ "cliquenet",
  "committable",
  "dashmap",
  "derive_more 2.1.0",
@@ -7889,27 +7891,6 @@ checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
 dependencies = [
  "mime",
  "unicase",
-]
-
-[[package]]
-name = "minicbor"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9a1119e42fbacc2bb65d860de6eb7c930562bc71d42dca026d06b0228231f77"
-dependencies = [
- "half",
- "minicbor-derive",
-]
-
-[[package]]
-name = "minicbor-derive"
-version = "0.18.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50fcf6ee04e942da7d65066bf427fe7bdd229256998809eeecee25db6dc9aac2"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.111",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-use std::{convert::Infallible, io};
+use std::io;
 use thiserror::Error;
 
 use crate::{frame::InvalidHeader, Address};
@@ -26,11 +26,8 @@ pub enum NetworkError {
     #[error("unknown frame type: {0}")]
     UnknownFrameType(u8),
 
-    #[error("encode error: {0}")]
-    Encode(#[from] minicbor::encode::Error<Infallible>),
-
-    #[error("decode error: {0}")]
-    Decode(#[from] minicbor::decode::Error),
+    #[error("bincode error: {0}")]
+    Bincode(#[from] bincode::Error),
 
     /// The Noise handshake message is not valid.
     #[error("invalid handshake message")]

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, net::{Ipv4Addr, SocketAddr}};
+use std::{
+    collections::HashMap,
+    net::{Ipv4Addr, SocketAddr},
+};
 
 use bytes::{Bytes, BytesMut};
 use cliquenet::{retry::Data, NetConf, Network, Retry};
@@ -7,7 +10,7 @@ use rand::RngCore;
 /// Send and receive messages of various sizes between 1 byte and 5 MiB.
 #[tokio::test]
 async fn multiple_frames() {
-    //tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     const PARTIES: u16 = 30;
 
@@ -15,18 +18,21 @@ async fn multiple_frames() {
 
     let mut networks = HashMap::new();
     for (k, a) in parties.clone() {
-        networks.insert(k, Retry::new(
-            Network::create(
-                NetConf::builder()
-                    .name("frames")
-                    .label(k)
-                    .bind(a.into())
-                    .parties(parties.clone().map(|(i, a)| (i, a.into())))
-                    .build(),
-            )
-            .await
-            .unwrap(),
-        ));
+        networks.insert(
+            k,
+            Retry::new(
+                Network::create(
+                    NetConf::builder()
+                        .name("frames")
+                        .label(k)
+                        .bind(a.into())
+                        .parties(parties.clone().map(|(i, a)| (i, a.into())))
+                        .build(),
+                )
+                .await
+                .unwrap(),
+            ),
+        );
     }
 
     let mut counters: HashMap<u16, HashMap<Bytes, usize>> = HashMap::new();
@@ -37,14 +43,14 @@ async fn multiple_frames() {
         }
         loop {
             for (k, net) in &mut networks {
-                if counters.get(k).map(|m| m.len()).unwrap_or(0) == PARTIES.into() {
-                    continue
+                if counters.get(k).map(|m| m.len()).unwrap_or(0) == usize::from(PARTIES) {
+                    continue;
                 }
                 let (_, data) = net.receive().await.unwrap();
                 *counters.entry(*k).or_default().entry(data).or_default() += 1
             }
-            if counters.values().all(|m| m.len() == PARTIES.into()) {
-                break
+            if counters.values().all(|m| m.len() == usize::from(PARTIES)) {
+                break;
             }
         }
         for net in networks.values_mut() {
@@ -59,4 +65,3 @@ fn gen_message() -> Data {
     g.fill_bytes(&mut v);
     Data::try_from(BytesMut::from(&v[..])).unwrap()
 }
-

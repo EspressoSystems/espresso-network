@@ -7,7 +7,7 @@ edition.workspace = true
 [dependencies]
 bon = { workspace = true }
 bytes = { workspace = true }
-minicbor = { version = "2", features = ["full"] }
+bincode = { workspace = true }
 nohash-hasher = { workspace = true }
 parking_lot = { workspace = true }
 rand = "0.9.2"
