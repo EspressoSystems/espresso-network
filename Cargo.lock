@@ -7573,6 +7573,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-query-service",
  "hotshot-types",
+ "jf-advz",
  "jf-merkle-tree-compat",
  "light-client",
  "portpicker",

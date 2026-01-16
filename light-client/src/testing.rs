@@ -14,9 +14,9 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
     v0_3::{StakeTableEvent, Validator},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NodeState,
-    PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash, StakeTableState, ValidatorMap,
-    BLOCK_MERKLE_TREE_HEIGHT,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NamespaceId,
+    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash,
+    StakeTableState, Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -24,17 +24,22 @@ use hotshot_query_service::{
     node::{BlockHash, BlockId},
 };
 use hotshot_types::{
-    data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
+    data::{
+        vid_commitment, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        VidCommon, ViewNumber,
+    },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
     stake_table::{supermajority_threshold, StakeTableEntry},
     traits::{
+        block_contents::EncodeBytes,
         node_implementation::{ConsensusTime, Versions},
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
+    vid::avidm::init_avidm_param,
     vote::Certificate as _,
 };
 use jf_merkle_tree_compat::{
@@ -48,6 +53,8 @@ use crate::{
     consensus::{
         header::HeaderProof,
         leaf::LeafProof,
+        namespace::NamespaceProof,
+        payload::PayloadProof,
         quorum::{Certificate, Quorum},
     },
     state::Genesis,
@@ -322,6 +329,7 @@ impl Default for TestClient {
 #[derivative(Default)]
 struct InnerTestClient {
     leaves: Vec<LeafQueryData<SeqTypes>>,
+    payloads: Vec<Payload>,
     // Use an appendable `MerkleTree` rather than a `BlockMerkleTree` (which is a
     // `LightweightMerkleTree`) so we can look up paths for previously inserted elements.
     merkle_trees: Vec<SHA3MerkleTree<BlockHash<SeqTypes>>>,
@@ -331,11 +339,13 @@ struct InnerTestClient {
     missing_leaves: HashSet<usize>,
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
+    invalid_payloads: HashSet<usize>,
     quorum: Vec<(PrivKey, Validator<PubKey>)>,
     #[derivative(Default(value = "3"))]
     first_epoch_with_dynamic_stake_table: u64,
     missing_quorums: HashSet<u64>,
     invalid_quorums: HashSet<u64>,
+    mock_block_height: Option<u64>,
 }
 
 impl InnerTestClient {
@@ -407,8 +417,8 @@ impl InnerTestClient {
             let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
             let view_number = ViewNumber::new(i as u64);
 
-            let node_state =
-                NodeState::mock_v3().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
+            let version = DrbAndHeaderUpgradeVersion::version();
+            let node_state = NodeState::mock_v3().with_genesis_version(version);
             let (justify_qc, mt) = if i == 0 {
                 (
                     QuorumCertificate2::genesis::<
@@ -423,6 +433,15 @@ impl InnerTestClient {
                 mt.push(parent.block_hash()).unwrap();
                 (parent.qc().clone(), mt)
             };
+
+            let transactions = vec![Transaction::random(&mut rand::thread_rng())];
+            let (payload, ns_table) =
+                Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
+            let payload_comm =
+                vid_commitment::<
+                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
+                >(&payload.encode(), &ns_table.encode(), quorum.len(), version);
+
             let mut block_header = Leaf2::genesis::<
                 SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
             >(&Default::default(), &node_state)
@@ -431,6 +450,8 @@ impl InnerTestClient {
             .clone();
             *block_header.height_mut() = i as u64;
             *block_header.block_merkle_tree_root_mut() = mt.commitment();
+            *block_header.payload_commitment_mut() = payload_comm;
+            *block_header.ns_table_mut() = ns_table;
             if *epoch + 1 >= self.first_epoch_with_dynamic_stake_table
                 && is_ge_epoch_root(block_header.height(), epoch_height)
             {
@@ -485,6 +506,7 @@ impl InnerTestClient {
             self.block_hashes.insert(leaf.block_hash(), i);
             self.payload_hashes.entry(leaf.payload_hash()).or_insert(i);
             self.leaves.push(leaf);
+            self.payloads.push(payload);
             self.merkle_trees.push(mt);
         }
 
@@ -511,6 +533,12 @@ impl InnerTestClient {
                 .context(format!("missing payload {h}")),
         }
     }
+
+    fn vid_common(&mut self, height: u64, epoch_height: u64) -> VidCommon {
+        let epoch = epoch_from_block_number(height, epoch_height);
+        let quorum = self.quorum_for_epoch(epoch);
+        VidCommon::V1(init_avidm_param(quorum.len()).unwrap())
+    }
 }
 
 impl TestClient {
@@ -535,6 +563,17 @@ impl TestClient {
     pub async fn leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
         inner.leaf(height, self.epoch_height).await
+    }
+
+    pub async fn payload(&self, height: usize) -> Payload {
+        let mut inner = self.inner.lock().await;
+        inner.leaf(height, self.epoch_height).await;
+        inner.payloads[height].clone()
+    }
+
+    pub async fn return_invalid_payload(&self, for_height: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.invalid_payloads.insert(for_height);
     }
 
     pub async fn remember_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
@@ -587,9 +626,26 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.invalid_quorums.insert(*epoch);
     }
+
+    pub async fn vid_common(&self, height: u64) -> VidCommon {
+        let mut inner = self.inner.lock().await;
+        inner.vid_common(height, self.epoch_height)
+    }
+
+    pub async fn mock_block_height(&self, height: u64) {
+        let mut inner = self.inner.lock().await;
+        inner.mock_block_height = Some(height);
+    }
 }
 
 impl Client for TestClient {
+    async fn block_height(&self) -> Result<u64> {
+        let inner = self.inner.lock().await;
+        Ok(inner
+            .mock_block_height
+            .unwrap_or_else(|| inner.leaves.len() as u64))
+    }
+
     async fn leaf_proof(
         &self,
         id: impl Into<LeafRequest> + Send,
@@ -716,6 +772,82 @@ impl Client for TestClient {
             register_validator_events(&mut events, validator);
         }
         Ok(events)
+    }
+
+    async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
+        let mut inner = self.inner.lock().await;
+
+        let vid_common = inner.vid_common(height, self.epoch_height);
+        let height = height as usize;
+        ensure!(height < inner.payloads.len());
+
+        let payload = if inner.invalid_payloads.contains(&height) {
+            tracing::info!(height, "return mock incorrect payload proof");
+            Payload::from_transactions_sync(
+                [Transaction::random(&mut rand::thread_rng())],
+                NodeState::mock_v3().chain_config,
+            )
+            .unwrap()
+            .0
+        } else {
+            inner.payloads[height].clone()
+        };
+
+        Ok(PayloadProof::new(payload, vid_common))
+    }
+
+    async fn namespace_proof(
+        &self,
+        height: u64,
+        mut namespace: NamespaceId,
+    ) -> Result<NamespaceProof> {
+        let mut inner = self.inner.lock().await;
+
+        let vid_common = inner.vid_common(height, self.epoch_height);
+        let height = height as usize;
+        ensure!(height < inner.payloads.len());
+
+        let (payload, ns_table) = if inner.invalid_payloads.contains(&height) {
+            // To mock an invalid proof, we use a different payload which doesn't match the actual
+            // payload for the requested block.
+            tracing::info!(height, "return mock incorrect namespace proof");
+            let mut payload = vec![0; 32];
+            rand::thread_rng().fill_bytes(&mut payload);
+            let tx = Transaction::new(namespace, payload);
+            let node_state = NodeState::mock_v3();
+            Payload::from_transactions_sync([tx], node_state.chain_config).unwrap()
+        } else {
+            (
+                inner.payloads[height].clone(),
+                inner.leaves[height].header().ns_table().clone(),
+            )
+        };
+
+        if inner.invalid_proofs.contains(&height) {
+            // If we are returning a mock invalid proof, return a proof for the wrong namespace so
+            // that verification will fail.
+            namespace = NamespaceId::from(u64::from(namespace) + 1);
+        }
+
+        let Some(ns_index) = ns_table.find_ns_id(&namespace) else {
+            return Ok(NamespaceProof::not_present());
+        };
+        let proof = NsProof::new(&payload, &ns_index, &vid_common)
+            .context("failed to construct NsProof")?;
+        Ok(NamespaceProof::new(proof, vid_common))
+    }
+
+    async fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> Result<Vec<NamespaceProof>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            proofs.push(self.namespace_proof(i, namespace).await?);
+        }
+        Ok(proofs)
     }
 }
 
