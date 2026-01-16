@@ -99,8 +99,7 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 /// Uses the real protocols and a Redis discovery client.
 pub struct ProductionDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
-    type User = UserDefQuic<TYPES>;
-    type User2 = UserDefTcp<TYPES>;
+    type User = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
@@ -149,8 +148,7 @@ impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
 /// Uses the real protocols, but with an embedded discovery client.
 pub struct TestingDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for TestingDef<TYPES> {
-    type User = UserDefQuic<TYPES>;
-    type User2 = UserDefTcp<TYPES>;
+    type User = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;

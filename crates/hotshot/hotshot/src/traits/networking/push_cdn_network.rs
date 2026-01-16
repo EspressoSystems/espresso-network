@@ -13,7 +13,7 @@ use std::{path::Path, time::Duration};
 use async_trait::async_trait;
 use bincode::config::Options;
 use cdn_broker::reexports::{
-    connection::protocols::{Quic, Tcp},
+    connection::protocols::Tcp,
     def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
     discovery::{Embedded, Redis},
 };
@@ -142,21 +142,10 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 /// Uses the real protocols and a Redis discovery client.
 pub struct ProductionDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> RunDef for ProductionDef<K> {
-    type User = UserDefQuic<K>;
-    type User2 = UserDefTcp<K>;
+    type User = UserDefTcp<K>;
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
-}
-
-/// The user definition for the Push CDN.
-/// Uses the Quic protocol and untrusted middleware.
-/// RM TODO: Remove this, switching to TCP singularly when everyone has updated
-pub struct UserDefQuic<K: SignatureKey + 'static>(PhantomData<K>);
-impl<K: SignatureKey + 'static> ConnectionDef for UserDefQuic<K> {
-    type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Tcp;
-    type MessageHook = NoMessageHook;
 }
 
 /// The user definition for the Push CDN.
@@ -192,8 +181,7 @@ impl<K: SignatureKey> ConnectionDef for ClientDef<K> {
 /// Uses the real protocols, but with an embedded discovery client.
 pub struct TestingDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> RunDef for TestingDef<K> {
-    type User = UserDefQuic<K>;
-    type User2 = UserDefTcp<K>;
+    type User = UserDefTcp<K>;
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;
