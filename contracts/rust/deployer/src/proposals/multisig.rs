@@ -714,20 +714,6 @@ pub async fn upgrade_fee_contract_multisig_owner(
             )
             .await?;
 
-        if let Some(cached_fee_contract_addr) = cached_fee_contract_addr {
-            if cached_fee_contract_addr == new_fee_contract_addr {
-                anyhow::bail!(
-                    "New deployment address ({new_fee_contract_addr:#x}) matches cached address \
-                     ({cached_fee_contract_addr:#x}). Cache removal may have failed or deployment \
-                     reused cached contract."
-                );
-            }
-            tracing::info!(
-                old_impl = %cached_fee_contract_addr,
-                new_impl = %new_fee_contract_addr,
-                "Fresh FeeContract implementation deployed"
-            );
-        }
         new_fee_contract_addr
     } else {
         // Use dummy address for dry run

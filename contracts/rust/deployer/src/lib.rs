@@ -1302,17 +1302,17 @@ pub async fn upgrade_fee_v1(
         );
     }
 
-    let old_fee_contract_addr = contracts.address(Contract::FeeContract);
+    let cached_fee_contract_addr = contracts.address(Contract::FeeContract);
 
     // For patch upgrades, we need to deploy a fresh implementation contract.
     // If FeeContract is already in the cache, the caller must unset it first
     // to make the redeployment requirement explicit.
-    if let Some(old_fee_contract_addr) = old_fee_contract_addr {
+    if let Some(cached_fee_contract_addr) = cached_fee_contract_addr {
         anyhow::bail!(
             "FeeContract implementation address is already set in cache ({:#x}). For patch \
              upgrades, the implementation must be redeployed. Please unset \
              ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first.",
-            old_fee_contract_addr
+            cached_fee_contract_addr
         );
     }
 
@@ -1323,20 +1323,6 @@ pub async fn upgrade_fee_v1(
             FeeContract::deploy_builder(&provider),
         )
         .await?;
-
-    if let Some(old_fee_contract_addr) = old_fee_contract_addr {
-        if old_fee_contract_addr == new_fee_contract_addr {
-            anyhow::bail!(
-                "New deployment address ({new_fee_contract_addr:#x}) matches cached address. \
-                 Cache removal may have failed."
-            );
-        }
-        tracing::info!(
-            old_impl = %old_fee_contract_addr,
-            new_impl = %new_fee_contract_addr,
-            "New FeeContract implementation deployed at {new_fee_contract_addr:#x}"
-        );
-    }
 
     let receipt = fee_contract_proxy
         .upgradeToAndCall(new_fee_contract_addr, vec![].into())
