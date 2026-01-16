@@ -24,7 +24,7 @@ export ENV_FILE={YOUR_ENV_FILE}
 cp .env $ENV_FILE
 ```
 
-- and replace the following fields in the new file if not deploying to a local network via anvil.
+- and replace the following fields in the `$ENV_FILE` if not deploying to a local network via anvil.
   - `ESPRESSO_SEQUENCER_ETH_MNEMONIC`
   - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS`
 
