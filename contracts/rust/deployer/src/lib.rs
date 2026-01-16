@@ -1611,10 +1611,10 @@ pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes>
 /// Retries up to 5 times with exponential backoff (500ms, 1s, 2s, 4s, 8s)
 /// Parameters:
 /// - `check_name`: the name of the check
-/// - `check_fn`: the function to check
+/// - `check_fn`: the function to check, must return `Result<bool>`
 ///
 /// Returns:
-/// - `true` if the check passed, `false` otherwise
+/// - `Ok(true)` if the check passed, `Ok(false)`
 pub async fn retry_until_true<F, Fut>(check_name: &str, mut check_fn: F) -> Result<bool>
 where
     F: FnMut() -> Fut,
@@ -1628,14 +1628,24 @@ where
                 tracing::warn!("{} not ready, retrying in {}ms...", check_name, delay_ms);
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             },
-            Ok(false) => return Ok(false),
+            Ok(false) => {
+                tracing::error!(
+                    "{} not ready after {} attempts, returning false",
+                    check_name,
+                    MAX_RETRY_ATTEMPTS
+                );
+                return Ok(false);
+            },
             Err(e) => {
-                tracing::error!("{} failed: {}", check_name, e);
-                return Err(e);
+                tracing::error!(
+                    "{} not ready after {} attempts,  (treating as not ready): {e:#}",
+                    check_name,
+                    MAX_RETRY_ATTEMPTS
+                );
+                return Ok(false);
             },
         }
     }
-    Ok(false)
 }
 
 #[cfg(test)]
