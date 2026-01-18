@@ -119,8 +119,10 @@ pub(crate) trait NodeStateDataSource {
 }
 
 pub(crate) trait TokenDataSource<T: NodeType> {
-    /// Get the stake table for a given epoch
+    /// Get the total minted supply from the token contract
     fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
+    /// Get the total distributed supply from the most recently decided block, taken from the node's internal consensus state
+    fn get_total_distributed_supply(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
 }
 
 #[derive(Serialize, Deserialize)]

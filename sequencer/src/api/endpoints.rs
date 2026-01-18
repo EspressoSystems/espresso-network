@@ -320,7 +320,25 @@ where
                 .read(|state| state.get_total_supply_l1().boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
-                    message: format!("failed to get total supply. err={err:#}"),
+                    message: format!("failed to get total minted supply. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })?;
+
+            let scale = U256::from(10u64.pow(18));
+            let quotient = value / scale;
+            let remainder = value % scale;
+
+            Ok(format!("{quotient}.{remainder}"))
+        }
+        .boxed()
+    })?
+    .at("get_total_distributed_supply", |_, state| {
+        async move {
+            let value = state
+                .read(|state| state.get_total_distributed_supply().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get total distributed supply. err={err:#}"),
                     status: StatusCode::NOT_FOUND,
                 })?;
 
