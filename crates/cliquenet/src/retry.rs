@@ -192,7 +192,8 @@ where
     }
 
     pub async fn receive(&self) -> Result<(K, Bytes)> {
-        if let Some((_, Pending { src, data, trailer })) = self.inner.pending.lock().pop_first() {
+        let pending = self.inner.pending.lock().pop_first();
+        if let Some((_, Pending { src, data, trailer })) = pending {
             self.inner
                 .sender
                 .send(Command::Unicast(src.clone(), None, trailer.clone()))
@@ -258,12 +259,12 @@ where
 
             let mut messages = self.inner.buffer.0.lock();
 
-            if let Some(buckets) = messages.get_mut(&trailer.bucket) {
-                if let Some(m) = buckets.get_mut(&trailer.id) {
-                    m.remaining.retain(|k| *k != src);
-                    if m.remaining.is_empty() {
-                        buckets.remove(&trailer.id);
-                    }
+            if let Some(buckets) = messages.get_mut(&trailer.bucket)
+                && let Some(m) = buckets.get_mut(&trailer.id)
+            {
+                m.remaining.retain(|k| *k != src);
+                if m.remaining.is_empty() {
+                    buckets.remove(&trailer.id);
                 }
             }
         }

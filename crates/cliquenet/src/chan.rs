@@ -58,19 +58,19 @@ impl<T> Sender<T> {
             if buf.ids.contains(&id) {
                 return;
             }
-            if buf.xs.len() == self.0.cap {
-                if let Some((Some(id), _)) = buf.xs.pop_front() {
-                    buf.ids.remove(&id);
-                }
+            if buf.xs.len() == self.0.cap
+                && let Some((Some(id), _)) = buf.xs.pop_front()
+            {
+                buf.ids.remove(&id);
             }
             buf.xs.push_back((Some(id), val));
             buf.ids.insert(id);
         } else {
             let mut buf = self.0.buf.lock();
-            if buf.xs.len() == self.0.cap {
-                if let Some((Some(id), _)) = buf.xs.pop_front() {
-                    buf.ids.remove(&id);
-                }
+            if buf.xs.len() == self.0.cap
+                && let Some((Some(id), _)) = buf.xs.pop_front()
+            {
+                buf.ids.remove(&id);
             }
             buf.xs.push_back((None, val));
         }

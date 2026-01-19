@@ -337,7 +337,8 @@ where
         self.parties
             .lock()
             .iter()
-            .filter_map(|(k, x)| (r == *x).then(|| k.clone()))
+            .filter(|&(_, x)| r == *x)
+            .map(|(k, _)| k.clone())
             .collect()
     }
 
