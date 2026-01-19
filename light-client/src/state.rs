@@ -10,7 +10,7 @@ use espresso_types::{
     Transaction,
 };
 use hotshot_query_service::{
-    availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData},
+    availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
     types::HeightIndexed,
 };
@@ -47,18 +47,38 @@ pub struct Genesis {
 
     /// The fixed stake table used before epochs begin.
     pub stake_table: Vec<StakeTableEntry<PubKey>>,
+
+    /// Enable special cases for Decaf testnet.
+    ///
+    /// On Decaf, `first_epoch_with_dynamic_stake_table` is not actually the first epoch of PoS, but
+    /// the first Epoch after the upgrade to version 0.4 (version 0.3 is completely unsupported
+    /// since it will never be deployed on Mainnet). Thus, when we perform stake table catchup on
+    /// Decaf, we need to replay all events from epochs between the upgrade to proof-of-stake (this
+    /// number) and the upgrade to version 0.4.
+    #[cfg(feature = "decaf")]
+    #[serde(default)]
+    pub decaf_first_pos_epoch: Option<EpochNumber>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Options {
+#[cfg_attr(feature = "clap", derive(clap::Parser))]
+pub struct LightClientOptions {
     /// Maximum number of stake tables to cache in memory at any given time.
-    pub num_stake_tables: usize,
+    #[cfg_attr(
+        feature = "clap",
+        clap(
+            long = "light-client-num-stake-tables",
+            env = "LIGHT_CLIENT_NUM_STAKE_TABLES",
+            default_value = "100",
+        )
+    )]
+    pub num_stake_tables_in_memory: usize,
 }
 
-impl Default for Options {
+impl Default for LightClientOptions {
     fn default() -> Self {
         Self {
-            num_stake_tables: 100,
+            num_stake_tables_in_memory: 100,
         }
     }
 }
@@ -74,11 +94,14 @@ impl Default for Options {
 pub struct LightClient<P, S> {
     db: P,
     server: S,
-    opt: Options,
+    opt: LightClientOptions,
 
     epoch_height: u64,
     first_epoch_with_dynamic_stake_table: EpochNumber,
     genesis_stake_table: Arc<StakeTable>,
+
+    #[cfg(feature = "decaf")]
+    decaf_first_pos_epoch: Option<EpochNumber>,
 
     // We cache stake tables in memory since they are large and expensive to load from the database.
     stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
@@ -105,7 +128,12 @@ where
     /// root of trust for verifying all state that is subsequently loaded by the light client. If
     /// the genesis is not correct (i.e. matching the genesis used by honest HotShot nodes) the
     /// light client may verify incorrect data, or fail to verify correct data.
-    pub fn from_genesis_with_options(db: P, server: S, genesis: Genesis, opt: Options) -> Self {
+    pub fn from_genesis_with_options(
+        db: P,
+        server: S,
+        genesis: Genesis,
+        opt: LightClientOptions,
+    ) -> Self {
         Self {
             db,
             server,
@@ -114,6 +142,9 @@ where
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
             stake_tables: Default::default(),
+
+            #[cfg(feature = "decaf")]
+            decaf_first_pos_epoch: genesis.decaf_first_pos_epoch,
         }
     }
 
@@ -345,10 +376,20 @@ where
 
     /// Fetch and verify the requested block.
     pub async fn fetch_block(&self, id: BlockId<SeqTypes>) -> Result<BlockQueryData<SeqTypes>> {
+        Ok(self.fetch_block_and_vid_common(id).await?.0)
+    }
+
+    pub async fn fetch_block_and_vid_common(
+        &self,
+        id: BlockId<SeqTypes>,
+    ) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)> {
         let header = self.fetch_header(id).await?;
         let proof = self.server.payload_proof(header.height()).await?;
-        let payload = proof.verify(&header)?;
-        Ok(BlockQueryData::new(header, payload))
+        let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+        Ok((
+            BlockQueryData::new(header.clone(), payload),
+            VidCommonQueryData::new(header, vid_common),
+        ))
     }
 
     /// Fetch and verify the transactions in the given namespace of the requested block.
@@ -437,6 +478,36 @@ where
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
 
+        // On decaf, replay the events from epochs on version 0.3 without checking stake table
+        // hashes (since these were only added in version 0.4). We will effectively check all this
+        // work at once when we check the stake table hash after the first epoch of version 0.4
+        #[cfg(feature = "decaf")]
+        if lower_bound < self.first_epoch_with_dynamic_stake_table {
+            if let Some(first_pos_epoch) = self.decaf_first_pos_epoch {
+                tracing::info!(
+                    %first_pos_epoch,
+                    to = %lower_bound,
+                    "performing Decaf catchup through version 0.3",
+                );
+                for epoch in *first_pos_epoch..=*lower_bound {
+                    let events = self
+                        .server
+                        .stake_table_events(EpochNumber::new(epoch))
+                        .await?;
+                    tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
+                    for event in events {
+                        tracing::debug!(epoch, ?event, "replay event");
+                        if let Err(err) =
+                            stake_table.apply_event(event).context("applying event")?
+                        {
+                            tracing::warn!("allowed error in event: {err:#}");
+                        }
+                    }
+                }
+                prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
+            }
+        }
+
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
         for epoch in *lower_bound + 1..=*epoch {
             let events = self
@@ -472,15 +543,20 @@ where
                 stake_table.commit(),
             );
 
+            // Cache the reconstructed stake table in the database.
+            if let Err(err) = self
+                .db
+                .insert_stake_table(EpochNumber::new(epoch), &stake_table)
+                .await
+            {
+                // If this fails, we can continue with the stake table that we have in memory right
+                // now, so this is just a warning.
+                tracing::warn!(epoch, "failed to cache stake table: {err:#}");
+            }
+
             prev_quorum = next_quorum;
         }
 
-        // Finally, add the reconstructed stake table to cache and storage, and return it.
-        if let Err(err) = self.db.insert_stake_table(epoch, &stake_table).await {
-            // If this fails, we can still successfully return the stake table that we have in
-            // memory right now, so this is just a warning.
-            tracing::warn!(%epoch, "failed to cache stake table: {err:#}");
-        }
         Ok(self.cache_stake_table(epoch, prev_quorum).await)
     }
 
@@ -544,7 +620,7 @@ where
 
         // If inserting the new stake table would cause the cache to exceed its maximum size, first
         // delete an old stake table.
-        if cache.len() >= self.opt.num_stake_tables {
+        if cache.len() >= self.opt.num_stake_tables_in_memory {
             // Always delete the _second oldest_ stake table. We want to keep the oldest around
             // because it is the hardest to catch up for if we need it again (we would have to go
             // all the way back to genesis). The second oldest is the least likely to be used again
@@ -992,8 +1068,8 @@ mod test {
             db.clone(),
             client.clone(),
             genesis.clone(),
-            Options {
-                num_stake_tables: 2,
+            LightClientOptions {
+                num_stake_tables_in_memory: 2,
             },
         );
 

@@ -13,7 +13,11 @@ use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, traits::node_implementation::ConsensusTime,
 };
 use serde_json::Value;
-use sqlx::{query, query_as, sqlite::SqlitePoolOptions, QueryBuilder, SqlitePool};
+use sqlx::{
+    query, query_as,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    QueryBuilder, SqlitePool,
+};
 
 /// Different ways to ask the database for a leaf.
 #[derive(Clone, Copy, Debug, Display, From)]
@@ -88,44 +92,73 @@ pub trait Storage: Sized + Send + Sync + 'static {
 }
 
 #[derive(Clone, Debug)]
-pub struct SqliteOptions {
+#[cfg_attr(feature = "clap", derive(clap::Parser))]
+pub struct LightClientSqliteOptions {
     /// Maximum number of simultaneous DB connections to allow.
+    #[cfg_attr(
+        feature = "clap",
+        clap(
+            long = "light-client-db-num-connections",
+            env = "LIGHT_CLIENT_DB_NUM_CONNECTIONS",
+            default_value = "5",
+        )
+    )]
     pub num_connections: u32,
 
     /// Maximum number of leaves to cache in the local DB.
+    #[cfg_attr(
+        feature = "clap",
+        clap(
+            long = "light-client-db-num-leaves",
+            env = "LIGHT_CLIENT_DB_NUM_LEAVES",
+            default_value = "100",
+        )
+    )]
     pub num_leaves: u32,
 
     /// Maximum number of stake tables to cache in the local DB.
+    #[cfg_attr(
+        feature = "clap",
+        clap(
+            long = "light-client-db-num-stake-tables",
+            env = "LIGHT_CLIENT_DB_NUM_STAKE_TABLES",
+            default_value = "100",
+        )
+    )]
     pub num_stake_tables: u32,
 
     /// Create or open storage that is persisted on the file system.
     ///
     /// If not present, the database will exist only in memory and will be destroyed when the
     /// [`SqlitePersistence`] object is dropped.
-    pub path: Option<PathBuf>,
+    #[cfg_attr(
+        feature = "clap",
+        clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")
+    )]
+    pub lc_path: Option<PathBuf>,
 }
 
-impl Default for SqliteOptions {
+impl Default for LightClientSqliteOptions {
     fn default() -> Self {
         Self {
             num_connections: 5,
             num_leaves: 100,
             num_stake_tables: 100,
-            path: None,
+            lc_path: None,
         }
     }
 }
 
-impl SqliteOptions {
+impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
     pub async fn connect(self) -> Result<SqliteStorage> {
-        let path = match &self.path {
-            Some(path) => path.to_str().context("invalid file path")?,
-            None => ":memory:",
-        };
+        let mut opt = SqliteConnectOptions::default().create_if_missing(true);
+        if let Some(path) = &self.lc_path {
+            opt = opt.filename(path);
+        }
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
-            .connect(path)
+            .connect_with(opt)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
 
@@ -147,7 +180,7 @@ pub struct SqliteStorage {
 
 impl Storage for SqliteStorage {
     async fn default() -> Result<Self> {
-        SqliteOptions::default().connect().await
+        LightClientSqliteOptions::default().connect().await
     }
 
     async fn block_height(&self) -> Result<u64> {
@@ -600,7 +633,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_gc_last_inserted() {
-        let db = SqliteOptions {
+        let db = LightClientSqliteOptions {
             num_leaves: 1,
             ..Default::default()
         }
@@ -625,7 +658,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_gc_last_selected() {
-        let db = SqliteOptions {
+        let db = LightClientSqliteOptions {
             num_leaves: 2,
             ..Default::default()
         }
@@ -772,7 +805,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_stake_table_gc() {
-        let db = SqliteOptions {
+        let db = LightClientSqliteOptions {
             num_stake_tables: 2,
             ..Default::default()
         }
