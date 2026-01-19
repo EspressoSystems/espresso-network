@@ -9,27 +9,26 @@ use bimap::BiHashMap;
 use bon::Builder;
 use bytes::{Bytes, BytesMut};
 use parking_lot::Mutex;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use snow::{Builder, HandshakeState, TransportState};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     spawn,
     sync::{
-        mpsc::{self, Receiver, Sender},
         Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore,
+        mpsc::{self, Receiver, Sender},
     },
     task::{self, AbortHandle, JoinHandle, JoinSet},
-    time::{sleep, timeout, Interval, MissedTickBehavior},
+    time::{Interval, MissedTickBehavior, sleep, timeout},
 };
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    chan,
+    Address, Id, Keypair, MAX_MESSAGE_SIZE, NetworkError, PublicKey, Role, chan,
     error::Empty,
     frame::{Header, Type},
     time::{Countdown, Timestamp},
-    Address, Id, Keypair, NetworkError, PublicKey, Role, MAX_MESSAGE_SIZE,
 };
 
 type Budget = Arc<Semaphore>;

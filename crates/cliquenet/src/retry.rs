@@ -6,25 +6,25 @@ use std::{
     io::Cursor,
     ops::Deref,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
 use bytes::{Bytes, BytesMut};
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::{
     spawn,
-    sync::mpsc::{error::TrySendError, Sender},
+    sync::mpsc::{Sender, error::TrySendError},
     task::JoinHandle,
     time::{self, Duration, Instant},
 };
 use tracing::warn;
 
-use crate::{net::Command, Address, Id, Network, PublicKey, Role};
+use crate::{Address, Id, Network, PublicKey, Role, net::Command};
 
 type Result<T> = std::result::Result<T, NetworkDown>;
 

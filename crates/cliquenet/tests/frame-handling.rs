@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::{Bytes, BytesMut};
-use cliquenet::{retry::Data, Address, Keypair, NetConf, Network, Retry};
+use cliquenet::{Address, Keypair, NetConf, Network, Retry, retry::Data};
 use rand::RngCore;
 
 /// Send and receive messages of various sizes between 1 byte and 5 MiB.

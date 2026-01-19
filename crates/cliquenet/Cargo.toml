@@ -1,8 +1,8 @@
 [package]
 name = "cliquenet"
+version = "0.1.0"
+edition = "2024"
 description = "A fully connected mesh network"
-version.workspace = true
-edition.workspace = true
 
 [dependencies]
 bon = { workspace = true }

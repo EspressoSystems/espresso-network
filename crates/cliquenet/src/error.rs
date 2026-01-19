@@ -2,7 +2,7 @@ use std::io;
 
 use thiserror::Error;
 
-use crate::{frame::InvalidHeader, Address};
+use crate::{Address, frame::InvalidHeader};
 
 /// The empty type has no values.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
