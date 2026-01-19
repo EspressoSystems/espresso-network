@@ -31,7 +31,7 @@ async fn multiple_frames() {
                         .name("frames")
                         .keypair(x)
                         .label(k)
-                        .bind(a.into())
+                        .bind(a)
                         .parties(
                             parties
                                 .iter()
