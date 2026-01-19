@@ -5594,11 +5594,7 @@ mod test {
             .expect("failed to get total_distributed_supply");
         tracing::info!("total_distributed_supply={total_distributed_supply:?}");
 
-        assert!(total_distributed_supply != "0.0");
-
-        assert!(total_distributed_supply != "");
-
-        assert!(total_distributed_supply != "11111111111");
+        assert_eq!(total_distributed_supply, "0.0");
 
         Ok(())
     }
