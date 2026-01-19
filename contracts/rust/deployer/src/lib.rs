@@ -1646,6 +1646,8 @@ where
             },
         }
     }
+    // should never reach here, but defensive fallback to return false
+    Ok(false)
 }
 
 #[cfg(test)]
