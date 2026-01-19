@@ -19,6 +19,11 @@ use crate::{
 
 /// Interface to a query server providing the light client API.
 pub trait Client: Send + Sync + 'static {
+    /// Get the number of blocks known to be in the chain.
+    ///
+    /// This is equivalent to one more than the block number of the latest known block.
+    fn block_height(&self) -> impl Send + Future<Output = Result<u64>>;
+
     /// Get a finality proof for the requested leaf.
     ///
     /// Optionally, the client may specify the height of a known-finalized leaf. In this case, the
@@ -99,6 +104,10 @@ impl QueryServiceClient {
 }
 
 impl Client for QueryServiceClient {
+    async fn block_height(&self) -> Result<u64> {
+        Ok(self.client.get("/node/block-height").send().await?)
+    }
+
     async fn leaf_proof(
         &self,
         id: impl Into<LeafRequest> + Send,
@@ -213,6 +222,48 @@ mod test {
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::AlwaysTrueQuorum,
     };
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_block_height() {
+        let port = pick_unused_port().expect("No ports free");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let _network = TestNetwork::new(
+            config,
+            SequencerVersions::<EpochVersion, EpochVersion>::new(),
+        )
+        .await;
+        let client = QueryServiceClient::new(url);
+
+        // Check that the block height increases over time.
+        let initial_height = client.block_height().await.unwrap();
+        tracing::info!(initial_height);
+
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let height = client.block_height().await.unwrap();
+            if height > initial_height {
+                tracing::info!(height, initial_height, "height increased");
+                break;
+            }
+            tracing::info!("waiting for height to increase");
+        }
+    }
 
     #[tokio::test]
     #[test_log::test]
