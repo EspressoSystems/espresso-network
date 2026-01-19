@@ -1,12 +1,12 @@
 use anyhow::{anyhow, ensure, Context, Result};
 use espresso_types::{Header, Payload};
+use hotshot_query_service::VidCommon;
 use hotshot_types::{
-    data::{ns_table::parse_ns_table, VidCommitment, VidCommon},
+    data::{ns_table::parse_ns_table, VidCommitment},
     traits::block_contents::EncodeBytes,
     vid::{
         advz::{advz_scheme, ADVZScheme},
         avidm::{init_avidm_param, AvidMScheme},
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
     },
 };
 use jf_advz::VidScheme;
@@ -57,17 +57,6 @@ impl PayloadProof {
                     parse_ns_table(bytes.len(), &header.ns_table().encode()),
                 )
                 .map(VidCommitment::V1)
-                .map_err(|err| anyhow!("computing AvidM commitment: {err:#}"))?
-            },
-            VidCommon::V2(avidm_gf2) => {
-                let param = init_avidm_gf2_param(avidm_gf2.param.total_weights)?;
-                let bytes = self.payload.encode();
-                AvidmGf2Scheme::commit(
-                    &param,
-                    &bytes,
-                    parse_ns_table(bytes.len(), &header.ns_table().encode()),
-                )
-                .map(|(comm, _)| VidCommitment::V2(comm))
                 .map_err(|err| anyhow!("computing AvidM commitment: {err:#}"))?
             },
         };

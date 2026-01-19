@@ -22,11 +22,12 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegi
 use hotshot_query_service::{
     availability::{LeafHash, LeafId, LeafQueryData},
     node::{BlockHash, BlockId},
+    VidCommon,
 };
 use hotshot_types::{
     data::{
         vid_commitment, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        VidCommon, ViewNumber,
+        ViewNumber,
     },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,

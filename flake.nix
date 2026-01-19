@@ -202,6 +202,9 @@
       };
       devShells.default =
         let
+          # stableToolchain = pkgs.rust-bin.stable."1.92.0".minimal.override {
+          #   extensions = ["llvm-tools-preview" "rust-src" "clippy"];
+          # };
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];

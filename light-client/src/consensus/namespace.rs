@@ -1,6 +1,6 @@
 use anyhow::{bail, ensure, Context, Result};
 use espresso_types::{Header, NamespaceId, NsProof, Transaction};
-use hotshot_types::data::VidCommon;
+use hotshot_query_service::VidCommon;
 use serde::{Deserialize, Serialize};
 
 /// Information required to verify a payload.
