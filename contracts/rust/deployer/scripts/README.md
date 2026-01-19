@@ -28,6 +28,11 @@ cp .env $ENV_FILE
   - `ESPRESSO_SEQUENCER_ETH_MNEMONIC`
   - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS`
 
+- The default ops and safe exit timelock delays in this script is 30 and 60 seconds respectively. If you want to change
+  it then also add the following fields to the ENV_FILE:
+  - `OPS_DELAY` (in seconds)
+  - `SAFE_EXIT_DELAY` (in seconds)
+
 2. set the RPC_URL, ACCOUNT_INDEX and OUTPUT_FILE
 
 ```bash
@@ -39,7 +44,7 @@ export OUTPUT_FILE={YOUR_OUTPUT_FILE}  # Optional: customize output file
 3. Run the script
 
 ```bash
-./contracts/rust/deployer/scripts/testnet-governance-deploy.sh --env-file $OUTPUT_FILE
+./contracts/rust/deployer/scripts/testnet-governance-deploy.sh --env-file $ENV_FILE
 ```
 
 ## Running the test flow
@@ -49,9 +54,12 @@ export OUTPUT_FILE={YOUR_OUTPUT_FILE}  # Optional: customize output file
 3. Have your ledger connected (assumes account index = 0 otherwise set `export ACCOUNT_INDEX=YOUR_ACCOUNT_INDEX`)
 
 ```bash
-export RPC_URL=
+export RPC_URL={YOUR_RPC_URL}
 ./contracts/rust/deployer/scripts/testnet-governance-flows.sh --ledger --env-file $OUTPUT_FILE
 ```
+
+**Note**: The `$OUTPUT_FILE` from the deploy script contains the deployed contract addresses and should be used as
+`--env-file` for the flows script.
 
 ## Notes
 

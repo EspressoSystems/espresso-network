@@ -102,7 +102,7 @@ if $USE_LEDGER; then
     unset ESPRESSO_DEPLOYER_ACCOUNT_INDEX
 fi
 
-# echo "=== Deploying Governance Contracts ==="
+echo "=== Deploying Governance Contracts ==="
 echo "RPC URL: $RPC_URL"
 if ! is_localhost_rpc "$RPC_URL"; then
     echo "WARNING: This will deploy to a non-localhost network!"
