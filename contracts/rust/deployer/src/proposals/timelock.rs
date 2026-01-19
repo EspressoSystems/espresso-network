@@ -417,7 +417,7 @@ pub async fn execute_timelock_operation(
     // check that the tx is executed (with retry for RPC timing)
     let check_name = format!("Execute operation {}", operation_id);
     let is_done = retry_until_true(&check_name, || async {
-        Ok(timelock.is_operation_done(operation_id, &provider).await?)
+        Ok(timelock.is_operation_done(operation_id, &provider).await)
     })
     .await?;
 
