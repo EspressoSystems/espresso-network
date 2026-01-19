@@ -1,10 +1,7 @@
-use std::{
-    collections::HashMap,
-    net::Ipv4Addr,
-};
+use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::{Bytes, BytesMut};
-use cliquenet::{Address, Keypair, NetConf, Network, Retry, retry::Data};
+use cliquenet::{retry::Data, Address, Keypair, NetConf, Network, Retry};
 use rand::RngCore;
 
 /// Send and receive messages of various sizes between 1 byte and 5 MiB.
@@ -16,7 +13,11 @@ async fn multiple_frames() {
 
     let parties = (0..PARTIES)
         .map(|i| {
-            (i, Keypair::generate().unwrap(), Address::from((Ipv4Addr::LOCALHOST, 50000 + i)))
+            (
+                i,
+                Keypair::generate().unwrap(),
+                Address::from((Ipv4Addr::LOCALHOST, 50000 + i)),
+            )
         })
         .collect::<Vec<_>>();
 
@@ -31,7 +32,11 @@ async fn multiple_frames() {
                         .keypair(x)
                         .label(k)
                         .bind(a.into())
-                        .parties(parties.iter().map(|(i, x, a)| (*i, x.public_key(), a.clone())))
+                        .parties(
+                            parties
+                                .iter()
+                                .map(|(i, x, a)| (*i, x.public_key(), a.clone())),
+                        )
                         .build(),
                 )
                 .await

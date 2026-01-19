@@ -14,8 +14,9 @@ pub use error::NetworkError;
 pub use id::Id;
 pub use net::{NetConf, NetConfBuilder, Network};
 pub use retry::Retry;
-pub use x25519::{Keypair, SecretKey, PublicKey};
-pub use x25519::{InvalidKeypair, InvalidSecretKey, InvalidPublicKey};
+pub use x25519::{
+    InvalidKeypair, InvalidPublicKey, InvalidSecretKey, Keypair, PublicKey, SecretKey,
+};
 
 /// Max. number of bytes for a message (potentially consisting of several frames).
 pub const MAX_MESSAGE_SIZE: usize = 5 * 1024 * 1024;

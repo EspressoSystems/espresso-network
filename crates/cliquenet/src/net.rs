@@ -29,7 +29,7 @@ use crate::{
     error::Empty,
     frame::{Header, Type},
     time::{Countdown, Timestamp},
-    Address, Id, NetworkError, Role, MAX_MESSAGE_SIZE, Keypair, PublicKey
+    Address, Id, Keypair, NetworkError, PublicKey, Role, MAX_MESSAGE_SIZE,
 };
 
 type Budget = Arc<Semaphore>;
@@ -1003,21 +1003,21 @@ where
                     Ok(Ok(x)) => {
                         debug!(%name, node = %this.0, peer = %to.0, %addr, "connection established");
                         return x;
-                    }
+                    },
                     Ok(Err(err)) => {
                         warn!(%name, node = %this.0, peer = %to.0, %addr, %err, "handshake failure");
-                    }
+                    },
                     Err(_) => {
                         warn!(%name, node = %this.0, peer = %to.0, %addr, "handshake timeout");
-                    }
+                    },
                 }
-            }
+            },
             Ok(Err(err)) => {
                 warn!(%name, node = %this.0, peer = %to.0, %addr, %err, "failed to connect");
-            }
+            },
             Err(_) => {
                 warn!(%name, node = %this.0, peer = %to.0, %addr, "connect timeout");
-            }
+            },
         }
     }
 
@@ -1027,7 +1027,7 @@ where
 /// Perform a noise handshake as initiator with the remote party.
 async fn handshake(
     mut hs: HandshakeState,
-    mut stream: TcpStream
+    mut stream: TcpStream,
 ) -> Result<(TcpStream, TransportState)> {
     let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
     let n = hs.write_message(&[], &mut b)?;
@@ -1043,7 +1043,7 @@ async fn handshake(
 /// Perform a noise handshake as responder with a remote party.
 async fn on_handshake(
     mut hs: HandshakeState,
-    mut stream: TcpStream
+    mut stream: TcpStream,
 ) -> Result<(TcpStream, TransportState)> {
     stream.set_nodelay(true)?;
     let (h, m) = recv_frame(&mut stream).await?;
@@ -1159,12 +1159,12 @@ where
                 let h = Header::ping(n as u16);
                 send_frame(&mut writer, h, &buf[..n]).await?;
                 countdown.start(REPLY_TIMEOUT)
-            }
+            },
             Message::Pong(pong) => {
                 let n = state.lock().write_message(&pong.to_bytes()[..], &mut buf)?;
                 let h = Header::pong(n as u16);
                 send_frame(&mut writer, h, &buf[..n]).await?;
-            }
+            },
             Message::Data(msg) => {
                 let mut it = msg.chunks(MAX_PAYLOAD_SIZE).peekable();
                 while let Some(m) = it.next() {
@@ -1176,7 +1176,7 @@ where
                     };
                     send_frame(&mut writer, h, &buf[..n]).await?
                 }
-            }
+            },
         }
     }
     Ok(())

@@ -32,7 +32,7 @@ impl<T: NodeType> Cliquenet<T> {
         key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
-        parties: P
+        parties: P,
     ) -> Result<Self, NetworkError>
     where
         A: Into<Address>,
@@ -57,8 +57,6 @@ impl<T: NodeType> Cliquenet<T> {
 
 pub fn derive_keypair<K: SignatureKey>(k: &K::PrivateKey) -> Keypair {
     SecretKey::from(blake3::derive_key("cliquenet key", &k.to_bytes())).into()
-
-
 }
 
 #[async_trait]
@@ -160,7 +158,9 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
             let parties = parties.clone();
             let future = async move {
                 let (s, k, a) = &parties[i as usize];
-                let it = parties.iter().map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
+                let it = parties
+                    .iter()
+                    .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
                 let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it)
                     .await
                     .unwrap();

@@ -1,5 +1,4 @@
-use std::cmp::Ordering;
-use std::fmt;
+use std::{cmp::Ordering, fmt};
 
 use ed25519_compact::x25519;
 
@@ -67,7 +66,10 @@ impl From<SecretKey> for Keypair {
     fn from(k: SecretKey) -> Self {
         let p = k.public_key();
         Self {
-            pair: x25519::KeyPair { sk: k.key, pk: p.key },
+            pair: x25519::KeyPair {
+                sk: k.key,
+                pk: p.key,
+            },
         }
     }
 }
@@ -163,7 +165,7 @@ impl TryFrom<&str> for SecretKey {
 impl From<[u8; 32]> for SecretKey {
     fn from(bytes: [u8; 32]) -> Self {
         SecretKey {
-            key: x25519::SecretKey::new(bytes)
+            key: x25519::SecretKey::new(bytes),
         }
     }
 }
@@ -179,5 +181,3 @@ pub struct InvalidSecretKey(());
 #[derive(Debug, thiserror::Error)]
 #[error("invalid public key")]
 pub struct InvalidPublicKey(());
-
-
