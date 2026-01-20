@@ -9,7 +9,8 @@ use rand::RngCore;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    runtime::Runtime, time::sleep,
+    runtime::Runtime,
+    time::sleep,
 };
 
 const A: u8 = 0;
