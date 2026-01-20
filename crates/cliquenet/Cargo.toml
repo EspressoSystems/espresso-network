@@ -23,8 +23,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.8.1"
-tracing-subscriber = { workspace = true }
+portpicker = { workspace = true }
 quickcheck = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [[bench]]
 name = "bench1"

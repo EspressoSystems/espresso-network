@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::LazyLock, time::Duration};
+use std::{collections::HashMap, io, net::Ipv4Addr, sync::LazyLock, time::Duration};
 
 use cliquenet::{
     Address, Keypair, MAX_MESSAGE_SIZE, NetConf, Network, PublicKey, Retry,
@@ -46,12 +46,18 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
         (
             A,
             a.public_key(),
-            Address::try_from("127.0.0.1:55000").unwrap(),
+            Address::from((
+                Ipv4Addr::from([127, 0, 0, 1]),
+                portpicker::pick_unused_port().unwrap(),
+            )),
         ),
         (
             B,
             b.public_key(),
-            Address::try_from("127.0.0.1:56000").unwrap(),
+            Address::from((
+                Ipv4Addr::from([127, 0, 0, 1]),
+                portpicker::pick_unused_port().unwrap(),
+            )),
         ),
     ];
 
