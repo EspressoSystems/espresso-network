@@ -13,8 +13,6 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
     PeerConfig, ValidatorConfig,
 };
-use libp2p_identity::PeerId;
-use multiaddr::Multiaddr;
 use surf_disco::{error::ClientError, Client};
 use tide_disco::Url;
 use tokio::time::sleep;
@@ -170,8 +168,7 @@ pub struct MultiValidatorArgs {
 pub async fn get_complete_config<TYPES: NodeType>(
     client: &OrchestratorClient,
     mut validator_config: ValidatorConfig<TYPES>,
-    libp2p_advertise_address: Option<Multiaddr>,
-    libp2p_public_key: Option<PeerId>,
+    cliquenet_advertise_address: String,
 ) -> anyhow::Result<(
     NetworkConfig<TYPES>,
     ValidatorConfig<TYPES>,
@@ -179,11 +176,7 @@ pub async fn get_complete_config<TYPES: NodeType>(
 )> {
     // get the configuration from the orchestrator
     let run_config: NetworkConfig<TYPES> = client
-        .post_and_wait_all_public_keys::<TYPES>(
-            &mut validator_config,
-            libp2p_advertise_address,
-            libp2p_public_key,
-        )
+        .post_and_wait_all_public_keys::<TYPES>(&mut validator_config, cliquenet_advertise_address)
         .await;
 
     info!(
@@ -256,22 +249,15 @@ impl OrchestratorClient {
     #[allow(clippy::type_complexity)]
     pub async fn get_config_without_peer<TYPES: NodeType>(
         &self,
-        libp2p_advertise_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
+        cliquenet_address: String,
     ) -> anyhow::Result<NetworkConfig<TYPES>> {
-        // Serialize our (possible) libp2p-specific data
-        let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&(
-            libp2p_advertise_address,
-            libp2p_public_key,
-        ))?;
+        let cliquenet_address_bytes = cliquenet_address.as_bytes();
 
         let identity = |client: Client<ClientError, OrchestratorVersion>| {
-            // We need to clone here to move it into the closure
-            let request_body = request_body.clone();
             async move {
                 let node_index: Result<u16, ClientError> = client
                     .post("api/identity")
-                    .body_binary(&request_body)
+                    .body_binary(&cliquenet_address_bytes)
                     .expect("failed to set request body")
                     .send()
                     .await;
@@ -403,18 +389,16 @@ impl OrchestratorClient {
     pub async fn post_and_wait_all_public_keys<TYPES: NodeType>(
         &self,
         validator_config: &mut ValidatorConfig<TYPES>,
-        libp2p_advertise_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
+        cliquenet_advertise_address: String,
     ) -> NetworkConfig<TYPES> {
         let pubkey: Vec<u8> =
             PeerConfig::<TYPES>::to_bytes(&validator_config.public_config()).clone();
         let da_requested: bool = validator_config.is_da;
 
-        // Serialize our (possible) libp2p-specific data
+        // Serialize our cliquenet advertise address
         let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&(
             pubkey,
-            libp2p_advertise_address,
-            libp2p_public_key,
+            cliquenet_advertise_address,
         ))
         .expect("failed to serialize request");
 

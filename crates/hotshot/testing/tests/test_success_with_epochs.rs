@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl,
+    CliquenetImpl, CombinedImpl, EpochsTestVersions, PushCdnImpl,
     TestTwoStakeTablesTypes, TestTypes, TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
@@ -13,7 +13,7 @@ use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::
 
 cross_tests!(
     TestName: test_success_with_epochs,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
+    Impls: [PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
     Versions: [EpochsTestVersions],
     Ignore: false,

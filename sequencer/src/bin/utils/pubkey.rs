@@ -3,10 +3,9 @@ use std::str::FromStr;
 use anyhow::bail;
 use clap::Parser;
 use espresso_types::{PrivKey, PubKey};
-use hotshot::{traits::implementations::derive_libp2p_peer_id, types::SignatureKey};
+use hotshot::types::SignatureKey;
 use hotshot_types::{
     light_client::{StateKeyPair, StateSignKey},
-    signature_key::BLSPubKey,
 };
 use tagged_base64::TaggedBase64;
 
@@ -43,22 +42,9 @@ pub struct Options {
 }
 
 pub fn run(opt: Options) {
-    match (opt.libp2p, opt.key) {
+    match opt.key {
         // Non-libp2p
-        (false, PrivateKey::Bls(key)) => println!("{}", PubKey::from_private(&key)),
-        (false, PrivateKey::Schnorr(key)) => {
-            println!("{}", StateKeyPair::from_sign_key(key).ver_key())
-        },
-
-        // Libp2p
-        (true, PrivateKey::Bls(key)) => {
-            println!(
-                "{}",
-                derive_libp2p_peer_id::<BLSPubKey>(&key).expect("Failed to derive libp2p peer ID")
-            );
-        },
-        (true, _) => {
-            eprintln!("Key type unsupported for libp2p peer ID derivation");
-        },
+        PrivateKey::Bls(key) => println!("{}", PubKey::from_private(&key)),
+        PrivateKey::Schnorr(key) => println!("{}", StateKeyPair::from_sign_key(key).ver_key()),
     }
 }

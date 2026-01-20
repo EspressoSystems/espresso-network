@@ -1,9 +1,7 @@
 use std::{num::NonZeroUsize, time::Duration};
 
 use hotshot_types::{
-    network::{
-        BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
-    },
+    network::{BuilderType, CombinedNetworkConfig, NetworkConfig, RandomBuilderConfig},
     HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
 };
 use serde::{Deserialize, Serialize};
@@ -226,7 +224,7 @@ pub struct PublicNetworkConfig {
     seed: [u8; 32],
     transaction_size: usize,
     key_type_name: String,
-    libp2p_config: Option<Libp2pConfig>,
+    cliquenet_peers: Vec<String>,
     config: PublicHotShotConfig,
     cdn_marshal_address: Option<String>,
     combined_network_config: Option<CombinedNetworkConfig>,
@@ -251,7 +249,7 @@ impl From<NetworkConfig<SeqTypes>> for PublicNetworkConfig {
             seed: cfg.seed,
             transaction_size: cfg.transaction_size,
             key_type_name: cfg.key_type_name,
-            libp2p_config: cfg.libp2p_config,
+            cliquenet_peers: cfg.cliquenet_peers,
             config: cfg.config.into(),
             cdn_marshal_address: cfg.cdn_marshal_address,
             combined_network_config: cfg.combined_network_config,
@@ -288,7 +286,7 @@ impl PublicNetworkConfig {
             seed: self.seed,
             transaction_size: self.transaction_size,
             key_type_name: self.key_type_name,
-            libp2p_config: self.libp2p_config,
+            cliquenet_peers: self.cliquenet_peers,
             config: self.config.into_hotshot_config(),
             cdn_marshal_address: self.cdn_marshal_address,
             combined_network_config: self.combined_network_config,
