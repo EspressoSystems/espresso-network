@@ -410,6 +410,16 @@ impl Header {
             _ => None,
         }
     }
+
+    pub fn set_next_stake_table_hash(&mut self, hash: StakeTableHash) -> bool {
+        match self {
+            Self::V4(fields) | Self::V5(fields) => {
+                fields.next_stake_table_hash = Some(hash);
+                true
+            },
+            _ => false,
+        }
+    }
 }
 
 // Getter for a field which is the same across all versions.
@@ -826,6 +836,10 @@ impl Header {
 
     pub fn ns_table(&self) -> &NsTable {
         field!(self.ns_table)
+    }
+
+    pub fn ns_table_mut(&mut self) -> &mut NsTable {
+        &mut *field_mut!(self.ns_table)
     }
 
     /// Root Commitment of Block Merkle Tree

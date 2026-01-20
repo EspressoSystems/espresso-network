@@ -16,9 +16,9 @@ use crate::{
     proposals::{
         multisig::{
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
-            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
-            StakeTableV2UpgradeParams, TransferOwnershipParams,
+            upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
+            upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+            LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
             derive_timelock_address_from_contract_type, perform_timelock_operation,
@@ -145,35 +145,61 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let admin = provider.default_signer_address();
         match target {
             Contract::FeeContractProxy => {
-                let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
+                if contracts.address(Contract::FeeContractProxy).is_some() {
+                    // Upgrade path
+                    let use_multisig = self.use_multisig;
+                    let dry_run = self.dry_run;
+                    let rpc_url = self.rpc_url.clone();
 
-                if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    // FeeContract uses OpsTimelock because:
-                    // - It handles critical fee collection and distribution logic
-                    // - May require emergency updates for security or functionality
-                    // - OpsTimelock provides a shorter delay for critical operations
-                    tracing::info!(
-                        "Transferring ownership to OpsTimelock: {:?}",
-                        use_timelock_owner
-                    );
-                    // deployer is the timelock owner
-                    if use_timelock_owner {
-                        let timelock_addr = derive_timelock_address_from_contract_type(
-                            OwnableContract::FeeContractProxy,
+                    tracing::info!(?dry_run, ?use_multisig, "Upgrading FeeContract to V1.0.1");
+                    if use_multisig {
+                        upgrade_fee_contract_multisig_owner(
+                            provider,
                             contracts,
-                        )?;
+                            rpc_url.to_string(),
+                            dry_run,
+                        )
+                        .await?;
+                    } else {
+                        crate::upgrade_fee_v1(provider, contracts).await?;
+                    }
+                } else {
+                    // Deploy path
+                    let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
+
+                    if let Some(use_timelock_owner) = self.use_timelock_owner {
+                        // FeeContract uses OpsTimelock because:
+                        // - It handles critical fee collection and distribution logic
+                        // - May require emergency updates for security or functionality
+                        // - OpsTimelock provides a shorter delay for critical operations
+                        tracing::info!(
+                            "Transferring ownership to OpsTimelock: {:?}",
+                            use_timelock_owner
+                        );
+                        // deployer is the timelock owner
+                        if use_timelock_owner {
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                OwnableContract::FeeContractProxy,
+                                contracts,
+                            )?;
+                            crate::transfer_ownership(
+                                provider,
+                                Contract::FeeContractProxy,
+                                addr,
+                                timelock_addr,
+                            )
+                            .await?;
+                        }
+                    } else if let Some(multisig) = self.multisig {
+                        tracing::info!("Transferring ownership to multisig: {:?}", multisig);
                         crate::transfer_ownership(
                             provider,
                             Contract::FeeContractProxy,
                             addr,
-                            timelock_addr,
+                            multisig,
                         )
                         .await?;
                     }
-                } else if let Some(multisig) = self.multisig {
-                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
-                    crate::transfer_ownership(provider, Contract::FeeContractProxy, addr, multisig)
-                        .await?;
                 }
             },
             Contract::EspTokenProxy => {
@@ -577,6 +603,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
     // Perform a timelock operation
     ///
+    /// This function can perform timelock operations via two paths:
+    /// - **Multisig path**: If `multisig` is set, the operation will be proposed via Safe multisig
+    /// - **EOA path**: If `multisig` is not set, the operation will be executed directly via EOA (useful for tests/local development)
+    ///
     /// Parameters:
     /// - `contracts`: ref to deployed contracts
     ///
@@ -659,19 +689,24 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             (operation, None)
         };
 
-        let multisig_proposer = self.multisig.context(
-            "Multisig address must be set when performing timelock operations. Use \
-             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
-        )?;
-
-        let rpc_url = self.rpc_url.to_string();
-        let use_hardware_wallet = self.ledger;
-
-        let params = TimelockOperationParams {
-            multisig_proposer: Some(multisig_proposer),
-            rpc_url: Some(rpc_url),
-            use_hardware_wallet,
-            operation_id,
+        let params = if let Some(multisig_proposer) = self.multisig {
+            // Multisig path
+            let rpc_url = self.rpc_url.to_string();
+            let use_hardware_wallet = self.ledger;
+            TimelockOperationParams {
+                multisig_proposer: Some(multisig_proposer),
+                rpc_url: Some(rpc_url),
+                use_hardware_wallet,
+                operation_id,
+            }
+        } else {
+            // EOA path (for tests/local development)
+            TimelockOperationParams {
+                multisig_proposer: None,
+                rpc_url: None,
+                use_hardware_wallet: false,
+                operation_id,
+            }
         };
 
         perform_timelock_operation(

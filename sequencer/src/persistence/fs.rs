@@ -1927,6 +1927,7 @@ impl MembershipPersistence for Persistence {
     ///
     async fn load_events(
         &self,
+        from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
@@ -1996,7 +1997,7 @@ impl MembershipPersistence for Persistence {
             let block_number = parts[0].parse::<u64>()?;
             let log_index = parts[1].parse::<u64>()?;
 
-            if block_number > query_l1_block {
+            if block_number < from_l1_block || block_number > query_l1_block {
                 continue;
             }
 

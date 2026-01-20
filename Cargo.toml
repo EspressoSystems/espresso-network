@@ -138,6 +138,7 @@ indexmap = { version = "2", features = ["serde"] }
 lazy_static = "1"
 libp2p-identity = { version = "0.2", features = ["ed25519", "serde"] }
 libp2p-swarm-derive = { version = "0.35" }
+moka = { version = "0.12.12", features = ["future"] }
 memoize = { version = "0.4", features = ["full"] }
 multiaddr = { version = "0.18" }
 num_cpus = "1"

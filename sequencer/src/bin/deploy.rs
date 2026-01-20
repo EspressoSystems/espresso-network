@@ -220,6 +220,10 @@ struct Options {
     #[clap(short, long, name = "OUT", env = "ESPRESSO_DEPLOYER_OUT_PATH")]
     out: Option<PathBuf>,
 
+    /// Suppress stdout output when writing to file
+    #[clap(long, short = 'q')]
+    quiet: bool,
+
     #[clap(flatten)]
     contracts: DeployedContracts,
 
@@ -400,6 +404,9 @@ struct Options {
         requires = "perform_timelock_operation"
     )]
     timelock_operation_id: Option<String>,
+    /// Option to upgrade fee contract v1 patch version
+    #[clap(long, default_value = "false")]
+    upgrade_fee_v1: bool,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -795,6 +802,10 @@ async fn main() -> anyhow::Result<()> {
         args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
+    if opt.upgrade_fee_v1 {
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+    }
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()
@@ -803,6 +814,10 @@ async fn main() -> anyhow::Result<()> {
             .write(true)
             .open(out)?;
         contracts.write(file)?;
+        // Also write to stdout so users can see output immediately
+        if !opt.quiet {
+            contracts.write(stdout())?;
+        }
     } else {
         contracts.write(stdout())?;
     }
