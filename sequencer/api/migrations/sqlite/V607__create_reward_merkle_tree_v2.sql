@@ -5,7 +5,7 @@
 CREATE TABLE reward_merkle_tree_v2 (
   path JSONB NOT NULL, 
   created BIGINT NOT NULL, 
-  hash_id INT NOT NULL REFERENCES hash (id), 
+  hash_id JSONB NOT NULL,
   children JSONB, 
   children_bitvec BLOB, 
   idx JSONB, 
