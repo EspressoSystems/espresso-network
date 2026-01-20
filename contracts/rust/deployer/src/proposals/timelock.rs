@@ -32,7 +32,7 @@ pub struct TimelockOperationPayload {
 }
 
 /// Parameters for executing timelock operations (how to route/execute)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TimelockOperationParams {
     /// Optional multisig proposer address. If provided, operation will be routed through Safe proposal.
     pub multisig_proposer: Option<Address>,
@@ -42,17 +42,6 @@ pub struct TimelockOperationParams {
     pub use_hardware_wallet: bool,
     /// Optional operation ID (for cancel operations when you already have the ID)
     pub operation_id: Option<B256>,
-}
-
-impl Default for TimelockOperationParams {
-    fn default() -> Self {
-        Self {
-            multisig_proposer: None,
-            rpc_url: None,
-            use_hardware_wallet: false,
-            operation_id: None,
-        }
-    }
 }
 
 /// Types of timelock operations
