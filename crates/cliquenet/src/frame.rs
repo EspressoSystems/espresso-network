@@ -8,11 +8,11 @@
 //!  0                   1                   2                   3
 //!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |       |       |P| Res |                                       |
-//! |Version|  Type |a| erv |           Payload length              |
-//! |       |       |r| ed  |                                       |
-//! |       |       |t|     |                                       |
-//! +-------+-------+-+-----+---------------------------------------+
+//! |       |       |P|             |                               |
+//! |Version|  Type |a|  Reserved   |        Payload length         |
+//! |       |       |r|             |                               |
+//! |       |       |t|             |                               |
+//! +-------+-------+-+-------------+-------------------------------+
 //! ```
 //!
 //! where
@@ -23,8 +23,8 @@
 //!    - Ping (1)
 //!    - Pong (2)
 //! - Partial (1 bit)
-//! - Reserved (3 bits)
-//! - Payload length (20 bits)
+//! - Reserved (7 bits)
+//! - Payload length (16 bits)
 //!
 //! If the partial bit is set, the frame is only a part of the message and the read task
 //! will assemble all frames to produce the final message. The maximum total message size
@@ -38,9 +38,8 @@ pub struct Header(u32);
 
 impl Header {
     /// Create a data header with the given payload length.
-    pub fn data(len: u32) -> Self {
-        debug_assert_eq!(len, len & 0x000F_FFFF);
-        Self(len & 0x000F_FFFF)
+    pub fn data(len: u16) -> Self {
+        Self(len as u32)
     }
 
     /// Create a ping header with the given payload length.
@@ -89,8 +88,8 @@ impl Header {
     }
 
     /// Get the payload length.
-    pub fn len(self) -> u32 {
-        self.0 & 0xFFFFF
+    pub fn len(self) -> u16 {
+        (self.0 & 0xFFFF) as u16
     }
 
     /// Convert this header into a byte array.
@@ -151,8 +150,8 @@ mod tests {
     use super::{Header, Type};
 
     quickcheck! {
-        fn data(len: u32) -> bool {
-            let hdr = Header::data(len & 0x000F_FFFF);
+        fn data(len: u16) -> bool {
+            let hdr = Header::data(len);
             hdr.is_data() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Data)
         }
 
@@ -166,8 +165,8 @@ mod tests {
             hdr.is_pong() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Pong)
         }
 
-        fn partial_data(len: u32) -> bool {
-            Header::data(len & 0x000F_FFFF).partial().is_partial()
+        fn partial_data(len: u16) -> bool {
+            Header::data(len).partial().is_partial()
         }
 
         fn partial_ping(len: u16) -> bool {
@@ -178,17 +177,16 @@ mod tests {
             Header::pong(len).partial().is_partial()
         }
 
-        fn data_len(len: u32) -> bool {
-            let len = 0x000F_FFFF;
+        fn data_len(len: u16) -> bool {
             Header::data(len).len() == len
         }
 
         fn ping_len(len: u16) -> bool {
-            Header::ping(len).len() == len.into()
+            Header::ping(len).len() == len
         }
 
         fn pong_len(len: u16) -> bool {
-            Header::pong(len).len() == len.into()
+            Header::pong(len).len() == len
         }
     }
 }
