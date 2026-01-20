@@ -653,3 +653,62 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
 
     Ok(())
 }
+
+// Add this function (make sure it's pub)
+/// Call the generic proposal script to create a Safe multisig proposal
+pub async fn call_propose_transaction_generic_script(
+    target: Address,
+    function_signature: String,
+    function_args: Vec<String>,
+    rpc_url: String,
+    safe_address: Address,
+    use_hardware_wallet: bool,
+) -> Result<Output> {
+    let script_path = find_script_path()?;
+
+    let mut cmd = Command::new(script_path);
+    cmd.arg("proposeTransactionGeneric.ts")
+        .arg("--from-rust")
+        .arg("--target")
+        .arg(target.to_string())
+        .arg("--function-signature")
+        .arg(&function_signature)
+        .arg("--function-args");
+
+    // Add function arguments
+    for arg in &function_args {
+        cmd.arg(arg);
+    }
+
+    cmd.arg("--value")
+        .arg("0")
+        .arg("--rpc-url")
+        .arg(&rpc_url)
+        .arg("--safe-address")
+        .arg(safe_address.to_string())
+        .arg("--use-hardware-wallet")
+        .arg(use_hardware_wallet.to_string())
+        .arg("--dry-run")
+        .arg("false")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd.output().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to execute proposeTransactionGeneric.ts script: {}",
+            e
+        )
+    })?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "proposeTransactionGeneric.ts script failed:\nSTDOUT: {}\nSTDERR: {}",
+            stdout,
+            stderr
+        );
+    }
+
+    Ok(output)
+}

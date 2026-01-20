@@ -21,9 +21,8 @@ use crate::{
             StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
-            cancel_timelock_operation, derive_timelock_address_from_contract_type,
-            execute_timelock_operation, schedule_timelock_operation, TimelockOperationPayload,
-            TimelockOperationType,
+            derive_timelock_address_from_contract_type, perform_timelock_operation,
+            TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
         },
     },
     Contract, Contracts, OwnableContract,
@@ -133,6 +132,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     transfer_ownership_from_eoa: Option<bool>,
     #[builder(default)]
     transfer_ownership_new_owner: Option<Address>,
+    #[builder(default)]
+    ledger: bool,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -630,35 +631,30 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             delay,
         };
 
-        match timelock_operation_type {
-            TimelockOperationType::Schedule => {
-                let operation_id = schedule_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation scheduled with ID: {}", operation_id);
-            },
-            TimelockOperationType::Execute => {
-                let tx_id = execute_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation executed with ID: {}", tx_id);
-            },
-            TimelockOperationType::Cancel => {
-                let tx_id = cancel_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation cancelled with ID: {}", tx_id);
-            },
-        }
+        // The timelock proposer is the multisig Safe address, get address from env variable
+        let multisig_proposer = self.multisig.context(
+            "Multisig address must be set when performing timelock operations. Use \
+             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
+        )?;
+
+        let params = TimelockOperationParams {
+            multisig_proposer: Some(multisig_proposer),
+            rpc_url: Some(self.rpc_url.to_string()),
+            use_hardware_wallet: self.ledger,
+        };
+
+        // Use the unified function which routes to EOA or multisig based on params
+        // Note: Since multisig_proposer is always Some in this function, it will always route through multisig
+        // The success message and Safe UI link are printed by perform_timelock_operation_via_multisig
+        perform_timelock_operation(
+            &self.deployer,
+            contract_type,
+            timelock_operation_data,
+            timelock_operation_type,
+            params,
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -690,7 +686,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         );
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
-        let use_hardware_wallet = false;
+        let use_hardware_wallet = self.ledger;
         let result = transfer_ownership_from_multisig_to_timelock(
             &self.deployer,
             contracts,

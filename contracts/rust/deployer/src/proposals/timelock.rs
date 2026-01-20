@@ -9,7 +9,10 @@ use hotshot_contract_adapter::sol_types::{
     EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
 };
 
-use crate::{Contract, Contracts, OwnableContract};
+use crate::{
+    proposals::multisig::call_propose_transaction_generic_script, Contract, Contracts,
+    OwnableContract,
+};
 
 /// Data structure for timelock operations payload
 #[derive(Debug, Clone)]
@@ -436,19 +439,6 @@ async fn perform_timelock_operation_via_eoa(
     Ok(operation_id)
 }
 
-/// Perform timelock operation via Safe multisig proposal
-async fn perform_timelock_operation_via_multisig(
-    timelock: TimelockContract,
-    operation: TimelockOperationPayload,
-    operation_type: TimelockOperationType,
-    operation_id: B256,
-    rpc_url: String,
-    multisig_proposer: Address,
-    use_hardware_wallet: bool,
-) -> Result<B256> {
-    Ok(operation_id)
-}
-
 // Keep existing functions as thin wrappers for backward compatibility
 // TODO: remove these functions once this is merged with main and other dependent branches can be updated
 /// Schedule a timelock operation
@@ -521,4 +511,82 @@ pub async fn cancel_timelock_operation(
         TimelockOperationParams::default(),
     )
     .await
+}
+
+/// Perform timelock operation via Safe multisig proposal
+async fn perform_timelock_operation_via_multisig(
+    timelock: TimelockContract,
+    operation: TimelockOperationPayload,
+    operation_type: TimelockOperationType,
+    operation_id: B256,
+    rpc_url: String,
+    multisig_proposer: Address,
+    use_hardware_wallet: bool,
+) -> Result<B256> {
+    // Get timelock address
+    let timelock_addr = match timelock {
+        TimelockContract::OpsTimelock(addr) => addr,
+        TimelockContract::SafeExitTimelock(addr) => addr,
+    };
+
+    // Determine function signature and arguments based on operation type
+    let (function_signature, function_args) = match operation_type {
+        TimelockOperationType::Schedule => {
+            (
+                "schedule(address,uint256,bytes,bytes32,bytes32,uint256)".to_string(),
+                vec![
+                    operation.target.to_string(),
+                    operation.value.to_string(),
+                    operation.data.to_string(), // Bytes implements Display with 0x prefix
+                    operation.predecessor.to_string(), // B256 implements Display with 0x prefix
+                    operation.salt.to_string(), // B256 implements Display with 0x prefix
+                    operation.delay.to_string(),
+                ],
+            )
+        },
+        TimelockOperationType::Execute => (
+            "execute(address,uint256,bytes,bytes32,bytes32)".to_string(),
+            vec![
+                operation.target.to_string(),
+                operation.value.to_string(),
+                operation.data.to_string(),
+                operation.predecessor.to_string(),
+                operation.salt.to_string(),
+            ],
+        ),
+        TimelockOperationType::Cancel => {
+            (
+                "cancel(bytes32)".to_string(),
+                vec![operation_id.to_string()], // B256 implements Display with 0x prefix
+            )
+        },
+    };
+
+    tracing::info!(
+        "Calling proposeTransactionGeneric.ts for {:?} operation on timelock {}",
+        operation_type,
+        timelock_addr
+    );
+
+    call_propose_transaction_generic_script(
+        timelock_addr,
+        function_signature,
+        function_args,
+        rpc_url,
+        multisig_proposer,
+        use_hardware_wallet,
+    )
+    .await?;
+
+    tracing::info!(
+        "Timelock {:?} operation proposal created successfully. Operation ID: {}",
+        operation_type,
+        operation_id
+    );
+    tracing::info!(
+        "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+        multisig_proposer
+    );
+
+    Ok(operation_id)
 }
