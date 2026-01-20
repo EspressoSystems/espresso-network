@@ -421,6 +421,34 @@ impl TryFrom<BytesMut> for Data {
     }
 }
 
+impl TryFrom<Bytes> for Data {
+    type Error = DataError;
+
+    fn try_from(val: Bytes) -> std::result::Result<Self, Self::Error> {
+        Self::try_from(BytesMut::from(val))
+    }
+}
+
+impl TryFrom<Vec<u8>> for Data {
+    type Error = DataError;
+
+    fn try_from(val: Vec<u8>) -> std::result::Result<Self, Self::Error> {
+        Self::try_from(BytesMut::from(Bytes::from(val)))
+    }
+}
+
+impl From<Data> for BytesMut {
+    fn from(val: Data) -> Self {
+        val.bytes
+    }
+}
+
+impl From<Data> for Vec<u8> {
+    fn from(val: Data) -> Self {
+        val.bytes.into()
+    }
+}
+
 impl Deref for Data {
     type Target = [u8];
 
