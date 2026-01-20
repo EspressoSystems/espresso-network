@@ -393,6 +393,14 @@ struct Options {
     )]
     timelock_operation_delay: Option<u64>,
 
+    /// The operation ID for cancel operations (optional, can be used instead of reconstructing from parameters)
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_ID",
+        requires = "perform_timelock_operation"
+    )]
+    timelock_operation_id: Option<String>,
+
     #[clap(flatten)]
     logging: logging::Config,
 
@@ -631,35 +639,47 @@ async fn main() -> anyhow::Result<()> {
             )
         })?;
         args_builder.target_contract(target_contract);
-        let function_signature = opt.function_signature.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --function-signature or \
-                 ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing timelock \
-                 operation"
-            )
-        })?;
-        args_builder.timelock_operation_function_signature(function_signature);
-        let function_values = opt.function_values.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --function-values or ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES \
-                 env var when performing timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_function_values(function_values);
-        let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env \
-                 var when scheduling timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_salt(timelock_operation_salt);
-        let timelock_operation_delay = opt.timelock_operation_delay.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY env \
-                 var when scheduling timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
+
+        // Only require these fields if operation_id is not provided
+        // (for cancel with operation_id, we don't need to reconstruct the operation)
+        if opt.timelock_operation_id.is_none() {
+            let function_signature = opt.function_signature.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --function-signature or \
+                     ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing \
+                     timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_function_signature(function_signature);
+            let function_values = opt.function_values.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --function-values or \
+                     ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES env var when performing timelock \
+                     operation"
+                )
+            })?;
+            args_builder.timelock_operation_function_values(function_values);
+            let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT \
+                     env var when scheduling timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_salt(timelock_operation_salt);
+            let timelock_operation_delay = opt.timelock_operation_delay.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY \
+                     env var when scheduling timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
+        } else {
+            // Set operation_id if provided (for cancel operations)
+            if let Some(operation_id) = opt.timelock_operation_id {
+                args_builder.timelock_operation_id(operation_id);
+            }
+        }
+
         let timelock_operation_value = opt.timelock_operation_value.unwrap_or_default();
         args_builder.timelock_operation_value(timelock_operation_value);
     }
@@ -760,7 +780,7 @@ async fn main() -> anyhow::Result<()> {
 
     // then perform the timelock operation if any
     if opt.perform_timelock_operation {
-        args.perform_timelock_operation_on_contract(&mut contracts)
+        args.propose_timelock_operation_for_contract(&mut contracts)
             .await?;
     }
 

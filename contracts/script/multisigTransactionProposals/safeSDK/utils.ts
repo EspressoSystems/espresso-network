@@ -3,8 +3,8 @@ import { LedgerSigner } from "@ethers-ext/signer-ledger";
 import HIDTransport from "@ledgerhq/hw-transport-node-hid";
 import Safe from "@safe-global/protocol-kit";
 // declaring types locally (since the return type isn't exposed) so that if it's updated, it's reflected here too
-type LocalSafeTransaction = Awaited<ReturnType<Safe["createTransaction"]>>;
-type SafeSignature = Awaited<ReturnType<Safe["signHash"]>>;
+export type LocalSafeTransaction = Awaited<ReturnType<Safe["createTransaction"]>>;
+export type SafeSignature = Awaited<ReturnType<Safe["signHash"]>>;
 
 /**
  * Function to check if a given string is a valid Ethereum address

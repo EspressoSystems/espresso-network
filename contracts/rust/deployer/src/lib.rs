@@ -1554,8 +1554,8 @@ mod tests {
                 LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
-                cancel_timelock_operation, derive_timelock_address_from_contract_type,
-                execute_timelock_operation, schedule_timelock_operation, TimelockOperationPayload,
+                derive_timelock_address_from_contract_type, perform_timelock_operation,
+                TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
             },
         },
         Contracts,
@@ -3046,9 +3046,14 @@ mod tests {
             salt: B256::ZERO,
             delay,
         };
-        let operation_id =
-            schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-                .await?;
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is scheduled
         let timelock = OpsTimelock::new(timelock_addr, &provider);
@@ -3058,8 +3063,14 @@ mod tests {
         assert!(timelock.getTimestamp(operation_id).call().await? > U256::ZERO);
 
         // execute the tx since the delay is 0
-        execute_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-            .await?;
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Execute,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is executed
         assert!(timelock.isOperationDone(operation_id).call().await?);
@@ -3079,13 +3090,26 @@ mod tests {
             .await?;
         assert!(tx_receipt.inner.is_success());
 
-        schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-            .await?;
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
-        cancel_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone()).await?;
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Cancel,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is cancelled
-        let next_operation_id = timelock
+        timelock
             .hashOperation(
                 operation.target,
                 operation.value,
@@ -3095,7 +3119,38 @@ mod tests {
             )
             .call()
             .await?;
-        assert!(timelock.getTimestamp(next_operation_id).call().await? == U256::ZERO);
+        assert!(timelock.getTimestamp(operation_id).call().await? == U256::ZERO);
+
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
+
+        // Test canceling with only the operation_id (operation payload not needed)
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            // Use a minimal/empty operation payload since operation_id is provided
+            TimelockOperationPayload {
+                target: fee_contract_proxy_addr, // Not used when operation_id is provided
+                value: U256::ZERO,
+                data: Bytes::new(),
+                predecessor: B256::ZERO,
+                salt: B256::ZERO,
+                delay: U256::ZERO,
+            },
+            TimelockOperationType::Cancel,
+            TimelockOperationParams {
+                operation_id: Some(operation_id), // Only operation_id is needed
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert!(timelock.getTimestamp(operation_id).call().await? == U256::ZERO);
         Ok(())
     }
 
@@ -3701,7 +3756,7 @@ mod tests {
         // Verify new_pauser doesn't have the role yet
         assert!(!reward_claim.hasRole(pauser_role, new_pauser).call().await?);
 
-        // Use DeployerArgsBuilder to test perform_timelock_operation_on_contract
+        // Use DeployerArgsBuilder to test propose_timelock_operation_for_contract
         use builder::DeployerArgsBuilder;
         use proposals::timelock::TimelockOperationType;
 
@@ -3725,7 +3780,7 @@ mod tests {
         let args = args_builder.build()?;
 
         // Schedule the operation using the high-level function
-        args.perform_timelock_operation_on_contract(&mut contracts)
+        args.propose_timelock_operation_for_contract(&mut contracts)
             .await?;
 
         // Now execute it
@@ -3747,7 +3802,7 @@ mod tests {
             .timelock_operation_delay(delay);
 
         let args = args_builder.build()?;
-        args.perform_timelock_operation_on_contract(&mut contracts)
+        args.propose_timelock_operation_for_contract(&mut contracts)
             .await?;
 
         // Verify the function was actually called

@@ -40,6 +40,8 @@ pub struct TimelockOperationParams {
     pub rpc_url: Option<String>,
     /// Whether to use hardware wallet for signing
     pub use_hardware_wallet: bool,
+    /// Optional operation ID (for cancel operations when you already have the ID)
+    pub operation_id: Option<B256>,
 }
 
 impl Default for TimelockOperationParams {
@@ -48,12 +50,13 @@ impl Default for TimelockOperationParams {
             multisig_proposer: None,
             rpc_url: None,
             use_hardware_wallet: false,
+            operation_id: None,
         }
     }
 }
 
 /// Types of timelock operations
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
 pub enum TimelockOperationType {
     Schedule,
     Execute,
@@ -362,7 +365,12 @@ pub async fn perform_timelock_operation(
     params: TimelockOperationParams,
 ) -> Result<B256> {
     let timelock = get_timelock_for_contract(provider, contract_type, operation.target).await?;
-    let operation_id = timelock.get_operation_id(&operation, &provider).await?;
+    let operation_id =
+        if let (TimelockOperationType::Cancel, Some(id)) = (operation_type, params.operation_id) {
+            id
+        } else {
+            timelock.get_operation_id(&operation, &provider).await?
+        };
 
     if let Some(multisig_proposer) = params.multisig_proposer {
         // Multisig path
@@ -579,7 +587,7 @@ async fn perform_timelock_operation_via_multisig(
     .await?;
 
     tracing::info!(
-        "Timelock {:?} operation proposal created successfully. Operation ID: {}",
+        "Timelock {:?} operation multisig proposal created successfully. Operation ID: {}",
         operation_type,
         operation_id
     );
