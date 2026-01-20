@@ -2501,10 +2501,6 @@ impl MembershipPersistence for Persistence {
         l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        if events.is_empty() {
-            return Ok(());
-        }
-
         let mut tx = self.db.write().await?;
 
         // check last l1 block if there is any
@@ -2528,28 +2524,31 @@ impl MembershipPersistence for Persistence {
             return Ok(());
         }
 
-        let mut query_builder: sqlx::QueryBuilder<Db> =
-            sqlx::QueryBuilder::new("INSERT INTO stake_table_events (l1_block, log_index, event) ");
+        if !events.is_empty() {
+            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+            );
 
-        let events = events
-            .into_iter()
-            .map(|((block_number, index), event)| {
-                Ok((
-                    i64::try_from(block_number)?,
-                    i64::try_from(index)?,
-                    serde_json::to_value(event).context("l1 event to value")?,
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            let events = events
+                .into_iter()
+                .map(|((block_number, index), event)| {
+                    Ok((
+                        i64::try_from(block_number)?,
+                        i64::try_from(index)?,
+                        serde_json::to_value(event).context("l1 event to value")?,
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
-        query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
-            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
-        });
+            query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
+                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+            });
 
-        query_builder.push(" ON CONFLICT DO NOTHING");
-        let query = query_builder.build();
+            query_builder.push(" ON CONFLICT DO NOTHING");
+            let query = query_builder.build();
 
-        query.execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
+        }
 
         // update l1 block
         tx.upsert(
@@ -3596,6 +3595,25 @@ mod test {
         );
 
         storage.migrate_storage().await.unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_events_empty() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        assert_eq!(storage.load_events(0, 100).await.unwrap(), (None, vec![]));
+
+        // Storing an empty events list still updates the latest L1 block.
+        for i in 1..=2 {
+            tracing::info!(i, "update l1 height");
+            storage.store_events(i, vec![]).await.unwrap();
+            assert_eq!(
+                storage.load_events(0, 100).await.unwrap(),
+                (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
+            );
+        }
     }
 }
 
