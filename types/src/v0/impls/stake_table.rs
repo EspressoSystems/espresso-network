@@ -63,7 +63,10 @@ use vbs::version::StaticVersionType;
 use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{ChainConfig, EventKey, Fetcher, StakeTableEvent, StakeTableUpdateTask, Validator},
+    v0_3::{
+        AuthenticatedValidator, ChainConfig, EventKey, Fetcher, RegisteredValidator,
+        StakeTableEvent, StakeTableUpdateTask,
+    },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::{
@@ -78,7 +81,17 @@ use crate::{
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
-pub type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+pub type RegisteredValidatorMap = IndexMap<Address, RegisteredValidator<BLSPubKey>>;
+pub type AuthenticatedValidatorMap = IndexMap<Address, AuthenticatedValidator<BLSPubKey>>;
+
+pub fn to_registered_validator_map(
+    validators: &AuthenticatedValidatorMap,
+) -> RegisteredValidatorMap {
+    validators
+        .iter()
+        .map(|(addr, v)| (*addr, v.clone().into()))
+        .collect()
+}
 
 pub type StakeTableHash = Commitment<StakeTableState>;
 
@@ -199,7 +212,7 @@ fn sort_stake_table_events(
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StakeTableState {
-    validators: ValidatorMap,
+    validators: RegisteredValidatorMap,
     validator_exits: HashSet<Address>,
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
@@ -246,7 +259,7 @@ impl Committable for StakeTableState {
 
 impl StakeTableState {
     pub fn new(
-        validators: ValidatorMap,
+        validators: RegisteredValidatorMap,
         validator_exits: HashSet<Address>,
         used_bls_keys: HashSet<BLSPubKey>,
         used_schnorr_keys: HashSet<SchnorrPubKey>,
@@ -259,11 +272,11 @@ impl StakeTableState {
         }
     }
 
-    pub fn validators(&self) -> &ValidatorMap {
+    pub fn validators(&self) -> &RegisteredValidatorMap {
         &self.validators
     }
 
-    pub fn into_validators(self) -> ValidatorMap {
+    pub fn into_validators(self) -> RegisteredValidatorMap {
         self.validators
     }
 
@@ -322,21 +335,25 @@ impl StakeTableState {
                 self.used_bls_keys.insert(stake_table_key);
                 self.used_schnorr_keys.insert(state_ver_key.clone());
 
-                entry.or_insert(Validator {
+                entry.or_insert(RegisteredValidator {
                     account,
                     stake_table_key,
                     state_ver_key,
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
+                    authenticated: true,
                 });
             },
 
-            StakeTableEvent::RegisterV2(reg) => {
-                // Signature authentication is performed right after fetching, if we get an
-                // unauthenticated event here, something went wrong, we abort early.
-                reg.authenticate()
-                    .map_err(|e| StakeTableError::AuthenticationFailed(e.to_string()))?;
+            StakeTableEvent::RegisterV2(ref reg) => {
+                let authenticated = reg.authenticate().is_ok();
+                if !authenticated {
+                    tracing::warn!(
+                        account = ?reg.account,
+                        "Validator registered with invalid signature"
+                    );
+                }
 
                 let ValidatorRegisteredV2 {
                     account,
@@ -346,17 +363,17 @@ impl StakeTableState {
                     ..
                 } = reg;
 
-                let stake_table_key: BLSPubKey = blsVK.into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+                let stake_table_key: BLSPubKey = (*blsVK).into();
+                let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
 
                 // Reject if validator already exited
-                if self.validator_exits.contains(&account) {
-                    return Err(StakeTableError::ValidatorAlreadyExited(account));
+                if self.validator_exits.contains(account) {
+                    return Err(StakeTableError::ValidatorAlreadyExited(*account));
                 }
 
-                let entry = self.validators.entry(account);
+                let entry = self.validators.entry(*account);
                 if let indexmap::map::Entry::Occupied(_) = entry {
-                    return Err(StakeTableError::AlreadyRegistered(account));
+                    return Err(StakeTableError::AlreadyRegistered(*account));
                 }
 
                 // The stake table v2 contract enforces that each bls key is only used once.
@@ -377,13 +394,14 @@ impl StakeTableState {
                 self.used_bls_keys.insert(stake_table_key);
                 self.used_schnorr_keys.insert(state_ver_key.clone());
 
-                entry.or_insert(Validator {
-                    account,
+                entry.or_insert(RegisteredValidator {
+                    account: *account,
                     stake_table_key,
                     state_ver_key,
                     stake: U256::ZERO,
-                    commission,
+                    commission: *commission,
                     delegators: HashMap::new(),
+                    authenticated,
                 });
             },
 
@@ -598,7 +616,7 @@ impl StakeTableState {
 
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
-) -> Result<(ValidatorMap, StakeTableHash), StakeTableError> {
+) -> Result<(RegisteredValidatorMap, StakeTableHash), StakeTableError> {
     let mut state = StakeTableState::default();
     for event in events {
         match state.apply_event(event.clone()) {
@@ -621,34 +639,39 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 
 /// Select active validators
 ///
-/// Filters out validators without stake and selects the top 100 staked validators.
-/// Returns a new ValidatorMap containing only the selected validators.
+/// Filters out unauthenticated validator candidates, those without stake, and selects
+/// the top 100 staked validators.
+/// Returns a new AuthenticatedValidatorMap containing only the selected validators.
 pub fn select_active_validator_set(
-    validators: &ValidatorMap,
-) -> Result<ValidatorMap, StakeTableError> {
-    let total_validators = validators.len();
+    candidates: &RegisteredValidatorMap,
+) -> Result<AuthenticatedValidatorMap, StakeTableError> {
+    let total_candidates = candidates.len();
 
-    // Filter out validators with no delegators or zero stake
-    let valid_validators: ValidatorMap = validators
+    let valid_validators: AuthenticatedValidatorMap = candidates
         .iter()
-        .filter(|(address, validator)| {
-            if validator.delegators.is_empty() {
-                tracing::info!("Validator {address:?} does not have any delegator");
-                return false;
-            }
-
-            if validator.stake.is_zero() {
-                tracing::info!("Validator {address:?} does not have any stake");
-                return false;
-            }
-
-            true
-        })
-        .map(|(addr, val)| (*addr, val.clone()))
+        .filter_map(
+            |(address, validator)| match AuthenticatedValidator::try_from(validator) {
+                Err(e) => {
+                    tracing::debug!("{e}");
+                    None
+                },
+                Ok(cv) => {
+                    if cv.delegators.is_empty() {
+                        tracing::info!("Validator {address:?} does not have any delegator");
+                        return None;
+                    }
+                    if cv.stake.is_zero() {
+                        tracing::info!("Validator {address:?} does not have any stake");
+                        return None;
+                    }
+                    Some((*address, cv))
+                },
+            },
+        )
         .collect();
 
     tracing::debug!(
-        total_validators,
+        total_candidates,
         filtered = valid_validators.len(),
         "Filtered out invalid validators"
     );
@@ -686,7 +709,7 @@ pub fn select_active_validator_set(
     }
 
     let selected_addresses: HashSet<_> = valid_stakers.iter().map(|(addr, _)| *addr).collect();
-    let selected_validators: ValidatorMap = valid_validators
+    let selected_validators: AuthenticatedValidatorMap = valid_validators
         .into_iter()
         .filter(|(address, _)| selected_addresses.contains(address))
         .collect();
@@ -701,8 +724,8 @@ pub fn select_active_validator_set(
 
 #[derive(Clone, Debug)]
 pub struct ValidatorSet {
-    pub all_validators: ValidatorMap,
-    pub active_validators: ValidatorMap,
+    pub all_validators: RegisteredValidatorMap,
+    pub active_validators: AuthenticatedValidatorMap,
     pub stake_table_hash: Option<StakeTableHash>,
 }
 
@@ -752,8 +775,8 @@ pub struct EpochCommittees {
     non_epoch_committee: NonEpochCommittee,
     /// Holds Stake table and da stake
     state: HashMap<Epoch, EpochCommittee>,
-    /// holds the full validator sets temporarily, until we store them
-    all_validators: BTreeMap<Epoch, ValidatorMap>,
+    /// holds the full validator candidate sets temporarily, until we store them
+    all_validators: BTreeMap<Epoch, RegisteredValidatorMap>,
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     /// DA committees, indexed by the first epoch in which they apply
@@ -960,16 +983,6 @@ impl Fetcher {
     /// - `Err(StakeTableError)` if a fatal error occurs
     fn validate_event(event: &StakeTableV2Events, log: &Log) -> Result<bool, StakeTableError> {
         match event {
-            StakeTableV2Events::ValidatorRegisteredV2(evt) => {
-                if let Err(err) = evt.authenticate() {
-                    tracing::warn!(
-                        %err,
-                        "Failed to authenticate ValidatorRegisteredV2 event: {}",
-                        log.display()
-                    );
-                    return Ok(false);
-                }
-            },
             StakeTableV2Events::ConsensusKeysUpdatedV2(evt) => {
                 if let Err(err) = evt.authenticate() {
                     tracing::warn!(
@@ -1119,7 +1132,7 @@ impl Fetcher {
         l1_client: L1Client,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<(ValidatorMap, StakeTableHash)> {
+    ) -> anyhow::Result<(RegisteredValidatorMap, StakeTableHash)> {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
 
         // Process the sorted events and return the resulting stake table.
@@ -1460,7 +1473,7 @@ struct NonEpochCommittee {
 }
 
 /// Holds Stake table and da stake
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct EpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
@@ -1468,7 +1481,7 @@ pub struct EpochCommittee {
     eligible_leaders: Vec<PeerConfig<SeqTypes>>,
     /// Keys for nodes participating in the network
     stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>>,
-    validators: ValidatorMap,
+    validators: AuthenticatedValidatorMap,
     address_mapping: HashMap<BLSPubKey, Address>,
     block_reward: Option<RewardAmount>,
     stake_table_hash: Option<StakeTableHash>,
@@ -1656,7 +1669,7 @@ impl EpochCommittees {
         &self,
         epoch: &Epoch,
         header: &Header,
-        validators: &ValidatorMap,
+        validators: &AuthenticatedValidatorMap,
     ) -> anyhow::Result<Option<RewardAmount>> {
         let epoch_height = self.epoch_height;
         let current_epoch = epoch_from_block_number(header.height(), epoch_height);
@@ -1772,7 +1785,7 @@ impl EpochCommittees {
     fn insert_committee(
         &mut self,
         epoch: EpochNumber,
-        validators: ValidatorMap,
+        validators: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         hash: Option<StakeTableHash>,
         header: Option<Header>,
@@ -1812,7 +1825,7 @@ impl EpochCommittees {
         );
     }
 
-    pub fn active_validators(&self, epoch: &Epoch) -> anyhow::Result<ValidatorMap> {
+    pub fn active_validators(&self, epoch: &Epoch) -> anyhow::Result<AuthenticatedValidatorMap> {
         Ok(self
             .state
             .get(epoch)
@@ -1838,7 +1851,7 @@ impl EpochCommittees {
         &self,
         epoch: &Epoch,
         key: BLSPubKey,
-    ) -> anyhow::Result<Validator<BLSPubKey>> {
+    ) -> anyhow::Result<AuthenticatedValidator<BLSPubKey>> {
         let address = self.address(epoch, key)?;
         let validators = self.active_validators(epoch)?;
         validators
@@ -1970,8 +1983,8 @@ impl EpochCommittees {
             },
         };
 
-        for (epoch, (stake_table, block_reward), stake_table_hash) in loaded_stake {
-            self.insert_committee(epoch, stake_table, block_reward, stake_table_hash, None);
+        for (epoch, (validators, block_reward), stake_table_hash) in loaded_stake {
+            self.insert_committee(epoch, validators, block_reward, stake_table_hash, None);
         }
     }
 
@@ -2367,7 +2380,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                 if let Err(e) = persistence_lock
                     .store_stake(
                         previous_epoch,
-                        previous_committee.validators,
+                        previous_committee.validators.clone(),
                         previous_committee.block_reward,
                         previous_committee.stake_table_hash,
                     )
@@ -2701,8 +2714,8 @@ pub mod testing {
         }
     }
 
-    impl Validator<BLSPubKey> {
-        pub fn mock() -> Validator<BLSPubKey> {
+    impl RegisteredValidator<BLSPubKey> {
+        pub fn mock() -> RegisteredValidator<BLSPubKey> {
             let val = TestValidator::random();
             let rng = &mut rand::thread_rng();
             let mut seed = [1u8; 32];
@@ -2718,14 +2731,31 @@ pub mod testing {
             let stake_table_key = val.bls_vk.into();
             let state_ver_key = val.schnorr_vk.into();
 
-            Validator {
+            RegisteredValidator {
                 account: val.account,
                 stake_table_key,
                 state_ver_key,
                 stake: validator_stake,
                 commission: val.commission,
                 delegators,
+                authenticated: true,
             }
+        }
+    }
+
+    impl AuthenticatedValidator<BLSPubKey> {
+        pub fn mock() -> AuthenticatedValidator<BLSPubKey> {
+            RegisteredValidator::mock()
+                .try_into()
+                .expect("mock validator is always authenticated")
+        }
+
+        pub fn mock_with_commission(commission: u16) -> AuthenticatedValidator<BLSPubKey> {
+            let mut inner = RegisteredValidator::mock();
+            inner.commission = commission;
+            inner
+                .try_into()
+                .expect("mock validator is always authenticated")
         }
     }
 }
@@ -2879,22 +2909,22 @@ mod tests {
 
     #[test]
     fn test_validators_selection() {
-        let mut validators = IndexMap::new();
+        let mut candidates = IndexMap::new();
         let mut highest_stake = alloy::primitives::U256::ZERO;
 
         for _i in 0..3000 {
-            let validator = Validator::mock();
-            validators.insert(validator.account, validator.clone());
+            let candidate = RegisteredValidator::mock();
+            candidates.insert(candidate.account, candidate.clone());
 
-            if validator.stake > highest_stake {
-                highest_stake = validator.stake;
+            if candidate.stake > highest_stake {
+                highest_stake = candidate.stake;
             }
         }
 
         let minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
 
         let selected_validators =
-            select_active_validator_set(&validators).expect("Failed to select validators");
+            select_active_validator_set(&candidates).expect("Failed to select validators");
         assert!(
             selected_validators.len() <= 100,
             "validators len is {}, expected at most 100",
@@ -3047,17 +3077,60 @@ mod tests {
     }
 
     #[test]
-    fn test_register_validator_v2_auth_fails() {
+    fn test_register_validator_v2_auth_fails_marks_as_unauthenticated() {
         let mut state = StakeTableState::default();
         let mut val = TestValidator::random();
         val.bls_sig = Default::default();
         let event = StakeTableEvent::RegisterV2((&val).into());
 
         let result = state.apply_event(event);
-        assert!(matches!(
-            result,
-            Err(StakeTableError::AuthenticationFailed(_))
-        ));
+        assert!(
+            result.is_ok(),
+            "Validator with invalid auth should still be accepted"
+        );
+
+        let validator = state
+            .validators()
+            .get(&val.account)
+            .expect("validator should exist");
+        assert!(
+            !validator.authenticated,
+            "Validator should be marked as not authenticated"
+        );
+
+        let event = StakeTableEvent::Delegate(Delegated {
+            delegator: Address::random(),
+            validator: val.account,
+            amount: U256::from(100),
+        });
+        state.apply_event(event).unwrap().unwrap();
+
+        let active = select_active_validator_set(state.validators());
+        match active {
+            Err(_) => {}, // No validators is valid - means the unauthenticated one was filtered
+            Ok(map) => {
+                assert!(
+                    map.get(&val.account).is_none(),
+                    "Unauthenticated validator should not be in active set"
+                );
+            },
+        }
+    }
+
+    #[test]
+    fn test_authenticated_validator_deserialize_rejects_unauthenticated() {
+        let mut validator = RegisteredValidator::<BLSPubKey>::mock();
+        validator.authenticated = false;
+
+        let json = serde_json::to_string(&validator).unwrap();
+        let result: Result<AuthenticatedValidator<BLSPubKey>, _> = serde_json::from_str(&json);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("cannot deserialize unauthenticated validator"),
+            "unexpected error: {err}"
+        );
     }
 
     #[rstest]
@@ -3523,8 +3596,7 @@ mod tests {
 
         let stake_table_json =
             std::fs::read_to_string("../data/v3/decaf_stake_table.json").unwrap();
-        let expected: IndexMap<Address, Validator<BLSPubKey>> =
-            serde_json::from_str(&stake_table_json).unwrap();
+        let expected: AuthenticatedValidatorMap = serde_json::from_str(&stake_table_json).unwrap();
 
         assert_eq!(
             reconstructed_stake_table, expected,
@@ -3761,5 +3833,118 @@ mod tests {
                  expected = {expected_reward}, actual = {actual_reward}, diff = {diff}"
             );
         }
+    }
+
+    // Uses V2 events where available. Delegate and CommissionUpdate don't have V2 versions.
+    #[derive(Debug, Clone, Copy)]
+    enum EventType {
+        Delegate,
+        Undelegate,
+        KeyUpdate,
+        CommissionUpdate,
+        Exit,
+    }
+
+    #[rstest]
+    #[case::delegate(EventType::Delegate)]
+    #[case::undelegate(EventType::Undelegate)]
+    #[case::key_update(EventType::KeyUpdate)]
+    #[case::commission_update(EventType::CommissionUpdate)]
+    #[case::exit(EventType::Exit)]
+    fn test_events_targeting_unauthenticated_validator(
+        #[case] event_type: EventType,
+    ) -> anyhow::Result<()> {
+        let mut state = StakeTableState::default();
+        let mut val = TestValidator::random();
+        val.bls_sig = Default::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        let validator = state.validators().get(&val.account).context("validator")?;
+        assert!(!validator.authenticated);
+
+        let delegator = Address::random();
+        let initial_amount = U256::from(1000);
+        state.apply_event(StakeTableEvent::Delegate(Delegated {
+            delegator,
+            validator: val.account,
+            amount: initial_amount,
+        }))??;
+
+        match event_type {
+            EventType::Delegate => {
+                let new_delegator = Address::random();
+                let amount = U256::from(500);
+                state.apply_event(StakeTableEvent::Delegate(Delegated {
+                    delegator: new_delegator,
+                    validator: val.account,
+                    amount,
+                }))??;
+
+                let validator = state.validators().get(&val.account).context("validator")?;
+                assert_eq!(validator.stake, initial_amount + amount);
+                assert_eq!(
+                    validator.delegators.get(&new_delegator).cloned(),
+                    Some(amount)
+                );
+            },
+            EventType::Undelegate => {
+                let undelegate_amount = U256::from(300);
+                state.apply_event(StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                    delegator,
+                    validator: val.account,
+                    undelegationId: 1,
+                    amount: undelegate_amount,
+                    unlocksAt: U256::from(1000u64),
+                }))??;
+
+                let validator = state.validators().get(&val.account).context("validator")?;
+                assert_eq!(validator.stake, initial_amount - undelegate_amount);
+                assert_eq!(
+                    validator.delegators.get(&delegator).cloned(),
+                    Some(initial_amount - undelegate_amount)
+                );
+            },
+            EventType::KeyUpdate => {
+                let new_keys = val.randomize_keys();
+                state.apply_event(StakeTableEvent::KeyUpdateV2((&new_keys).into()))??;
+
+                let validator = state.validators().get(&val.account).context("validator")?;
+                let expected_bls: BLSPubKey = new_keys.bls_vk.into();
+                let expected_schnorr: SchnorrPubKey = new_keys.schnorr_vk.into();
+                assert_eq!(validator.stake_table_key, expected_bls);
+                assert_eq!(validator.state_ver_key, expected_schnorr);
+                // KeyUpdate does not re-authenticate
+                assert!(!validator.authenticated);
+            },
+            EventType::CommissionUpdate => {
+                let new_commission: u16 = 5000;
+                state.apply_event(StakeTableEvent::CommissionUpdate(CommissionUpdated {
+                    validator: val.account,
+                    timestamp: Default::default(),
+                    oldCommission: val.commission,
+                    newCommission: new_commission,
+                }))??;
+
+                let validator = state.validators().get(&val.account).context("validator")?;
+                assert_eq!(validator.commission, new_commission);
+            },
+            EventType::Exit => {
+                state.apply_event(StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+                    validator: val.account,
+                    unlocksAt: U256::from(1000u64),
+                }))??;
+
+                assert!(!state.validators().contains_key(&val.account));
+                return Ok(());
+            },
+        }
+
+        let active = select_active_validator_set(state.validators());
+        match active {
+            Err(StakeTableError::NoValidValidators) => {},
+            Err(e) => bail!("Unexpected error: {e}"),
+            Ok(map) => assert!(!map.contains_key(&val.account)),
+        }
+        Ok(())
     }
 }

@@ -205,11 +205,13 @@ pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
-pub use self::impls::{NodeState, UpgradeMap, ValidatedState, ValidatorMap};
+pub use self::impls::{
+    AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
+};
 pub use crate::{
     v0::impls::{
-        calculate_proportion_staked_and_reward_rate, select_active_validator_set, StakeTableHash,
-        StakeTableState,
+        calculate_proportion_staked_and_reward_rate, select_active_validator_set,
+        to_registered_validator_map, StakeTableHash, StakeTableState,
     },
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,

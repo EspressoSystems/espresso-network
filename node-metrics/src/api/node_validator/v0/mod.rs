@@ -4,7 +4,7 @@ use std::{fmt, future::Future, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Context;
-use espresso_types::{v0_3::Validator, BackoffParams, SeqTypes};
+use espresso_types::{v0_3::AuthenticatedValidator, BackoffParams, SeqTypes};
 use futures::{
     channel::mpsc::{self, SendError, Sender},
     future::{BoxFuture, Either},
@@ -351,7 +351,7 @@ pub async fn get_node_stake_table_from_sequencer(
 pub async fn get_node_validators_from_sequencer(
     client: surf_disco::Client<hotshot_query_service::Error, Version01>,
     epoch: u64,
-) -> Result<IndexMap<Address, Validator<BLSPubKey>>, hotshot_query_service::Error> {
+) -> Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>, hotshot_query_service::Error> {
     let path = format!("node/validators/{epoch}");
     // Let's figure out our epoch height
     let request = client
@@ -361,13 +361,14 @@ pub async fn get_node_validators_from_sequencer(
         // deserialize the response.
         .header("Accept", "application/json");
 
-    let validators: IndexMap<Address, Validator<BLSPubKey>> = match request.send().await {
-        Ok(validators) => validators,
-        Err(err) => {
-            tracing::info!("retrieve validators request failed: {}", err);
-            return Err(err);
-        },
-    };
+    let validators: IndexMap<Address, AuthenticatedValidator<BLSPubKey>> =
+        match request.send().await {
+            Ok(validators) => validators,
+            Err(err) => {
+                tracing::info!("retrieve validators request failed: {}", err);
+                return Err(err);
+            },
+        };
 
     Ok(validators)
 }

@@ -42,12 +42,12 @@ use super::{
 use crate::{
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
-        Validator,
+        ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
+        RewardMerkleCommitmentV1,
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    PubKey, SeqTypes, ValidatorMap,
+    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
 
 #[async_trait]
@@ -518,7 +518,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
+    ) -> anyhow::Result<
+        Option<(
+            AuthenticatedValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        )>,
+    >;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -527,7 +533,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorMap,
+        stake: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()>;
@@ -549,7 +555,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
-        all_validators: IndexMap<Address, Validator<PubKey>>,
+        all_validators: IndexMap<Address, RegisteredValidator<PubKey>>,
     ) -> anyhow::Result<()>;
 
     async fn load_all_validators(
@@ -557,7 +563,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>>;
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
 #[async_trait]

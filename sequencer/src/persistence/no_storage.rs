@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
-    Leaf2, NetworkConfig, PubKey, StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
+    StakeTableHash,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -305,7 +306,13 @@ impl MembershipPersistence for NoStorage {
     async fn load_stake(
         &self,
         _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    ) -> anyhow::Result<
+        Option<(
+            AuthenticatedValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        )>,
+    > {
         Ok(None)
     }
 
@@ -316,7 +323,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorMap,
+        _stake: AuthenticatedValidatorMap,
         _block_reward: Option<RewardAmount>,
         _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -344,7 +351,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_all_validators(
         &self,
         _epoch: EpochNumber,
-        _all_validators: ValidatorMap,
+        _all_validators: RegisteredValidatorMap,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -354,7 +361,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _offset: u64,
         _limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         Ok(Default::default())
     }
 }

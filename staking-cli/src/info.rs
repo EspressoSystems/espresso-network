@@ -4,7 +4,7 @@ use alloy::{
 };
 use anyhow::{Context as _, Result};
 use espresso_types::{
-    v0_3::{Fetcher, Validator},
+    v0_3::{Fetcher, RegisteredValidator},
     L1Client,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2;
@@ -17,7 +17,7 @@ pub async fn stake_table_info(
     l1_url: Url,
     stake_table_address: Address,
     l1_block_number: u64,
-) -> Result<Vec<Validator<BLSPubKey>>> {
+) -> Result<Vec<RegisteredValidator<BLSPubKey>>> {
     let l1 = L1Client::new(vec![l1_url])?;
     let (validators, _) =
         Fetcher::fetch_all_validators_from_contract(l1, stake_table_address, l1_block_number)
@@ -29,7 +29,10 @@ pub async fn stake_table_info(
         .collect())
 }
 
-pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool) -> Result<()> {
+pub fn display_stake_table(
+    stake_table: Vec<RegisteredValidator<BLSPubKey>>,
+    compact: bool,
+) -> Result<()> {
     let mut stake_table = stake_table.clone();
     stake_table.sort_by(|a, b| a.stake.cmp(&b.stake));
 

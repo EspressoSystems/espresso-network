@@ -118,7 +118,7 @@ mod tests {
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
         },
-        v0_3::{Fetcher, Validator},
+        v0_3::{AuthenticatedValidator, Fetcher, RegisteredValidator},
         Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
         SequencerVersions, ValidatedState,
     };
@@ -1695,7 +1695,7 @@ mod tests {
 
         let storage = opt.create().await.unwrap();
 
-        let validator = Validator::mock();
+        let validator = AuthenticatedValidator::mock();
         let mut st = IndexMap::new();
         st.insert(validator.account, validator);
 
@@ -1706,7 +1706,7 @@ mod tests {
         let (table, ..) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
         assert_eq!(st, table);
 
-        let val2 = Validator::mock();
+        let val2 = AuthenticatedValidator::mock();
         let mut st2 = IndexMap::new();
         st2.insert(val2.account, val2);
         storage
@@ -1765,7 +1765,7 @@ mod tests {
 
         let mut vmap1 = IndexMap::new();
         for _i in 0..25 {
-            let v = Validator::mock();
+            let v = RegisteredValidator::mock();
             vmap1.insert(v.account, v);
         }
         storage
@@ -1810,7 +1810,7 @@ mod tests {
         assert!(loaded_empty.is_empty());
 
         // epoch 11
-        let validator2 = Validator::mock();
+        let validator2 = RegisteredValidator::mock();
         let mut vmap2 = IndexMap::new();
         vmap2.insert(validator2.account, validator2.clone());
 

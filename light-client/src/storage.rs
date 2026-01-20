@@ -3,7 +3,7 @@ use std::{future::Future, path::PathBuf, str::FromStr};
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use derive_more::{Display, From};
-use espresso_types::{v0_3::Validator, PubKey, SeqTypes, StakeTableState};
+use espresso_types::{v0_3::RegisteredValidator, PubKey, SeqTypes, StakeTableState};
 use futures::TryStreamExt;
 use hotshot_query_service::{
     availability::{BlockId, LeafId, LeafQueryData},
@@ -308,7 +308,7 @@ impl Storage for SqliteStorage {
         .fetch(tx.as_mut())
         .map_err(anyhow::Error::new)
         .and_then(|(json,)| async move {
-            let validator: Validator<PubKey> = serde_json::from_value(json)?;
+            let validator: RegisteredValidator<PubKey> = serde_json::from_value(json)?;
             Ok((validator.account, validator))
         })
         .try_collect()
@@ -849,25 +849,27 @@ mod test {
     /// Make a stake table state with all fields populated.
     fn random_stake_table() -> StakeTableState {
         let validator = random_validator();
+        let candidate: RegisteredValidator<PubKey> = validator.clone().into();
         StakeTableState::new(
-            [(validator.account, validator.clone())]
+            [(candidate.account, candidate.clone())]
                 .into_iter()
                 .collect(),
             [Address::random()].into_iter().collect(),
-            [validator.stake_table_key].into_iter().collect(),
-            [validator.state_ver_key].into_iter().collect(),
+            [candidate.stake_table_key].into_iter().collect(),
+            [candidate.state_ver_key].into_iter().collect(),
         )
     }
 
     /// Create a new stake table state which is a possible successor to the given state.
     fn chain_stake_table(state: &StakeTableState) -> StakeTableState {
         let new_validator = random_validator();
+        let new_candidate: RegisteredValidator<PubKey> = new_validator.clone().into();
         let new_exit = Address::random();
         StakeTableState::new(
             state
                 .validators()
                 .values()
-                .chain([&new_validator])
+                .chain([&new_candidate])
                 .map(|v| (v.account, v.clone()))
                 .collect(),
             state
@@ -879,13 +881,13 @@ mod test {
             state
                 .used_bls_keys()
                 .iter()
-                .chain([&new_validator.stake_table_key])
+                .chain([&new_candidate.stake_table_key])
                 .cloned()
                 .collect(),
             state
                 .used_schnorr_keys()
                 .iter()
-                .chain([&new_validator.state_ver_key])
+                .chain([&new_candidate.state_ver_key])
                 .cloned()
                 .collect(),
         )

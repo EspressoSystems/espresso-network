@@ -15,8 +15,9 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
-    Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
+    SeqTypes, StakeTableHash,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -1734,7 +1735,13 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    ) -> anyhow::Result<
+        Option<(
+            AuthenticatedValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        )>,
+    > {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1747,20 +1754,17 @@ impl MembershipPersistence for Persistence {
             format!("failed to read stake table file at {}", file_path.display())
         })?;
 
-        let stake = match bincode::deserialize(&bytes) {
-            Ok(res) => res,
-            Err(err) => {
-                let map = bincode::deserialize::<ValidatorMap>(&bytes).with_context(|| {
-                    format!(
-                        "fallback deserialization of legacy stake table at {} failed after \
-                         initial error: {}",
-                        file_path.display(),
-                        err
-                    )
-                })?;
-                (map, None, None)
-            },
-        };
+        type StakeTuple = (
+            AuthenticatedValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        );
+        let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
+            format!(
+                "failed to deserialize stake table at {}",
+                file_path.display()
+            )
+        })?;
 
         Ok(Some(stake))
     }
@@ -1774,33 +1778,23 @@ impl MembershipPersistence for Persistence {
             .take(limit);
         let mut validator_sets: Vec<IndexedStake> = Vec::new();
 
+        type StakeTuple = (
+            AuthenticatedValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        );
+
         for (epoch, file_path) in sorted_files {
             let bytes = fs::read(&file_path).with_context(|| {
                 format!("failed to read stake table file at {}", file_path.display())
             })?;
 
-            let stake: (ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>) =
-                match bincode::deserialize::<(
-                    ValidatorMap,
-                    Option<RewardAmount>,
-                    Option<StakeTableHash>,
-                )>(&bytes)
-                {
-                    Ok(res) => res,
-                    Err(err) => {
-                        let validatormap = bincode::deserialize::<ValidatorMap>(&bytes)
-                            .with_context(|| {
-                                format!(
-                                    "failed to deserialize legacy stake table at {}: fallback \
-                                     also failed after initial error: {}",
-                                    file_path.display(),
-                                    err
-                                )
-                            })?;
-
-                        (validatormap, None, None)
-                    },
-                };
+            let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
+                format!(
+                    "failed to deserialize stake table at {}",
+                    file_path.display()
+                )
+            })?;
 
             validator_sets.push((epoch, (stake.0, stake.1), stake.2));
         }
@@ -1811,7 +1805,7 @@ impl MembershipPersistence for Persistence {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorMap,
+        stake: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -2022,7 +2016,7 @@ impl MembershipPersistence for Persistence {
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
-        all_validators: ValidatorMap,
+        all_validators: RegisteredValidatorMap,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = inner.stake_table_dir_path();
@@ -2058,7 +2052,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         let inner = self.inner.read().await;
         let dir_path = inner.stake_table_dir_path();
         let validators_dir = dir_path.join("validators");
@@ -2072,11 +2066,11 @@ impl MembershipPersistence for Persistence {
             .with_context(|| format!("Failed to open validator file: {file_path:?}"))?;
         let reader = BufReader::new(file);
 
-        let map: ValidatorMap = serde_json::from_reader(reader).with_context(|| {
+        let map: RegisteredValidatorMap = serde_json::from_reader(reader).with_context(|| {
             format!("Failed to deserialize validators at {file_path:?}. epoch = {epoch}")
         })?;
 
-        let mut values: Vec<Validator<PubKey>> = map.into_values().collect();
+        let mut values: Vec<RegisteredValidator<PubKey>> = map.into_values().collect();
         values.sort_by_key(|v| v.account);
 
         let start = offset as usize;

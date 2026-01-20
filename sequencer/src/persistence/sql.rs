@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use clap::Parser;
@@ -16,9 +17,9 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
-    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
-    StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
+    NetworkConfig, Payload, PubKey, RegisteredValidatorMap, StakeTableHash,
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -62,6 +63,7 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, QueryBuilder, Row};
 
@@ -647,6 +649,7 @@ impl PersistenceOptions for Options {
             internal_metrics: PersistenceMetricsValue::default(),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
+        persistence.migrate_validator_authenticated().await?;
         self.pool = Some(persistence.db.pool());
         Ok(persistence)
     }
@@ -658,6 +661,19 @@ impl PersistenceOptions for Options {
         )
         .await?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DataMigration {
+    ValidatorAuthenticated,
+}
+
+impl DataMigration {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ValidatorAuthenticated => "validator_authenticated",
+        }
     }
 }
 
@@ -704,6 +720,149 @@ impl Persistence {
             .await?;
 
         tx.commit().await
+    }
+
+    async fn is_migration_complete(&self, name: &str, table_name: &str) -> anyhow::Result<bool> {
+        let mut tx = self.db.read().await?;
+        let (completed,): (bool,) =
+            query_as("SELECT completed FROM data_migrations WHERE name = $1 AND table_name = $2")
+                .bind(name)
+                .bind(table_name)
+                .fetch_one(tx.as_mut())
+                .await
+                .context("migration tracking row missing - schema may be out of sync")?;
+        Ok(completed)
+    }
+
+    async fn mark_migration_complete(
+        tx: &mut Transaction<Write>,
+        name: &str,
+        table_name: &str,
+        migrated_rows: usize,
+    ) -> anyhow::Result<()> {
+        tx.execute(
+            query(
+                "UPDATE data_migrations SET completed = true, migrated_rows = $1 WHERE name = $2 \
+                 AND table_name = $3",
+            )
+            .bind(migrated_rows as i64)
+            .bind(name)
+            .bind(table_name),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Ensure the `authenticated` field is explicitly set for all validators.
+    ///
+    /// This field was added to track validators with invalid Schnorr signatures.
+    /// All existing validators were authenticated (they passed validation before storage),
+    /// so we set authenticated=true for any records missing this field.
+    ///
+    /// # Migration Invariant
+    ///
+    /// This migration sets `authenticated=true` for all existing records. This is safe because:
+    /// - All validators in the database passed full signature validation before storage
+    /// - The normal registration path validates both BLS and Schnorr signatures
+    /// - Only after the `authenticated` field was added do we track unauthenticated validators
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
+        #[allow(deprecated)]
+        use espresso_types::v0_3::Validator;
+
+        let name = DataMigration::ValidatorAuthenticated.as_str();
+
+        // Migrate bincode storage (epoch_drb_and_root.stake).
+        // We expect less than 10k epochs/rows, so we do it all in one transaction.
+        if !self
+            .is_migration_complete(name, "epoch_drb_and_root")
+            .await?
+        {
+            let rows: Vec<(i64, Vec<u8>)> = {
+                let mut tx = self.db.read().await?;
+                query_as("SELECT epoch, stake FROM epoch_drb_and_root WHERE stake IS NOT NULL")
+                    .fetch_all(tx.as_mut())
+                    .await?
+            };
+
+            let num_rows = rows.len();
+            let mut tx = self.db.write().await?;
+            for (epoch, stake_bytes) in rows {
+                #[allow(deprecated)]
+                let old_validators: IndexMap<Address, Validator<PubKey>> =
+                    bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
+                let validators: RegisteredValidatorMap = old_validators
+                    .into_iter()
+                    .map(|(addr, v)| (addr, v.migrate()))
+                    .collect();
+
+                let new_bytes =
+                    bincode::serialize(&validators).context("serializing stake table")?;
+
+                tracing::debug!(
+                    epoch,
+                    "migrating validator authenticated field in stake table"
+                );
+                tx.execute(
+                    query("UPDATE epoch_drb_and_root SET stake = $1 WHERE epoch = $2")
+                        .bind(&new_bytes)
+                        .bind(epoch),
+                )
+                .await?;
+            }
+            Self::mark_migration_complete(&mut tx, name, "epoch_drb_and_root", num_rows).await?;
+            tx.commit().await?;
+            tracing::info!(
+                num_rows,
+                "validator authenticated migration completed for epoch_drb_and_root"
+            );
+        }
+
+        // Migrate JSONB storage (stake_table_validators).
+        // We expect less than 10k epochs/rows, so we do it all in one transaction.
+        if !self
+            .is_migration_complete(name, "stake_table_validators")
+            .await?
+        {
+            let rows: Vec<(i64, String, serde_json::Value)> = {
+                let mut tx = self.db.read().await?;
+                query_as("SELECT epoch, address, validator FROM stake_table_validators")
+                    .fetch_all(tx.as_mut())
+                    .await?
+            };
+
+            let num_rows = rows.len();
+            let mut tx = self.db.write().await?;
+            for (epoch, address, validator_json) in rows {
+                #[allow(deprecated)]
+                let old_validator: Validator<PubKey> =
+                    serde_json::from_value(validator_json.clone())
+                        .context("deserializing validator")?;
+                let validator = old_validator.migrate();
+
+                let new_json = serde_json::to_value(&validator).context("serializing validator")?;
+
+                tracing::debug!(epoch, %address, "migrating validator authenticated field");
+                tx.execute(
+                    query(
+                        "UPDATE stake_table_validators SET validator = $1 WHERE epoch = $2 AND \
+                         address = $3",
+                    )
+                    .bind(&new_json)
+                    .bind(epoch)
+                    .bind(&address),
+                )
+                .await?;
+            }
+            Self::mark_migration_complete(&mut tx, name, "stake_table_validators", num_rows)
+                .await?;
+            tx.commit().await?;
+            tracing::info!(
+                num_rows,
+                "validator authenticated migration completed for stake_table_validators"
+            );
+        }
+
+        Ok(())
     }
 
     async fn generate_decide_events(
@@ -2387,7 +2546,13 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(
         &self,
         epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    ) -> anyhow::Result<
+        Option<(
+            AuthenticatedValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        )>,
+    > {
         let result = self
             .db
             .read()
@@ -2406,8 +2571,9 @@ impl MembershipPersistence for Persistence {
                 let stake_table_bytes: Vec<u8> = row.get("stake");
                 let reward_bytes: Option<Vec<u8>> = row.get("block_reward");
                 let stake_table_hash_bytes: Option<Vec<u8>> = row.get("stake_table_hash");
-                let stake_table = bincode::deserialize(&stake_table_bytes)
-                    .context("deserializing stake table")?;
+                let stake_table: AuthenticatedValidatorMap =
+                    bincode::deserialize(&stake_table_bytes)
+                        .context("deserializing stake table")?;
                 let reward: Option<RewardAmount> = reward_bytes
                     .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
                     .transpose()?;
@@ -2442,7 +2608,7 @@ impl MembershipPersistence for Persistence {
             .into_iter()
             .map(
                 |(id, stake_bytes, reward_bytes_opt, stake_table_hash_bytes_opt)| {
-                    let stake_table =
+                    let stake_table: AuthenticatedValidatorMap =
                         bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
 
                     let block_reward: Option<RewardAmount> = reward_bytes_opt
@@ -2468,7 +2634,7 @@ impl MembershipPersistence for Persistence {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorMap,
+        stake: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -2644,7 +2810,7 @@ impl MembershipPersistence for Persistence {
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
-        all_validators: ValidatorMap,
+        all_validators: RegisteredValidatorMap,
     ) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 
@@ -2679,7 +2845,7 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         let mut tx = self.db.read().await?;
 
         // Use LOWER(address) in ORDER BY to ensure consistent ordering for SQlite and Postgres.
@@ -2700,7 +2866,8 @@ impl MembershipPersistence for Persistence {
         rows.into_iter()
             .map(|row| {
                 let validator_json: serde_json::Value = row.try_get("validator")?;
-                serde_json::from_value::<Validator<PubKey>>(validator_json).map_err(Into::into)
+                serde_json::from_value::<RegisteredValidator<PubKey>>(validator_json)
+                    .map_err(Into::into)
             })
             .collect()
     }
@@ -3060,6 +3227,143 @@ mod test {
                 row.get::<String, _>("leaf_hash"),
                 Committable::commit(&Leaf::from_quorum_proposal(&qp.data)).to_string()
             );
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validator_authenticated_migration() {
+        // Create a mock registered validator
+        let mut validator = RegisteredValidator::mock();
+        validator.delegators.clear(); // Simplify for test
+        validator.stake = alloy::primitives::U256::from(1000u64);
+
+        let epoch = 1i64;
+        let address = validator.account;
+
+        // Serialize to JSON and remove the `authenticated` field to simulate old data
+        let mut validator_json = serde_json::to_value(&validator).unwrap();
+        validator_json
+            .as_object_mut()
+            .unwrap()
+            .remove("authenticated");
+
+        // Use the deprecated Validator type for bincode storage to simulate old data format
+        // (which has no `authenticated` field)
+        #[allow(deprecated)]
+        let old_validator: espresso_types::v0_3::Validator<BLSPubKey> =
+            serde_json::from_value(validator_json.clone()).unwrap();
+        let mut validator_map: IndexMap<Address, _> = IndexMap::new();
+        validator_map.insert(address, old_validator);
+        let stake_bytes = bincode::serialize(&validator_map).unwrap();
+
+        // Create persistence and insert data directly
+        let db = Persistence::tmp_storage().await;
+
+        // First, create a persistence to set up the schema, then insert raw data
+        let persistence = Persistence::connect(&db).await;
+        let mut tx = persistence.db.write().await.unwrap();
+
+        // Insert into stake_table_validators with JSON missing the authenticated field
+        tx.execute(
+            query(
+                "INSERT INTO stake_table_validators (epoch, address, validator) VALUES ($1, $2, \
+                 $3)",
+            )
+            .bind(epoch)
+            .bind(format!("{:?}", address))
+            .bind(&validator_json),
+        )
+        .await
+        .unwrap();
+
+        // Insert into epoch_drb_and_root with bincode data
+        tx.execute(
+            query("INSERT INTO epoch_drb_and_root (epoch, stake) VALUES ($1, $2)")
+                .bind(epoch)
+                .bind(&stake_bytes),
+        )
+        .await
+        .unwrap();
+
+        // Reset migration state so it runs again on the newly inserted old-format data
+        tx.execute(query(
+            "UPDATE data_migrations SET completed = false, migrated_rows = 0 WHERE name = \
+             'validator_authenticated'",
+        ))
+        .await
+        .unwrap();
+
+        tx.commit().await.unwrap();
+
+        // Verify the data was inserted with missing authenticated field in JSON
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (serde_json::Value,) =
+                query_as("SELECT validator FROM stake_table_validators WHERE epoch = $1")
+                    .bind(epoch)
+                    .fetch_one(tx.as_mut())
+                    .await
+                    .unwrap();
+            let json_obj = row.0.as_object().unwrap();
+            assert!(!json_obj.contains_key("authenticated"));
+        }
+
+        // Create a new persistence which triggers the migration
+        let persistence = Persistence::connect(&db).await;
+
+        // Verify stake_table_validators now has authenticated explicitly set
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (serde_json::Value,) =
+                query_as("SELECT validator FROM stake_table_validators WHERE epoch = $1")
+                    .bind(epoch)
+                    .fetch_one(tx.as_mut())
+                    .await
+                    .unwrap();
+            let json_obj = row.0.as_object().unwrap();
+            assert!(json_obj.contains_key("authenticated"));
+            assert_eq!(
+                json_obj.get("authenticated").unwrap(),
+                &serde_json::Value::Bool(true)
+            );
+        }
+
+        // Verify epoch_drb_and_root stake was migrated
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (Vec<u8>,) = query_as("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
+                .bind(epoch)
+                .fetch_one(tx.as_mut())
+                .await
+                .unwrap();
+            let migrated_map: IndexMap<Address, RegisteredValidator<BLSPubKey>> =
+                bincode::deserialize(&row.0).unwrap();
+            let migrated_validator = migrated_map.get(&address).unwrap();
+            assert!(migrated_validator.authenticated);
+        }
+
+        // Verify migrated_rows was set correctly
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (bool, i64) = query_as(
+                "SELECT completed, migrated_rows FROM data_migrations WHERE name = \
+                 'validator_authenticated' AND table_name = 'epoch_drb_and_root'",
+            )
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+            assert!(row.0);
+            assert_eq!(row.1, 1);
+
+            let row: (bool, i64) = query_as(
+                "SELECT completed, migrated_rows FROM data_migrations WHERE name = \
+                 'validator_authenticated' AND table_name = 'stake_table_validators'",
+            )
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+            assert!(row.0);
+            assert_eq!(row.1, 1);
         }
     }
 
