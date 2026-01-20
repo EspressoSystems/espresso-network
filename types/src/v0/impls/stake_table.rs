@@ -913,18 +913,16 @@ impl Fetcher {
         .await?;
 
         // Store only the new events fetched from L1 contract
-        if !contract_events.is_empty() {
-            tracing::info!(
-                "storing {} new events in storage to_block={to_block:?}",
-                contract_events.len()
-            );
-            {
-                let persistence_lock = self.persistence.lock().await;
-                persistence_lock
-                    .store_events(to_block, contract_events.clone())
-                    .await
-                    .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
-            }
+        tracing::info!(
+            "storing {} new events in storage to_block={to_block:?}",
+            contract_events.len()
+        );
+        {
+            let persistence_lock = self.persistence.lock().await;
+            persistence_lock
+                .store_events(to_block, contract_events.clone())
+                .await
+                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
         }
 
         let mut events = match from_block {
