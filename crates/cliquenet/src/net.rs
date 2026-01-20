@@ -38,13 +38,13 @@ type Result<T> = std::result::Result<T, NetworkError>;
 const MAX_NOISE_HANDSHAKE_SIZE: usize = 1024;
 
 /// Max. message size using noise protocol.
-const MAX_NOISE_MESSAGE_SIZE: usize = 64 * 1024;
+const MAX_NOISE_MESSAGE_SIZE: usize = 0x100000;
 
 /// Max. number of bytes for payload data.
-const MAX_PAYLOAD_SIZE: usize = 63 * 1024;
+const MAX_PAYLOAD_SIZE: usize = MAX_NOISE_MESSAGE_SIZE - 32;
 
 /// Noise parameters to initialize the builders.
-const NOISE_PARAMS: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
+const NOISE_PARAMS: &str = "Noise_IK_25519_AESGCM_BLAKE2s";
 
 /// Interval between ping protocol.
 const PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -194,10 +194,10 @@ struct Server<K> {
     active: HashMap<K, IoTask>,
 
     /// Tasks performing a handshake with a remote party.
-    handshake_tasks: JoinSet<Result<(TcpStream, TransportState)>>,
+    handshake_tasks: JoinSet<Result<(TcpStream, K)>>,
 
     /// Tasks connecting to a remote party and performing a handshake.
-    connect_tasks: JoinSet<(TcpStream, TransportState)>,
+    connect_tasks: JoinSet<(TcpStream, K)>,
 
     /// Active I/O tasks, exchanging data with remote parties.
     io_tasks: JoinSet<Result<()>>,
@@ -501,7 +501,6 @@ where
                             info!(
                                 name = %self.conf.name,
                                 node = %self.conf.label,
-                                peer = ?t.get_remote_static().and_then(|k| PublicKey::try_from(k).ok()),
                                 addr = ?s.peer_addr().ok(),
                                 "unknown peer"
                             );
@@ -520,7 +519,7 @@ where
                         // is larger than ours, or if we do not have a connection for
                         // that key at the moment.
                         if k > self.conf.label || !self.active.contains_key(&k) {
-                            self.spawn_io(k, s, t, peer.budget.clone())
+                            self.spawn_io(k, s, peer.budget.clone())
                         } else {
                             debug!(
                                 name = %self.conf.name,
@@ -558,7 +557,6 @@ where
                                 warn!(
                                     name = %self.conf.name,
                                     node = %self.conf.label,
-                                    peer = ?t.get_remote_static().and_then(|k| PublicKey::try_from(k).ok()),
                                     addr = ?s.peer_addr().ok(),
                                     "connected to unknown peer"
                                 );
@@ -567,7 +565,7 @@ where
                             // We only keep the connection if our key is larger than the remote,
                             // or if we do not have a connection for that key at the moment.
                             if k < self.conf.label || !self.active.contains_key(&k) {
-                                self.spawn_io(k, s, t, peer.budget.clone())
+                                self.spawn_io(k, s, peer.budget.clone())
                             } else {
                                 debug!(
                                     name = %self.conf.name,
@@ -880,15 +878,9 @@ where
     /// own private key and then spawn a task that awaits an initiator handshake
     /// to which it will respond.
     fn spawn_handshake(&mut self, s: TcpStream) {
-        let h = Builder::new(NOISE_PARAMS.parse().expect("valid noise params"))
-            .local_private_key(&self.conf.keypair.secret_key().as_bytes())
-            .expect("valid private key")
-            .prologue(self.conf.name.as_bytes())
-            .expect("1st time we set the prologue")
-            .build_responder()
-            .expect("valid noise params yield valid handshake state");
+        let ours = self.conf.label.clone();
         self.handshake_tasks.spawn(async move {
-            timeout(HANDSHAKE_TIMEOUT, on_handshake(h, s))
+            timeout(HANDSHAKE_TIMEOUT, on_handshake(ours, s))
                 .await
                 .or(Err(NetworkError::Timeout))?
         });
@@ -897,7 +889,7 @@ where
     /// Spawns a new I/O task for handling communication with a remote peer over
     /// a TCP connection using the noise framework to create an authenticated
     /// secure link.
-    fn spawn_io(&mut self, k: K, s: TcpStream, t: TransportState, b: Budget) {
+    fn spawn_io(&mut self, k: K, s: TcpStream, b: Budget) {
         debug!(
             name = %self.conf.name,
             node = %self.conf.label,
@@ -907,8 +899,6 @@ where
         );
         let (to_remote, from_remote) = chan::channel(self.conf.peer_capacity_egress);
         let (r, w) = s.into_split();
-        let t1 = Arc::new(Mutex::new(t));
-        let t2 = t1.clone();
         let ibound = self.ibound.clone();
         let to_write = to_remote.clone();
         let countdown = Countdown::new();
@@ -916,7 +906,6 @@ where
             self.conf.name,
             k.clone(),
             r,
-            t1,
             ibound,
             to_write,
             b,
@@ -924,7 +913,7 @@ where
         ));
         let wh = self
             .io_tasks
-            .spawn(send_loop(w, t2, from_remote, countdown));
+            .spawn(send_loop(w, from_remote, countdown));
         assert!(self.task2key.insert(rh.id(), k.clone()).is_none());
         assert!(self.task2key.insert(wh.id(), k.clone()).is_none());
         let io = IoTask {
@@ -936,10 +925,7 @@ where
     }
 
     /// Get the public key of a party by their static X25519 public key.
-    fn lookup_peer(&self, t: &TransportState) -> Option<(K, &Peer)> {
-        let x = t.get_remote_static()?;
-        let x = PublicKey::try_from(x).ok()?;
-        let k = self.index.get_by_right(&x)?;
+    fn lookup_peer(&self, k: &K) -> Option<(K, &Peer)> {
         self.peers.get(k).map(|p| (k.clone(), p))
     }
 
@@ -966,23 +952,11 @@ async fn connect<K>(
     this: (K, Keypair),
     to: (K, PublicKey),
     addr: Address,
-) -> (TcpStream, TransportState)
+) -> (TcpStream, K)
 where
     K: Display + Serialize + DeserializeOwned + PartialEq + Send + Clone,
 {
     use rand::prelude::*;
-
-    let new_handshake_state = || {
-        Builder::new(NOISE_PARAMS.parse().expect("valid noise params"))
-            .local_private_key(this.1.secret_key().as_slice())
-            .expect("valid private key")
-            .remote_public_key(to.1.as_slice())
-            .expect("valid remote pub key")
-            .prologue(name.as_bytes())
-            .expect("1st time we set the prologue")
-            .build_initiator()
-            .expect("valid noise params yield valid handshake state")
-    };
 
     let i = rand::rng().random_range(0..=1000);
     let addr = addr.to_string();
@@ -992,31 +966,25 @@ where
         .chain(repeat(30_000))
     {
         sleep(Duration::from_millis(d)).await;
-        debug!(%name, node = %this.0, peer = %to.0, %addr, "connecting");
         match timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await {
             Ok(Ok(s)) => {
                 if let Err(err) = s.set_nodelay(true) {
                     error!(%name, node = %this.0, %err, "failed to set NO_DELAY socket option");
                     continue;
                 }
-                match timeout(HANDSHAKE_TIMEOUT, handshake(new_handshake_state(), s)).await {
+                match timeout(HANDSHAKE_TIMEOUT, handshake(this.0.clone(), s)).await {
                     Ok(Ok(x)) => {
-                        debug!(%name, node = %this.0, peer = %to.0, %addr, "connection established");
                         return x;
                     },
                     Ok(Err(err)) => {
-                        warn!(%name, node = %this.0, peer = %to.0, %addr, %err, "handshake failure");
                     },
                     Err(_) => {
-                        warn!(%name, node = %this.0, peer = %to.0, %addr, "handshake timeout");
                     },
                 }
             },
             Ok(Err(err)) => {
-                warn!(%name, node = %this.0, peer = %to.0, %addr, %err, "failed to connect");
             },
             Err(_) => {
-                warn!(%name, node = %this.0, peer = %to.0, %addr, "connect timeout");
             },
         }
     }
@@ -1024,37 +992,41 @@ where
     unreachable!("for loop repeats forever")
 }
 
-/// Perform a noise handshake as initiator with the remote party.
-async fn handshake(
-    mut hs: HandshakeState,
+/// Perform a handshake as initiator with the remote party.
+async fn handshake<K>(
+    ours: K,
     mut stream: TcpStream,
-) -> Result<(TcpStream, TransportState)> {
-    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
-    let n = hs.write_message(&[], &mut b)?;
-    send_frame(&mut stream, Header::data(n as u16), &b[..n]).await?;
+) -> Result<(TcpStream, K)>
+where
+    K: Serialize + DeserializeOwned
+{
+    let hello = bincode::serialize(&ours)?;
+    send_frame(&mut stream, Header::data(hello.len() as u32), &hello).await?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    hs.read_message(&m, &mut b)?;
-    Ok((stream, hs.into_transport_mode()?))
+    let theirs = bincode::deserialize(&m)?;
+    Ok((stream, theirs))
 }
 
-/// Perform a noise handshake as responder with a remote party.
-async fn on_handshake(
-    mut hs: HandshakeState,
+/// Perform a handshake as responder with a remote party.
+async fn on_handshake<K>(
+    ours: K,
     mut stream: TcpStream,
-) -> Result<(TcpStream, TransportState)> {
+) -> Result<(TcpStream, K)>
+where
+    K: Serialize + DeserializeOwned,
+{
     stream.set_nodelay(true)?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
-    hs.read_message(&m, &mut b)?;
-    let n = hs.write_message(&[], &mut b)?;
-    send_frame(&mut stream, Header::data(n as u16), &b[..n]).await?;
-    Ok((stream, hs.into_transport_mode()?))
+    let theirs = bincode::deserialize(&m)?;
+    let hello = bincode::serialize(&ours)?;
+    send_frame(&mut stream, Header::data(hello.len() as u32), &hello).await?;
+    Ok((stream, theirs))
 }
 
 /// Read messages from the remote by assembling frames together.
@@ -1065,7 +1037,6 @@ async fn recv_loop<R, K>(
     name: &'static str,
     id: K,
     mut reader: R,
-    state: Arc<Mutex<TransportState>>,
     to_deliver: Sender<(K, Bytes, Option<OwnedSemaphorePermit>)>,
     to_writer: chan::Sender<Message>,
     budget: Arc<Semaphore>,
@@ -1075,7 +1046,6 @@ where
     R: AsyncRead + Unpin,
     K: Display + Clone,
 {
-    let mut buf = vec![0; MAX_NOISE_MESSAGE_SIZE];
     loop {
         let permit = budget
             .clone()
@@ -1091,22 +1061,17 @@ where
                         Ok((h, f)) => {
                             match h.frame_type() {
                                 Ok(Type::Ping) => {
-                                    // Received ping message; sending pong to writer
-                                    let n = state.lock().read_message(&f, &mut buf)?;
-                                    if let Some(ping) = Timestamp::try_from_slice(&buf[..n]) {
+                                    if let Some(ping) = Timestamp::try_from_slice(&f) {
                                         to_writer.send(None, Message::Pong(ping))
                                     }
                                 }
                                 Ok(Type::Pong) => {
-                                    // Received pong message; measure elapsed time
-                                    let _n = state.lock().read_message(&f, &mut buf)?;
-                                    if let Some(_ping) = Timestamp::try_from_slice(&buf[.._n]) {
+                                    if let Some(_ping) = Timestamp::try_from_slice(&f) {
                                         // TODO: update metrics
                                     }
                                 }
                                 Ok(Type::Data) => {
-                                    let n = state.lock().read_message(&f, &mut buf)?;
-                                    msg.extend_from_slice(&buf[..n]);
+                                    msg.extend_from_slice(&f);
                                     if !h.is_partial() {
                                         break;
                                     }
@@ -1143,38 +1108,34 @@ where
 /// a noise package.
 async fn send_loop<W>(
     mut writer: W,
-    state: Arc<Mutex<TransportState>>,
     rx: chan::Receiver<Message>,
     countdown: Countdown,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    let mut buf = vec![0; MAX_NOISE_MESSAGE_SIZE];
-
     while let Some(msg) = rx.recv().await {
         match msg {
             Message::Ping(ping) => {
-                let n = state.lock().write_message(&ping.to_bytes()[..], &mut buf)?;
-                let h = Header::ping(n as u16);
-                send_frame(&mut writer, h, &buf[..n]).await?;
+                let b = ping.to_bytes();
+                let h = Header::ping(b.len() as u16);
+                send_frame(&mut writer, h, &b).await?;
                 countdown.start(REPLY_TIMEOUT)
             },
             Message::Pong(pong) => {
-                let n = state.lock().write_message(&pong.to_bytes()[..], &mut buf)?;
-                let h = Header::pong(n as u16);
-                send_frame(&mut writer, h, &buf[..n]).await?;
+                let b = pong.to_bytes();
+                let h = Header::pong(b.len() as u16);
+                send_frame(&mut writer, h, &b).await?;
             },
             Message::Data(msg) => {
                 let mut it = msg.chunks(MAX_PAYLOAD_SIZE).peekable();
                 while let Some(m) = it.next() {
-                    let n = state.lock().write_message(m, &mut buf)?;
                     let h = if it.peek().is_some() {
-                        Header::data(n as u16).partial()
+                        Header::data(m.len() as u32).partial()
                     } else {
-                        Header::data(n as u16)
+                        Header::data(m.len() as u32)
                     };
-                    send_frame(&mut writer, h, &buf[..n]).await?
+                    send_frame(&mut writer, h, &m).await?
                 }
             },
         }
@@ -1189,7 +1150,7 @@ where
 {
     let b = r.read_u32().await?;
     let h = Header::try_from(b.to_be_bytes())?;
-    let mut v = vec![0; h.len().into()];
+    let mut v = vec![0; h.len() as usize];
     r.read_exact(&mut v).await?;
     Ok((h, v))
 }
@@ -1199,7 +1160,7 @@ async fn send_frame<W>(w: &mut W, hdr: Header, msg: &[u8]) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    debug_assert_eq!(usize::from(hdr.len()), msg.len());
+    debug_assert_eq!(hdr.len() as usize, msg.len());
     w.write_all(&hdr.to_bytes()).await?;
     w.write_all(msg).await?;
     Ok(())
