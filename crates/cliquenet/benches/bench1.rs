@@ -46,12 +46,12 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
         (
             A,
             a.public_key(),
-            Address::try_from("127.0.0.1:50000").unwrap(),
+            Address::try_from("127.0.0.1:55000").unwrap(),
         ),
         (
             B,
             b.public_key(),
-            Address::try_from("127.0.0.1:51000").unwrap(),
+            Address::try_from("127.0.0.1:56000").unwrap(),
         ),
     ];
 
