@@ -1,11 +1,7 @@
-CREATE TABLE IF NOT EXISTS hash (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, value JSONB NOT NULL UNIQUE
-);
-
 CREATE TABLE fee_merkle_tree (
   path JSONB NOT NULL, 
   created BIGINT NOT NULL, 
-  hash_id INT NOT NULL REFERENCES hash (id), 
+  hash_id JSONB NOT NULL, 
   children JSONB, 
   children_bitvec BLOB, 
   idx JSONB, 
@@ -16,7 +12,7 @@ CREATE TABLE fee_merkle_tree (
 CREATE TABLE block_merkle_tree (
   path JSONB NOT NULL, 
   created BIGINT NOT NULL, 
-  hash_id INT NOT NULL REFERENCES hash (id), 
+  hash_id JSONB, 
   children JSONB, 
   children_bitvec BLOB, 
   idx JSONB, 

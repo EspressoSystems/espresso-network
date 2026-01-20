@@ -71,32 +71,7 @@ where
 
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
-        // insert all the hash ids to a hashset which is used to query later
-        // HashSet is used to avoid duplicates
-        let mut hash_ids = HashSet::new();
-        for node in nodes.iter() {
-            hash_ids.insert(node.hash_id);
-            if let Some(children) = &node.children {
-                let children: Vec<i32> =
-                    serde_json::from_value(children.clone()).map_err(|e| QueryError::Error {
-                        message: format!("Error deserializing 'children' into Vec<i32>: {e}"),
-                    })?;
-                hash_ids.extend(children);
-            }
-        }
-
-        // Find all the hash values and create a hashmap
-        // Hashmap will be used to get the hash value of the nodes children and the node itself.
-        let hashes = if !hash_ids.is_empty() {
-            let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
-            query
-                .query_as(&sql)
-                .fetch(self.as_mut())
-                .try_collect::<HashMap<i32, Vec<u8>>>()
-                .await?
-        } else {
-            HashMap::new()
-        };
+        let hashes: Vec<_> = nodes.iter().map(|node| node.hash_id.clone()).collect();
 
         let mut proof_path = VecDeque::with_capacity(State::tree_height());
         for Node {
@@ -109,15 +84,13 @@ where
         } in nodes.iter()
         {
             {
-                let value = hashes.get(hash_id).ok_or(QueryError::Error {
-                    message: format!("node's value references non-existent hash {hash_id}"),
-                })?;
+                let value = hash_id;
 
                 match (children, children_bitvec, idx, entry) {
                     // If the row has children then its a branch
                     (Some(children), Some(children_bitvec), None, None) => {
-                        let children: Vec<i32> =
-                            serde_json::from_value(children.clone()).map_err(|e| {
+                        let children: Vec<Vec<u8>> =
+                            serde_json::from_value(children.clone().into()).map_err(|e| {
                                 QueryError::Error {
                                     message: format!(
                                         "Error deserializing 'children' into Vec<i32>: {e}"
@@ -132,13 +105,8 @@ where
                             .iter()
                             .map(|bit| {
                                 if bit {
-                                    let hash_id = children.next().ok_or(QueryError::Error {
+                                    let value = children.next().ok_or(QueryError::Error {
                                         message: "node has fewer children than set bits".into(),
-                                    })?;
-                                    let value = hashes.get(hash_id).ok_or(QueryError::Error {
-                                        message: format!(
-                                            "node's child references non-existent hash {hash_id}"
-                                        ),
                                     })?;
                                     Ok(Arc::new(MerkleNode::ForgettenSubtree {
                                         value: State::T::deserialize_compressed(value.as_slice())
@@ -533,8 +501,8 @@ where
 pub(crate) struct Node {
     pub(crate) path: JsonValue,
     pub(crate) created: i64,
-    pub(crate) hash_id: i32,
-    pub(crate) children: Option<JsonValue>,
+    pub(crate) hash_id: Vec<u8>,
+    pub(crate) children: Option<Vec<Vec<u8>>>,
     pub(crate) children_bitvec: Option<BitVec>,
     pub(crate) idx: Option<JsonValue>,
     pub(crate) entry: Option<JsonValue>,
@@ -672,7 +640,9 @@ impl Node {
                 paths.push(node.path.clone());
                 createds.push(node.created);
                 hash_ids.push(node.hash_id);
-                childrens.push(node.children.clone());
+                if let Some(children) = node.children {
+                    childrens.push(children.clone());
+                }
                 children_bitvecs.push(node.children_bitvec.clone());
                 idxs.push(node.idx.clone());
                 entries.push(node.entry.clone());
@@ -681,7 +651,7 @@ impl Node {
         let sql = format!(
             r#"
             INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::jsonb[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path) DO UPDATE SET
                 hash_id = EXCLUDED.hash_id,
                 children = EXCLUDED.children,
@@ -695,7 +665,7 @@ impl Node {
                 .bind(&paths)
                 .bind(&createds)
                 .bind(&hash_ids)
-                .bind(&childrens)
+                .bind(&childrens.concat())
                 .bind(&children_bitvecs)
                 .bind(&idxs)
                 .bind(&entries)
