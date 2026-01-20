@@ -148,39 +148,20 @@ impl RewardAccountProofDataSource for SqlStorage {
         height: u64,
         account: RewardAccountV2,
     ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch reward account {account:?}; height {height}"
-        ))?;
-
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
-
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
-        if height < block_height {
-            let (tree, _) = load_v2_reward_accounts(self, height, &[account])
-                .await
-                .with_context(|| {
-                    format!("failed to load v2 reward account {account:?} at height {height}")
-                })?;
+        let (tree, _) = load_v2_reward_accounts(self, height, &[account])
+            .await
+            .with_context(|| {
+                format!("failed to load v2 reward account {account:?} at height {height}")
+            })?;
 
-            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
-                .with_context(|| {
-                    format!("reward account {account:?} not available at height {height}")
-                })?;
+        let (proof, balance) =
+            RewardAccountProofV2::prove(&tree, account.into()).with_context(|| {
+                format!("reward account {account:?} not available at height {height}")
+            })?;
 
-            Ok(RewardAccountQueryDataV2 { balance, proof })
-        } else {
-            bail!(
-                "requested height {height} is not yet available (latest block height: \
-                 {block_height})"
-            );
-        }
+        Ok(RewardAccountQueryDataV2 { balance, proof })
     }
 }
 impl CatchupStorage for SqlStorage {
@@ -239,32 +220,32 @@ impl CatchupStorage for SqlStorage {
             "opening transaction to fetch reward account {accounts:?}; height {height}"
         ))?;
 
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
-
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
-        if height < block_height {
-            load_v2_reward_accounts(self, height, accounts).await
-        } else {
-            // If we do not have the exact snapshot we need, we can try going back to the last
-            // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf) = reconstruct_state(
-                instance,
-                self,
-                &mut tx,
-                block_height - 1,
-                view,
-                &[],
-                accounts,
-            )
-            .await?;
-            Ok((state.reward_merkle_tree_v2, leaf))
+        match load_v2_reward_accounts(self, height, accounts).await {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+                    .await
+                    .context("getting block height")? as u64;
+                ensure!(
+                    block_height > 0,
+                    "cannot get reward_accounts_v2 for height {height}: no blocks available"
+                );
+                // If we do not have the exact snapshot we need, we can try going back to the last
+                // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
+                let (state, leaf) = reconstruct_state(
+                    instance,
+                    self,
+                    &mut tx,
+                    block_height - 1,
+                    view,
+                    &[],
+                    accounts,
+                )
+                .await?;
+                Ok((state.reward_merkle_tree_v2, leaf))
+            },
         }
     }
 
@@ -277,19 +258,6 @@ impl CatchupStorage for SqlStorage {
         let mut tx = self.read().await.context(format!(
             "opening transaction to fetch all reward accounts; height {height}"
         ))?;
-
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
-
-        ensure!(
-            height < block_height,
-            "requested height {height} is not yet available (latest block height: {block_height})"
-        );
 
         let merklized_state_height = tx
             .get_last_state_height()
@@ -370,32 +338,32 @@ impl CatchupStorage for SqlStorage {
             "opening transaction to fetch account {accounts:?}; height {height}"
         ))?;
 
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
-
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
-        if height < block_height {
-            load_accounts(&mut tx, height, accounts).await
-        } else {
-            // If we do not have the exact snapshot we need, we can try going back to the last
-            // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf) = reconstruct_state(
-                instance,
-                self,
-                &mut tx,
-                block_height - 1,
-                view,
-                accounts,
-                &[],
-            )
-            .await?;
-            Ok((state.fee_merkle_tree, leaf))
+        match load_accounts(&mut tx, height, accounts).await {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+                    .await
+                    .context("getting block height")? as u64;
+                ensure!(
+                    block_height > 0,
+                    "cannot get accounts for height {height}: no blocks available"
+                );
+                // If we do not have the exact snapshot we need, we can try going back to the last
+                // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
+                let (state, leaf) = reconstruct_state(
+                    instance,
+                    self,
+                    &mut tx,
+                    block_height - 1,
+                    view,
+                    accounts,
+                    &[],
+                )
+                .await?;
+                Ok((state.fee_merkle_tree, leaf))
+            },
         }
     }
 
@@ -409,34 +377,34 @@ impl CatchupStorage for SqlStorage {
             "opening transaction to fetch frontier at height {height}"
         ))?;
 
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get frontier for height {height}: no blocks available"
-        );
-
         // Check if we have the desired state snapshot. If so, we can load the desired frontier
         // directly.
-        if height < block_height {
-            load_frontier(&mut tx, height).await
-        } else {
-            // If we do not have the exact snapshot we need, we can try going back to the last
-            // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, _) =
-                reconstruct_state(instance, self, &mut tx, block_height - 1, view, &[], &[])
-                    .await?;
-            match state.block_merkle_tree.lookup(height - 1) {
-                LookupResult::Ok(_, proof) => Ok(proof),
-                _ => {
-                    bail!(
-                        "state snapshot {view:?},{height} was found but does not contain frontier \
-                         at height {}; this should not be possible",
-                        height - 1
-                    );
-                },
-            }
+        match load_frontier(&mut tx, height).await {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+                    .await
+                    .context("getting block height")? as u64;
+                ensure!(
+                    block_height > 0,
+                    "cannot get frontier for height {height}: no blocks available"
+                );
+                // If we do not have the exact snapshot we need, we can try going back to the last
+                // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
+                let (state, _) =
+                    reconstruct_state(instance, self, &mut tx, block_height - 1, view, &[], &[])
+                        .await?;
+                match state.block_merkle_tree.lookup(height - 1) {
+                    LookupResult::Ok(_, proof) => Ok(proof),
+                    _ => {
+                        bail!(
+                            "state snapshot {view:?},{height} was found but does not contain \
+                             frontier at height {}; this should not be possible",
+                            height - 1
+                        );
+                    },
+                }
+            },
         }
     }
 
