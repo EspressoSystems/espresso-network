@@ -3597,6 +3597,28 @@ mod test {
         storage.migrate_storage().await.unwrap();
     }
 
+    /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
+    ///
+    /// Previously, `store_events` did nothing when given an empty events list (in fact,
+    /// `fetch_and_store_stake_table_events` was not even calling it). But this means that the
+    /// `stake_table_events_l1_block` column does not get updated when we enter a new epoch with no
+    /// new stake table events. This makes it impossible to distinguish between two very different
+    /// scenarios:
+    ///
+    /// 1. The node has successfully processed events through the latest L1 finalized block, but
+    ///    there are no new events from the last epoch.
+    /// 2. The node is lagging behind the latest L1 finalized block, and is possibly missing some
+    ///    new events.
+    ///
+    /// In scenario 1, clients of this node should be able to treat the empty list of stake table
+    /// events as authoritative, and derive the stake table for the next epoch (which will end up
+    /// being the same as the previous one. However, in scenario 2, clients need to wait, because we
+    /// don't yet know whether there could be any events that modify the stake table. Thus,
+    /// distinguishing these two scenarios is important.
+    ///
+    /// This regression test ensures that even if there are no new events, at least the
+    /// `stake_table_events_l1_block` column gets updated. We can then distinguish the two scenarios
+    /// using the `EventsPersistenceRead`` return value from load_events.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_store_events_empty() {
         let tmp = Persistence::tmp_storage().await;
