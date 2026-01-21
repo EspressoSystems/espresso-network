@@ -267,7 +267,48 @@ ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS=0xe1da8919f262ee86f9be05059c9280142cf23f
 
 # Timelock Proposals
 
-These are demonstration commands and should not be used in production environments
+## Overview
+
+Timelock operations can be performed via two execution paths:
+
+1. **EOA Path** (Externally Owned Account): Direct execution using a private key/mnemonic
+   - Use for: Local development, testing, or when you control the proposer/executor accounts
+   - Requires: No multisig address needed
+   - Execution: Immediate transaction submission
+
+2. **Multisig Path** (Safe Multisig): Operations are proposed via Safe multisig wallet
+   - Use for: Production environments requiring multiple signatures
+   - Requires: `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
+   - Execution: Creates a Safe proposal that requires multisig approval before execution
+
+The deployer automatically routes to the appropriate path based on whether `--multisig-address` or
+`ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` is set.
+
+## Execution Paths
+
+### EOA Path (Direct Execution)
+
+When no multisig address is provided, operations execute directly via EOA:
+
+```bash
+# Example: Schedule operation via EOA
+RUST_LOG=info cargo run --bin deploy -- \
+  --rpc-url=$RPC_URL \
+  --perform-timelock-operation \
+  --timelock-operation-type schedule \
+  --target-contract FeeContract \
+  --function-signature "transferOwnership(address)" \
+  --function-values "0xNEWOWNERADDRESS" \
+  --timelock-operation-salt 0x \
+  --timelock-operation-delay 0 \
+  --timelock-operation-value 0
+```
+
+**Requirements:**
+
+- The deployer account must have proposer/executor roles on the timelock
+- No multisig address needed
+- Operations execute immediately
 
 ## Transfer Ownership
 
