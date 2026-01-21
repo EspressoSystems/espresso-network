@@ -84,6 +84,9 @@ pub struct Network<K> {
 
     /// Handle of the server task that has been spawned by `Network`.
     srv: JoinHandle<Result<Empty>>,
+
+    /// Max. number of bytes per message.
+    max_message_size: usize,
 }
 
 impl<K> Drop for Network<K> {
@@ -133,6 +136,10 @@ pub struct NetConf<K> {
     /// Default is 2n² with n = number of parties.
     #[builder(default = 2 * parties.len() * parties.len())]
     peer_capacity_ingress: usize,
+
+    /// Max. number of bytes per message to send or receive.
+    #[builder(default = MAX_MESSAGE_SIZE)]
+    pub(crate) max_message_size: usize,
 }
 
 impl<K> NetConf<K> {
@@ -299,6 +306,8 @@ where
 
         let name = cfg.name;
         let label = cfg.label.clone();
+        let mmsze = cfg.max_message_size;
+
         let server = Server {
             conf: cfg,
             role: Role::Active,
@@ -322,6 +331,7 @@ where
             rx: AsyncMutex::new(irx),
             tx: otx,
             srv: spawn(server.run(listener)),
+            max_message_size: mmsze,
         })
     }
 
@@ -344,12 +354,13 @@ where
 
     /// Send a message to a party, identified by the given public key.
     pub async fn unicast(&self, to: K, msg: Bytes) -> Result<()> {
-        if msg.len() > MAX_MESSAGE_SIZE {
+        if msg.len() > self.max_message_size {
             warn!(
                 name = %self.name,
                 node = %self.label,
-                %to,
-                len = %msg.len(),
+                to   = %to,
+                len  = %msg.len(),
+                max  = %self.max_message_size,
                 "message too large to send"
             );
             return Err(NetworkError::MessageTooLarge);
@@ -362,11 +373,12 @@ where
 
     /// Send a message to all parties.
     pub async fn broadcast(&self, msg: Bytes) -> Result<()> {
-        if msg.len() > MAX_MESSAGE_SIZE {
+        if msg.len() > self.max_message_size {
             warn!(
                 name = %self.name,
                 node = %self.label,
-                len = %msg.len(),
+                len  = %msg.len(),
+                max  = %self.max_message_size,
                 "message too large to broadcast"
             );
             return Err(NetworkError::MessageTooLarge);
@@ -921,6 +933,7 @@ where
             to_write,
             b,
             countdown.clone(),
+            self.conf.max_message_size,
         ));
         let wh = self
             .io_tasks
@@ -1070,6 +1083,7 @@ async fn recv_loop<R, K>(
     to_writer: chan::Sender<Message>,
     budget: Arc<Semaphore>,
     mut countdown: Countdown,
+    max_message_size: usize,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -1110,7 +1124,7 @@ where
                                     if !h.is_partial() {
                                         break;
                                     }
-                                    if msg.len() > MAX_MESSAGE_SIZE {
+                                    if msg.len() > max_message_size {
                                         return Err(NetworkError::MessageTooLarge);
                                     }
                                 }

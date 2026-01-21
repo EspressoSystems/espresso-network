@@ -1,9 +1,6 @@
 use std::{collections::HashMap, io, net::Ipv4Addr, sync::LazyLock, time::Duration};
 
-use cliquenet::{
-    Address, Keypair, MAX_MESSAGE_SIZE, NetConf, Network, PublicKey, Retry,
-    retry::{Data, NetworkDown},
-};
+use cliquenet::{Address, Keypair, MAX_MESSAGE_SIZE, NetConf, NetworkError, PublicKey, Retry};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::RngCore;
 use tokio::{
@@ -17,13 +14,12 @@ const A: u8 = 0;
 const B: u8 = 1;
 const SIZES: &[usize] = &[128 * 1024, 512 * 1024, 1024 * 1024, MAX_MESSAGE_SIZE];
 
-static DATA: LazyLock<HashMap<usize, Data>> = LazyLock::new(|| {
+static DATA: LazyLock<HashMap<usize, Vec<u8>>> = LazyLock::new(|| {
     let mut g = rand::rng();
     HashMap::from_iter(SIZES.iter().map(|n| {
         let mut v = vec![0; *n];
         g.fill_bytes(&mut v);
-        let d = Data::try_from(v).unwrap();
-        (*n, d)
+        (*n, v)
     }))
 });
 
@@ -61,32 +57,28 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
         ),
     ];
 
-    let net_a = Retry::new(
-        Network::create(
-            NetConf::builder()
-                .name("bench")
-                .label(A)
-                .keypair(a)
-                .bind(all[0].2.clone())
-                .parties(all.clone())
-                .build(),
-        )
-        .await
-        .unwrap(),
-    );
-    let net_b = Retry::new(
-        Network::create(
-            NetConf::builder()
-                .name("bench")
-                .label(B)
-                .keypair(b)
-                .bind(all[1].2.clone())
-                .parties(all.clone())
-                .build(),
-        )
-        .await
-        .unwrap(),
-    );
+    let net_a = Retry::create(
+        NetConf::builder()
+            .name("bench")
+            .label(A)
+            .keypair(a)
+            .bind(all[0].2.clone())
+            .parties(all.clone())
+            .build(),
+    )
+    .await
+    .unwrap();
+    let net_b = Retry::create(
+        NetConf::builder()
+            .name("bench")
+            .label(B)
+            .keypair(b)
+            .bind(all[1].2.clone())
+            .parties(all.clone())
+            .build(),
+    )
+    .await
+    .unwrap();
 
     (net_a, net_b)
 }
@@ -100,7 +92,7 @@ async fn tcp(size: usize, srv: &mut TcpStream, clt: &mut TcpStream) {
         stream.write_all(&v).await
     }
 
-    async fn echo_client(stream: &mut TcpStream, d: Data) -> io::Result<()> {
+    async fn echo_client(stream: &mut TcpStream, d: Vec<u8>) -> io::Result<()> {
         stream.write_u32(d.len() as u32).await?;
         stream.write_all(&d).await?;
         let len = stream.read_u32().await?;
@@ -118,13 +110,13 @@ async fn tcp(size: usize, srv: &mut TcpStream, clt: &mut TcpStream) {
 }
 
 async fn cliquenet(to: u8, size: usize, srv: &mut Retry<u8>, clt: &mut Retry<u8>) {
-    async fn echo_server(net: &mut Retry<u8>) -> Result<(), NetworkDown> {
+    async fn echo_server(net: &mut Retry<u8>) -> Result<(), NetworkError> {
         let (src, data) = net.receive().await?;
         let _ = net.unicast(src, 0, data.try_into().unwrap()).await?;
         Ok(())
     }
 
-    async fn echo_client(to: u8, net: &mut Retry<u8>, d: Data) -> Result<(), NetworkDown> {
+    async fn echo_client(to: u8, net: &mut Retry<u8>, d: Vec<u8>) -> Result<(), NetworkError> {
         let _ = net.unicast(to, 0, d.clone()).await?;
         let (src, data) = net.receive().await?;
         assert_eq!(src, to);
