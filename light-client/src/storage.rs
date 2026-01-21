@@ -152,10 +152,11 @@ impl Default for LightClientSqliteOptions {
 impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
     pub async fn connect(self) -> Result<SqliteStorage> {
-        let mut opt = SqliteConnectOptions::default().create_if_missing(true);
-        if let Some(path) = &self.lc_path {
-            opt = opt.filename(path);
-        }
+        let path = match &self.lc_path {
+            Some(path) => path.to_str().context("invalid file path")?,
+            None => ":memory:",
+        };
+        let opt = SqliteConnectOptions::from_str(path)?.create_if_missing(true);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
             .connect_with(opt)
