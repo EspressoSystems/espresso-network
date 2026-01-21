@@ -1485,12 +1485,57 @@ impl SequencerPersistence for Persistence {
                 })
                 .collect();
 
-            // Write back in new format
+            // Write back in new format (atomic: write to temp, then rename)
             let new_data: StakeTuple = (migrated, legacy.1, legacy.2);
             let new_bytes = bincode::serialize(&new_data)?;
-            fs::write(&file_path, new_bytes)?;
+            let tmp_path = file_path.with_extension("txt.tmp");
+            fs::write(&tmp_path, new_bytes)?;
+            fs::rename(&tmp_path, &file_path)?;
 
             tracing::info!(?epoch, "migrated stake table");
+        }
+
+        // Also migrate validators JSON files (used by store_all_validators)
+        let validators_dir = path.join("validators");
+        if validators_dir.is_dir() {
+            #[allow(deprecated)]
+            type LegacyValidatorMap =
+                indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
+
+            for entry in fs::read_dir(&validators_dir)? {
+                let entry = entry?;
+                let file_path = entry.path();
+                if file_path.extension().map_or(false, |ext| ext == "json") {
+                    let content = fs::read_to_string(&file_path)?;
+
+                    // Try new format first
+                    if serde_json::from_str::<RegisteredValidatorMap>(&content).is_ok() {
+                        continue;
+                    }
+
+                    // Migrate from legacy format
+                    let legacy: LegacyValidatorMap =
+                        serde_json::from_str(&content).with_context(|| {
+                            format!(
+                                "failed to deserialize validators at {} (tried both formats)",
+                                file_path.display()
+                            )
+                        })?;
+
+                    let migrated: RegisteredValidatorMap = legacy
+                        .into_iter()
+                        .map(|(addr, v)| (addr, v.migrate()))
+                        .collect();
+
+                    // Atomic write: write to temp, then rename
+                    let new_json = serde_json::to_string_pretty(&migrated)?;
+                    let tmp_path = file_path.with_extension("json.tmp");
+                    fs::write(&tmp_path, new_json)?;
+                    fs::rename(&tmp_path, &file_path)?;
+
+                    tracing::info!(?file_path, "migrated validators file");
+                }
+            }
         }
 
         inner.migrated.insert("validator_authenticated".to_string());
@@ -1830,7 +1875,14 @@ impl MembershipPersistence for Persistence {
             format!("failed to read stake table file at {}", file_path.display())
         })?;
 
-        let stake = deserialize_stake_tuple(&bytes, &file_path)?;
+        // No fallback for legacy format needed: migrate_validator_authenticated() runs on startup
+        // and must succeed for the node to start, so all files are already in the new format.
+        let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
+            format!(
+                "failed to deserialize stake table at {}",
+                file_path.display()
+            )
+        })?;
         Ok(Some(stake))
     }
 
@@ -1848,7 +1900,13 @@ impl MembershipPersistence for Persistence {
                 format!("failed to read stake table file at {}", file_path.display())
             })?;
 
-            let stake = deserialize_stake_tuple(&bytes, &file_path)?;
+            // No fallback for legacy format needed: migrate_validator_authenticated() runs on startup.
+            let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
+                format!(
+                    "failed to deserialize stake table at {}",
+                    file_path.display()
+                )
+            })?;
             validator_sets.push((epoch, (stake.0, stake.1), stake.2));
         }
 
@@ -2226,49 +2284,6 @@ type StakeTuple = (
     Option<RewardAmount>,
     Option<StakeTableHash>,
 );
-
-fn deserialize_stake_tuple(bytes: &[u8], file_path: &Path) -> anyhow::Result<StakeTuple> {
-    #[allow(deprecated)]
-    use espresso_types::v0_3::Validator;
-
-    // Try to deserialize as the new format first
-    if let Ok(stake) = bincode::deserialize::<StakeTuple>(bytes) {
-        return Ok(stake);
-    }
-
-    // Fallback: try to deserialize as legacy format (without `authenticated` field).
-    // This ensures reads succeed even if migration hasn't run or failed partway through.
-    #[allow(deprecated)]
-    type LegacyValidatorMap = indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
-    type LegacyStakeTuple = (
-        LegacyValidatorMap,
-        Option<RewardAmount>,
-        Option<StakeTableHash>,
-    );
-
-    let legacy: LegacyStakeTuple = bincode::deserialize(bytes).with_context(|| {
-        format!(
-            "failed to deserialize stake table at {} (tried both new and legacy formats)",
-            file_path.display()
-        )
-    })?;
-
-    // Migrate legacy validators to new format with authenticated=true
-    let migrated: AuthenticatedValidatorMap = legacy
-        .0
-        .into_iter()
-        .map(|(addr, v)| {
-            let registered = v.migrate();
-            (
-                addr,
-                AuthenticatedValidator::try_from(registered)
-                    .expect("migrate() sets authenticated=true"),
-            )
-        })
-        .collect();
-
-    Ok((migrated, legacy.1, legacy.2))
-}
 
 /// Get all paths under `dir` whose name is of the form <epoch number>.txt.
 /// Should probably be made generic and merged with view_files.
@@ -2892,5 +2907,154 @@ mod test {
         // Still loadable
         let result2 = storage.load_stake(EpochNumber::new(1)).await;
         assert!(result2.is_ok());
+    }
+
+    #[allow(deprecated)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_migrate_validator_authenticated_json_files() {
+        use std::collections::HashMap;
+
+        use alloy::primitives::{Address, U256};
+        use espresso_types::v0_3::Validator;
+        use indexmap::IndexMap;
+
+        type LegacyValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        // Create legacy validator data (without `authenticated` field)
+        let legacy_validator = Validator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake: U256::from(2000),
+            commission: 200,
+            delegators: HashMap::new(),
+        };
+
+        let mut legacy_map: LegacyValidatorMap = IndexMap::new();
+        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
+
+        // Write legacy format to validators JSON file
+        let inner = storage.inner.read().await;
+        let path = inner.stake_table_dir_path();
+        drop(inner);
+        let validators_dir = path.join("validators");
+        fs::create_dir_all(&validators_dir).unwrap();
+        let file_path = validators_dir.join("epoch_1.json");
+        let legacy_json = serde_json::to_string_pretty(&legacy_map).unwrap();
+        fs::write(&file_path, &legacy_json).unwrap();
+
+        // Run migration
+        storage.migrate_validator_authenticated().await.unwrap();
+
+        // Loading should succeed after migration
+        let result = storage
+            .load_all_validators(EpochNumber::new(1), 0, 100)
+            .await;
+        assert!(
+            result.is_ok(),
+            "load_all_validators should succeed after migration"
+        );
+        let validators = result.unwrap();
+        assert_eq!(validators.len(), 1);
+
+        // Verify the migrated validator has correct data and authenticated=true
+        let migrated = &validators[0];
+        assert_eq!(migrated.account, legacy_validator.account);
+        assert_eq!(migrated.stake_table_key, legacy_validator.stake_table_key);
+        assert_eq!(migrated.stake, legacy_validator.stake);
+        assert!(
+            migrated.authenticated,
+            "migrated validator should be authenticated"
+        );
+
+        // Running migration again should be a no-op (idempotent)
+        storage.migrate_validator_authenticated().await.unwrap();
+
+        // Still loadable
+        let result2 = storage
+            .load_all_validators(EpochNumber::new(1), 0, 100)
+            .await;
+        assert!(result2.is_ok());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_all_validators_authenticated_and_unauthenticated() {
+        use std::collections::HashMap;
+
+        use alloy::primitives::{Address, U256};
+        use espresso_types::v0_3::RegisteredValidator;
+        use indexmap::IndexMap;
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        // Create an authenticated validator
+        let authenticated_validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake: U256::from(1000),
+            commission: 100,
+            delegators: HashMap::new(),
+            authenticated: true,
+        };
+
+        // Create an unauthenticated validator
+        let unauthenticated_validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake: U256::from(2000),
+            commission: 200,
+            delegators: HashMap::new(),
+            authenticated: false,
+        };
+
+        let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();
+        validators.insert(
+            authenticated_validator.account,
+            authenticated_validator.clone(),
+        );
+        validators.insert(
+            unauthenticated_validator.account,
+            unauthenticated_validator.clone(),
+        );
+
+        // Store both validators
+        storage
+            .store_all_validators(EpochNumber::new(1), validators)
+            .await
+            .unwrap();
+
+        // Load and verify
+        let loaded = storage
+            .load_all_validators(EpochNumber::new(1), 0, 100)
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        // Find each validator and verify authenticated state is preserved
+        let loaded_auth = loaded
+            .iter()
+            .find(|v| v.account == authenticated_validator.account)
+            .unwrap();
+        assert!(
+            loaded_auth.authenticated,
+            "authenticated validator should remain authenticated"
+        );
+
+        let loaded_unauth = loaded
+            .iter()
+            .find(|v| v.account == unauthenticated_validator.account)
+            .unwrap();
+        assert!(
+            !loaded_unauth.authenticated,
+            "unauthenticated validator should remain unauthenticated"
+        );
     }
 }

@@ -17,7 +17,10 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    v0_3::{
+        AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
+        StakeTableEvent,
+    },
     AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
     NetworkConfig, Payload, PubKey, RegisteredValidatorMap, StakeTableHash,
 };
@@ -790,9 +793,16 @@ impl Persistence {
                 #[allow(deprecated)]
                 let old_validators: IndexMap<Address, Validator<PubKey>> =
                     bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
-                let validators: RegisteredValidatorMap = old_validators
+                let validators: AuthenticatedValidatorMap = old_validators
                     .into_iter()
-                    .map(|(addr, v)| (addr, v.migrate()))
+                    .map(|(addr, v)| {
+                        let registered = v.migrate();
+                        (
+                            addr,
+                            AuthenticatedValidator::try_from(registered)
+                                .expect("migrate() sets authenticated=true"),
+                        )
+                    })
                     .collect();
 
                 let new_bytes =
@@ -3328,7 +3338,7 @@ mod test {
             );
         }
 
-        // Verify epoch_drb_and_root stake was migrated
+        // Verify epoch_drb_and_root stake was migrated to AuthenticatedValidatorMap
         {
             let mut tx = persistence.db.read().await.unwrap();
             let row: (Vec<u8>,) = query_as("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
@@ -3336,10 +3346,10 @@ mod test {
                 .fetch_one(tx.as_mut())
                 .await
                 .unwrap();
-            let migrated_map: IndexMap<Address, RegisteredValidator<BLSPubKey>> =
-                bincode::deserialize(&row.0).unwrap();
-            let migrated_validator = migrated_map.get(&address).unwrap();
-            assert!(migrated_validator.authenticated);
+            // Deserializing as AuthenticatedValidatorMap verifies authenticated=true
+            // (AuthenticatedValidator's Deserialize impl rejects authenticated=false)
+            let migrated_map: AuthenticatedValidatorMap = bincode::deserialize(&row.0).unwrap();
+            assert!(migrated_map.contains_key(&address));
         }
 
         // Verify migrated_rows was set correctly
@@ -3365,6 +3375,82 @@ mod test {
             assert!(row.0);
             assert_eq!(row.1, 1);
         }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_all_validators_authenticated_and_unauthenticated() {
+        use std::collections::HashMap;
+
+        use alloy::primitives::{Address, U256};
+        use hotshot_types::light_client::StateVerKey;
+        use indexmap::IndexMap;
+
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        // Create an authenticated validator
+        let authenticated_validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+            state_ver_key: StateVerKey::default(),
+            stake: U256::from(1000),
+            commission: 100,
+            delegators: HashMap::new(),
+            authenticated: true,
+        };
+
+        // Create an unauthenticated validator
+        let unauthenticated_validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+            state_ver_key: StateVerKey::default(),
+            stake: U256::from(2000),
+            commission: 200,
+            delegators: HashMap::new(),
+            authenticated: false,
+        };
+
+        let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();
+        validators.insert(
+            authenticated_validator.account,
+            authenticated_validator.clone(),
+        );
+        validators.insert(
+            unauthenticated_validator.account,
+            unauthenticated_validator.clone(),
+        );
+
+        // Store both validators
+        storage
+            .store_all_validators(EpochNumber::new(1), validators)
+            .await
+            .unwrap();
+
+        // Load and verify
+        let loaded = storage
+            .load_all_validators(EpochNumber::new(1), 0, 100)
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        // Find each validator and verify authenticated state is preserved
+        let loaded_auth = loaded
+            .iter()
+            .find(|v| v.account == authenticated_validator.account)
+            .unwrap();
+        assert!(
+            loaded_auth.authenticated,
+            "authenticated validator should remain authenticated"
+        );
+
+        let loaded_unauth = loaded
+            .iter()
+            .find(|v| v.account == unauthenticated_validator.account)
+            .unwrap();
+        assert!(
+            !loaded_unauth.authenticated,
+            "unauthenticated validator should remain unauthenticated"
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
