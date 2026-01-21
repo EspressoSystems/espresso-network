@@ -389,7 +389,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         }
         // TODO: Handle the case where the block is received before this call
         while let Ok(event) = receiver.recv_direct().await {
-            if let HotShotEvent::BlockReconstructed(block, metadata, view) = event.as_ref() {
+            if let HotShotEvent::BlockReconstructed(block, metadata, _, view) = event.as_ref() {
                 if *view == parent_view {
                     tracing::error!("Received block for parent view {parent_view}, building block");
                     return Ok((block.clone(), metadata.clone()));
@@ -516,7 +516,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     return Ok(());
                 }
             },
-            HotShotEvent::BlockReconstructed(block, metadata, view) => {
+            HotShotEvent::BlockReconstructed(block, metadata, _, view) => {
                 self.handle_block(*view, block.clone(), metadata.clone())
                     .await;
             },

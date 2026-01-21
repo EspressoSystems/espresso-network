@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidDisperse, VidDisperseAndDuration, VidDisperseShare},
+    data::{PackedBundle, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
@@ -129,8 +129,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .vid_disperse_duration
                     .add_point(disperse_duration.as_secs_f64());
                 // Make sure we save the payload; we might need it to send the next epoch VID shares.
-                if let Err(e) =
-                    consensus_writer.update_saved_payloads(*view_number, payload_with_metadata)
+                if let Err(e) = consensus_writer
+                    .update_saved_payloads(*view_number, payload_with_metadata.clone())
                 {
                     tracing::debug!(error=?e);
                 }
@@ -152,6 +152,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                         metadata.clone(),
                         *view_number,
                         sequencing_fees.clone(),
+                    )),
+                    &event_stream,
+                )
+                .await;
+                broadcast_event(
+                    Arc::new(HotShotEvent::BlockReady(
+                        payload_with_metadata,
+                        payload_commitment,
+                        *view_number,
                     )),
                     &event_stream,
                 )
@@ -331,6 +340,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     Arc::new(HotShotEvent::BlockReconstructed(
                         payload,
                         metadata.clone(),
+                        VidCommitment::V2(share.payload_commitment.clone()),
                         view,
                     )),
                     &event_stream,
@@ -365,12 +375,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 }
 
                 let mut reconstruct_shares = vec![];
-                let common = {
+                let (common, vid_commitment) = {
                     let first_share = shares.values().next()?;
                     let VidDisperseShare::V2(ref share) = first_share.get(&epoch)?.data else {
                         return None;
                     };
-                    share.common.clone()
+                    (share.common.clone(), share.payload_commitment.clone())
                 };
 
                 for share in shares.values() {
@@ -397,6 +407,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     Arc::new(HotShotEvent::BlockReconstructed(
                         payload,
                         metadata.clone(),
+                        VidCommitment::V2(vid_commitment),
                         view,
                     )),
                     &event_stream,

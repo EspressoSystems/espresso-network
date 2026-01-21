@@ -23,6 +23,7 @@ use hotshot_task::task::Task;
 use hotshot_task_impls::rewind::RewindTaskState;
 use hotshot_task_impls::{
     block::BlockTaskState,
+    block_storer::BlockStorerTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
@@ -255,6 +256,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
 ) {
     handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
     handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
+    handle.add_task(BlockStorerTaskState::<TYPES, I>::create_from(handle).await);
     handle.add_task(BlockTaskState::<TYPES, V>::create_from(handle).await);
     // handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
 

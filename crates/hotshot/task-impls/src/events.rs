@@ -4,12 +4,13 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::fmt::Display;
+use std::{fmt::Display, sync::Arc};
 
 use async_broadcast::Sender;
 use either::Either;
 use hotshot_task::task::TaskEvent;
 use hotshot_types::{
+    consensus::PayloadWithMetadata,
     data::{
         DaProposal2, Leaf2, PackedBundle, QuorumProposal2, QuorumProposalWrapper, UpgradeProposal,
         VidCommitment, VidDisperse, VidDisperseShare, VidDisperseShare2,
@@ -69,6 +70,8 @@ pub struct HotShotTaskCompleted;
 #[derive(Eq, PartialEq, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum HotShotEvent<TYPES: NodeType> {
+    /// A block has been reconstructed and is ready to be stored
+    BlockReady(Arc<PayloadWithMetadata<TYPES>>, VidCommitment, TYPES::View),
     /// Shutdown the task
     Shutdown,
     /// A quorum proposal has been received from the network; handled by the consensus task
@@ -204,6 +207,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     BlockReconstructed(
         TYPES::BlockPayload,
         <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        VidCommitment,
         TYPES::View,
     ),
 
@@ -317,6 +321,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
     /// Return the view number for a hotshot event if present
     pub fn view_number(&self) -> Option<TYPES::View> {
         match self {
+            HotShotEvent::BlockReady(_, _, view) => Some(*view),
             HotShotEvent::QuorumVoteSend(v)
             | HotShotEvent::QuorumVoteRecv(v)
             | HotShotEvent::ExtendedQuorumVoteSend(v) => Some(v.view_number()),
@@ -407,7 +412,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             },
             HotShotEvent::SetFirstEpoch(..) => None,
             HotShotEvent::LeavesDecided(..) => None,
-            HotShotEvent::BlockReconstructed(_, _, view) => Some(*view),
+            HotShotEvent::BlockReconstructed(_, _, _, view) => Some(*view),
         }
     }
 }
@@ -416,6 +421,7 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            HotShotEvent::BlockReady(_, _, view) => write!(f, "BlockReady(view_number={:?})", view),
             HotShotEvent::Shutdown => write!(f, "Shutdown"),
             HotShotEvent::QuorumProposalRecv(proposal, _) => write!(
                 f,
@@ -728,7 +734,7 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             HotShotEvent::LeavesDecided(leaf) => {
                 write!(f, "LeavesDecided(leaf={leaf:?})")
             },
-            HotShotEvent::BlockReconstructed(_, _, view) => {
+            HotShotEvent::BlockReconstructed(_, _, _, view) => {
                 write!(f, "BlockReconstructed(view_number={:?}", view)
             },
             HotShotEvent::VidShareSend(proposal) => write!(

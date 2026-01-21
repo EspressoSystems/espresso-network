@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use hotshot_task_impls::{
     block::{BlockTaskState, Mempool},
+    block_storer::BlockStorerTaskState,
     builder::BuilderClient,
     consensus::ConsensusTaskState,
     quorum_proposal::QuorumProposalTaskState,
@@ -141,6 +142,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
+        }
+    }
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+    for BlockStorerTaskState<TYPES, I>
+{
+    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        Self {
+            storage: handle.storage.clone(),
+            private_key: handle.private_key().clone(),
         }
     }
 }
