@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::BytesMut;
-use cliquenet::{retry::Data, Keypair, NetConf, Network, Retry, SecretKey};
 pub use cliquenet::{Address, PublicKey};
+use cliquenet::{Keypair, NetConf, Retry, SecretKey};
+
 use futures::future::ready;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
@@ -46,12 +46,10 @@ impl<T: NodeType> Cliquenet<T> {
             .bind(addr.into())
             .parties(parties.into_iter().map(|(k, x, a)| (k, x, a.into())))
             .build();
-        let net = Network::create(cfg)
+        let net = Retry::create(cfg)
             .await
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
-        Ok(Self {
-            net: Retry::new(net),
-        })
+        Ok(Self { net })
     }
 }
 
@@ -67,8 +65,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         _: Topic,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        let data = try_copy(&m)?;
-        self.net.broadcast(0, data).await.map_err(|e| {
+        self.net.broadcast(0, m).await.map_err(|e| {
             NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}"))
         })?;
         Ok(())
@@ -80,8 +77,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         recipients: Vec<T::SignatureKey>,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        let data = try_copy(&m)?;
-        self.net.multicast(recipients, 0, data).await.map_err(|e| {
+        self.net.multicast(recipients, 0, m).await.map_err(|e| {
             NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
         })?;
         Ok(())
@@ -92,9 +88,8 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         m: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), NetworkError> {
-        let data = try_copy(&m)?;
         self.net
-            .unicast(recipient, 0, data)
+            .unicast(recipient, 0, m)
             .await
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))?;
         Ok(())
@@ -173,8 +168,4 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
     fn in_flight_message_count(&self) -> Option<usize> {
         None
     }
-}
-
-fn try_copy(bytes: &[u8]) -> Result<Data, NetworkError> {
-    Data::try_from(BytesMut::from(bytes)).map_err(|e| NetworkError::MessageSendError(e.to_string()))
 }

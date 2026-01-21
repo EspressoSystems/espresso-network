@@ -22,6 +22,11 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
-tracing-subscriber = { workspace = true }
+criterion = "0.8.1"
+portpicker = { workspace = true }
 quickcheck = { workspace = true }
+tracing-subscriber = { workspace = true }
 
+[[bench]]
+name = "bench1"
+harness = false

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
-use bytes::{Bytes, BytesMut};
-use cliquenet::{Address, Keypair, NetConf, Network, Retry, retry::Data};
+use bytes::Bytes;
+use cliquenet::{Address, Keypair, NetConf, Retry};
 use rand::RngCore;
 
 /// Send and receive messages of various sizes between 1 byte and 5 MiB.
@@ -25,23 +25,21 @@ async fn multiple_frames() {
     for (k, x, a) in parties.clone() {
         networks.insert(
             k,
-            Retry::new(
-                Network::create(
-                    NetConf::builder()
-                        .name("frames")
-                        .keypair(x)
-                        .label(k)
-                        .bind(a)
-                        .parties(
-                            parties
-                                .iter()
-                                .map(|(i, x, a)| (*i, x.public_key(), a.clone())),
-                        )
-                        .build(),
-                )
-                .await
-                .unwrap(),
-            ),
+            Retry::create(
+                NetConf::builder()
+                    .name("frames")
+                    .keypair(x)
+                    .label(k)
+                    .bind(a)
+                    .parties(
+                        parties
+                            .iter()
+                            .map(|(i, x, a)| (*i, x.public_key(), a.clone())),
+                    )
+                    .build(),
+            )
+            .await
+            .unwrap(),
         );
     }
 
@@ -69,9 +67,9 @@ async fn multiple_frames() {
     }
 }
 
-fn gen_message() -> Data {
+fn gen_message() -> Vec<u8> {
     let mut g = rand::rng();
     let mut v = vec![0; 5 * 1024 * 1024];
     g.fill_bytes(&mut v);
-    Data::try_from(BytesMut::from(&v[..])).unwrap()
+    v
 }

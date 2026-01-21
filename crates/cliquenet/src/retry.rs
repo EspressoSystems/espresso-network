@@ -4,7 +4,6 @@ use std::{
     fmt::{self, Display},
     hash::Hash,
     io::Cursor,
-    ops::Deref,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -15,7 +14,6 @@ use bytes::{Bytes, BytesMut};
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use thiserror::Error;
 use tokio::{
     spawn,
     sync::mpsc::{Sender, error::TrySendError},
@@ -24,9 +22,9 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::{Address, Id, Network, PublicKey, Role, net::Command};
+use crate::{Address, Id, NetConf, Network, NetworkError, PublicKey, Role, net::Command};
 
-type Result<T> = std::result::Result<T, NetworkDown>;
+type Result<T> = std::result::Result<T, NetworkError>;
 
 /// Max. bucket number.
 pub const MAX_BUCKET: Bucket = Bucket(u64::MAX);
@@ -64,15 +62,6 @@ impl<K> Drop for Retry<K> {
     fn drop(&mut self) {
         self.inner.retry.abort()
     }
-}
-
-/// Data wraps some length-checked, tagged bytes.
-///
-/// This exists to allow clients to construct a message item that will
-/// not be rejected by the network due to size violations.
-#[derive(Debug, Clone)]
-pub struct Data {
-    bytes: BytesMut,
 }
 
 /// Buckets conceptionally contain messages.
@@ -134,10 +123,12 @@ impl<K> Retry<K>
 where
     K: Serialize + DeserializeOwned + Eq + Ord + Send + Clone + Display + Hash + 'static,
 {
-    pub fn new(net: Network<K>) -> Self {
+    pub async fn create(mut cfg: NetConf<K>) -> Result<Self> {
+        cfg.max_message_size += Trailer::MAX_LEN + 1;
+        let net = Network::create(cfg).await?;
         let buffer = Buffer::default();
         let retry = spawn(retry(buffer.clone(), net.sender()));
-        Self {
+        Ok(Self {
             inner: Arc::new(Inner {
                 this: net.public_key().clone(),
                 sender: net.sender(),
@@ -147,24 +138,24 @@ where
                 retry,
                 pending: Mutex::new(BTreeMap::new()),
             }),
-        }
+        })
     }
 
-    pub async fn broadcast<B>(&self, b: B, data: Data) -> Result<Id>
+    pub async fn broadcast<B>(&self, b: B, data: Vec<u8>) -> Result<Id>
     where
         B: Into<Bucket>,
     {
         self.send(b.into(), Target::All, data).await
     }
 
-    pub async fn multicast<B>(&self, to: Vec<K>, b: B, data: Data) -> Result<Id>
+    pub async fn multicast<B>(&self, to: Vec<K>, b: B, data: Vec<u8>) -> Result<Id>
     where
         B: Into<Bucket>,
     {
         self.send(b.into(), Target::Multi(to), data).await
     }
 
-    pub async fn unicast<B>(&self, to: K, b: B, data: Data) -> Result<Id>
+    pub async fn unicast<B>(&self, to: K, b: B, data: Vec<u8>) -> Result<Id>
     where
         B: Into<Bucket>,
     {
@@ -172,23 +163,15 @@ where
     }
 
     pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
-        self.inner.net.add(peers).await.map_err(|_| NetworkDown(()))
+        self.inner.net.add(peers).await
     }
 
     pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
-        self.inner
-            .net
-            .remove(peers)
-            .await
-            .map_err(|_| NetworkDown(()))
+        self.inner.net.remove(peers).await
     }
 
     pub async fn assign(&mut self, r: Role, peers: Vec<K>) -> Result<()> {
-        self.inner
-            .net
-            .assign(r, peers)
-            .await
-            .map_err(|_| NetworkDown(()))
+        self.inner.net.assign(r, peers).await
     }
 
     pub async fn receive(&self) -> Result<(K, Bytes)> {
@@ -198,16 +181,11 @@ where
                 .sender
                 .send(Command::Unicast(src.clone(), None, trailer.clone()))
                 .await
-                .map_err(|_| NetworkDown(()))?;
+                .map_err(|_| NetworkError::ChannelClosed)?;
             return Ok((src, data));
         }
         loop {
-            let (src, mut bytes) = self
-                .inner
-                .net
-                .receive()
-                .await
-                .map_err(|_| NetworkDown(()))?;
+            let (src, mut bytes) = self.inner.net.receive().await?;
 
             let Some(trailer_bytes) = Trailer::split_off(&mut bytes) else {
                 warn!(node = %self.inner.this, "invalid trailer bytes");
@@ -230,7 +208,7 @@ where
                     .try_send(Command::Unicast(src.clone(), None, trailer_bytes))
                 {
                     Ok(()) => return Ok((src, bytes)),
-                    Err(TrySendError::Closed(_)) => return Err(NetworkDown(())),
+                    Err(TrySendError::Closed(_)) => return Err(NetworkError::ChannelClosed),
                     Err(TrySendError::Full(Command::Unicast(src, _, trailer_bytes))) => {
                         // Save received data for cancellation safety:
                         self.inner.pending.lock().insert(
@@ -245,7 +223,7 @@ where
                             .sender
                             .send(Command::Unicast(src.clone(), None, trailer_bytes))
                             .await
-                            .map_err(|_| NetworkDown(()))?;
+                            .map_err(|_| NetworkError::ChannelClosed)?;
                         self.inner.pending.lock().remove(&trailer);
                         return Ok((src, bytes));
                     },
@@ -282,7 +260,7 @@ where
         }
     }
 
-    async fn send(&self, b: Bucket, to: Target<K>, data: Data) -> Result<Id> {
+    async fn send(&self, b: Bucket, to: Target<K>, data: Vec<u8>) -> Result<Id> {
         let id = self.next_id();
 
         let trailer = Trailer { bucket: b, id };
@@ -290,8 +268,7 @@ where
         let mut encoded = Cursor::new([0u8; Trailer::MAX_LEN]);
         bincode::serialize_into(&mut encoded, &trailer).expect("trailer encoding never fails");
 
-        let mut msg = data.bytes;
-
+        let mut msg = BytesMut::from(Bytes::from(data));
         msg.extend_from_slice(&encoded.get_ref()[..encoded.position() as usize]);
         msg.extend_from_slice(&[encoded.position().try_into().expect("|trailer| <= 32")]);
         let msg = msg.freeze();
@@ -304,7 +281,7 @@ where
                     .sender
                     .send(Command::Unicast(to.clone(), Some(id), msg.clone()))
                     .await
-                    .map_err(|_| NetworkDown(()))?;
+                    .map_err(|_| NetworkError::ChannelClosed)?;
                 vec![to]
             },
             Target::Multi(peers) => {
@@ -312,7 +289,7 @@ where
                     .sender
                     .send(Command::Multicast(peers.clone(), Some(id), msg.clone()))
                     .await
-                    .map_err(|_| NetworkDown(()))?;
+                    .map_err(|_| NetworkError::ChannelClosed)?;
                 peers
             },
             Target::All => {
@@ -320,7 +297,7 @@ where
                     .sender
                     .send(Command::Broadcast(Some(id), msg.clone()))
                     .await
-                    .map_err(|_| NetworkDown(()))?;
+                    .map_err(|_| NetworkError::ChannelClosed)?;
                 self.inner.net.parties(Role::Active)
             },
         };
@@ -396,36 +373,6 @@ async fn retry<K: Clone>(buf: Buffer<K>, net: Sender<Command<K>>) -> Infallible 
                     .await;
             }
         }
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("network down")]
-pub struct NetworkDown(());
-
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum DataError {
-    #[error("data size exceeds allowed maximum")]
-    MaxSize,
-}
-
-impl TryFrom<BytesMut> for Data {
-    type Error = DataError;
-
-    fn try_from(val: BytesMut) -> std::result::Result<Self, Self::Error> {
-        if val.len() > crate::MAX_MESSAGE_SIZE {
-            return Err(DataError::MaxSize);
-        }
-        Ok(Self { bytes: val })
-    }
-}
-
-impl Deref for Data {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        self.bytes.as_ref()
     }
 }
 
