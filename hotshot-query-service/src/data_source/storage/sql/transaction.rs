@@ -19,7 +19,6 @@
 //! transaction.
 
 use std::{
-    collections::HashMap,
     marker::PhantomData,
     time::{Duration, Instant},
 };
@@ -47,10 +46,6 @@ pub use sqlx::Executor;
 use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
 use tokio::time::sleep;
 
-#[cfg(not(feature = "embedded-db"))]
-use super::queries::state::batch_insert_hashes;
-#[cfg(feature = "embedded-db")]
-use super::queries::state::build_hash_batch_insert;
 use super::{
     queries::{
         self,
@@ -709,17 +704,14 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         let name = State::state_type();
         let block_number = block_number as i64;
 
-        let (mut all_nodes, all_hashes) = collect_nodes_from_proofs(&proofs)?;
-        let hashes: Vec<Vec<u8>> = all_hashes.into_iter().collect();
+        let (mut all_nodes, _all_hashes) = collect_nodes_from_proofs(&proofs)?;
 
         for (node, children, hash) in &mut all_nodes {
             node.created = block_number;
             node.hash_id = hash.to_vec();
 
             if let Some(children) = children {
-                let children_hashes = children;
-
-                node.children = Some(children_hashes.clone().into());
+                node.children = Some(children.clone());
             }
         }
 
