@@ -5,6 +5,7 @@ use alloy::{
 };
 use anyhow::Result;
 use clap::ValueEnum;
+use derive_more::Display;
 use hotshot_contract_adapter::sol_types::{
     EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
 };
@@ -44,8 +45,7 @@ pub struct TimelockOperationParams {
     pub operation_id: Option<B256>,
 }
 
-/// Types of timelock operations
-#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum TimelockOperationType {
     Schedule,
     Execute,
@@ -98,7 +98,7 @@ impl TimelockContract {
         operation: TimelockOperationPayload,
         provider: &impl Provider,
     ) -> Result<TransactionReceipt> {
-        self.call_timelock_method("schedule", operation, None, provider)
+        self.call_timelock_method(TimelockOperationType::Schedule, operation, None, provider)
             .await
     }
 
@@ -107,7 +107,7 @@ impl TimelockContract {
         operation: TimelockOperationPayload,
         provider: &impl Provider,
     ) -> Result<TransactionReceipt> {
-        self.call_timelock_method("execute", operation, None, provider)
+        self.call_timelock_method(TimelockOperationType::Execute, operation, None, provider)
             .await
     }
 
@@ -117,7 +117,7 @@ impl TimelockContract {
         provider: &impl Provider,
     ) -> Result<TransactionReceipt> {
         self.call_timelock_method(
-            "cancel",
+            TimelockOperationType::Cancel,
             TimelockOperationPayload {
                 target: Address::ZERO,
                 value: U256::ZERO,
@@ -135,13 +135,13 @@ impl TimelockContract {
     /// Internal helper to reduce duplication in schedule/execute/cancel
     async fn call_timelock_method(
         &self,
-        method: &str,
+        method: TimelockOperationType,
         operation: TimelockOperationPayload,
         operation_id: Option<B256>,
         provider: &impl Provider,
     ) -> Result<TransactionReceipt> {
         let pending_tx = match (self, method) {
-            (TimelockContract::OpsTimelock(addr), "schedule") => {
+            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Schedule) => {
                 OpsTimelock::new(*addr, &provider)
                     .schedule(
                         operation.target,
@@ -154,7 +154,7 @@ impl TimelockContract {
                     .send()
                     .await?
             },
-            (TimelockContract::SafeExitTimelock(addr), "schedule") => {
+            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Schedule) => {
                 SafeExitTimelock::new(*addr, &provider)
                     .schedule(
                         operation.target,
@@ -167,7 +167,7 @@ impl TimelockContract {
                     .send()
                     .await?
             },
-            (TimelockContract::OpsTimelock(addr), "execute") => {
+            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Execute) => {
                 OpsTimelock::new(*addr, &provider)
                     .execute(
                         operation.target,
@@ -179,7 +179,7 @@ impl TimelockContract {
                     .send()
                     .await?
             },
-            (TimelockContract::SafeExitTimelock(addr), "execute") => {
+            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Execute) => {
                 SafeExitTimelock::new(*addr, &provider)
                     .execute(
                         operation.target,
@@ -191,27 +191,29 @@ impl TimelockContract {
                     .send()
                     .await?
             },
-            (TimelockContract::OpsTimelock(addr), "cancel") => {
+            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Cancel) => {
                 OpsTimelock::new(*addr, &provider)
-                    .cancel(operation_id.expect("operation_id required for cancel"))
+                    .cancel(
+                        operation_id
+                            .ok_or_else(|| anyhow::anyhow!("operation_id required for cancel"))?,
+                    )
                     .send()
                     .await?
             },
-            (TimelockContract::SafeExitTimelock(addr), "cancel") => {
+            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Cancel) => {
                 SafeExitTimelock::new(*addr, &provider)
-                    .cancel(operation_id.expect("operation_id required for cancel"))
+                    .cancel(
+                        operation_id
+                            .ok_or_else(|| anyhow::anyhow!("operation_id required for cancel"))?,
+                    )
                     .send()
                     .await?
             },
-            _ => anyhow::bail!("Invalid method: {}", method),
         };
 
         let tx_hash = *pending_tx.tx_hash();
         tracing::info!(%tx_hash, "waiting for tx to be mined");
         let receipt = pending_tx.get_receipt().await?;
-        if !receipt.inner.is_success() {
-            anyhow::bail!("tx failed: {:?}", receipt);
-        }
         Ok(receipt)
     }
 
@@ -434,80 +436,6 @@ async fn perform_timelock_operation_via_eoa(
     }
 
     Ok(operation_id)
-}
-
-// Keep existing functions as thin wrappers for backward compatibility
-// TODO: remove these functions once this is merged with main and other dependent branches can be updated
-/// Schedule a timelock operation
-///
-/// Parameters:
-/// - `provider`: the provider to use
-/// - `contract_type`: the type of contract to schedule the operation on
-/// - `operation`: the operation to schedule (see TimelockOperationPayload struct for more details)
-///
-/// Returns:
-/// - The operation id
-pub async fn schedule_timelock_operation(
-    provider: &impl Provider,
-    contract_type: Contract,
-    operation: TimelockOperationPayload,
-) -> Result<B256> {
-    perform_timelock_operation(
-        provider,
-        contract_type,
-        operation,
-        TimelockOperationType::Schedule,
-        TimelockOperationParams::default(),
-    )
-    .await
-}
-
-/// Execute a timelock operation
-///
-/// Parameters:
-/// - `provider`: the provider to use
-/// - `contract_type`: the type of contract to execute the operation on
-/// - `operation`: the operation to execute (see TimelockOperationPayload struct for more details)
-///
-/// Returns:
-/// - The operation id
-pub async fn execute_timelock_operation(
-    provider: &impl Provider,
-    contract_type: Contract,
-    operation: TimelockOperationPayload,
-) -> Result<B256> {
-    perform_timelock_operation(
-        provider,
-        contract_type,
-        operation,
-        TimelockOperationType::Execute,
-        TimelockOperationParams::default(),
-    )
-    .await
-}
-
-/// Cancel a timelock operation
-///
-/// Parameters:
-/// - `provider`: the provider to use
-/// - `contract_type`: the type of contract to cancel the operation on
-/// - `operation`: the operation to cancel (see TimelockOperationPayload struct for more details)
-///
-/// Returns:
-/// - The operation id
-pub async fn cancel_timelock_operation(
-    provider: &impl Provider,
-    contract_type: Contract,
-    operation: TimelockOperationPayload,
-) -> Result<B256> {
-    perform_timelock_operation(
-        provider,
-        contract_type,
-        operation,
-        TimelockOperationType::Cancel,
-        TimelockOperationParams::default(),
-    )
-    .await
 }
 
 /// Perform timelock operation via Safe multisig proposal
