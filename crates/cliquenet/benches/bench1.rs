@@ -112,7 +112,7 @@ async fn tcp(size: usize, srv: &mut TcpStream, clt: &mut TcpStream) {
 async fn cliquenet(to: u8, size: usize, srv: &mut Retry<u8>, clt: &mut Retry<u8>) {
     async fn echo_server(net: &mut Retry<u8>) -> Result<(), NetworkError> {
         let (src, data) = net.receive().await?;
-        let _ = net.unicast(src, 0, data.try_into().unwrap()).await?;
+        let _ = net.unicast(src, 0, data.into()).await?;
         Ok(())
     }
 
