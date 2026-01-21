@@ -15,7 +15,10 @@ use clap::Parser;
 use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    v0_3::{
+        AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
+        StakeTableEvent, Validator,
+    },
     AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
     SeqTypes, StakeTableHash,
 };
@@ -1754,18 +1757,7 @@ impl MembershipPersistence for Persistence {
             format!("failed to read stake table file at {}", file_path.display())
         })?;
 
-        type StakeTuple = (
-            AuthenticatedValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableHash>,
-        );
-        let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
-            format!(
-                "failed to deserialize stake table at {}",
-                file_path.display()
-            )
-        })?;
-
+        let stake = deserialize_stake_tuple(&bytes, &file_path)?;
         Ok(Some(stake))
     }
 
@@ -1778,24 +1770,12 @@ impl MembershipPersistence for Persistence {
             .take(limit);
         let mut validator_sets: Vec<IndexedStake> = Vec::new();
 
-        type StakeTuple = (
-            AuthenticatedValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableHash>,
-        );
-
         for (epoch, file_path) in sorted_files {
             let bytes = fs::read(&file_path).with_context(|| {
                 format!("failed to read stake table file at {}", file_path.display())
             })?;
 
-            let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
-                format!(
-                    "failed to deserialize stake table at {}",
-                    file_path.display()
-                )
-            })?;
-
+            let stake = deserialize_stake_tuple(&bytes, &file_path)?;
             validator_sets.push((epoch, (stake.0, stake.1), stake.2));
         }
 
@@ -2166,6 +2146,48 @@ fn view_files(
         };
         Some((ViewNumber::new(view_number), entry.path().to_owned()))
     }))
+}
+
+type StakeTuple = (
+    AuthenticatedValidatorMap,
+    Option<RewardAmount>,
+    Option<StakeTableHash>,
+);
+
+#[allow(deprecated)]
+fn deserialize_stake_tuple(bytes: &[u8], file_path: &Path) -> anyhow::Result<StakeTuple> {
+    // Try to deserialize as the new format first
+    if let Ok(stake) = bincode::deserialize::<StakeTuple>(bytes) {
+        return Ok(stake);
+    }
+
+    // Fallback: try to deserialize as legacy format (without `authenticated` field)
+    type LegacyValidatorMap = indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
+    type LegacyStakeTuple = (
+        LegacyValidatorMap,
+        Option<RewardAmount>,
+        Option<StakeTableHash>,
+    );
+
+    let legacy: LegacyStakeTuple = bincode::deserialize(bytes).with_context(|| {
+        format!(
+            "failed to deserialize stake table at {} (tried both new and legacy formats)",
+            file_path.display()
+        )
+    })?;
+
+    // Migrate legacy validators to new format with authenticated=true
+    let migrated: AuthenticatedValidatorMap = legacy
+        .0
+        .into_iter()
+        .map(|(addr, v)| {
+            let registered = v.migrate();
+            // Safe: all validators in existing files passed validation before storage
+            (addr, AuthenticatedValidator::try_from(registered).unwrap())
+        })
+        .collect();
+
+    Ok((migrated, legacy.1, legacy.2))
 }
 
 /// Get all paths under `dir` whose name is of the form <epoch number>.txt.
@@ -2719,5 +2741,61 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    #[allow(deprecated)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_legacy_format() {
+        use std::collections::HashMap;
+
+        use alloy::primitives::{Address, U256};
+        use espresso_types::v0_3::Validator;
+        use indexmap::IndexMap;
+
+        type LegacyValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        // Create legacy validator data (without `authenticated` field)
+        let legacy_validator = Validator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake: U256::from(1000),
+            commission: 100,
+            delegators: HashMap::new(),
+        };
+
+        let mut legacy_map: LegacyValidatorMap = IndexMap::new();
+        legacy_map.insert(legacy_validator.account, legacy_validator);
+
+        // Serialize in the legacy format: (ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)
+        type LegacyStakeTuple = (
+            LegacyValidatorMap,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        );
+        let legacy_data: LegacyStakeTuple = (legacy_map, None, None);
+        let bytes = bincode::serialize(&legacy_data).unwrap();
+
+        // Write directly to the stake table file
+        let inner = storage.inner.read().await;
+        let path = inner.stake_table_dir_path();
+        drop(inner);
+        fs::create_dir_all(&path).unwrap();
+        let file_path = path.join("1.txt");
+        fs::write(&file_path, &bytes).unwrap();
+
+        // Loading should succeed and migrate the legacy format
+        let result = storage.load_stake(EpochNumber::new(1)).await;
+        assert!(result.is_ok(), "load_stake should handle legacy format");
+        let stake = result.unwrap();
+        assert!(stake.is_some(), "stake should be present");
+        let (validators, reward, hash) = stake.unwrap();
+        assert_eq!(validators.len(), 1);
+        assert!(reward.is_none());
+        assert!(hash.is_none());
     }
 }
