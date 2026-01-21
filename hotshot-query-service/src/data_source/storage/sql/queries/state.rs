@@ -21,7 +21,6 @@ use std::{
 use anyhow::Context;
 use ark_serialize::CanonicalDeserialize;
 use async_trait::async_trait;
-use futures::stream::TryStreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree_compat::{
     prelude::{MerkleNode, MerkleProof},
@@ -35,9 +34,8 @@ use super::{
 };
 use crate::{
     data_source::storage::{
-        pruning::PrunedHeightStorage,
-        sql::{build_where_in, sqlx::Row},
-        MerklizedStateHeightStorage, MerklizedStateStorage,
+        pruning::PrunedHeightStorage, sql::sqlx::Row, MerklizedStateHeightStorage,
+        MerklizedStateStorage,
     },
     merklized_state::{MerklizedState, Snapshot},
     QueryError, QueryResult,
@@ -71,8 +69,6 @@ where
 
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
-        let hashes: Vec<_> = nodes.iter().map(|node| node.hash_id.clone()).collect();
-
         let mut proof_path = VecDeque::with_capacity(State::tree_height());
         for Node {
             hash_id,
@@ -89,14 +85,6 @@ where
                 match (children, children_bitvec, idx, entry) {
                     // If the row has children then its a branch
                     (Some(children), Some(children_bitvec), None, None) => {
-                        let children: Vec<Vec<u8>> =
-                            serde_json::from_value(children.clone().into()).map_err(|e| {
-                                QueryError::Error {
-                                    message: format!(
-                                        "Error deserializing 'children' into Vec<i32>: {e}"
-                                    ),
-                                }
-                            })?;
                         let mut children = children.iter();
 
                         // Reconstruct the Children MerkleNodes from storage.
@@ -288,10 +276,11 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             },
         };
 
-        // Make sure the requested snapshot is up to date.
+        // We only store the current merkle tree state (not historical).
+        // Return NotFound if the requested height doesn't match our current height.
         let height = self.get_last_state_height().await?;
 
-        if height < (created as usize) {
+        if height != (created as usize) {
             return Err(QueryError::NotFound);
         }
 
@@ -308,51 +297,6 @@ impl<Mode: TransactionMode> Transaction<Mode> {
 
         Ok((created, commit))
     }
-}
-
-// TODO: create a generic upsert function with retries that returns the column
-#[cfg(feature = "embedded-db")]
-pub(crate) fn build_hash_batch_insert(
-    hashes: &[Vec<u8>],
-) -> QueryResult<(QueryBuilder<'_>, String)> {
-    let mut query = QueryBuilder::default();
-    let params = hashes
-        .iter()
-        .map(|hash| Ok(format!("({})", query.bind(hash)?)))
-        .collect::<QueryResult<Vec<String>>>()?;
-    let sql = format!(
-        "INSERT INTO hash(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
-         EXCLUDED.value returning value, id",
-        params.join(",")
-    );
-    Ok((query, sql))
-}
-
-/// Batch insert hashes using UNNEST for large batches (postgres only).
-/// Returns a map from hash bytes to their database IDs.
-#[cfg(not(feature = "embedded-db"))]
-pub(crate) async fn batch_insert_hashes(
-    hashes: Vec<Vec<u8>>,
-    tx: &mut Transaction<Write>,
-) -> QueryResult<HashMap<Vec<u8>, i32>> {
-    if hashes.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // Use UNNEST-based batch insert (more efficient and avoids parameter limits)
-    let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
-               UPDATE SET value = EXCLUDED.value RETURNING value, id";
-
-    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
-        .bind(&hashes)
-        .fetch(tx.as_mut())
-        .try_collect()
-        .await
-        .map_err(|e| QueryError::Error {
-            message: format!("batch hash insert failed: {e}"),
-        })?;
-
-    Ok(result)
 }
 
 /// Type alias for a merkle proof with its traversal path.
@@ -510,11 +454,20 @@ impl From<sqlx::sqlite::SqliteRow> for Node {
         let children_bitvec: Option<BitVec> =
             bit_string.map(|b| b.chars().map(|c| c == '1').collect());
 
+        // SQLite stores hash_id and children as JSONB, so we need to deserialize them
+        let hash_id_json: JsonValue = row.get_unchecked("hash_id");
+        let hash_id: Vec<u8> =
+            serde_json::from_value(hash_id_json).expect("malformed hash_id in database");
+
+        let children_json: Option<JsonValue> = row.get_unchecked("children");
+        let children: Option<Vec<Vec<u8>>> = children_json
+            .map(|j| serde_json::from_value(j).expect("malformed children in database"));
+
         Self {
             path: row.get_unchecked("path"),
             created: row.get_unchecked("created"),
-            hash_id: row.get_unchecked("hash_id"),
-            children: row.get_unchecked("children"),
+            hash_id,
+            children,
             children_bitvec,
             idx: row.get_unchecked("idx"),
             entry: row.get_unchecked("entry"),
@@ -525,11 +478,16 @@ impl From<sqlx::sqlite::SqliteRow> for Node {
 #[cfg(not(feature = "embedded-db"))]
 impl From<sqlx::postgres::PgRow> for Node {
     fn from(row: sqlx::postgres::PgRow) -> Self {
+        // children is stored as JSONB (array of byte arrays), deserialize it
+        let children_json: Option<JsonValue> = row.get_unchecked("children");
+        let children: Option<Vec<Vec<u8>>> = children_json
+            .map(|j| serde_json::from_value(j).expect("malformed children in database"));
+
         Self {
             path: row.get_unchecked("path"),
             created: row.get_unchecked("created"),
             hash_id: row.get_unchecked("hash_id"),
-            children: row.get_unchecked("children"),
+            children,
             children_bitvec: row.get_unchecked("children_bitvec"),
             idx: row.get_unchecked("idx"),
             entry: row.get_unchecked("entry"),
@@ -560,11 +518,18 @@ impl Node {
                             .clone()
                             .map(|b| b.iter().map(|bit| if bit { '1' } else { '0' }).collect());
 
+                        // SQLite stores hash_id and children as JSONB
+                        let hash_id_json: JsonValue =
+                            serde_json::to_value(&n.hash_id).expect("failed to serialize hash_id");
+                        let children_json: Option<JsonValue> = n.children.as_ref().map(|c| {
+                            serde_json::to_value(c).expect("failed to serialize children")
+                        });
+
                         (
                             n.path.clone(),
                             n.created,
-                            n.hash_id,
-                            n.children.clone(),
+                            hash_id_json,
+                            children_json,
                             children_bitvec,
                             n.idx.clone(),
                             n.entry.clone(),
@@ -621,9 +586,11 @@ impl Node {
             paths.push(node.path);
             createds.push(node.created);
             hash_ids.push(node.hash_id);
-            if let Some(children) = node.children {
-            childrens.push(children);
-            }
+            // Serialize children to JSON for Postgres JSONB column
+            let children_json: Option<JsonValue> = node
+                .children
+                .map(|c| serde_json::to_value(c).expect("failed to serialize children"));
+            childrens.push(children_json);
             children_bitvecs.push(node.children_bitvec);
             idxs.push(node.idx);
             entries.push(node.entry);
@@ -632,8 +599,9 @@ impl Node {
         let sql = format!(
             r#"
             INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::jsonb[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bytea[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path) DO UPDATE SET
+                created = EXCLUDED.created,
                 hash_id = EXCLUDED.hash_id,
                 children = EXCLUDED.children,
                 children_bitvec = EXCLUDED.children_bitvec,
@@ -646,7 +614,7 @@ impl Node {
             .bind(&paths)
             .bind(&createds)
             .bind(&hash_ids)
-            .bind(&childrens.concat())
+            .bind(&childrens)
             .bind(&children_bitvecs)
             .bind(&idxs)
             .bind(&entries)
