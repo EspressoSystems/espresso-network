@@ -374,16 +374,38 @@ where
         Ok(self.fetch_block(id).await?.into())
     }
 
+    /// Fetch and verify the full payload with the requested header.
+    pub async fn fetch_payload_for_header(
+        &self,
+        header: Header,
+    ) -> Result<PayloadQueryData<SeqTypes>> {
+        Ok(self.fetch_block_for_header(header).await?.into())
+    }
+
     /// Fetch and verify the requested block.
     pub async fn fetch_block(&self, id: BlockId<SeqTypes>) -> Result<BlockQueryData<SeqTypes>> {
         Ok(self.fetch_block_and_vid_common(id).await?.0)
     }
 
+    /// Fetch and verify the full block with the requested header.
+    pub async fn fetch_block_for_header(&self, header: Header) -> Result<BlockQueryData<SeqTypes>> {
+        Ok(self.fetch_block_and_vid_common_for_header(header).await?.0)
+    }
+
+    /// Fetch and verify the requested payload and the associated VID common data.
     pub async fn fetch_block_and_vid_common(
         &self,
         id: BlockId<SeqTypes>,
     ) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)> {
         let header = self.fetch_header(id).await?;
+        self.fetch_block_and_vid_common_for_header(header).await
+    }
+
+    /// Fetch and verify the payload corresponding to `header`, and the associated VID common data.
+    pub async fn fetch_block_and_vid_common_for_header(
+        &self,
+        header: Header,
+    ) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)> {
         let proof = self.server.payload_proof(header.height()).await?;
         let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
         Ok((
@@ -399,11 +421,20 @@ where
         namespace: NamespaceId,
     ) -> Result<Vec<Transaction>> {
         let header = self.fetch_header(id).await?;
+        self.fetch_namespace_for_header(&header, namespace).await
+    }
+
+    /// Fetch and verify the transactions in the given namespace of the requested header.
+    pub async fn fetch_namespace_for_header(
+        &self,
+        header: &Header,
+        namespace: NamespaceId,
+    ) -> Result<Vec<Transaction>> {
         let proof = self
             .server
             .namespace_proof(header.height(), namespace)
             .await?;
-        proof.verify(&header, namespace)
+        proof.verify(header, namespace)
     }
 
     /// Fetch and verify the transactions in the given namespace of blocks in the range

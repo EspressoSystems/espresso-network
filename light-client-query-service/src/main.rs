@@ -6,8 +6,7 @@ use espresso_types::parse_duration;
 use hotshot_query_service::{
     availability::{self, BlockInfo, LeafId, UpdateAvailabilityData},
     fetching::provider::{AnyProvider, QueryServiceProvider},
-    node::{self, BlockId},
-    ApiState,
+    node, ApiState,
 };
 use light_client::{
     client::{Client, QueryServiceClient},
@@ -149,7 +148,7 @@ where
             .await
             .context(format!("fetching leaf {block}"))?;
         let (payload, vid_common) = lc
-            .fetch_block_and_vid_common(BlockId::Number(block as usize))
+            .fetch_block_and_vid_common_for_header(leaf.header().clone())
             .await
             .context(format!("fetching block {block}"))?;
         ds.append(BlockInfo::new(leaf, Some(payload), Some(vid_common), None))
