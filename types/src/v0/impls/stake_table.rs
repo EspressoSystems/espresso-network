@@ -245,12 +245,17 @@ impl Committable for StakeTableState {
 }
 
 impl StakeTableState {
-    pub fn new() -> Self {
+    pub fn new(
+        validators: ValidatorMap,
+        validator_exits: HashSet<Address>,
+        used_bls_keys: HashSet<BLSPubKey>,
+        used_schnorr_keys: HashSet<SchnorrPubKey>,
+    ) -> Self {
         Self {
-            validators: IndexMap::new(),
-            validator_exits: HashSet::new(),
-            used_bls_keys: HashSet::new(),
-            used_schnorr_keys: HashSet::new(),
+            validators,
+            validator_exits,
+            used_bls_keys,
+            used_schnorr_keys,
         }
     }
 
@@ -260,6 +265,18 @@ impl StakeTableState {
 
     pub fn into_validators(self) -> ValidatorMap {
         self.validators
+    }
+
+    pub fn used_bls_keys(&self) -> &HashSet<BLSPubKey> {
+        &self.used_bls_keys
+    }
+
+    pub fn used_schnorr_keys(&self) -> &HashSet<SchnorrPubKey> {
+        &self.used_schnorr_keys
+    }
+
+    pub fn validator_exits(&self) -> &HashSet<Address> {
+        &self.validator_exits
     }
 
     /// Applies a stake table event to this state.
@@ -582,7 +599,7 @@ impl StakeTableState {
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> Result<(ValidatorMap, StakeTableHash), StakeTableError> {
-    let mut state = StakeTableState::new();
+    let mut state = StakeTableState::default();
     for event in events {
         match state.apply_event(event.clone()) {
             Ok(Ok(())) => {
@@ -606,7 +623,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 ///
 /// Filters out validators without stake and selects the top 100 staked validators.
 /// Returns a new ValidatorMap containing only the selected validators.
-pub(crate) fn select_active_validator_set(
+pub fn select_active_validator_set(
     validators: &ValidatorMap,
 ) -> Result<ValidatorMap, StakeTableError> {
     let total_validators = validators.len();
@@ -735,6 +752,8 @@ pub struct EpochCommittees {
     non_epoch_committee: NonEpochCommittee,
     /// Holds Stake table and da stake
     state: HashMap<Epoch, EpochCommittee>,
+    /// holds the full validator sets temporarily, until we store them
+    all_validators: BTreeMap<Epoch, ValidatorMap>,
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     /// DA committees, indexed by the first epoch in which they apply
@@ -863,7 +882,7 @@ impl Fetcher {
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let (read_l1_offset, persistence_events) = {
             let persistence_lock = self.persistence.lock().await;
-            persistence_lock.load_events(to_block).await?
+            persistence_lock.load_events(0, to_block).await?
         };
 
         tracing::info!("loaded events from storage to_block={to_block:?}");
@@ -899,18 +918,16 @@ impl Fetcher {
         .await?;
 
         // Store only the new events fetched from L1 contract
-        if !contract_events.is_empty() {
-            tracing::info!(
-                "storing {} new events in storage to_block={to_block:?}",
-                contract_events.len()
-            );
-            {
-                let persistence_lock = self.persistence.lock().await;
-                persistence_lock
-                    .store_events(to_block, contract_events.clone())
-                    .await
-                    .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
-            }
+        tracing::info!(
+            "storing {} new events in storage to_block={to_block:?}",
+            contract_events.len()
+        );
+        {
+            let persistence_lock = self.persistence.lock().await;
+            persistence_lock
+                .store_events(to_block, contract_events.clone())
+                .await
+                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
         }
 
         let mut events = match from_block {
@@ -1911,6 +1928,7 @@ impl EpochCommittees {
             non_epoch_committee: members,
             da_committees: BTreeMap::new(),
             state: map,
+            all_validators: BTreeMap::new(),
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
             fixed_block_reward,
@@ -2317,23 +2335,71 @@ impl Membership<SeqTypes> for EpochCommittees {
             active_validators.clone(),
             block_reward,
             stake_table_hash,
-            Some(block_header),
+            Some(block_header.clone()),
         );
+
+        // previous_epoch is the epoch prior to `epoch`,
+        // or the epoch immediately succeeding the block header
+        let previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
+        let previous_committee = membership_writer.state.get(&previous_epoch).cloned();
+        // garbage collect the validator set
+        membership_writer.all_validators =
+            membership_writer.all_validators.split_off(&previous_epoch);
+        // extract `all_validators` for the previous epoch
+        let previous_validators = membership_writer.all_validators.remove(&previous_epoch);
+        membership_writer
+            .all_validators
+            .insert(epoch, all_validators.clone());
         drop(membership_writer);
 
         let persistence_lock = fetcher.persistence.lock().await;
-        if let Err(e) = persistence_lock
-            .store_stake(epoch, active_validators, block_reward, stake_table_hash)
-            .await
-        {
-            tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing stake table");
-        }
 
-        if let Err(e) = persistence_lock
-            .store_all_validators(epoch, all_validators)
-            .await
-        {
-            tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
+        let decided_hash = block_header.next_stake_table_hash();
+
+        // we store the information from the previous epoch's in-memory committeee
+        // if the decided stake_table_hash is consistent with what we get
+        //
+        // in principle this is unnecessary and we could've stored these right away,
+        // without offsetting the epoch. but the intention is to catch L1 provider issues
+        // if there is a mismatch
+        if let Some(previous_committee) = previous_committee {
+            if decided_hash.is_none() || decided_hash == previous_committee.stake_table_hash {
+                if let Err(e) = persistence_lock
+                    .store_stake(
+                        previous_epoch,
+                        previous_committee.validators,
+                        previous_committee.block_reward,
+                        previous_committee.stake_table_hash,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        ?e,
+                        ?previous_epoch,
+                        "`add_epoch_root`, error storing stake table"
+                    );
+                }
+
+                if let Some(previous_validators) = previous_validators {
+                    if let Err(e) = persistence_lock
+                        .store_all_validators(previous_epoch, previous_validators)
+                        .await
+                    {
+                        tracing::error!(
+                            ?e,
+                            ?epoch,
+                            "`add_epoch_root`, error storing all validators"
+                        );
+                    }
+                }
+            } else {
+                panic!(
+                    "The decided block header's `next_stake_table_hash` does not match the hash \
+                     of the stake table we have. This is an unrecoverable error likely due to \
+                     issues with the your L1 RPC provider. Decided:\n\n{:?}Actual:\n\n{:?}",
+                    decided_hash, previous_committee.stake_table_hash
+                );
+            }
         }
 
         Ok(())
@@ -2922,7 +2988,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_register_validator(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
 
         let event = match version {
@@ -2940,7 +3006,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_validator_already_registered(#[case] version: StakeTableContractVersion) {
-        let mut stake_table_state = StakeTableState::new();
+        let mut stake_table_state = StakeTableState::default();
 
         let test_validator = TestValidator::random();
 
@@ -2982,7 +3048,7 @@ mod tests {
 
     #[test]
     fn test_register_validator_v2_auth_fails() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let mut val = TestValidator::random();
         val.bls_sig = Default::default();
         let event = StakeTableEvent::RegisterV2((&val).into());
@@ -2998,7 +3064,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_deregister_validator(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
 
         let reg = StakeTableEvent::Register((&val).into());
@@ -3019,7 +3085,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_delegate_and_undelegate(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
         state
             .apply_event(StakeTableEvent::Register((&val).into()))
@@ -3061,7 +3127,7 @@ mod tests {
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
     fn test_key_update_event(#[case] version: StakeTableContractVersion) {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
 
         // Always register first using V1 to simulate upgrade scenarios
@@ -3086,7 +3152,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_bls_key() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
         let event1 = StakeTableEvent::Register((&val).into());
         let mut val2 = TestValidator::random();
@@ -3109,7 +3175,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_schnorr_key() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let val = TestValidator::random();
         let event1 = StakeTableEvent::Register((&val).into());
         let mut val2 = TestValidator::random();
@@ -3133,7 +3199,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_schnorr_key_v2_during_update() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
 
         let val1 = TestValidator::random();
 
@@ -3165,7 +3231,7 @@ mod tests {
 
     #[test]
     fn test_register_and_deregister_validator() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let event = StakeTableEvent::Register((&validator).into());
         state.apply_event(event).unwrap().unwrap();
@@ -3178,7 +3244,7 @@ mod tests {
     fn test_commission_validation_exceeds_basis_points() {
         // Create a simple stake table with one validator
         let validator = TestValidator::random();
-        let mut stake_table = StakeTableState::new();
+        let mut stake_table = StakeTableState::default();
 
         // Register the validator first
         let registration_event = ValidatorRegistered::from(&validator).into();
@@ -3221,7 +3287,7 @@ mod tests {
 
     #[test]
     fn test_delegate_zero_amount_is_rejected() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let account = validator.account;
         state
@@ -3249,7 +3315,7 @@ mod tests {
 
     #[test]
     fn test_undelegate_more_than_stake_fails() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let account = validator.account;
         state
@@ -3279,7 +3345,7 @@ mod tests {
 
     #[test]
     fn test_apply_event_does_not_modify_state_on_error() {
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
         let validator = TestValidator::random();
         let delegator = Address::random();
 

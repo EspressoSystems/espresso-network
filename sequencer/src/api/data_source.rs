@@ -9,7 +9,7 @@ use espresso_types::{
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
-        RewardMerkleTreeV1, Validator,
+        RewardMerkleTreeV1, StakeTableEvent, Validator,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -42,7 +42,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion};
+use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion, U256};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -118,6 +118,11 @@ pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
 }
 
+pub(crate) trait TokenDataSource<T: NodeType> {
+    /// Get the stake table for a given epoch
+    fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "T: NodeType")]
 pub struct StakeTableWithEpochNumber<T: NodeType> {
@@ -174,6 +179,13 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         offset: u64,
         limit: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
+
+    /// Get stake table events from L1 blocks `from_l1_block..=to_l1_block`.
+    fn stake_table_events(
+        &self,
+        from_l1_block: u64,
+        to_l1_block: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<StakeTableEvent>>>;
 }
 
 // Thin wrapper trait to access persistence methods from API handlers

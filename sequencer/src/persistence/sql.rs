@@ -42,13 +42,11 @@ use hotshot_query_service::{
         Provider,
     },
     merklized_state::MerklizedState,
-    VidCommon,
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare, VidDisperseShare0,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -371,7 +369,7 @@ impl From<SqliteOptions> for Options {
     fn from(opt: SqliteOptions) -> Self {
         Options {
             sqlite_options: opt,
-            max_connections: 10,
+            max_connections: 5,
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
@@ -1376,13 +1374,11 @@ impl SequencerPersistence for Persistence {
 
     async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number.u64();
-        let payload_hash = proposal.data.payload_commitment;
-        let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-            convert_proposal(proposal.clone());
-        let data_bytes = bincode::serialize(&proposal).unwrap();
+        let view = proposal.data.view_number().u64();
+        let payload_hash = proposal.data.payload_commitment();
+        let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
         let mut tx = self.db.write().await?;
@@ -1396,31 +1392,6 @@ impl SequencerPersistence for Persistence {
         let res = tx.commit().await;
         self.internal_metrics
             .internal_append_vid_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number.u64();
-        let payload_hash = proposal.data.payload_commitment;
-        let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-            convert_proposal(proposal.clone());
-        let data_bytes = bincode::serialize(&proposal).unwrap();
-
-        let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "vid_share2",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, payload_hash.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
-        self.internal_metrics
-            .internal_append_vid2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -1803,7 +1774,7 @@ impl SequencerPersistence for Persistence {
                 let data: Vec<u8> = row.try_get("data")?;
                 let payload_hash: String = row.try_get("payload_hash")?;
 
-                let vid_share: Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>> =
+                let vid_share: Proposal<SeqTypes, VidDisperseShare0<SeqTypes>> =
                     bincode::deserialize(&data)?;
                 let vid_share2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(vid_share);
@@ -2530,10 +2501,6 @@ impl MembershipPersistence for Persistence {
         l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        if events.is_empty() {
-            return Ok(());
-        }
-
         let mut tx = self.db.write().await?;
 
         // check last l1 block if there is any
@@ -2557,28 +2524,31 @@ impl MembershipPersistence for Persistence {
             return Ok(());
         }
 
-        let mut query_builder: sqlx::QueryBuilder<Db> =
-            sqlx::QueryBuilder::new("INSERT INTO stake_table_events (l1_block, log_index, event) ");
+        if !events.is_empty() {
+            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+            );
 
-        let events = events
-            .into_iter()
-            .map(|((block_number, index), event)| {
-                Ok((
-                    i64::try_from(block_number)?,
-                    i64::try_from(index)?,
-                    serde_json::to_value(event).context("l1 event to value")?,
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            let events = events
+                .into_iter()
+                .map(|((block_number, index), event)| {
+                    Ok((
+                        i64::try_from(block_number)?,
+                        i64::try_from(index)?,
+                        serde_json::to_value(event).context("l1 event to value")?,
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
-        query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
-            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
-        });
+            query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
+                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+            });
 
-        query_builder.push(" ON CONFLICT DO NOTHING");
-        let query = query_builder.build();
+            query_builder.push(" ON CONFLICT DO NOTHING");
+            let query = query_builder.build();
 
-        query.execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
+        }
 
         // update l1 block
         tx.upsert(
@@ -2606,6 +2576,7 @@ impl MembershipPersistence for Persistence {
     ///
     async fn load_events(
         &self,
+        from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
@@ -2636,9 +2607,10 @@ impl MembershipPersistence for Persistence {
         };
 
         let rows = query(
-            "SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER \
-             BY l1_block ASC, log_index ASC",
+            "SELECT l1_block, log_index, event FROM stake_table_events WHERE $1 <= l1_block AND \
+             l1_block <= $2 ORDER BY l1_block ASC, log_index ASC",
         )
+        .bind(i64::try_from(from_l1_block)?)
         .bind(query_l1_block)
         .fetch_all(tx.as_mut())
         .await?;
@@ -2830,6 +2802,7 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
         match share.data {
             VidDisperseShare::V0(vid) => Some(VidCommon::V0(vid.common)),
             VidDisperseShare::V1(vid) => Some(VidCommon::V1(vid.common)),
+            VidDisperseShare::V2(vid) => Some(VidCommon::V2(vid.common)),
         }
     }
 }
@@ -2987,7 +2960,8 @@ mod test {
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, EpochNumber, QuorumProposal2,
+            ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, EpochNumber,
+            QuorumProposal2,
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
@@ -3111,18 +3085,20 @@ mod test {
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = VidDisperseShare2::<SeqTypes> {
-            view_number: ViewNumber::new(0),
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param.clone(),
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid_share = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: ViewNumber::new(0),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param.clone(),
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
 
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
@@ -3176,10 +3152,7 @@ mod test {
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
             .unwrap();
-        storage
-            .append_vid2(&convert_proposal(vid_share.clone()))
-            .await
-            .unwrap();
+        storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
             .await
@@ -3195,17 +3168,13 @@ mod test {
         assert_eq!(
             Some(VidCommon::V1(avidm_param)),
             storage
-                .fetch(VidCommonRequest(VidCommitment::V1(
-                    vid_share.data.payload_commitment
-                )))
+                .fetch(VidCommonRequest(vid_share.data.payload_commitment()))
                 .await
         );
         assert_eq!(
             leaf_payload,
             storage
-                .fetch(PayloadRequest(VidCommitment::V1(
-                    vid_share.data.payload_commitment
-                )))
+                .fetch(PayloadRequest(vid_share.data.payload_commitment()))
                 .await
                 .unwrap()
         );
@@ -3255,18 +3224,20 @@ mod test {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid = VidDisperseShare2::<SeqTypes> {
-            view_number: data_view,
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param,
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: data_view,
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param,
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
                 epoch: None,
@@ -3308,7 +3279,7 @@ mod test {
         };
 
         tracing::info!(?vid, ?da_proposal, ?quorum_proposal, "append data");
-        storage.append_vid2(&vid).await.unwrap();
+        storage.append_vid(&vid).await.unwrap();
         storage
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
@@ -3327,7 +3298,7 @@ mod test {
             .unwrap();
         assert_eq!(
             storage.load_vid_share(data_view).await.unwrap().unwrap(),
-            convert_proposal(vid)
+            vid
         );
         assert_eq!(
             storage.load_da_proposal(data_view).await.unwrap().unwrap(),
@@ -3485,7 +3456,7 @@ mod test {
                 .disperse(payload_bytes.clone())
                 .unwrap();
 
-            let vid = ADVZDisperseShare::<SeqTypes> {
+            let vid = VidDisperseShare0::<SeqTypes> {
                 view_number: ViewNumber::new(i),
                 payload_commitment: Default::default(),
                 share: disperse.shares[0].clone(),
@@ -3514,7 +3485,7 @@ mod test {
             };
 
             storage
-                .append_vid(&vid.to_proposal(&privkey).unwrap())
+                .append_vid(&convert_proposal(vid.to_proposal(&privkey).unwrap()))
                 .await
                 .unwrap();
             storage
@@ -3624,6 +3595,47 @@ mod test {
         );
 
         storage.migrate_storage().await.unwrap();
+    }
+
+    /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
+    ///
+    /// Previously, `store_events` did nothing when given an empty events list (in fact,
+    /// `fetch_and_store_stake_table_events` was not even calling it). But this means that the
+    /// `stake_table_events_l1_block` column does not get updated when we enter a new epoch with no
+    /// new stake table events. This makes it impossible to distinguish between two very different
+    /// scenarios:
+    ///
+    /// 1. The node has successfully processed events through the latest L1 finalized block, but
+    ///    there are no new events from the last epoch.
+    /// 2. The node is lagging behind the latest L1 finalized block, and is possibly missing some
+    ///    new events.
+    ///
+    /// In scenario 1, clients of this node should be able to treat the empty list of stake table
+    /// events as authoritative, and derive the stake table for the next epoch (which will end up
+    /// being the same as the previous one. However, in scenario 2, clients need to wait, because we
+    /// don't yet know whether there could be any events that modify the stake table. Thus,
+    /// distinguishing these two scenarios is important.
+    ///
+    /// This regression test ensures that even if there are no new events, at least the
+    /// `stake_table_events_l1_block` column gets updated. We can then distinguish the two scenarios
+    /// using the `EventsPersistenceRead`` return value from load_events.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_events_empty() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        assert_eq!(storage.load_events(0, 100).await.unwrap(), (None, vec![]));
+
+        // Storing an empty events list still updates the latest L1 block.
+        for i in 1..=2 {
+            tracing::info!(i, "update l1 height");
+            storage.store_events(i, vec![]).await.unwrap();
+            assert_eq!(
+                storage.load_events(0, 100).await.unwrap(),
+                (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
+            );
+        }
     }
 }
 

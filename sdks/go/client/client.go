@@ -105,6 +105,30 @@ func (c *Client) FetchTransactionByHash(ctx context.Context, hash *types.TaggedB
 	return res, nil
 }
 
+func (c *Client) FetchNamespaceTransactionsInRange(ctx context.Context, from uint64, until uint64, namespace uint64) ([]types.NamespaceTransactionsRangeData, error) {
+	limits, err := c.FetchLimits(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// check that from and until are within limits
+	if until-from > limits.LargeObjectRangeLimit {
+		return nil, fmt.Errorf("range too large: %d > %d", until-from, limits.LargeObjectRangeLimit)
+	}
+	var res []types.NamespaceTransactionsRangeData
+	if err := c.get(ctx, &res, "availability/block/%d/%d/namespace/%d", from, until, namespace); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (c *Client) FetchLimits(ctx context.Context) (types.LimitsData, error) {
+	var res types.LimitsData
+	if err := c.get(ctx, &res, "availability/limits"); err != nil {
+		return types.LimitsData{}, err
+	}
+	return res, nil
+}
+
 // Fetches a block merkle proof at the snapshot rootHeight for the leaf at the provided HotShot height
 func (c *Client) FetchBlockMerkleProof(ctx context.Context, rootHeight uint64, hotshotHeight uint64) (types.HotShotBlockMerkleProof, error) {
 	var res types.HotShotBlockMerkleProof

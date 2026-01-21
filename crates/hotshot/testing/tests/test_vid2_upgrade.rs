@@ -1,0 +1,33 @@
+// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
+// This file is part of the HotShot repository.
+
+// You should have received a copy of the MIT License
+// along with the HotShot repository. If not, see <https://mit-license.org/>.
+
+use hotshot_example_types::node_types::{
+    MemoryImpl, TestTypes, TestTypesRandomizedLeader, Vid2UpgradeTestVersions,
+};
+use hotshot_macros::cross_tests;
+use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
+
+cross_tests!(
+    TestName: test_vid2_upgrade,
+    Impls: [MemoryImpl],
+    Types: [TestTypes, TestTypesRandomizedLeader],
+    // TODO: we need some test infrastructure + Membership trait fixes to get this to work with:
+    // Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
+    Versions: [Vid2UpgradeTestVersions],
+    Ignore: false,
+    Metadata: {
+        let mut metadata = TestDescription {
+            upgrade_view: Some(5),
+            ..TestDescription::default()
+        };
+
+        // Keep going until the 2nd epoch transition
+        metadata.overall_safety_properties.num_successful_views = 110;
+        metadata.test_config.epoch_height = 50;
+
+        metadata
+    },
+);

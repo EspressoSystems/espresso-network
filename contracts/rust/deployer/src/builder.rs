@@ -16,9 +16,9 @@ use crate::{
     proposals::{
         multisig::{
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
-            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
-            StakeTableV2UpgradeParams, TransferOwnershipParams,
+            upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
+            upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+            LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
             cancel_timelock_operation, derive_timelock_address_from_contract_type,
@@ -26,7 +26,7 @@ use crate::{
             TimelockOperationType,
         },
     },
-    Contract, Contracts,
+    Contract, Contracts, OwnableContract,
 };
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
@@ -116,7 +116,7 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     timelock_operation_type: Option<TimelockOperationType>,
     #[builder(default)]
-    target_contract: Option<String>,
+    target_contract: Option<OwnableContract>,
     #[builder(default)]
     timelock_operation_value: Option<U256>,
     #[builder(default)]
@@ -142,26 +142,61 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let admin = provider.default_signer_address();
         match target {
             Contract::FeeContractProxy => {
-                let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
+                if contracts.address(Contract::FeeContractProxy).is_some() {
+                    // Upgrade path
+                    let use_multisig = self.use_multisig;
+                    let dry_run = self.dry_run;
+                    let rpc_url = self.rpc_url.clone();
 
-                if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    // FeeContract uses OpsTimelock because:
-                    // - It handles critical fee collection and distribution logic
-                    // - May require emergency updates for security or functionality
-                    // - OpsTimelock provides a shorter delay for critical operations
-                    tracing::info!(
-                        "Transferring ownership to OpsTimelock: {:?}",
-                        use_timelock_owner
-                    );
-                    // deployer is the timelock owner
-                    if use_timelock_owner {
-                        let timelock_addr =
-                            derive_timelock_address_from_contract_type(target, contracts)?;
-                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
+                    tracing::info!(?dry_run, ?use_multisig, "Upgrading FeeContract to V1.0.1");
+                    if use_multisig {
+                        upgrade_fee_contract_multisig_owner(
+                            provider,
+                            contracts,
+                            rpc_url.to_string(),
+                            dry_run,
+                        )
+                        .await?;
+                    } else {
+                        crate::upgrade_fee_v1(provider, contracts).await?;
                     }
-                } else if let Some(multisig) = self.multisig {
-                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
-                    crate::transfer_ownership(provider, target, addr, multisig).await?;
+                } else {
+                    // Deploy path
+                    let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
+
+                    if let Some(use_timelock_owner) = self.use_timelock_owner {
+                        // FeeContract uses OpsTimelock because:
+                        // - It handles critical fee collection and distribution logic
+                        // - May require emergency updates for security or functionality
+                        // - OpsTimelock provides a shorter delay for critical operations
+                        tracing::info!(
+                            "Transferring ownership to OpsTimelock: {:?}",
+                            use_timelock_owner
+                        );
+                        // deployer is the timelock owner
+                        if use_timelock_owner {
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                OwnableContract::FeeContractProxy,
+                                contracts,
+                            )?;
+                            crate::transfer_ownership(
+                                provider,
+                                Contract::FeeContractProxy,
+                                addr,
+                                timelock_addr,
+                            )
+                            .await?;
+                        }
+                    } else if let Some(multisig) = self.multisig {
+                        tracing::info!("Transferring ownership to multisig: {:?}", multisig);
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::FeeContractProxy,
+                            addr,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::EspTokenProxy => {
@@ -215,10 +250,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             // - No emergency updates are expected for token functionality
                             // - SafeExitTimelock provides sufficient security for token operations
                             tracing::info!("Transferring ownership to SafeExitTimelock");
-                            let timelock_addr =
-                                derive_timelock_address_from_contract_type(target, contracts)?;
-                            crate::transfer_ownership(provider, target, addr, timelock_addr)
-                                .await?;
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                OwnableContract::EspTokenProxy,
+                                contracts,
+                            )?;
+                            crate::transfer_ownership(
+                                provider,
+                                Contract::EspTokenProxy,
+                                addr,
+                                timelock_addr,
+                            )
+                            .await?;
                         }
                     } else if let Some(multisig) = self.multisig {
                         let token_proxy = contracts
@@ -337,19 +379,23 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
-                            let timelock_addr =
-                                derive_timelock_address_from_contract_type(target, contracts)?;
-                            crate::transfer_ownership(provider, target, addr, timelock_addr)
-                                .await?;
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                OwnableContract::LightClientProxy,
+                                contracts,
+                            )?;
+                            crate::transfer_ownership(
+                                provider,
+                                Contract::LightClientProxy,
+                                addr,
+                                timelock_addr,
+                            )
+                            .await?;
                         }
                     } else if let Some(multisig) = self.multisig {
-                        let lc_proxy = contracts
-                            .address(Contract::LightClientProxy)
-                            .expect("fail to get LightClientProxy address");
                         crate::transfer_ownership(
                             provider,
                             Contract::LightClientProxy,
-                            lc_proxy,
+                            addr,
                             multisig,
                         )
                         .await?;
@@ -405,9 +451,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     // Pick admin from config. StakeTable uses OpsTimelock for faster
                     // emergency updates since it handles critical staking ops.
                     let admin = match self.use_timelock_owner {
-                        Some(true) => {
-                            derive_timelock_address_from_contract_type(target, contracts)?
-                        },
+                        Some(true) => derive_timelock_address_from_contract_type(
+                            OwnableContract::StakeTableProxy,
+                            contracts,
+                        )?,
                         Some(false) => admin, // deployer
                         None => {
                             if let Some(multisig) = self.multisig {
@@ -496,7 +543,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 // RewardClaim uses SafeExitTimelock (longer delay) since it can mint tokens
                 // and users need time to react to upgrades. Can be paused in emergencies.
                 let admin = match self.use_timelock_owner {
-                    Some(true) => derive_timelock_address_from_contract_type(target, contracts)?,
+                    Some(true) => derive_timelock_address_from_contract_type(
+                        OwnableContract::RewardClaimProxy,
+                        contracts,
+                    )?,
                     Some(false) => admin, // deployer
                     None => {
                         if let Some(multisig) = self.multisig {
@@ -560,10 +610,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let timelock_operation_type = self
             .timelock_operation_type
             .context("Timelock operation type not found")?;
-        let target_contract = self
-            .target_contract
-            .clone()
-            .context("Timelock target not found")?;
+        let target_contract = self.target_contract.context("Timelock target not found")?;
         let value = self
             .timelock_operation_value
             .context("Timelock operation value not found")?;
@@ -583,39 +630,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .timelock_operation_delay
             .context("Timelock operation delay not found")?;
 
-        let (target_addr, contract_type) = match target_contract.as_str() {
-            "FeeContract" => (
-                contracts
-                    .address(Contract::FeeContractProxy)
-                    .context("FeeContractProxy address not found")?,
-                Contract::FeeContractProxy,
-            ),
-            "EspToken" => (
-                contracts
-                    .address(Contract::EspTokenProxy)
-                    .context("EspTokenProxy address not found")?,
-                Contract::EspTokenProxy,
-            ),
-            "LightClient" => (
-                contracts
-                    .address(Contract::LightClientProxy)
-                    .context("LightClientProxy address not found")?,
-                Contract::LightClientProxy,
-            ),
-            "StakeTable" => (
-                contracts
-                    .address(Contract::StakeTableProxy)
-                    .context("StakeTableProxy address not found")?,
-                Contract::StakeTableProxy,
-            ),
-            "RewardClaim" => (
-                contracts
-                    .address(Contract::RewardClaimProxy)
-                    .context("RewardClaimProxy address not found")?,
-                Contract::RewardClaimProxy,
-            ),
-            _ => anyhow::bail!("Invalid target contract: {}", target_contract),
-        };
+        let contract_type: Contract = target_contract.into();
+        let target_addr = contracts
+            .address(contract_type)
+            .context(format!("{:?} address not found", contract_type))?;
 
         let function_calldata = encode_function_call(function_signature, function_values.clone())
             .context("Failed to encode function data")?;
@@ -679,7 +697,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             "Multisig address must be set when proposing ownership transfer. Use \
              --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
         );
-        let target_contract = self.target_contract.clone().ok_or_else(|| {
+        let ownable_contract = self.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide target_contract when using \
                  --propose-transfer-ownership-to-timelock. Use --target-contract or \
@@ -687,30 +705,15 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             )
         })?;
 
-        // Parse the contract type from string
-        let contract_type = match target_contract.to_lowercase().as_str() {
-            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
-            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
-            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
-            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
-            "rewardclaim" | "rewardclaimproxy" => Contract::RewardClaimProxy,
-            _ => anyhow::bail!(
-                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-                 staketable, rewardclaim",
-                target_contract
-            ),
-        };
-
         let timelock_address =
-            derive_timelock_address_from_contract_type(contract_type, contracts)?;
+            derive_timelock_address_from_contract_type(ownable_contract, contracts)?;
 
+        let contract: Contract = ownable_contract.into();
         tracing::info!(
-            "Proposing transfer of ownership from multisig to timelock for {} (timelock: {:?})",
-            target_contract,
+            "Proposing transfer of ownership from multisig to timelock for {:?} (timelock: {:?})",
+            contract,
             timelock_address
         );
-
-        let contract = contract_type;
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
         let use_hardware_wallet = false;
@@ -752,7 +755,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             return Ok(());
         }
 
-        let target_contract = self.target_contract.clone().ok_or_else(|| {
+        let ownable_contract = self.target_contract.ok_or_else(|| {
             anyhow::anyhow!("Must provide target_contract when using transfer_ownership_from_eoa")
         })?;
         let new_owner = self.transfer_ownership_new_owner.ok_or_else(|| {
@@ -761,25 +764,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             )
         })?;
 
-        // Parse the contract type from string
-        let contract_type = match target_contract.to_lowercase().as_str() {
-            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
-            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
-            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
-            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
-            "rewardclaim" | "rewardclaimproxy" => Contract::RewardClaimProxy,
-            _ => anyhow::bail!(
-                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-                 staketable, rewardclaim",
-                target_contract
-            ),
-        };
-
-        // Get the contract address from the contracts map
+        let contract_type: Contract = ownable_contract.into();
         let contract_address = contracts.address(contract_type).ok_or_else(|| {
             anyhow::anyhow!(
-                "Contract {} not found in deployed contracts",
-                target_contract
+                "Contract {:?} not found in deployed contracts",
+                contract_type
             )
         })?;
 
@@ -787,17 +776,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         // instead of transferring ownership
         let receipt = if contract_type == Contract::RewardClaimProxy {
             tracing::info!(
-                "Granting DEFAULT_ADMIN_ROLE for {} to {} (RewardClaim uses AccessControl, not \
+                "Granting DEFAULT_ADMIN_ROLE for {:?} to {} (RewardClaim uses AccessControl, not \
                  Ownable)",
-                target_contract,
+                contract_type,
                 new_owner
             );
             crate::grant_admin_role(&self.deployer, contract_type, contract_address, new_owner)
                 .await?
         } else {
             tracing::info!(
-                "Transferring ownership of {} from EOA to {}",
-                target_contract,
+                "Transferring ownership of {:?} from EOA to {}",
+                contract_type,
                 new_owner
             );
             crate::transfer_ownership(&self.deployer, contract_type, contract_address, new_owner)
@@ -805,8 +794,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         };
 
         tracing::info!(
-            "Successfully transferred admin control of {} to {}. Transaction: {}",
-            target_contract,
+            "Successfully transferred admin control of {:?} to {}. Transaction: {}",
+            contract_type,
             new_owner,
             receipt.transaction_hash
         );
