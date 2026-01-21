@@ -746,17 +746,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 ensure!(
                     sender.validate(&share.signature, payload_commitment.as_ref())
                         || leader.validate(&share.signature, payload_commitment.as_ref()),
-                    warn!(
+                    error!(
                         "VID share signature is invalid, sender: {}, signature: {:?}, \
                          payload_commitment: {:?}",
                         sender, share.signature, payload_commitment
                     )
                 );
-
-                // ensure that the VID share was sent by a DA member OR the view leader
                 ensure!(
                     membership_reader
-                        .da_committee_members(view)
+                        .committee_members(view)
                         .await
                         .contains(sender)
                         || *sender == membership_reader.leader(view).await?,
@@ -802,7 +800,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // If it's the first time receiving our share send it to all nodes
                 if *share.data.recipient_key() == self.public_key {
                     if let VidDisperseShare::V2(ref inner_share) = share.data {
-                        tracing::error!("Received our own VID share for view {view}");
+                        tracing::warn!("Received our own VID share for view {view}");
                         let proposal = Proposal {
                             signature: share.signature.clone(),
                             data: inner_share.clone(),

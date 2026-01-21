@@ -279,7 +279,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .saved_payloads()
                     .contains_key(&view)
                 {
-                    tracing::warn!(
+                    tracing::debug!(
                         "We already have the payload for view {view}, skipping reconstruction"
                     );
                     return None;
@@ -304,16 +304,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     reconstruct_shares.push(share.share.clone());
                 }
 
-                let reconstruct_result = tokio::task::spawn_blocking(move || {
-                    AvidmGf2Scheme::recover(&common, &reconstruct_shares)
-                })
-                .await
-                .ok()?;
+                let reconstruct_result = AvidmGf2Scheme::recover(&common, &reconstruct_shares);
 
                 let payload_bytes = match reconstruct_result {
                     Ok(payload_bytes) => payload_bytes,
                     Err(e) => {
-                        tracing::error!("Failed to reconstruct block for view {view}: {e}");
+                        tracing::debug!(error=?e, "Failed to reconstruct block for view {view}");
                         return None;
                     },
                 };
@@ -351,6 +347,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .saved_payloads()
                     .contains_key(&view)
                 {
+                    tracing::debug!(
+                        "We already have the payload for view {view}, skipping reconstruction"
+                    );
                     return None;
                 }
                 let epoch = proposal.data.epoch();
@@ -382,14 +381,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     reconstruct_shares.push(share.share.clone());
                 }
 
-                let Ok(payload_bytes) = AvidmGf2Scheme::recover(&common, &reconstruct_shares)
-                else {
-                    return None;
+                let reconstruct_result = AvidmGf2Scheme::recover(&common, &reconstruct_shares);
+
+                let payload_bytes = match reconstruct_result {
+                    Ok(payload_bytes) => payload_bytes,
+                    Err(e) => {
+                        tracing::debug!(error=?e, "Failed to reconstruct block for view {view}");
+                        return None;
+                    },
                 };
                 let metadata = proposal.data.block_header().metadata();
                 let payload = TYPES::BlockPayload::from_bytes(&payload_bytes, metadata);
-
-                tracing::error!("Reconstructed block for view {view}");
+                tracing::error!("Reconstructed block after proposal validation for view {view}");
                 broadcast_event(
                     Arc::new(HotShotEvent::BlockReconstructed(
                         payload,

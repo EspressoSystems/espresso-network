@@ -1005,7 +1005,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         // Update our internal storage of the proposal. The proposal is valid, so
         // we swallow this error and just log if it occurs.
         if let Err(e) = consensus_writer.update_proposed_view(proposal.clone()) {
-            tracing::debug!("Internal proposal update failed; error = {e:#}");
+            tracing::error!("Internal proposal update failed; error = {e:#}");
         };
     }
 
