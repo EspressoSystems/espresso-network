@@ -19,7 +19,7 @@ pub use x25519::{
 };
 
 /// Max. number of bytes for a message (potentially consisting of several frames).
-pub const MAX_MESSAGE_SIZE: usize = 5 * 1024 * 1024;
+pub const MAX_MESSAGE_SIZE: usize = 8 * 1024 * 1024;
 
 /// Network peer role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
