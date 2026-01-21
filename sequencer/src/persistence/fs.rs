@@ -17,7 +17,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
-        StakeTableEvent, Validator,
+        StakeTableEvent,
     },
     AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
     SeqTypes, StakeTableHash,
@@ -1426,6 +1426,79 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
+        #[allow(deprecated)]
+        use espresso_types::v0_3::Validator;
+
+        let mut inner = self.inner.write().await;
+
+        if inner.migrated.contains("validator_authenticated") {
+            tracing::info!("validator_authenticated migration already complete");
+            return Ok(());
+        }
+
+        let path = inner.stake_table_dir_path();
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        tracing::warn!("migrating stake tables...");
+
+        for (epoch, file_path) in epoch_files(&path)? {
+            let bytes = fs::read(&file_path).with_context(|| {
+                format!("failed to read stake table file at {}", file_path.display())
+            })?;
+
+            // Try new format - if it works, already migrated
+            if bincode::deserialize::<StakeTuple>(&bytes).is_ok() {
+                continue;
+            }
+
+            // Deserialize legacy format
+            #[allow(deprecated)]
+            type LegacyValidatorMap =
+                indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
+            type LegacyStakeTuple = (
+                LegacyValidatorMap,
+                Option<RewardAmount>,
+                Option<StakeTableHash>,
+            );
+
+            let legacy: LegacyStakeTuple = bincode::deserialize(&bytes).with_context(|| {
+                format!(
+                    "failed to deserialize stake table at {} (tried both new and legacy formats)",
+                    file_path.display()
+                )
+            })?;
+
+            // Migrate validators
+            let migrated: AuthenticatedValidatorMap = legacy
+                .0
+                .into_iter()
+                .map(|(addr, v)| {
+                    let registered = v.migrate();
+                    (
+                        addr,
+                        AuthenticatedValidator::try_from(registered)
+                            .expect("migrate() sets authenticated=true"),
+                    )
+                })
+                .collect();
+
+            // Write back in new format
+            let new_data: StakeTuple = (migrated, legacy.1, legacy.2);
+            let new_bytes = bincode::serialize(&new_data)?;
+            fs::write(&file_path, new_bytes)?;
+
+            tracing::info!(?epoch, "migrated stake table");
+        }
+
+        inner.migrated.insert("validator_authenticated".to_string());
+        inner.update_migration()?;
+        tracing::warn!("validator_authenticated migration complete");
+        Ok(())
+    }
+
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
@@ -2154,14 +2227,18 @@ type StakeTuple = (
     Option<StakeTableHash>,
 );
 
-#[allow(deprecated)]
 fn deserialize_stake_tuple(bytes: &[u8], file_path: &Path) -> anyhow::Result<StakeTuple> {
+    #[allow(deprecated)]
+    use espresso_types::v0_3::Validator;
+
     // Try to deserialize as the new format first
     if let Ok(stake) = bincode::deserialize::<StakeTuple>(bytes) {
         return Ok(stake);
     }
 
-    // Fallback: try to deserialize as legacy format (without `authenticated` field)
+    // Fallback: try to deserialize as legacy format (without `authenticated` field).
+    // This ensures reads succeed even if migration hasn't run or failed partway through.
+    #[allow(deprecated)]
     type LegacyValidatorMap = indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
     type LegacyStakeTuple = (
         LegacyValidatorMap,
@@ -2182,8 +2259,11 @@ fn deserialize_stake_tuple(bytes: &[u8], file_path: &Path) -> anyhow::Result<Sta
         .into_iter()
         .map(|(addr, v)| {
             let registered = v.migrate();
-            // Safe: all validators in existing files passed validation before storage
-            (addr, AuthenticatedValidator::try_from(registered).unwrap())
+            (
+                addr,
+                AuthenticatedValidator::try_from(registered)
+                    .expect("migrate() sets authenticated=true"),
+            )
         })
         .collect();
 
@@ -2745,7 +2825,7 @@ mod test {
 
     #[allow(deprecated)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_load_stake_legacy_format() {
+    async fn test_migrate_validator_authenticated() {
         use std::collections::HashMap;
 
         use alloy::primitives::{Address, U256};
@@ -2769,7 +2849,7 @@ mod test {
         };
 
         let mut legacy_map: LegacyValidatorMap = IndexMap::new();
-        legacy_map.insert(legacy_validator.account, legacy_validator);
+        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
 
         // Serialize in the legacy format: (ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)
         type LegacyStakeTuple = (
@@ -2788,14 +2868,29 @@ mod test {
         let file_path = path.join("1.txt");
         fs::write(&file_path, &bytes).unwrap();
 
-        // Loading should succeed and migrate the legacy format
+        // Run migration
+        storage.migrate_validator_authenticated().await.unwrap();
+
+        // Loading should succeed after migration
         let result = storage.load_stake(EpochNumber::new(1)).await;
-        assert!(result.is_ok(), "load_stake should handle legacy format");
+        assert!(result.is_ok(), "load_stake should succeed after migration");
         let stake = result.unwrap();
         assert!(stake.is_some(), "stake should be present");
         let (validators, reward, hash) = stake.unwrap();
         assert_eq!(validators.len(), 1);
         assert!(reward.is_none());
         assert!(hash.is_none());
+
+        // Verify the migrated validator has correct data
+        let migrated = validators.get(&legacy_validator.account).unwrap();
+        assert_eq!(migrated.stake_table_key, legacy_validator.stake_table_key);
+        assert_eq!(migrated.stake, legacy_validator.stake);
+
+        // Running migration again should be a no-op (idempotent)
+        storage.migrate_validator_authenticated().await.unwrap();
+
+        // Still loadable
+        let result2 = storage.load_stake(EpochNumber::new(1)).await;
+        assert!(result2.is_ok());
     }
 }

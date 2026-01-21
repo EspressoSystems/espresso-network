@@ -914,9 +914,14 @@ pub trait SequencerPersistence:
         self.migrate_vid_shares().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
+        self.migrate_validator_authenticated().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");
 
+        Ok(())
+    }
+
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
         Ok(())
     }
 

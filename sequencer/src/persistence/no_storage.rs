@@ -243,6 +243,10 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
