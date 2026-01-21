@@ -276,10 +276,11 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             },
         };
 
-        // Make sure the requested snapshot is up to date.
+        // We only store the current merkle tree state (not historical).
+        // Return NotFound if the requested height doesn't match our current height.
         let height = self.get_last_state_height().await?;
 
-        if height < (created as usize) {
+        if height != (created as usize) {
             return Err(QueryError::NotFound);
         }
 
@@ -600,6 +601,7 @@ impl Node {
             INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
             SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bytea[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path) DO UPDATE SET
+                created = EXCLUDED.created,
                 hash_id = EXCLUDED.hash_id,
                 children = EXCLUDED.children,
                 children_bitvec = EXCLUDED.children_bitvec,
