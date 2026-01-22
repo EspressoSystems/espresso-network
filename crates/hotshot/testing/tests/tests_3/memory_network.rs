@@ -22,7 +22,7 @@ use hotshot_types::{
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
         node_implementation::{ConsensusTime, NodeType},
-    },
+    }, vote::HasViewNumber,
 };
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use tokio::time::timeout;
@@ -118,9 +118,10 @@ async fn memory_network_direct_queue() {
     // Test 1 -> 2
     // Send messages
     for sent_message in first_messages {
+        let view = sent_message.view_number();
         let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
         network1
-            .direct_message(serialized_message.clone(), pub_key_2)
+            .direct_message(view, serialized_message.clone(), pub_key_2)
             .await
             .expect("Failed to message node");
         let recv_message = network2
@@ -140,9 +141,10 @@ async fn memory_network_direct_queue() {
     // Test 2 -> 1
     // Send messages
     for sent_message in second_messages {
+        let view = sent_message.view_number();
         let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
         network2
-            .direct_message(serialized_message.clone(), pub_key_1)
+            .direct_message(view, serialized_message.clone(), pub_key_1)
             .await
             .expect("Failed to message node");
         let recv_message = network1
@@ -177,9 +179,10 @@ async fn memory_network_broadcast_queue() {
     // Test 1 -> 2
     // Send messages
     for sent_message in first_messages {
+        let view = sent_message.view_number();
         let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
         network1
-            .broadcast_message(serialized_message.clone(), Topic::Da, BroadcastDelay::None)
+            .broadcast_message(view, serialized_message.clone(), Topic::Da, BroadcastDelay::None)
             .await
             .expect("Failed to message node");
         let recv_message = network2
@@ -199,9 +202,11 @@ async fn memory_network_broadcast_queue() {
     // Test 2 -> 1
     // Send messages
     for sent_message in second_messages {
+        let view = sent_message.view_number();
         let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
         network2
             .broadcast_message(
+                view,
                 serialized_message.clone(),
                 Topic::Global,
                 BroadcastDelay::None,
@@ -247,10 +252,11 @@ async fn memory_network_test_in_flight_message_count() {
     let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
 
     for (count, message) in messages.iter().enumerate() {
+        let view = message.view_number();
         let serialized_message = upgrade_lock.serialize(message).await.unwrap();
 
         network1
-            .direct_message(serialized_message.clone(), pub_key_2)
+            .direct_message(view, serialized_message.clone(), pub_key_2)
             .await
             .unwrap();
         // network 2 has received `count` broadcast messages and `count + 1` direct messages
@@ -261,6 +267,7 @@ async fn memory_network_test_in_flight_message_count() {
 
         network2
             .broadcast_message(
+                view,
                 serialized_message.clone(),
                 Topic::Global,
                 BroadcastDelay::None,

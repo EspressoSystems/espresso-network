@@ -12,6 +12,8 @@ use hotshot_types::traits::network::{
 };
 use hotshot_types::{
     boxed_sync,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::NodeType,
@@ -63,11 +65,12 @@ pub fn derive_keypair<K: SignatureKey>(k: &K::PrivateKey) -> Keypair {
 impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
     async fn broadcast_message(
         &self,
+        v: ViewNumber,
         m: Vec<u8>,
         _: Topic,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.net.lock().await.broadcast(0, m).await.map_err(|e| {
+        self.net.lock().await.broadcast(*v, m).await.map_err(|e| {
             NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}"))
         })?;
         Ok(())
@@ -75,6 +78,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 
     async fn da_broadcast_message(
         &self,
+        v: ViewNumber,
         m: Vec<u8>,
         recipients: Vec<T::SignatureKey>,
         _: BroadcastDelay,
@@ -82,7 +86,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         self.net
             .lock()
             .await
-            .multicast(recipients, 0, m)
+            .multicast(recipients, *v, m)
             .await
             .map_err(|e| {
                 NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
@@ -92,13 +96,14 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 
     async fn direct_message(
         &self,
+        v: ViewNumber,
         m: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), NetworkError> {
         self.net
             .lock()
             .await
-            .unicast(recipient, 0, m)
+            .unicast(recipient, *v, m)
             .await
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))?;
         Ok(())
@@ -110,6 +115,17 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
                 NetworkError::MessageSendError(format!("cliquenet receive error: {e}"))
             })?;
         Ok(Vec::from(&data[..]))
+    }
+
+    async fn update_view<U>(
+        &self,
+        v: ViewNumber,
+        _: Option<EpochNumber>,
+        _: EpochMembershipCoordinator<U>,
+    ) where
+        U: NodeType<SignatureKey = T::SignatureKey>,
+    {
+        self.net.lock().await.gc(*v)
     }
 
     async fn wait_for_ready(&self) {}

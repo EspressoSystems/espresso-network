@@ -549,7 +549,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         );
                     };
                     let transmit_result = network
-                        .direct_message(serialized_message.clone(), node.clone())
+                        .direct_message(
+                            view_number.u64().into(),
+                            serialized_message.clone(),
+                            node.clone(),
+                        )
                         .await;
                     match transmit_result {
                         Ok(()) => tracing::info!(
@@ -627,7 +631,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         );
                     };
                     let transmit_result = network
-                        .direct_message(serialized_message.clone(), node.clone())
+                        .direct_message(
+                            view_number.u64().into(),
+                            serialized_message.clone(),
+                            node.clone(),
+                        )
                         .await;
                     match transmit_result {
                         Ok(()) => tracing::info!(
@@ -684,7 +692,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         );
                     };
                     let transmit_result = network
-                        .direct_message(serialized_message.clone(), node.clone())
+                        .direct_message(
+                            view_number.u64().into(),
+                            serialized_message.clone(),
+                            node.clone(),
+                        )
                         .await;
                     match transmit_result {
                         Ok(()) => tracing::info!(
