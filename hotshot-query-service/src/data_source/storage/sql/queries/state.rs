@@ -366,14 +366,13 @@ pub(crate) type ProofWithPath<Entry, Key, T, const ARITY: usize> =
 /// Returns (nodes, hashes) for batch insertion.
 pub(crate) fn collect_nodes_from_proofs<Entry, Key, T, const ARITY: usize>(
     proofs: &[ProofWithPath<Entry, Key, T, ARITY>],
-) -> QueryResult<(Vec<NodeWithHashes>, HashSet<Vec<u8>>)>
+) -> QueryResult<Vec<NodeWithHashes>>
 where
     Entry: jf_merkle_tree_compat::Element + serde::Serialize,
     Key: jf_merkle_tree_compat::Index + serde::Serialize,
     T: jf_merkle_tree_compat::NodeValue,
 {
     let mut nodes = Vec::new();
-    let mut hashes = HashSet::new();
 
     for (proof, traversal_path) in proofs {
         let pos = &proof.pos;
@@ -397,7 +396,6 @@ where
                         None,
                         [0_u8; 32].to_vec(),
                     ));
-                    hashes.insert([0_u8; 32].to_vec());
                 },
                 MerkleNode::ForgettenSubtree { .. } => {
                     return Err(QueryError::Error {
@@ -432,8 +430,6 @@ where
                         None,
                         leaf_commit.clone(),
                     ));
-
-                    hashes.insert(leaf_commit);
                 },
                 MerkleNode::Branch { value, children } => {
                     let mut branch_hash = Vec::new();
@@ -478,8 +474,6 @@ where
                         Some(children_values.clone()),
                         branch_hash.clone(),
                     ));
-                    hashes.insert(branch_hash);
-                    hashes.extend(children_values);
                 },
             }
 
@@ -487,7 +481,7 @@ where
         }
     }
 
-    Ok((nodes, hashes))
+    Ok(nodes)
 }
 
 // Represents a row in a state table
@@ -554,7 +548,7 @@ impl Node {
 
         #[cfg(feature = "embedded-db")]
         {
-            for node_chunk in nodes.chunks(20) {
+            for node_chunk in nodes.chunks(50) {
                 let rows: Vec<_> = node_chunk
                     .iter()
                     .map(|n| {
