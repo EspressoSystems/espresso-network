@@ -52,6 +52,12 @@ use crate::{
     ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
 
+type StakeTuple = (
+    AuthenticatedValidatorMap,
+    Option<RewardAmount>,
+    Option<StakeTableHash>,
+);
+
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
 pub struct Options {
@@ -1853,16 +1859,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<
-        Option<(
-            AuthenticatedValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableHash>,
-        )>,
-    > {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let file_path = path.join(epoch.to_string()).with_extension("txt");
@@ -1934,8 +1931,9 @@ impl MembershipPersistence for Persistence {
                 Ok(true)
             },
             |mut file| {
-                let bytes = bincode::serialize(&(stake, block_reward, stake_table_hash))
-                    .context("serializing combined stake table")?;
+                let data: StakeTuple = (stake, block_reward, stake_table_hash);
+                let bytes =
+                    bincode::serialize(&data).context("serializing combined stake table")?;
                 file.write_all(&bytes)?;
                 Ok(())
             },
@@ -2278,12 +2276,6 @@ fn view_files(
         Some((ViewNumber::new(view_number), entry.path().to_owned()))
     }))
 }
-
-type StakeTuple = (
-    AuthenticatedValidatorMap,
-    Option<RewardAmount>,
-    Option<StakeTableHash>,
-);
 
 /// Get all paths under `dir` whose name is of the form <epoch number>.txt.
 /// Should probably be made generic and merged with view_files.
