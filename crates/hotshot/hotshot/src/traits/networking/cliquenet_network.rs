@@ -1,4 +1,3 @@
-#[cfg(feature = "hotshot-testing")]
 use std::sync::Arc;
 #[cfg(feature = "hotshot-testing")]
 use std::time::Duration;
