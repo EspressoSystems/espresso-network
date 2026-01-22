@@ -15,10 +15,11 @@ use crate::{
     encode_function_call,
     proposals::{
         multisig::{
-            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
-            upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-            LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
+            call_propose_transaction_generic_script, transfer_ownership_from_multisig_to_timelock,
+            upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
+            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
+            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
+            StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
             derive_timelock_address_from_contract_type, perform_timelock_operation,
@@ -134,6 +135,14 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     transfer_ownership_new_owner: Option<Address>,
     #[builder(default)]
     timelock_operation_id: Option<String>,
+    #[builder(default)]
+    multisig_transaction_target: Option<Address>,
+    #[builder(default)]
+    multisig_transaction_function_signature: Option<String>,
+    #[builder(default)]
+    multisig_transaction_function_args: Option<Vec<String>>,
+    #[builder(default)]
+    multisig_transaction_value: Option<String>,
     #[builder(default)]
     ledger: bool,
 }
@@ -627,7 +636,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             == TimelockOperationType::Cancel
             && self.timelock_operation_id.is_some()
         {
-            // Parse operation_id
             let op_id_str = self.timelock_operation_id.as_ref().unwrap();
             let op_id = if let Some(stripped) = op_id_str.strip_prefix("0x") {
                 B256::from_hex(stripped).context("Invalid operation ID hex format")?
@@ -635,8 +643,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 B256::from_hex(op_id_str).context("Invalid operation ID hex format")?
             };
 
-            // Create minimal operation payload (target needed to get timelock)
-            let dummy_operation = TimelockOperationPayload {
+            let minimal_payload = TimelockOperationPayload {
                 target: target_addr,
                 value: U256::ZERO,
                 data: Bytes::new(),
@@ -644,7 +651,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 salt: B256::ZERO,
                 delay: U256::ZERO,
             };
-            (dummy_operation, Some(op_id))
+            (minimal_payload, Some(op_id))
         } else {
             let value = self
                 .timelock_operation_value
@@ -698,6 +705,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 rpc_url: Some(rpc_url),
                 use_hardware_wallet,
                 operation_id,
+                dry_run: self.dry_run,
             }
         } else {
             // EOA path (for tests/local development)
@@ -706,6 +714,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 rpc_url: None,
                 use_hardware_wallet: false,
                 operation_id,
+                dry_run: self.dry_run,
             }
         };
 
@@ -832,6 +841,42 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             new_owner,
             receipt.transaction_hash
         );
+
+        Ok(())
+    }
+
+    /// Propose a transaction via Safe multisig
+    pub async fn propose_multisig_transaction(&self) -> Result<()> {
+        let target = self
+            .multisig_transaction_target
+            .context("Multisig transaction target address not found")?;
+        let function_signature = self
+            .multisig_transaction_function_signature
+            .as_ref()
+            .context("Multisig transaction function signature not found")?;
+        let function_args = self
+            .multisig_transaction_function_args
+            .clone()
+            .unwrap_or_default();
+        let value = self
+            .multisig_transaction_value
+            .clone()
+            .unwrap_or_else(|| "0".to_string());
+        let multisig = self
+            .multisig
+            .context("Multisig address required for multisig transaction proposal")?;
+
+        call_propose_transaction_generic_script(
+            target,
+            function_signature.clone(),
+            function_args,
+            self.rpc_url.to_string(),
+            multisig,
+            self.ledger,
+            Some(value),
+            self.dry_run,
+        )
+        .await?;
 
         Ok(())
     }

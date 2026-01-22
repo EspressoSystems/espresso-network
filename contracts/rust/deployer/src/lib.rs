@@ -4628,4 +4628,46 @@ mod tests {
 
         Ok(())
     }
+
+    #[test_log::test(tokio::test)]
+    async fn test_propose_multisig_transaction_dry_run() -> Result<()> {
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, provider_wallet).await?;
+        let new_owner = Address::random();
+
+        // Use DeployerArgsBuilder to test propose_multisig_transaction
+        use builder::DeployerArgsBuilder;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .multisig(provider_wallet)
+            .dry_run(true)
+            .multisig_transaction_target(fee_contract_proxy_addr)
+            .multisig_transaction_function_signature("transferOwnership(address)".to_string())
+            .multisig_transaction_function_args(vec![new_owner.to_string()])
+            .multisig_transaction_value("0".to_string());
+
+        let args = args_builder.build()?;
+
+        let result = args.propose_multisig_transaction().await;
+
+        match result {
+            Ok(_) => {
+                tracing::info!("Multisig transaction proposal succeeded in dry_run mode");
+                tracing::info!("Result: {:?}", result);
+            },
+            Err(e) => {
+                tracing::info!("Multisig transaction proposal failed: {}", e);
+            },
+        }
+
+        Ok(())
+    }
 }

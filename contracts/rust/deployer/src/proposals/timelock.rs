@@ -43,6 +43,8 @@ pub struct TimelockOperationParams {
     pub use_hardware_wallet: bool,
     /// Optional operation ID (for cancel operations when you already have the ID)
     pub operation_id: Option<B256>,
+    /// Whether to perform a dry run (for testing, no proposal is created)
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -377,6 +379,7 @@ pub async fn perform_timelock_operation(
             rpc_url,
             multisig_proposer,
             params.use_hardware_wallet,
+            params.dry_run,
         )
         .await
     } else {
@@ -447,6 +450,7 @@ async fn perform_timelock_operation_via_multisig(
     rpc_url: String,
     multisig_proposer: Address,
     use_hardware_wallet: bool,
+    dry_run: bool,
 ) -> Result<B256> {
     // Get timelock address
     let timelock_addr = match timelock {
@@ -500,6 +504,8 @@ async fn perform_timelock_operation_via_multisig(
         rpc_url,
         multisig_proposer,
         use_hardware_wallet,
+        Some(operation.value.to_string()),
+        dry_run,
     )
     .await?;
 

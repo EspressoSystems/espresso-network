@@ -260,6 +260,15 @@ struct Options {
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
+
+    /// Option to upgrade fee contract v1 patch version
+    #[clap(long, default_value = "false")]
+    pub upgrade_fee_v1: bool,
+
+    /// Option to propose a transaction via Safe multisig
+    /// This allows calling any contract function via multisig proposal
+    #[clap(long, default_value = "false")]
+    pub propose_multisig_transaction: bool,
     ///
     /// If the light client contract is being deployed and this is set, the prover will be
     /// permissioned so that only this address can update the light client state. Otherwise, proving
@@ -404,9 +413,39 @@ struct Options {
         requires = "perform_timelock_operation"
     )]
     timelock_operation_id: Option<String>,
-    /// Option to upgrade fee contract v1 patch version
-    #[clap(long, default_value = "false")]
-    upgrade_fee_v1: bool,
+
+    /// Target contract address for multisig transaction proposal
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_TARGET",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_target: Option<Address>,
+
+    /// Function signature for multisig transaction (e.g., "transfer(address,uint256)")
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_FUNCTION_SIGNATURE",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_function_signature: Option<String>,
+
+    /// Function arguments for multisig transaction
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_FUNCTION_ARGS",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_function_args: Option<Vec<String>>,
+
+    /// Value to send with multisig transaction (in wei, as string)
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_VALUE",
+        requires = "propose_multisig_transaction",
+        default_value = "0"
+    )]
+    multisig_transaction_value: Option<String>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -739,6 +778,21 @@ async fn main() -> anyhow::Result<()> {
         args_builder.target_contract(target_contract);
     }
 
+    if opt.propose_multisig_transaction {
+        if let Some(target) = opt.multisig_transaction_target {
+            args_builder.multisig_transaction_target(target);
+        }
+        if let Some(sig) = opt.multisig_transaction_function_signature {
+            args_builder.multisig_transaction_function_signature(sig);
+        }
+        if let Some(args) = opt.multisig_transaction_function_args {
+            args_builder.multisig_transaction_function_args(args);
+        }
+        if let Some(val) = opt.multisig_transaction_value {
+            args_builder.multisig_transaction_value(val);
+        }
+    }
+
     // then deploy specified contracts
     let args = args_builder.build()?;
 
@@ -806,6 +860,11 @@ async fn main() -> anyhow::Result<()> {
         args.deploy(&mut contracts, Contract::FeeContractProxy)
             .await?;
     }
+
+    if opt.propose_multisig_transaction {
+        args.propose_multisig_transaction().await?;
+    }
+
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()

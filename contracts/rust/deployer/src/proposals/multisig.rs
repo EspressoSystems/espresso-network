@@ -665,6 +665,8 @@ pub async fn call_propose_transaction_generic_script(
     rpc_url: String,
     safe_address: Address,
     use_hardware_wallet: bool,
+    value: Option<String>,
+    dry_run: bool,
 ) -> Result<Output> {
     let script_path = find_script_path()?;
 
@@ -682,7 +684,7 @@ pub async fn call_propose_transaction_generic_script(
     }
 
     cmd.arg("--value")
-        .arg("0")
+        .arg(value.unwrap_or_else(|| "0".to_string()))
         .arg("--rpc-url")
         .arg(&rpc_url)
         .arg("--safe-address")
@@ -690,7 +692,7 @@ pub async fn call_propose_transaction_generic_script(
         .arg("--use-hardware-wallet")
         .arg(use_hardware_wallet.to_string())
         .arg("--dry-run")
-        .arg("false")
+        .arg(dry_run.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
