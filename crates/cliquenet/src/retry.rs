@@ -125,9 +125,9 @@ where
 {
     pub async fn create(mut cfg: NetConf<K>) -> Result<Self> {
         cfg.max_message_size += Trailer::MAX_LEN + 1;
+        let delays = cfg.retry_delays;
         let net = Network::create(cfg).await?;
         let buffer = Buffer::default();
-        let delays = [1, 3, 5, 15, 30];
         let retry = spawn(retry(buffer.clone(), net.sender(), delays));
         Ok(Self {
             inner: Arc::new(Inner {

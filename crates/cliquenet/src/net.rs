@@ -1,12 +1,16 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    collections::HashMap, fmt::Display, future::pending, hash::Hash, iter::repeat, sync::Arc,
+    collections::HashMap,
+    fmt::Display,
+    future::pending,
+    hash::Hash,
+    iter::{once, repeat},
+    sync::Arc,
     time::Duration,
 };
 
 use bimap::BiHashMap;
-use bon::Builder;
 use bytes::{Bytes, BytesMut};
 use parking_lot::Mutex;
 use snow::{Builder, HandshakeState, TransportState};
@@ -24,7 +28,7 @@ use tokio::{
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    Address, Id, Keypair, MAX_MESSAGE_SIZE, NetworkError, PublicKey, Role, chan,
+    Address, Id, Keypair, NetConf, NetworkError, PublicKey, Role, chan,
     error::Empty,
     frame::{Header, Type},
     time::{Countdown, Timestamp},
@@ -91,51 +95,6 @@ pub struct Network<K> {
 impl<K> Drop for Network<K> {
     fn drop(&mut self) {
         self.srv.abort()
-    }
-}
-
-#[derive(Debug, Builder)]
-pub struct NetConf<K> {
-    /// Network name.
-    name: &'static str,
-
-    /// Network public key.
-    label: K,
-
-    /// DH keypair
-    keypair: Keypair,
-
-    /// Address to bind to.
-    bind: Address,
-
-    /// Committee members with key material and bind address.
-    #[builder(with = <_>::from_iter)]
-    parties: Vec<(K, PublicKey, Address)>,
-
-    /// Total egress channel capacity.
-    #[builder(default = 64 * parties.len())]
-    total_capacity_egress: usize,
-
-    /// Total ingress channel capacity.
-    #[builder(default = 32 * parties.len())]
-    total_capacity_ingress: usize,
-
-    /// Egress channel capacity per peer.
-    #[builder(default = 64)]
-    peer_capacity_egress: usize,
-
-    /// Ingress channel capacity per peer.
-    #[builder(default = 32)]
-    peer_capacity_ingress: usize,
-
-    /// Max. number of bytes per message to send or receive.
-    #[builder(default = MAX_MESSAGE_SIZE)]
-    pub(crate) max_message_size: usize,
-}
-
-impl<K> NetConf<K> {
-    fn new_budget(&self) -> Budget {
-        Arc::new(Semaphore::new(self.peer_capacity_ingress))
     }
 }
 
@@ -872,6 +831,7 @@ where
             (self.conf.label.clone(), self.conf.keypair.clone()),
             (k.clone(), *x),
             p.addr.clone(),
+            self.conf.retry_delays,
         ));
         assert!(self.task2key.insert(h.id(), k.clone()).is_none());
         self.connecting.insert(k, ConnectTask { h });
@@ -970,6 +930,7 @@ async fn connect<K>(
     this: (K, Keypair),
     to: (K, PublicKey),
     addr: Address,
+    delays: [u8; 5],
 ) -> (TcpStream, TransportState)
 where
     K: Display,
@@ -988,13 +949,15 @@ where
             .expect("valid noise params yield valid handshake state")
     };
 
-    let i = rand::rng().random_range(0..=1000);
+    let delays = once(rand::rng().random_range(0..=1000))
+        .chain(delays.into_iter().map(|d| u64::from(d) * 1000))
+        .chain(repeat(
+            u64::from(delays.last().copied().unwrap_or(30)) * 1000,
+        ));
+
     let addr = addr.to_string();
 
-    for d in [i, 1000, 3000, 6000, 10_000, 15_000]
-        .into_iter()
-        .chain(repeat(30_000))
-    {
+    for d in delays {
         sleep(Duration::from_millis(d)).await;
         debug!(%name, node = %this.0, peer = %to.0, %addr, "connecting");
         match timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await {
