@@ -29,6 +29,10 @@ pub struct TransferOwnershipParams {
     pub dry_run: bool,
 }
 
+const TRANSFER_OWNERSHIP_SCRIPT: &str = "transferOwnership.ts";
+const UPGRADE_PROXY_SCRIPT: &str = "upgradeProxy.ts";
+const PROPOSE_TRANSACTION_GENERIC_SCRIPT: &str = "proposeTransactionGeneric.ts";
+
 /// Call the transfer ownership script to transfer ownership of a contract to a new owner
 ///
 /// Parameters:
@@ -41,7 +45,7 @@ pub async fn call_transfer_ownership_script(
 ) -> Result<Output, anyhow::Error> {
     let script_path = find_script_path()?;
     let output = Command::new(script_path)
-        .arg("transferOwnership.ts")
+        .arg(TRANSFER_OWNERSHIP_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -176,7 +180,7 @@ pub async fn call_upgrade_proxy_script(
     let script_path = find_script_path()?;
 
     let output = Command::new(script_path)
-        .arg("upgradeProxy.ts")
+        .arg(UPGRADE_PROXY_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -530,10 +534,9 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 
     if !dry_run {
         tracing::info!("Checking if owner is a contract");
-        assert!(
-            crate::is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
-        );
+        if !crate::is_contract(&provider, owner_addr).await? {
+            anyhow::bail!("Owner is not a contract so not a multisig wallet");
+        }
     }
 
     // Prepare addresses
@@ -654,7 +657,6 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     Ok(())
 }
 
-// Add this function (make sure it's pub)
 /// Call the generic proposal script to create a Safe multisig proposal
 pub async fn call_propose_transaction_generic_script(
     target: Address,
@@ -667,7 +669,7 @@ pub async fn call_propose_transaction_generic_script(
     let script_path = find_script_path()?;
 
     let mut cmd = Command::new(script_path);
-    cmd.arg("proposeTransactionGeneric.ts")
+    cmd.arg(PROPOSE_TRANSACTION_GENERIC_SCRIPT)
         .arg("--from-rust")
         .arg("--target")
         .arg(target.to_string())
@@ -675,7 +677,6 @@ pub async fn call_propose_transaction_generic_script(
         .arg(&function_signature)
         .arg("--function-args");
 
-    // Add function arguments
     for arg in &function_args {
         cmd.arg(arg);
     }
@@ -695,7 +696,7 @@ pub async fn call_propose_transaction_generic_script(
 
     let output = cmd.output().map_err(|e| {
         anyhow::anyhow!(
-            "Failed to execute proposeTransactionGeneric.ts script: {}",
+            "Failed to execute {PROPOSE_TRANSACTION_GENERIC_SCRIPT} script: {}",
             e
         )
     })?;
@@ -704,7 +705,7 @@ pub async fn call_propose_transaction_generic_script(
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         anyhow::bail!(
-            "proposeTransactionGeneric.ts script failed:\nSTDOUT: {}\nSTDERR: {}",
+            "{PROPOSE_TRANSACTION_GENERIC_SCRIPT} script failed:\nSTDOUT: {}\nSTDERR: {}",
             stdout,
             stderr
         );
