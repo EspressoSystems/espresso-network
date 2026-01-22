@@ -119,12 +119,13 @@ export async function createAndSignSafeTransaction(
   safeSDK: Safe,
   contractAddress: string,
   data: string,
+  value: string,
   useHardwareWallet: boolean,
 ): Promise<{ safeTransaction: LocalSafeTransaction; safeTxHash: string; senderSignature: SafeSignature }> {
   validateEthereumAddress(contractAddress);
 
   // Create the Safe Transaction Object
-  const safeTransaction = await createSafeTransaction(safeSDK, contractAddress, data, "0", useHardwareWallet);
+  const safeTransaction = await createSafeTransaction(safeSDK, contractAddress, data, value, useHardwareWallet);
 
   // Get the transaction hash
   const safeTxHash = await safeSDK.getTransactionHash(safeTransaction);

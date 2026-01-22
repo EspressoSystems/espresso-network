@@ -86,6 +86,7 @@ export async function proposeSetStateHistoryRetentionTransaction(
     safeSDK,
     contractAddress,
     data,
+    "0",
     useHardwareWallet,
   );
 

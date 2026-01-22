@@ -59,8 +59,7 @@ async function main() {
     const parsedArgs = parseFunctionArgs(proposalData.functionSignature, proposalData.functionArgs);
     const encodedData = iface.encodeFunctionData(functionName, parsedArgs);
 
-    // Create and sign Safe transaction - NOTE: createAndSignSafeTransaction hardcodes value to "0"
-    // If you need non-zero value, you'll need to modify utils.ts or create transaction differently
+    // Create and sign Safe transaction
     let safeTransaction: LocalSafeTransaction;
     let safeTxHash: string;
     let senderSignature: SafeSignature;
@@ -69,6 +68,7 @@ async function main() {
         safeSdk,
         proposalData.target,
         encodedData,
+        proposalData.value,
         proposalData.useHardwareWallet,
       );
       safeTransaction = result.safeTransaction;
@@ -109,11 +109,11 @@ async function main() {
       console.error(`  Orchestrator Signer Address: ${orchestratorSignerAddress}`);
       console.error(`  RPC URL: ${proposalData.rpcUrl}`);
       console.error(`  Safe Tx Hash: ${safeTxHash}`);
-      // Check if Safe exists on Sepolia (the real network, not the fork)
-      console.error(`\nChecking if Safe exists on Sepolia (chain ${chainId})...`);
+      // Check if Safe exists on the real network
+      console.error(`\nChecking if Safe exists on chain ${chainId}...`);
       try {
         const safeInfo = await safeService.getSafeInfo(proposalData.safeAddress);
-        console.error(`✓ Safe exists on Sepolia`);
+        console.error(`✓ Safe exists on chain ${chainId}`);
         console.error(`  Owners: ${safeInfo.owners.join(", ")}`);
         console.error(`  Threshold: ${safeInfo.threshold}`);
         console.error(`  Nonce: ${safeInfo.nonce}`);
@@ -123,13 +123,15 @@ async function main() {
           (owner) => owner.toLowerCase() === orchestratorSignerAddress.toLowerCase(),
         );
         if (!isOwner) {
-          console.error(`\n✗ ERROR: Orchestrator signer ${orchestratorSignerAddress} is NOT an owner on Sepolia!`);
-          console.error(`  Safe owners on Sepolia: ${safeInfo.owners.join(", ")}`);
           console.error(
-            `\nNote: Even if this address is an owner on your fork, it must also be an owner on real Sepolia.`,
+            `\n✗ ERROR: Orchestrator signer ${orchestratorSignerAddress} is NOT an owner on chain ${chainId}!`,
+          );
+          console.error(`  Safe owners on chain ${chainId}: ${safeInfo.owners.join(", ")}`);
+          console.error(
+            `\nNote: Even if this address is an owner on your fork, it must also be an owner on chain ${chainId}.`,
           );
         } else {
-          console.error(`✓ Orchestrator signer is an owner on Sepolia`);
+          console.error(`✓ Orchestrator signer is an owner on chain ${chainId}`);
           console.error(`\nSince the Safe exists and the signer is an owner, the error might be:`);
           console.error(`  1. Invalid transaction data format`);
           console.error(`  2. Invalid signature`);
@@ -138,14 +140,14 @@ async function main() {
         }
       } catch (safeCheckError: unknown) {
         const safeCheckMessage = (safeCheckError as any)?.message || String(safeCheckError);
-        console.error(`✗ Safe does NOT exist on Sepolia (chain ${chainId})`);
+        console.error(`✗ Safe does NOT exist on chain ${chainId}`);
         console.error(`  Error: ${safeCheckMessage}`);
         console.error(`\nThis is the most likely cause of the error!`);
-        console.error(`The Safe address ${proposalData.safeAddress} exists on your fork but NOT on real Sepolia.`);
+        console.error(`The Safe address ${proposalData.safeAddress} exists on your fork but NOT on chain ${chainId}.`);
         console.error(`\nThe Safe transaction service validates against the real network, not your fork.`);
         console.error(`\nTo fix:`);
-        console.error(`  1. Deploy a Safe on Sepolia: https://app.safe.global/`);
-        console.error(`  2. Use an existing Safe address that exists on Sepolia`);
+        console.error(`  1. Deploy a Safe on chain ${chainId}: https://app.safe.global/`);
+        console.error(`  2. Use an existing Safe address that exists on chain ${chainId}`);
         console.error(`  3. For localhost fork testing, skip the Safe transaction service and execute directly`);
       }
 
