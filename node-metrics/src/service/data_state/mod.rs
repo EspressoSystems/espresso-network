@@ -617,35 +617,37 @@ impl ProcessLeafAndBlockPairStreamTask {
                 // which will ultimately mean that further processing attempts
                 // will fail, and be fruitless.
                 match err {
+                    // Instead of panicking, we log the error and gracefully terminate the task.
+                    // Panicking in async services can crash the whole process and is considered an anti-pattern in production systems.
                     ProcessLeafError::BlockSendError(err) => {
-                        panic!(
-                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink \
-                             is closed, blocks will stagnate: {err}"
-                        )
+                        tracing::error!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {err}"
+                        );
+                        return;
                     },
                     ProcessLeafError::VotersSendError(err) => {
-                        panic!(
-                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink \
-                             is closed, voters will stagnate: {err}"
-                        )
+                        tracing::error!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {err}"
+                        );
+                        return;
                     },
                     ProcessLeafError::StakeTableSendError(err) => {
-                        panic!(
-                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
-                             stake table is closed, stake table will stagnate: {err}"
-                        )
+                        tracing::error!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, stake table will stagnate: {err}"
+                        );
+                        return;
                     },
                     ProcessLeafError::ValidatorSendError(err) => {
-                        panic!(
-                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
-                             validator sink is closed, validators will stagnate: {err}"
-                        )
+                        tracing::error!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying validator sink is closed, validators will stagnate: {err}"
+                        );
+                        return;
                     },
                     ProcessLeafError::FailedToGetNewStakeTable => {
-                        panic!(
-                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying \
-                             stake table is closed, blocks will stagnate"
-                        )
+                        tracing::error!(
+                            "ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate"
+                        );
+                        return;
                     },
                 }
             }
