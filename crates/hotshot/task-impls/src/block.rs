@@ -151,6 +151,8 @@ pub struct BlockTaskState<TYPES: NodeType, V: Versions> {
 
     /// Builder private key for the block task
     pub builder_private_key: <TYPES::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
+
+    pub max_block_size: u64,
 }
 
 impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {

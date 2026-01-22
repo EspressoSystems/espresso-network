@@ -34,6 +34,7 @@ use hotshot_types::{
         consensus_api::ConsensusApi,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::BuilderSignatureKey,
+        states::InstanceState,
     },
 };
 use tokio::spawn;
@@ -264,6 +265,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             base_fee: 1,
             builder_key,
             builder_private_key,
+            max_block_size: handle.hotshot.instance_state.max_block_size(),
         }
     }
 }
