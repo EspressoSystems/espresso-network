@@ -19,10 +19,11 @@ use hotshot_types::{
     },
     BoxSyncFuture,
 };
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct Cliquenet<T: NodeType> {
-    net: Retry<T::SignatureKey>,
+    net: Arc<Mutex<Retry<T::SignatureKey>>>,
 }
 
 impl<T: NodeType> Cliquenet<T> {
@@ -48,7 +49,9 @@ impl<T: NodeType> Cliquenet<T> {
         let net = Retry::create(cfg)
             .await
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
-        Ok(Self { net })
+        Ok(Self {
+            net: Arc::new(Mutex::new(net)),
+        })
     }
 }
 
@@ -64,7 +67,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         _: Topic,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.net.broadcast(0, m).await.map_err(|e| {
+        self.net.lock().await.broadcast(0, m).await.map_err(|e| {
             NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}"))
         })?;
         Ok(())
@@ -76,9 +79,14 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         recipients: Vec<T::SignatureKey>,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.net.multicast(recipients, 0, m).await.map_err(|e| {
-            NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
-        })?;
+        self.net
+            .lock()
+            .await
+            .multicast(recipients, 0, m)
+            .await
+            .map_err(|e| {
+                NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
+            })?;
         Ok(())
     }
 
@@ -88,6 +96,8 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         recipient: T::SignatureKey,
     ) -> Result<(), NetworkError> {
         self.net
+            .lock()
+            .await
             .unicast(recipient, 0, m)
             .await
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))?;
@@ -96,7 +106,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 
     async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
         let (_src, data) =
-            self.net.receive().await.map_err(|e| {
+            self.net.lock().await.receive().await.map_err(|e| {
                 NetworkError::MessageSendError(format!("cliquenet receive error: {e}"))
             })?;
         Ok(Vec::from(&data[..]))

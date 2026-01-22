@@ -9,14 +9,13 @@ use bimap::BiHashMap;
 use bon::Builder;
 use bytes::{Bytes, BytesMut};
 use parking_lot::Mutex;
-use serde::{Serialize, de::DeserializeOwned};
 use snow::{Builder, HandshakeState, TransportState};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     spawn,
     sync::{
-        Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore,
+        OwnedSemaphorePermit, Semaphore,
         mpsc::{self, Receiver, Sender},
     },
     task::{self, AbortHandle, JoinHandle, JoinSet},
@@ -72,7 +71,7 @@ pub struct Network<K> {
     label: K,
 
     /// The network participants.
-    parties: Mutex<HashMap<K, Role>>,
+    parties: HashMap<K, Role>,
 
     /// MPSC sender of server task instructions.
     tx: Sender<Command<K>>,
@@ -80,7 +79,7 @@ pub struct Network<K> {
     /// MPSC receiver of messages from a remote party.
     ///
     /// The public key identifies the remote.
-    rx: AsyncMutex<Receiver<(K, Bytes, Option<OwnedSemaphorePermit>)>>,
+    rx: Receiver<(K, Bytes, Option<OwnedSemaphorePermit>)>,
 
     /// Handle of the server task that has been spawned by `Network`.
     srv: JoinHandle<Result<Empty>>,
@@ -264,7 +263,7 @@ enum Message {
 
 impl<K> Network<K>
 where
-    K: Serialize + DeserializeOwned + Eq + Ord + Send + Clone + Display + Hash + 'static,
+    K: Eq + Ord + Send + Clone + Display + Hash + 'static,
 {
     pub async fn create(cfg: NetConf<K>) -> Result<Self> {
         let listener = TcpListener::bind(cfg.bind.to_string())
@@ -327,8 +326,8 @@ where
         Ok(Self {
             name,
             label,
-            parties: Mutex::new(parties),
-            rx: AsyncMutex::new(irx),
+            parties,
+            rx: irx,
             tx: otx,
             srv: spawn(server.run(listener)),
             max_message_size: mmsze,
@@ -343,13 +342,8 @@ where
         self.name
     }
 
-    pub fn parties(&self, r: Role) -> Vec<K> {
-        self.parties
-            .lock()
-            .iter()
-            .filter(|&(_, x)| r == *x)
-            .map(|(k, _)| k.clone())
-            .collect()
+    pub fn parties(&self) -> impl Iterator<Item = (&K, &Role)> {
+        self.parties.iter()
     }
 
     /// Send a message to a party, identified by the given public key.
@@ -390,9 +384,8 @@ where
     }
 
     /// Receive a message from a remote party.
-    pub async fn receive(&self) -> Result<(K, Bytes)> {
-        let mut rx = self.rx.lock().await;
-        let (k, b, _) = rx.recv().await.ok_or(NetworkError::ChannelClosed)?;
+    pub async fn receive(&mut self) -> Result<(K, Bytes)> {
+        let (k, b, _) = self.rx.recv().await.ok_or(NetworkError::ChannelClosed)?;
         Ok((k, b))
     }
 
@@ -400,9 +393,8 @@ where
     ///
     /// NB that peers added here are passive. See `Network::assign` for
     /// giving peers a different `Role`.
-    pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
+    pub async fn add(&mut self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
         self.parties
-            .lock()
             .extend(peers.iter().map(|(p, ..)| (p.clone(), Role::Passive)));
         self.tx
             .send(Command::Add(peers))
@@ -411,12 +403,9 @@ where
     }
 
     /// Remove the given peers from the network.
-    pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
-        {
-            let mut parties = self.parties.lock();
-            for p in &peers {
-                parties.remove(p);
-            }
+    pub async fn remove(&mut self, peers: Vec<K>) -> Result<()> {
+        for p in &peers {
+            self.parties.remove(p);
         }
         self.tx
             .send(Command::Remove(peers))
@@ -425,13 +414,10 @@ where
     }
 
     /// Assign the given role to the given peers.
-    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
-        {
-            let mut parties = self.parties.lock();
-            for p in &peers {
-                if let Some(role) = parties.get_mut(p) {
-                    *role = r
-                }
+    pub async fn assign(&mut self, r: Role, peers: Vec<K>) -> Result<()> {
+        for p in &peers {
+            if let Some(role) = self.parties.get_mut(p) {
+                *role = r
             }
         }
         self.tx
@@ -448,7 +434,7 @@ where
 
 impl<K> Server<K>
 where
-    K: Serialize + DeserializeOwned + Eq + Ord + Send + Clone + Display + Hash + Clone + 'static,
+    K: Eq + Ord + Send + Clone + Display + Hash + 'static,
 {
     /// Runs the main loop of this network node.
     ///
@@ -981,7 +967,7 @@ async fn connect<K>(
     addr: Address,
 ) -> (TcpStream, TransportState)
 where
-    K: Display + Serialize + DeserializeOwned + PartialEq + Send + Clone,
+    K: Display,
 {
     use rand::prelude::*;
 
