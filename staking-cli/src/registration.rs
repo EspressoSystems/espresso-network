@@ -382,10 +382,9 @@ mod test {
         Ok(())
     }
 
-    /// Unauthenticated consensus key updates (with incorrect schnorr signature) are kept because
-    /// the contract allows staking transactions targeting these validators.
+    /// Unauthenticated consensus key updates (with incorrect schnorr signature) are removed.
     #[tokio::test]
-    async fn test_integration_unauthenticated_update_consensus_keys_events_kept() -> Result<()> {
+    async fn test_integration_unauthenticated_update_consensus_keys_events_removed() -> Result<()> {
         let system = TestSystem::deploy().await?;
 
         // register a validator with correct signature
@@ -430,10 +429,9 @@ mod test {
         )
         .await?;
 
-        // verify that both events are kept (RegisterV2 and KeyUpdateV2)
-        assert_eq!(events.len(), 2);
+        // verify that we only have the RegisterV2 event
+        assert_eq!(events.len(), 1);
         assert!(matches!(events[0].1, StakeTableEvent::RegisterV2(_)));
-        assert!(matches!(events[1].1, StakeTableEvent::KeyUpdateV2(_)));
 
         Ok(())
     }
