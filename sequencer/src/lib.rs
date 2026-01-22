@@ -31,7 +31,6 @@ use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
 use proposal_fetcher::ProposalFetcherConfig;
-use tokio::select;
 use tracing::info;
 use url::Url;
 
@@ -45,9 +44,8 @@ use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id, GossipConfig, Libp2pNetwork, MemoryNetwork,
+        RequestResponseConfig,
     },
     types::SignatureKey,
 };
@@ -465,26 +463,14 @@ where
 
     let node_index = network_config.node_index;
 
-    // If we are a DA node, we need to subscribe to the DA topic
-    let topics = {
-        let mut topics = vec![CdnTopic::Global];
-        if is_da {
-            topics.push(CdnTopic::Da);
-        }
-        topics
-    };
-
-    // Initialize the push CDN network (and perform the initial connection)
-    let cdn_network = PushCdnNetwork::new(
-        network_params.cdn_endpoint,
-        topics,
-        KeyPair {
-            public_key: WrappedSignatureKey(validator_config.public_key),
-            private_key: validator_config.private_key.clone(),
-        },
-        CdnMetricsValue::new(metrics),
-    )
-    .with_context(|| format!("Failed to create CDN network {node_index}"))?;
+    // // If we are a DA node, we need to subscribe to the DA topic
+    // let topics = {
+    //     let mut topics = vec![CdnTopic::Global];
+    //     if is_da {
+    //         topics.push(CdnTopic::Da);
+    //     }
+    //     topics
+    // };
 
     // Configure gossipsub based on the command line options
     let gossip_config = GossipConfig {
@@ -661,22 +647,10 @@ where
 
         info!("Libp2p network initialized");
 
-        tracing::warn!("Waiting for at least one connection to be initialized");
-        select! {
-            _ = cdn_network.wait_for_ready() => {
-                tracing::warn!("CDN connection initialized");
-            },
-            _ = p2p_network.wait_for_ready() => {
-                tracing::warn!("P2P connection initialized");
-            },
-        };
+        tracing::warn!("Waiting for Libp2p network to be initialized");
 
-        // Combine the CDN and P2P networks
-        Arc::from(CombinedNetworks::new(
-            cdn_network,
-            p2p_network,
-            Some(Duration::from_secs(1)),
-        ))
+        p2p_network.wait_for_ready().await;
+        Arc::new(p2p_network)
     };
 
     let mut ctx = SequencerContext::init(
