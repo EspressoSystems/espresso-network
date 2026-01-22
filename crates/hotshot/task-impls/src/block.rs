@@ -13,7 +13,7 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use committable::Committable;
+use committable::{Commitment, Committable};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
@@ -22,7 +22,7 @@ use hotshot_types::{
     event::Event,
     message::UpgradeLock,
     traits::{
-        block_contents::{BlockHeader, BuilderFee},
+        block_contents::{BlockHeader, BuilderFee, Transaction},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload, EncodeBytes,
@@ -52,15 +52,24 @@ pub struct BuilderResponse<TYPES: NodeType> {
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
 }
 
+#[derive(Clone)]
+struct ReceivedTransaction<TYPES: NodeType> {
+    tx: TYPES::Transaction,
+    len: u64,
+    commit: Commitment<TYPES::Transaction>,
+}
+
 pub struct Mempool<TYPES: NodeType> {
-    transactions: Vec<TYPES::Transaction>,
+    max_block_size: u64,
+    transactions: Vec<ReceivedTransaction<TYPES>>,
     recently_decided_transactions: lru::LruCache<TYPES::Transaction, bool>,
     recently_proposed_blocks: HashMap<TYPES::View, Vec<TYPES::Transaction>>,
 }
 
 impl<TYPES: NodeType> Mempool<TYPES> {
-    pub fn new() -> Self {
+    pub fn new(max_block_size: u64) -> Self {
         Self {
+            max_block_size,
             transactions: Vec::new(),
             recently_decided_transactions: lru::LruCache::new(NonZero::new(1000).unwrap()),
             recently_proposed_blocks: HashMap::new(),
@@ -70,7 +79,16 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         if self.recently_decided_transactions.contains(&transaction) {
             return;
         }
-        self.transactions.push(transaction);
+        let len = transaction.minimum_block_size();
+        if len > self.max_block_size {
+            return;
+        }
+        let commit = transaction.commit();
+        self.transactions.push(ReceivedTransaction {
+            tx: transaction,
+            len,
+            commit,
+        });
     }
 
     fn decide_block(
@@ -83,7 +101,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             self.recently_decided_transactions
                 .put(transaction.clone(), true);
             self.transactions
-                .retain(|txn| txn.commit() != transaction.commit());
+                .retain(|txn| txn.commit != transaction.commit());
         }
         self.recently_proposed_blocks.remove(&view);
     }
@@ -101,7 +119,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
 
 impl<TYPES: NodeType> Default for Mempool<TYPES> {
     fn default() -> Self {
-        Self::new()
+        Self::new(1 * 1024 * 1024) // 1MB
     }
 }
 
@@ -349,7 +367,20 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             in_flight_txns.extend(payload);
             view = proposal.data.justify_qc().view_number();
         }
-        transactions.retain(|transaction| !in_flight_txns.contains(transaction));
+        transactions.retain(|transaction| !in_flight_txns.contains(&transaction.tx));
+        let transactions_to_include = transactions.iter().scan(0, |total_size, tx| {
+            let prev_size = *total_size;
+            *total_size += tx.len;
+            // We will include one transaction over our target block length
+            // if it's the first transaction in queue, otherwise we'd have a possible failure
+            // state where a single transaction larger than target block state is stuck in
+            // queue and we just build empty blocks forever
+            if *total_size >= self.max_block_size && prev_size != 0 {
+                None
+            } else {
+                Some(tx.tx.clone())
+            }
+        });
         let validated_state = self
             .consensus
             .read()
@@ -360,7 +391,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             .1
             .clone();
         let (payload, metadata) = <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
-            transactions,
+            transactions_to_include,
             &validated_state,
             &self.instance_state,
         )
