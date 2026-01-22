@@ -1,8 +1,8 @@
 CREATE TABLE fee_merkle_tree (
   path INTEGER[] NOT NULL, 
   created BIGINT NOT NULL, 
-  hash_id BYTEA NOT NULL, 
-  children BYTEA[256], 
+  hash_id JSONB NOT NULL, 
+  children JSONB[], 
   children_bitvec BIT(256), 
   index JSONB, 
   entry JSONB
@@ -18,8 +18,8 @@ CREATE INDEX fee_merkle_tree_created ON fee_merkle_tree (created);
 CREATE TABLE block_merkle_tree (
   path INTEGER[] NOT NULL, 
   created BIGINT NOT NULL, 
-  hash_id BYTEA NOT NULL, 
-  children BYTEA[3], 
+  hash_id JSONB NOT NULL, 
+  children JSONB[], 
   children_bitvec BIT(3), 
   index JSONB, 
   entry JSONB

@@ -714,7 +714,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
 
         for (node, children, hash) in &mut all_nodes {
             node.created = block_number;
-            node.hash_id = hash.to_vec();
+            node.hash_id = hash.to_vec().into();
 
             if let Some(children) = children {
                 let children_hashes = children;
