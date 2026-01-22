@@ -372,7 +372,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 // TODO: Track transactions by time
                 // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
             },
-            HotShotEvent::SendPayloadCommitmentAndMetadata(_, _, _, view, _) => {
+            HotShotEvent::SendPayloadCommitmentAndMetadata(_, _, _, view, ..) => {
                 self.leader_entry(*view).vid_disperse_send = Some(now);
             },
             HotShotEvent::VidShareRecv(_, proposal) => {

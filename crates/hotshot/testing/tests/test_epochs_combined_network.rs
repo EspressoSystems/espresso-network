@@ -20,7 +20,7 @@ use hotshot_testing::{
 
 // A run where the CDN crashes part-way through, epochs enabled.
 cross_tests!(
-    TestName: test_combined_network_cdn_crash_with_epochs,
+    TestName: test_with_epochs_combined_network_cdn_crash,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [EpochsTestVersions],
