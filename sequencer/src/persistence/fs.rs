@@ -13,7 +13,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
@@ -51,12 +51,6 @@ use crate::{
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
     ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
-
-type StakeTuple = (
-    AuthenticatedValidatorMap,
-    Option<RewardAmount>,
-    Option<StakeTableHash>,
-);
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]

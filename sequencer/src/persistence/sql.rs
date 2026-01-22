@@ -15,7 +15,7 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
     parse_duration, parse_size,
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
@@ -2553,16 +2553,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<
-        Option<(
-            AuthenticatedValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableHash>,
-        )>,
-    > {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         let result = self
             .db
             .read()

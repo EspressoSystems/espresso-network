@@ -15,7 +15,7 @@ use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
@@ -83,16 +83,7 @@ impl NodeState {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<
-        Option<(
-            AuthenticatedValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableHash>,
-        )>,
-    > {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         Ok(None)
     }
 

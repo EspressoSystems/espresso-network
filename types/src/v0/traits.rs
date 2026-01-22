@@ -511,20 +511,18 @@ pub enum EventsPersistenceRead {
     UntilL1Block(u64),
 }
 
+/// Tuple type for stake table data: (validators, block_reward, stake_table_hash)
+pub type StakeTuple = (
+    AuthenticatedValidatorMap,
+    Option<RewardAmount>,
+    Option<StakeTableHash>,
+);
+
 #[async_trait]
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<
-        Option<(
-            AuthenticatedValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableHash>,
-        )>,
-    >;
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
