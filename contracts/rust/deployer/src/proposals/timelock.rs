@@ -5,7 +5,6 @@ use alloy::{
 };
 use anyhow::Result;
 use clap::ValueEnum;
-use derive_more::Display;
 use hotshot_contract_adapter::sol_types::{
     EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
 };
@@ -16,7 +15,7 @@ use crate::{
 };
 
 /// Data structure for timelock operations payload
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct TimelockOperationPayload {
     /// The address of the contract to call
     pub target: Address,
@@ -47,7 +46,7 @@ pub struct TimelockOperationParams {
     pub dry_run: bool,
 }
 
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum TimelockOperationType {
     Schedule,
     Execute,
@@ -118,16 +117,11 @@ impl TimelockContract {
         operation_id: B256,
         provider: &impl Provider,
     ) -> Result<TransactionReceipt> {
+        // the timelock contract only requires the operation_id to cancel an operation
+        let placeholder_operation = TimelockOperationPayload::default();
         self.call_timelock_method(
             TimelockOperationType::Cancel,
-            TimelockOperationPayload {
-                target: Address::ZERO,
-                value: U256::ZERO,
-                data: Bytes::new(),
-                predecessor: B256::ZERO,
-                salt: B256::ZERO,
-                delay: U256::ZERO,
-            },
+            placeholder_operation,
             Some(operation_id),
             provider,
         )
@@ -383,7 +377,6 @@ pub async fn perform_timelock_operation(
         )
         .await
     } else {
-        // EOA path
         perform_timelock_operation_via_eoa(
             timelock,
             operation,
@@ -416,7 +409,6 @@ async fn perform_timelock_operation_via_eoa(
     // Verify operation state based on type
     match operation_type {
         TimelockOperationType::Schedule => {
-            // Check that the tx is scheduled
             if !(timelock
                 .is_operation_pending(operation_id, &provider)
                 .await?
@@ -427,7 +419,6 @@ async fn perform_timelock_operation_via_eoa(
             tracing::info!("tx scheduled with id: {}", operation_id);
         },
         TimelockOperationType::Execute => {
-            // Check that the tx is executed
             if !timelock.is_operation_done(operation_id, &provider).await? {
                 anyhow::bail!("tx not correctly executed: {}", operation_id);
             }
@@ -452,7 +443,6 @@ async fn perform_timelock_operation_via_multisig(
     use_hardware_wallet: bool,
     dry_run: bool,
 ) -> Result<B256> {
-    // Get timelock address
     let timelock_addr = match timelock {
         TimelockContract::OpsTimelock(addr) => addr,
         TimelockContract::SafeExitTimelock(addr) => addr,

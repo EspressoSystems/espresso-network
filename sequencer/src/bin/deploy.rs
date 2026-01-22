@@ -720,7 +720,6 @@ async fn main() -> anyhow::Result<()> {
             })?;
             args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
         } else {
-            // Set operation_id if provided (for cancel operations)
             if let Some(operation_id) = opt.timelock_operation_id {
                 args_builder.timelock_operation_id(operation_id);
             }

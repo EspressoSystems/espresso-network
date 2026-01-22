@@ -677,12 +677,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     .context("Failed to encode function data")?;
 
             // Parse salt from string to B256
-            let salt_bytes = if salt == "0x" || salt.is_empty() {
-                B256::ZERO // Use zero salt if empty
-            } else if let Some(stripped) = salt.strip_prefix("0x") {
-                B256::from_hex(stripped).context("Invalid salt hex format")?
+            let salt_trimmed = salt.trim();
+            let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
+                B256::ZERO
             } else {
-                B256::from_hex(&salt).context("Invalid salt hex format")?
+                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(&salt_trimmed);
+                B256::from_hex(hex_str).context("Invalid salt hex format")?
             };
 
             let operation = TimelockOperationPayload {
