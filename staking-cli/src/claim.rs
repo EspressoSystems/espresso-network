@@ -139,15 +139,40 @@ pub async fn claim_reward(
     .await?
     .context("No reward claim data found for address")?;
 
-    let reward_claim = RewardClaim::new(data.reward_claim_address, provider);
-    reward_claim
+    let reward_claim = RewardClaim::new(data.reward_claim_address, &provider);
+    let result = reward_claim
         .claimRewards(
             data.claim_input.lifetime_rewards,
             data.claim_input.auth_data.into(),
         )
         .send()
         .await
-        .maybe_decode_revert::<RewardClaimErrors>()
+        .maybe_decode_revert::<RewardClaimErrors>();
+
+    // If the claim failed with AlreadyClaimed, include the current balance for context
+    if let Err(ref err) = result {
+        let err_str = err.to_string();
+        if err_str.contains("AlreadyClaimed") {
+            let already_claimed = reward_claim
+                .claimedRewards(claimer_address)
+                .call()
+                .await
+                .unwrap_or(U256::ZERO);
+            let unclaimed = data
+                .claim_input
+                .lifetime_rewards
+                .checked_sub(already_claimed)
+                .unwrap_or(U256::ZERO);
+            bail!(
+                "Rewards already claimed. Current unclaimed balance: {} (lifetime: {}, claimed: {})",
+                unclaimed,
+                data.claim_input.lifetime_rewards,
+                already_claimed
+            );
+        }
+    }
+
+    result
 }
 
 pub async fn unclaimed_rewards(
