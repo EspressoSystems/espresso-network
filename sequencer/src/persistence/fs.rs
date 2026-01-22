@@ -1505,7 +1505,7 @@ impl SequencerPersistence for Persistence {
             for entry in fs::read_dir(&validators_dir)? {
                 let entry = entry?;
                 let file_path = entry.path();
-                if file_path.extension().map_or(false, |ext| ext == "json") {
+                if file_path.extension().is_some_and(|ext| ext == "json") {
                     let content = fs::read_to_string(&file_path)?;
 
                     // Try new format first

@@ -450,8 +450,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .await
             .context("membership not found")?;
 
-        let r = mem.coordinator.membership().read().await;
-        Ok(r.active_validators(&epoch)?)
+        let membership = mem.coordinator.membership().read().await;
+        membership.active_validators(&epoch)
     }
 
     /// Get the current proposal participation.
