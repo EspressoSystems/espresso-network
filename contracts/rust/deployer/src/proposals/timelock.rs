@@ -433,6 +433,7 @@ async fn perform_timelock_operation_via_eoa(
 }
 
 /// Perform timelock operation via Safe multisig proposal
+#[allow(clippy::too_many_arguments)]
 async fn perform_timelock_operation_via_multisig(
     timelock: TimelockContract,
     operation: TimelockOperationPayload,

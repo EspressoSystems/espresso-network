@@ -636,23 +636,18 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             == TimelockOperationType::Cancel
             && self.timelock_operation_id.is_some()
         {
+            // Cancel operation - we need the operation ID
             let op_id_str = self.timelock_operation_id.as_ref().unwrap();
             let op_id = if let Some(stripped) = op_id_str.strip_prefix("0x") {
                 B256::from_hex(stripped).context("Invalid operation ID hex format")?
             } else {
                 B256::from_hex(op_id_str).context("Invalid operation ID hex format")?
             };
-
-            let minimal_payload = TimelockOperationPayload {
-                target: target_addr,
-                value: U256::ZERO,
-                data: Bytes::new(),
-                predecessor: B256::ZERO,
-                salt: B256::ZERO,
-                delay: U256::ZERO,
-            };
+            let mut minimal_payload = TimelockOperationPayload::default();
+            minimal_payload.target = target_addr;
             (minimal_payload, Some(op_id))
         } else {
+            // Schedule or Execute operation - we need full operation details
             let value = self
                 .timelock_operation_value
                 .context("Timelock operation value not found")?;
@@ -681,7 +676,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
                 B256::ZERO
             } else {
-                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(&salt_trimmed);
+                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
                 B256::from_hex(hex_str).context("Invalid salt hex format")?
             };
 

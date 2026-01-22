@@ -658,6 +658,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
 }
 
 /// Call the generic proposal script to create a Safe multisig proposal
+#[allow(clippy::too_many_arguments)]
 pub async fn call_propose_transaction_generic_script(
     target: Address,
     function_signature: String,
