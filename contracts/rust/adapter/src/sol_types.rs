@@ -77,6 +77,20 @@ sol! {
         uint256 v;
         uint256 u;
     }
+
+    /// Safe multisig interface
+    #[sol(rpc)]
+    interface ISafe {
+        function VERSION() external view returns (string memory);
+        function getOwners() external view returns (address[] memory);
+        function getThreshold() external view returns (uint256);
+    }
+
+    /// Versioned contract interface
+    #[sol(rpc)]
+    interface IVersioned {
+        function getVersion() external view returns (uint8, uint8, uint8);
+    }
 }
 
 // Due to <https://github.com/foundry-rs/foundry/issues/10153> the rust bindings contain duplicate types for our solidity types.
