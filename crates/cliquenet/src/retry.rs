@@ -4,7 +4,10 @@ use std::{
     fmt::{self, Display},
     hash::Hash,
     io::Cursor,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use bytes::{Bytes, BytesMut};
@@ -39,22 +42,25 @@ pub const MAX_BUCKET: Bucket = Bucket(u64::MAX);
 /// Note that if malicious parties modify the trailer and have it point to a
 /// different message, they can only remove themselves from the set of parties
 /// the sender is expecting an acknowledgement from.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Retry<K> {
+    inner: Arc<Inner<K>>,
+}
+
+#[derive(Debug)]
+struct Inner<K> {
     this: K,
     net: Network<K>,
     sender: Sender<Command<K>>,
-    id: Id,
+    id: AtomicU64,
     buffer: Buffer<K>,
-    encoded: [u8; Trailer::MAX_LEN],
     retry: JoinHandle<Infallible>,
-    pending: Option<Pending<K>>,
-    delays: [u8; 5],
+    pending: Mutex<BTreeMap<Trailer, Pending<K>>>,
 }
 
 impl<K> Drop for Retry<K> {
     fn drop(&mut self) {
-        self.retry.abort()
+        self.inner.retry.abort()
     }
 }
 
@@ -124,86 +130,73 @@ where
         let delays = [1, 3, 5, 15, 30];
         let retry = spawn(retry(buffer.clone(), net.sender(), delays));
         Ok(Self {
-            this: net.public_key().clone(),
-            sender: net.sender(),
-            net,
-            buffer,
-            encoded: [0; Trailer::MAX_LEN],
-            id: Id::from(0),
-            retry,
-            pending: None,
-            delays,
+            inner: Arc::new(Inner {
+                this: net.public_key().clone(),
+                sender: net.sender(),
+                net,
+                buffer,
+                id: AtomicU64::new(0),
+                retry,
+                pending: Mutex::new(BTreeMap::new()),
+            }),
         })
     }
 
-    pub fn set_delays(&mut self, seconds: [u8; 5]) {
-        self.delays = seconds;
-        self.retry.abort();
-        self.retry = spawn(retry(self.buffer.clone(), self.net.sender(), self.delays))
-    }
-
-    pub fn parties(&self) -> impl Iterator<Item = (&K, &Role)> {
-        self.net.parties()
-    }
-
-    pub async fn broadcast<B>(&mut self, b: B, data: Vec<u8>) -> Result<Id>
+    pub async fn broadcast<B>(&self, b: B, data: Vec<u8>) -> Result<Id>
     where
         B: Into<Bucket>,
     {
         self.send(b.into(), Target::All, data).await
     }
 
-    pub async fn multicast<B>(&mut self, to: Vec<K>, b: B, data: Vec<u8>) -> Result<Id>
+    pub async fn multicast<B>(&self, to: Vec<K>, b: B, data: Vec<u8>) -> Result<Id>
     where
         B: Into<Bucket>,
     {
         self.send(b.into(), Target::Multi(to), data).await
     }
 
-    pub async fn unicast<B>(&mut self, to: K, b: B, data: Vec<u8>) -> Result<Id>
+    pub async fn unicast<B>(&self, to: K, b: B, data: Vec<u8>) -> Result<Id>
     where
         B: Into<Bucket>,
     {
         self.send(b.into(), Target::Single(to), data).await
     }
 
-    pub async fn add(&mut self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
-        self.net.add(peers).await
+    pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
+        self.inner.net.add(peers).await
     }
 
-    pub async fn remove(&mut self, peers: Vec<K>) -> Result<()> {
-        self.net.remove(peers).await
+    pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
+        self.inner.net.remove(peers).await
     }
 
-    pub async fn assign(&mut self, r: Role, peers: Vec<K>) -> Result<()> {
-        self.net.assign(r, peers).await
+    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
+        self.inner.net.assign(r, peers).await
     }
 
-    pub async fn receive(&mut self) -> Result<(K, Bytes)> {
-        if let Some(Pending { src, data, trailer }) = &self.pending {
-            self.sender
+    pub async fn receive(&self) -> Result<(K, Bytes)> {
+        let pending = self.inner.pending.lock().pop_first();
+        if let Some((_, Pending { src, data, trailer })) = pending {
+            self.inner
+                .sender
                 .send(Command::Unicast(src.clone(), None, trailer.clone()))
                 .await
                 .map_err(|_| NetworkError::ChannelClosed)?;
-            let src = src.clone();
-            let dat = data.clone();
-            self.pending = None;
-            return Ok((src, dat));
+            return Ok((src, data));
         }
         loop {
-            debug_assert!(self.pending.is_none());
-
-            let (src, mut bytes) = self.net.receive().await?;
+            let (src, mut bytes) = self.inner.net.receive().await?;
 
             let Some(trailer_bytes) = Trailer::split_off(&mut bytes) else {
-                warn!(node = %self.this, "invalid trailer bytes");
+                warn!(node = %self.inner.this, "invalid trailer bytes");
                 continue;
             };
 
             let trailer: Trailer = match bincode::deserialize(&trailer_bytes) {
                 Ok(t) => t,
                 Err(e) => {
-                    warn!(node = %self.this, err = %e, "invalid trailer");
+                    warn!(node = %self.inner.this, err = %e, "invalid trailer");
                     continue;
                 },
             };
@@ -211,6 +204,7 @@ where
             if !bytes.is_empty() {
                 // Send the trailer back as acknowledgement:
                 match self
+                    .inner
                     .sender
                     .try_send(Command::Unicast(src.clone(), None, trailer_bytes))
                 {
@@ -218,16 +212,20 @@ where
                     Err(TrySendError::Closed(_)) => return Err(NetworkError::ChannelClosed),
                     Err(TrySendError::Full(Command::Unicast(src, _, trailer_bytes))) => {
                         // Save received data for cancellation safety:
-                        self.pending = Some(Pending {
-                            src: src.clone(),
-                            data: bytes.clone(),
-                            trailer: trailer_bytes.clone(),
-                        });
-                        self.sender
+                        self.inner.pending.lock().insert(
+                            trailer,
+                            Pending {
+                                src: src.clone(),
+                                data: bytes.clone(),
+                                trailer: trailer_bytes.clone(),
+                            },
+                        );
+                        self.inner
+                            .sender
                             .send(Command::Unicast(src.clone(), None, trailer_bytes))
                             .await
                             .map_err(|_| NetworkError::ChannelClosed)?;
-                        self.pending = None;
+                        self.inner.pending.lock().remove(&trailer);
                         return Ok((src, bytes));
                     },
                     Err(TrySendError::Full(_)) => {
@@ -238,7 +236,7 @@ where
                 }
             }
 
-            let mut messages = self.buffer.0.lock();
+            let mut messages = self.inner.buffer.0.lock();
 
             if let Some(buckets) = messages.get_mut(&trailer.bucket)
                 && let Some(m) = buckets.get_mut(&trailer.id)
@@ -251,24 +249,24 @@ where
         }
     }
 
-    pub fn gc<B: Into<Bucket>>(&mut self, bucket: B) {
+    pub fn gc<B: Into<Bucket>>(&self, bucket: B) {
         let bucket = bucket.into();
-        self.buffer.0.lock().retain(|b, _| *b >= bucket);
+        self.inner.buffer.0.lock().retain(|b, _| *b >= bucket);
     }
 
-    pub fn rm<B: Into<Bucket>>(&mut self, bucket: B, id: Id) {
+    pub fn rm<B: Into<Bucket>>(&self, bucket: B, id: Id) {
         let bucket = bucket.into();
-        if let Some(messages) = self.buffer.0.lock().get_mut(&bucket) {
+        if let Some(messages) = self.inner.buffer.0.lock().get_mut(&bucket) {
             messages.remove(&id);
         }
     }
 
-    async fn send(&mut self, b: Bucket, to: Target<K>, data: Vec<u8>) -> Result<Id> {
+    async fn send(&self, b: Bucket, to: Target<K>, data: Vec<u8>) -> Result<Id> {
         let id = self.next_id();
 
         let trailer = Trailer { bucket: b, id };
 
-        let mut encoded = Cursor::new(&mut self.encoded[..]);
+        let mut encoded = Cursor::new([0u8; Trailer::MAX_LEN]);
         bincode::serialize_into(&mut encoded, &trailer).expect("trailer encoding never fails");
 
         let mut msg = BytesMut::from(Bytes::from(data));
@@ -280,33 +278,32 @@ where
 
         let rem = match to {
             Target::Single(to) => {
-                self.sender
+                self.inner
+                    .sender
                     .send(Command::Unicast(to.clone(), Some(id), msg.clone()))
                     .await
                     .map_err(|_| NetworkError::ChannelClosed)?;
                 vec![to]
             },
             Target::Multi(peers) => {
-                self.sender
+                self.inner
+                    .sender
                     .send(Command::Multicast(peers.clone(), Some(id), msg.clone()))
                     .await
                     .map_err(|_| NetworkError::ChannelClosed)?;
                 peers
             },
             Target::All => {
-                self.sender
+                self.inner
+                    .sender
                     .send(Command::Broadcast(Some(id), msg.clone()))
                     .await
                     .map_err(|_| NetworkError::ChannelClosed)?;
-                self.net
-                    .parties()
-                    .filter(|(_, r)| r.is_active())
-                    .map(|(p, _)| p.clone())
-                    .collect()
+                self.inner.net.parties(Role::Active)
             },
         };
 
-        self.buffer.0.lock().entry(b).or_default().insert(
+        self.inner.buffer.0.lock().entry(b).or_default().insert(
             id,
             Message {
                 data: msg,
@@ -319,10 +316,8 @@ where
         Ok(id)
     }
 
-    fn next_id(&mut self) -> Id {
-        let id = self.id;
-        self.id = (u64::from(self.id) + 1).into();
-        id
+    fn next_id(&self) -> Id {
+        Id::from(self.inner.id.fetch_add(1, Ordering::Relaxed))
     }
 }
 
