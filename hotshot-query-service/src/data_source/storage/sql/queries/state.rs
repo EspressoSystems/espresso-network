@@ -27,7 +27,7 @@ use jf_merkle_tree_compat::{
     prelude::{MerkleNode, MerkleProof},
     DigestAlgorithm, MerkleCommitment, ToTraversalPath,
 };
-use sqlx::types::{BitVec, JsonValue};
+use sqlx::types::{BitVec, Json, JsonValue};
 
 use super::{
     super::transaction::{query_as, Transaction, TransactionMode, Write},
@@ -84,7 +84,10 @@ where
         } in nodes.iter()
         {
             {
-                let value = hash_id;
+                let value: Vec<u8> =
+                    serde_json::from_value(hash_id.clone()).map_err(|e| QueryError::Error {
+                        message: format!("Error deserializing 'children' into Vec<i32>: {e}"),
+                    })?;
 
                 match (children, children_bitvec, idx, entry) {
                     // If the row has children then its a branch
@@ -492,8 +495,8 @@ where
 pub(crate) struct Node {
     pub(crate) path: JsonValue,
     pub(crate) created: i64,
-    pub(crate) hash_id: Vec<u8>,
-    pub(crate) children: Option<Vec<Vec<u8>>>,
+    pub(crate) hash_id: JsonValue,
+    pub(crate) children: Option<JsonValue>,
     pub(crate) children_bitvec: Option<BitVec>,
     pub(crate) idx: Option<JsonValue>,
     pub(crate) entry: Option<JsonValue>,
@@ -563,8 +566,8 @@ impl Node {
                         (
                             n.path.clone(),
                             n.created,
-                            n.hash_id,
-                            n.children.clone(),
+                            n.hash_id.clone(),
+                            n.children.clone().map(sqlx::types::Json),
                             children_bitvec,
                             n.idx.clone(),
                             n.entry.clone(),
@@ -621,9 +624,7 @@ impl Node {
             paths.push(node.path);
             createds.push(node.created);
             hash_ids.push(node.hash_id);
-            if let Some(children) = node.children {
-            childrens.push(children);
-            }
+            childrens.push(node.children);
             children_bitvecs.push(node.children_bitvec);
             idxs.push(node.idx);
             entries.push(node.entry);
@@ -646,7 +647,7 @@ impl Node {
             .bind(&paths)
             .bind(&createds)
             .bind(&hash_ids)
-            .bind(&childrens.concat())
+            .bind(&childrens)
             .bind(&children_bitvecs)
             .bind(&idxs)
             .bind(&entries)
