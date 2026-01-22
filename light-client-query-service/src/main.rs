@@ -121,7 +121,7 @@ where
         }
 
         tracing::debug!("waiting for height to increase");
-        sleep(Duration::from_secs(1)).await;
+        sleep(poll_opt.poll_interval).await;
     };
     tracing::debug!(
         height,
