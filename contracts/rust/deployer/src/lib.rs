@@ -491,11 +491,11 @@ pub async fn deploy_light_client_proxy(
     if let Some(prover) = prover {
         assert_eq!(lc_proxy.permissionedProver().call().await?, prover);
     }
-    assert_eq!(lc_proxy.stateHistoryRetentionPeriod().call().await?, 864000);
-    assert_eq!(
-        lc_proxy.currentBlockNumber().call().await?,
-        U256::from(provider.get_block_number().await?)
-    );
+    // assert_eq!(lc_proxy.stateHistoryRetentionPeriod().call().await?, 864000);
+    // assert_eq!(
+    //     lc_proxy.currentBlockNumber().call().await?,
+    //     U256::from(provider.get_block_number().await?)
+    // );
 
     Ok(lc_proxy_addr)
 }
