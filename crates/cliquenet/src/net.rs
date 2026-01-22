@@ -113,27 +113,19 @@ pub struct NetConf<K> {
     parties: Vec<(K, PublicKey, Address)>,
 
     /// Total egress channel capacity.
-    ///
-    /// Default is n⁴ with n = number of parties.
-    #[builder(default = parties.len() * parties.len() * parties.len() * parties.len())]
+    #[builder(default = 64 * parties.len())]
     total_capacity_egress: usize,
 
     /// Total ingress channel capacity.
-    ///
-    /// Default is n⁴ with n = number of parties.
-    #[builder(default = parties.len() * parties.len() * parties.len() * parties.len())]
+    #[builder(default = 32 * parties.len())]
     total_capacity_ingress: usize,
 
     /// Egress channel capacity per peer.
-    ///
-    /// Default is n³ with n = number of parties.
-    #[builder(default = parties.len() * parties.len() * parties.len())]
+    #[builder(default = 64)]
     peer_capacity_egress: usize,
 
     /// Ingress channel capacity per peer.
-    ///
-    /// Default is 2n² with n = number of parties.
-    #[builder(default = 2 * parties.len() * parties.len())]
+    #[builder(default = 32)]
     peer_capacity_ingress: usize,
 
     /// Max. number of bytes per message to send or receive.

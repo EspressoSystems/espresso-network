@@ -12,7 +12,14 @@ use tokio::{
 
 const A: u8 = 0;
 const B: u8 = 1;
-const SIZES: &[usize] = &[128 * 1024, 512 * 1024, 1024 * 1024, MAX_MESSAGE_SIZE];
+
+const SIZES: &[usize] = &[
+    128 * 1024,
+    512 * 1024,
+    1024 * 1024,
+    5 * 1024 * 1024,
+    MAX_MESSAGE_SIZE,
+];
 
 static DATA: LazyLock<HashMap<usize, Vec<u8>>> = LazyLock::new(|| {
     let mut g = rand::rng();
