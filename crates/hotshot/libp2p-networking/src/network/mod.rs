@@ -23,20 +23,19 @@ use futures::channel::oneshot::Sender;
 use hotshot_types::traits::{network::NetworkError, node_implementation::NodeType};
 use libp2p::{
     build_multiaddr,
-    core::{muxing::StreamMuxerBox, transport::Boxed},
+    core::{muxing::StreamMuxerBox, transport::Boxed, upgrade::Version},
     dns::tokio::Transport as DnsTransport,
     gossipsub::Event as GossipEvent,
     identify::Event as IdentifyEvent,
     identity::Keypair,
-    quic,
     request_response::ResponseChannel,
+    tcp,
+    yamux::Config as YamuxConfig,
     Multiaddr, Transport,
 };
 use libp2p_identity::PeerId;
 use parking_lot::Mutex;
-use quic::tokio::Transport as QuicTransport;
 use tracing::instrument;
-use transport::ConsensusKeyAuthentication;
 
 pub use self::{
     def::NetworkDef,
@@ -162,18 +161,10 @@ type BoxedTransport = Boxed<(PeerId, StreamMuxerBox)>;
 pub async fn gen_transport<T: NodeType>(
     identity: Keypair,
     auth_message: Option<Vec<u8>>,
-    consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
+    _consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
 ) -> Result<BoxedTransport, NetworkError> {
-    // Create the initial `Quic` transport
-    let transport = {
-        let mut config = quic::Config::new(&identity);
-        config.handshake_timeout = std::time::Duration::from_secs(20);
-        QuicTransport::new(config)
-    };
-
-    // Require authentication against the stake table
-    let transport: ConsensusKeyAuthentication<_, T::SignatureKey, _> =
-        ConsensusKeyAuthentication::new(transport, auth_message, consensus_key_to_pid_map);
+    // Create the initial `Tcp` transport
+    let transport = tcp::tokio::Transport::new(tcp::Config::default());
 
     // Support DNS resolution
     let transport = {
@@ -184,6 +175,8 @@ pub async fn gen_transport<T: NodeType>(
     .map_err(|e| NetworkError::ConfigError(format!("failed to build DNS transport: {e}")))?;
 
     Ok(transport
-        .map(|(peer_id, connection), _| (peer_id, StreamMuxerBox::new(connection)))
+        .upgrade(Version::V1)
+        .authenticate(libp2p::noise::Config::new(&identity).unwrap())
+        .multiplex(YamuxConfig::default())
         .boxed())
 }
