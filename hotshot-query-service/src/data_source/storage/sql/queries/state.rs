@@ -636,15 +636,15 @@ impl Node {
             for node in chunk {
                 paths.push(node.path.clone());
                 createds.push(node.created);
-                hash_ids.push(node.hash_id);
+                hash_ids.push(node.hash_id.clone());
                 childrens.push(node.children.clone());
                 children_bitvecs.push(node.children_bitvec.clone());
                 idxs.push(node.idx.clone());
                 entries.push(node.entry.clone());
             }
 
-        let sql = format!(
-            r#"
+            let sql = format!(
+                r#"
             INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
             SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::jsonb[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path) DO UPDATE SET
@@ -654,7 +654,7 @@ impl Node {
                 idx = EXCLUDED.idx,
                 entry = EXCLUDED.entry
             "#
-        );
+            );
 
             sqlx::query(&sql)
                 .bind(&paths)

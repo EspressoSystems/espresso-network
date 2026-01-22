@@ -709,46 +709,42 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         let name = State::state_type();
         let block_number = block_number as i64;
 
-
         for pfs in proofs.chunks(20) {
+            let mut all_nodes = collect_nodes_from_proofs(&pfs)?;
 
-        let mut all_nodes = collect_nodes_from_proofs(&pfs)?;
+            for (node, children, hash) in &mut all_nodes {
+                node.created = block_number;
+                node.hash_id = hash.to_vec().into();
 
-        for (node, children, hash) in &mut all_nodes {
-            node.created = block_number;
-            node.hash_id = hash.to_vec().into();
+                if let Some(children) = children {
+                    let children_hashes = children;
 
-            if let Some(children) = children {
-                let children_hashes = children;
-
-                node.children = Some(children_hashes.clone().into());
+                    node.children = Some(children_hashes.clone().into());
+                }
             }
-        }
 
-        Node::upsert(name, all_nodes.into_iter().map(|(n, ..)| n), self).await?;
+            Node::upsert(name, all_nodes.into_iter().map(|(n, ..)| n), self).await?;
 
-//        let all_nodes = proofs
-//    .into_iter()
-//    .map(|pf| {
-//        collect_nodes_from_proofs(&[pf])
-//            .unwrap_or_default()
-//            .into_iter()
-//    })
-//    .flatten()
-//    .map(|(mut node, children, hash): (_, _, _)| {
-//        node.created = block_number;
-//        node.hash_id = hash.to_vec().into();
-//
-//        if let Some(children) = children {
-//            let children_hashes = children;
-//
-//            node.children = Some(children_hashes.clone().into());
-//        }
-//
-//        node
-//    });
-
-
+            //        let all_nodes = proofs
+            //    .into_iter()
+            //    .map(|pf| {
+            //        collect_nodes_from_proofs(&[pf])
+            //            .unwrap_or_default()
+            //            .into_iter()
+            //    })
+            //    .flatten()
+            //    .map(|(mut node, children, hash): (_, _, _)| {
+            //        node.created = block_number;
+            //        node.hash_id = hash.to_vec().into();
+            //
+            //        if let Some(children) = children {
+            //            let children_hashes = children;
+            //
+            //            node.children = Some(children_hashes.clone().into());
+            //        }
+            //
+            //        node
+            //    });
         }
 
         Ok(())
