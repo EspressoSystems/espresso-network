@@ -719,10 +719,8 @@ async fn main() -> anyhow::Result<()> {
                 )
             })?;
             args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
-        } else {
-            if let Some(operation_id) = opt.timelock_operation_id {
-                args_builder.timelock_operation_id(operation_id);
-            }
+        } else if let Some(operation_id) = opt.timelock_operation_id {
+            args_builder.timelock_operation_id(operation_id);
         }
 
         let timelock_operation_value = opt.timelock_operation_value.unwrap_or_default();
