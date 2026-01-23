@@ -27,6 +27,8 @@ use tokio::{
 };
 use tracing::{debug, error, info, trace, warn};
 
+#[cfg(feature = "metrics")]
+use crate::metrics::NetworkMetrics;
 use crate::{
     Address, Id, Keypair, LAST_DELAY, NUM_DELAYS, NetConf, NetworkError, PublicKey, Role, chan,
     error::Empty,
@@ -161,6 +163,10 @@ struct Server<K> {
 
     /// Interval at which to ping peers.
     ping_interval: Interval,
+
+    /// For gathering network metrics.
+    #[cfg(feature = "metrics")]
+    metrics: Arc<NetworkMetrics<K>>,
 }
 
 #[derive(Debug)]
@@ -214,7 +220,7 @@ enum Message {
 
 impl<K> Network<K>
 where
-    K: Eq + Ord + Send + Clone + Display + Hash + 'static,
+    K: Eq + Ord + Clone + Display + Hash + Send + Sync + 'static,
 {
     pub async fn create(cfg: NetConf<K>) -> Result<Self> {
         let listener = TcpListener::bind(cfg.bind.to_string())
@@ -258,6 +264,12 @@ where
         let label = cfg.label.clone();
         let mmsze = cfg.max_message_size;
 
+        #[cfg(feature = "metrics")]
+        let metrics = {
+            let it = parties.keys().filter(|k| **k != label).cloned();
+            NetworkMetrics::new(name, &*cfg.metrics, it)
+        };
+
         let server = Server {
             conf: cfg,
             role: Role::Active,
@@ -272,6 +284,8 @@ where
             connect_tasks: JoinSet::new(),
             io_tasks: JoinSet::new(),
             ping_interval: interval,
+            #[cfg(feature = "metrics")]
+            metrics: Arc::new(metrics),
         };
 
         Ok(Self {
@@ -398,7 +412,7 @@ where
 
 impl<K> Server<K>
 where
-    K: Eq + Ord + Send + Clone + Display + Hash + 'static,
+    K: Eq + Ord + Clone + Display + Hash + Send + Sync + 'static,
 {
     /// Runs the main loop of this network node.
     ///
@@ -434,6 +448,12 @@ where
                 iqueue     = %self.ibound.capacity(),
                 oqueue     = %self.obound.capacity(),
             );
+
+            #[cfg(feature = "metrics")]
+            {
+                self.metrics.iqueue.set(self.ibound.capacity());
+                self.metrics.oqueue.set(self.obound.capacity());
+            }
 
             tokio::select! {
                 // Accepted a new connection.
@@ -588,6 +608,8 @@ where
                 },
                 cmd = self.obound.recv() => match cmd {
                     Some(Command::Add(peers)) => {
+                        #[cfg(feature = "metrics")]
+                        Arc::make_mut(&mut self.metrics).add_parties(peers.iter().map(|(k, ..)| k).cloned());
                         for (k, x, a) in peers {
                             if self.peers.contains_key(&k) {
                                 warn!(
@@ -627,6 +649,8 @@ where
                             self.connecting.remove(k);
                             self.active.remove(k);
                         }
+                        #[cfg(feature = "metrics")]
+                        Arc::make_mut(&mut self.metrics).remove_parties(&peers)
                     }
                     Some(Command::Assign(role, peers)) => {
                         for k in &peers {
@@ -673,6 +697,8 @@ where
                                 queue = task.tx.capacity(),
                                 "sending message"
                             );
+                            #[cfg(feature = "metrics")]
+                            self.metrics.set_peer_oqueue_cap(&to, task.tx.capacity());
                             task.tx.send(id, Message::Data(m))
                         }
                     }
@@ -708,6 +734,8 @@ where
                                 queue = task.tx.capacity(),
                                 "sending message"
                             );
+                            #[cfg(feature = "metrics")]
+                            self.metrics.set_peer_oqueue_cap(to, task.tx.capacity());
                             task.tx.send(id, Message::Data(m.clone()))
                         }
                     }
@@ -743,6 +771,8 @@ where
                                 queue = task.tx.capacity(),
                                 "sending message"
                             );
+                            #[cfg(feature = "metrics")]
+                            self.metrics.set_peer_oqueue_cap(to, task.tx.capacity());
                             task.tx.send(id, Message::Data(m.clone()))
                         }
                     }
@@ -832,6 +862,8 @@ where
             (k.clone(), *x),
             p.addr.clone(),
             self.conf.retry_delays,
+            #[cfg(feature = "metrics")]
+            self.metrics.clone(),
         ));
         assert!(self.task2key.insert(h.id(), k.clone()).is_none());
         self.connecting.insert(k, ConnectTask { h });
@@ -882,6 +914,8 @@ where
             t1,
             ibound,
             to_write,
+            #[cfg(feature = "metrics")]
+            self.metrics.clone(),
             b,
             countdown.clone(),
             self.conf.max_message_size,
@@ -897,6 +931,8 @@ where
             tx: to_remote,
         };
         self.active.insert(k, io);
+        #[cfg(feature = "metrics")]
+        self.metrics.connections.set(self.active.len());
     }
 
     /// Get the public key of a party by their static X25519 public key.
@@ -931,9 +967,10 @@ async fn connect<K>(
     to: (K, PublicKey),
     addr: Address,
     delays: [u8; NUM_DELAYS],
+    #[cfg(feature = "metrics")] metrics: Arc<NetworkMetrics<K>>,
 ) -> (TcpStream, TransportState)
 where
-    K: Display,
+    K: Eq + Hash + Display + Clone,
 {
     use rand::prelude::*;
 
@@ -958,6 +995,8 @@ where
     for d in delays {
         sleep(Duration::from_millis(d)).await;
         debug!(%name, node = %this.0, peer = %to.0, %addr, "connecting");
+        #[cfg(feature = "metrics")]
+        metrics.add_connect_attempt(&to.0);
         match timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await {
             Ok(Ok(s)) => {
                 if let Err(err) = s.set_nodelay(true) {
@@ -1033,16 +1072,19 @@ async fn recv_loop<R, K>(
     state: Arc<Mutex<TransportState>>,
     to_deliver: Sender<(K, Bytes, Option<OwnedSemaphorePermit>)>,
     to_writer: chan::Sender<Message>,
+    #[cfg(feature = "metrics")] metrics: Arc<NetworkMetrics<K>>,
     budget: Arc<Semaphore>,
     mut countdown: Countdown,
     max_message_size: usize,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
-    K: Display + Clone,
+    K: Eq + Hash + Display + Clone,
 {
     let mut buf = vec![0; MAX_NOISE_MESSAGE_SIZE];
     loop {
+        #[cfg(feature = "metrics")]
+        metrics.set_peer_iqueue_cap(&id, budget.available_permits());
         let permit = budget
             .clone()
             .acquire_owned()
@@ -1066,8 +1108,11 @@ where
                                 Ok(Type::Pong) => {
                                     // Received pong message; measure elapsed time
                                     let _n = state.lock().read_message(&f, &mut buf)?;
-                                    if let Some(_ping) = Timestamp::try_from_slice(&buf[.._n]) {
-                                        // TODO: update metrics
+                                    #[cfg(feature = "metrics")]
+                                    if let Some(ping) = Timestamp::try_from_slice(&buf[.._n])
+                                        && let Some(delay) = Timestamp::now().diff(ping)
+                                    {
+                                        metrics.set_latency(&id, delay)
                                     }
                                 }
                                 Ok(Type::Data) => {

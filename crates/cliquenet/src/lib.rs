@@ -7,6 +7,9 @@ mod net;
 mod time;
 mod x25519;
 
+#[cfg(feature = "metrics")]
+mod metrics;
+
 pub mod retry;
 
 use std::sync::Arc;
@@ -14,6 +17,8 @@ use std::sync::Arc;
 pub use addr::{Address, InvalidAddress};
 use bon::Builder;
 pub use error::NetworkError;
+#[cfg(feature = "metrics")]
+use hotshot_types::traits::metrics::Metrics;
 pub use id::Id;
 pub use net::Network;
 pub use retry::Retry;
@@ -87,6 +92,9 @@ pub struct NetConf<K> {
     /// Default retry delays in seconds.
     #[builder(default = [1, 3, 5, 15, 30])]
     retry_delays: [u8; NUM_DELAYS],
+
+    #[cfg(feature = "metrics")]
+    metrics: Box<dyn Metrics>,
 }
 
 impl<K> NetConf<K> {

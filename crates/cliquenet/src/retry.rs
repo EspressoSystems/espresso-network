@@ -123,7 +123,7 @@ enum Target<K> {
 
 impl<K> Retry<K>
 where
-    K: Eq + Ord + Send + Clone + Display + Hash + 'static,
+    K: Eq + Ord + Clone + Display + Hash + Send + Sync + 'static,
 {
     pub async fn create(mut cfg: NetConf<K>) -> Result<Self> {
         cfg.max_message_size += Trailer::MAX_LEN + 1;

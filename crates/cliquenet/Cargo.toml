@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "A fully connected mesh network"
 
+[features]
+metrics = ["dep:hotshot-types"]
+
 [dependencies]
 bon = { workspace = true }
 bytes = { workspace = true }
@@ -20,6 +23,8 @@ snow = { version = "0.10.0", features = ["ring-accelerated"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+# optional:
+hotshot-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = "0.8.1"

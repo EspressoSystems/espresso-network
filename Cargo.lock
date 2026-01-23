@@ -2986,6 +2986,7 @@ dependencies = [
  "bytes 1.11.0",
  "criterion 0.8.1",
  "ed25519-compact",
+ "hotshot-types",
  "nohash-hasher",
  "parking_lot",
  "portpicker",
