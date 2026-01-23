@@ -64,7 +64,7 @@ fix *args:
     just clippy --fix {{args}}
 
 lint *args:
-    just clippy -- -D warnings
+    just clippy {{args}} -- -D warnings
 
 clippy *args:
     # check all targets in default workspace members
