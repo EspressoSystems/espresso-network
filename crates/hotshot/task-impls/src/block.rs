@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_broadcast::{Receiver, Sender};
@@ -77,6 +77,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         }
     }
     fn receive_transaction(&mut self, transaction: TYPES::Transaction, view: TYPES::View) {
+        let now = Instant::now();
         let commit = transaction.commit();
         if self
             .recently_decided_transactions
@@ -88,12 +89,15 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         if len > self.max_block_size {
             return;
         }
+
         self.transactions.push(ReceivedTransaction {
             tx: transaction,
             len,
             commit,
             view,
         });
+        let elapsed = now.elapsed();
+        tracing::error!("Received transactions in {elapsed:?}");
     }
 
     fn decide_block(
@@ -102,6 +106,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         block_payload: &TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) {
+        let now = Instant::now();
         let txn_set: HashSet<Commitment<TYPES::Transaction>> = block_payload
             .transactions(metadata)
             .map(|tx| tx.commit())
@@ -113,6 +118,8 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         self.transactions
             .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
         self.recently_proposed_blocks.remove(&view);
+        let elapsed = now.elapsed();
+        tracing::error!("Mempool processed block in {elapsed:?}");
     }
 
     fn receive_block(
@@ -324,6 +331,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         block_view: TYPES::View,
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
+        let now = Instant::now();
         let (previous_block, metadata) = timeout(
             Duration::from_secs(1),
             self.wait_for_previous_block(block_view - 1, receiver),
@@ -331,9 +339,18 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         .await
         .ok()?
         .ok()?;
+        let elapsed = now.elapsed();
+        tracing::error!("Waited for previous block in {elapsed:?}");
+
+        let now = Instant::now();
         self.handle_block(block_view - 1, previous_block, metadata)
             .await;
+        let now = Instant::now();
         let PayloadWithMetadata { payload, metadata } = self.build_block(block_view).await?;
+        let elapsed = now.elapsed();
+        tracing::error!("Built block in {elapsed:?}");
+
+        let now = Instant::now();
         let encoded_payload = payload.encode();
         let encoded_txns: Vec<u8> = encoded_payload.to_vec();
         let block_size: u64 = encoded_txns.len() as u64;
@@ -351,6 +368,8 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             fee_account: self.builder_key.clone(),
             fee_signature: signature_over_fee_info,
         };
+        let elapsed = now.elapsed();
+        tracing::error!("Created Builder Response in {elapsed:?}");
         Some(BuilderResponse {
             block_payload: payload,
             metadata,

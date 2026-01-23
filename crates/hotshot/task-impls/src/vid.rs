@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
@@ -128,6 +128,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .metrics
                     .vid_disperse_duration
                     .add_point(disperse_duration.as_secs_f64());
+                tracing::error!("Calculated VID disperse in {disperse_duration:?}");
                 // Make sure we save the payload; we might need it to send the next epoch VID shares.
                 if let Err(e) = consensus_writer
                     .update_saved_payloads(*view_number, payload_with_metadata.clone())
@@ -313,6 +314,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     reconstruct_shares.push(share.share.clone());
                 }
 
+                let now = Instant::now();
                 let reconstruct_result = AvidmGf2Scheme::recover(&common, &reconstruct_shares);
 
                 let payload_bytes = match reconstruct_result {
@@ -334,7 +336,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
 
                 let payload = TYPES::BlockPayload::from_bytes(&payload_bytes, metadata);
 
-                tracing::error!("Reconstructed block for view {view}");
+                let elapsed = now.elapsed();
+                tracing::error!("Reconstructed block for view {view} in {elapsed:?}");
 
                 broadcast_event(
                     Arc::new(HotShotEvent::BlockReconstructed(
@@ -391,6 +394,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     reconstruct_shares.push(share.share.clone());
                 }
 
+                let now = Instant::now();
                 let reconstruct_result = AvidmGf2Scheme::recover(&common, &reconstruct_shares);
 
                 let payload_bytes = match reconstruct_result {
@@ -400,9 +404,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                         return None;
                     },
                 };
+
                 let metadata = proposal.data.block_header().metadata();
                 let payload = TYPES::BlockPayload::from_bytes(&payload_bytes, metadata);
-                tracing::error!("Reconstructed block after proposal validation for view {view}");
+                let elapsed = now.elapsed();
+                tracing::error!(
+                    "Reconstructed block after proposal validation for view {view} in {elapsed:?}"
+                );
                 broadcast_event(
                     Arc::new(HotShotEvent::BlockReconstructed(
                         payload,
