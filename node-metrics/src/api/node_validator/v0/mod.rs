@@ -615,7 +615,7 @@ where
         let self_mut = self.get_mut();
 
         // Next, do we already have a connection?
-        if let Some(connection_mut) = self_mut.connection.as_mut() {
+        if let Some(connection_mut) = &mut self_mut.connection {
             // Alright, then we'll want to retrieve the next entry
             pin_mut!(connection_mut);
 
@@ -666,7 +666,7 @@ where
         }
 
         // Do we have an attempt to retrieve a connection in progress?
-        if let Some(connection_future) = self_mut.connection_future.as_mut() {
+        if let Some(connection_future) = &mut self_mut.connection_future {
             tracing::debug!("waiting for connection to be established");
             pin_mut!(connection_future);
             match connection_future.poll(cx) {
