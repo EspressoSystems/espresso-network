@@ -57,12 +57,13 @@ struct ReceivedTransaction<TYPES: NodeType> {
     tx: TYPES::Transaction,
     len: u64,
     commit: Commitment<TYPES::Transaction>,
+    view: TYPES::View,
 }
 
 pub struct Mempool<TYPES: NodeType> {
     max_block_size: u64,
     transactions: Vec<ReceivedTransaction<TYPES>>,
-    recently_decided_transactions: lru::LruCache<TYPES::Transaction, bool>,
+    recently_decided_transactions: lru::LruCache<Commitment<TYPES::Transaction>, bool>,
     recently_proposed_blocks: HashMap<TYPES::View, Vec<TYPES::Transaction>>,
 }
 
@@ -75,19 +76,23 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             recently_proposed_blocks: HashMap::new(),
         }
     }
-    fn receive_transaction(&mut self, transaction: TYPES::Transaction) {
-        if self.recently_decided_transactions.contains(&transaction) {
+    fn receive_transaction(&mut self, transaction: TYPES::Transaction, view: TYPES::View) {
+        let commit = transaction.commit();
+        if self
+            .recently_decided_transactions
+            .contains(&transaction.commit())
+        {
             return;
         }
         let len = transaction.minimum_block_size();
         if len > self.max_block_size {
             return;
         }
-        let commit = transaction.commit();
         self.transactions.push(ReceivedTransaction {
             tx: transaction,
             len,
             commit,
+            view,
         });
     }
 
@@ -97,12 +102,16 @@ impl<TYPES: NodeType> Mempool<TYPES> {
         block_payload: &TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) {
-        for transaction in block_payload.transactions(metadata) {
+        let txn_set: HashSet<Commitment<TYPES::Transaction>> = block_payload
+            .transactions(metadata)
+            .map(|tx| tx.commit())
+            .collect();
+        for txn_commit in &txn_set {
             self.recently_decided_transactions
-                .put(transaction.clone(), true);
-            self.transactions
-                .retain(|txn| txn.commit != transaction.commit());
+                .put(txn_commit.clone(), true);
         }
+        self.transactions
+            .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
         self.recently_proposed_blocks.remove(&view);
     }
 
@@ -354,6 +363,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         let mut view = block_view - 1;
         let mut in_flight_txns = HashSet::new();
         while let Some(payload) = self.mempool.recently_proposed_blocks.get(&view) {
+            in_flight_txns.extend(payload);
             let Some(proposal) = self
                 .consensus
                 .read()
@@ -364,7 +374,6 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             else {
                 break;
             };
-            in_flight_txns.extend(payload);
             view = proposal.data.justify_qc().view_number();
         }
         transactions.retain(|transaction| !in_flight_txns.contains(&transaction.tx));
@@ -521,7 +530,10 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         match event.as_ref() {
             HotShotEvent::TransactionsRecv(transactions) => {
                 for transaction in transactions {
-                    self.mempool.receive_transaction(transaction.clone());
+                    self.mempool.receive_transaction(
+                        transaction.clone(),
+                        self.consensus.read().await.cur_view(),
+                    );
                 }
             },
             HotShotEvent::ViewChange(view, epoch) => {
