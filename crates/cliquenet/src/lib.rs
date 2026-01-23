@@ -25,6 +25,9 @@ pub use x25519::{
 /// Max. number of bytes for a message (potentially consisting of several frames).
 pub const MAX_MESSAGE_SIZE: usize = 8 * 1024 * 1024;
 
+const NUM_DELAYS: usize = 5;
+const LAST_DELAY: usize = NUM_DELAYS - 1;
+
 /// Network peer role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Role {
@@ -83,7 +86,7 @@ pub struct NetConf<K> {
 
     /// Default retry delays in seconds.
     #[builder(default = [1, 3, 5, 15, 30])]
-    retry_delays: [u8; 5],
+    retry_delays: [u8; NUM_DELAYS],
 }
 
 impl<K> NetConf<K> {

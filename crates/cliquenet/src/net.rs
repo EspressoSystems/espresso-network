@@ -28,7 +28,7 @@ use tokio::{
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    Address, Id, Keypair, NetConf, NetworkError, PublicKey, Role, chan,
+    Address, Id, Keypair, LAST_DELAY, NUM_DELAYS, NetConf, NetworkError, PublicKey, Role, chan,
     error::Empty,
     frame::{Header, Type},
     time::{Countdown, Timestamp},
@@ -930,7 +930,7 @@ async fn connect<K>(
     this: (K, Keypair),
     to: (K, PublicKey),
     addr: Address,
-    delays: [u8; 5],
+    delays: [u8; NUM_DELAYS],
 ) -> (TcpStream, TransportState)
 where
     K: Display,
@@ -951,9 +951,7 @@ where
 
     let delays = once(rand::rng().random_range(0..=1000))
         .chain(delays.into_iter().map(|d| u64::from(d) * 1000))
-        .chain(repeat(
-            u64::from(delays.last().copied().unwrap_or(30)) * 1000,
-        ));
+        .chain(repeat(u64::from(delays[LAST_DELAY]) * 1000));
 
     let addr = addr.to_string();
 

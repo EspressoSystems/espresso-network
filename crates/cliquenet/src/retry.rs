@@ -22,7 +22,9 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::{Address, Id, NetConf, Network, NetworkError, PublicKey, Role, net::Command};
+use crate::{
+    Address, Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command,
+};
 
 type Result<T> = std::result::Result<T, NetworkError>;
 
@@ -321,7 +323,7 @@ where
     }
 }
 
-async fn retry<K>(buf: Buffer<K>, net: Sender<Command<K>>, delays: [u8; 5]) -> Infallible
+async fn retry<K>(buf: Buffer<K>, net: Sender<Command<K>>, delays: [u8; NUM_DELAYS]) -> Infallible
 where
     K: Clone,
 {
