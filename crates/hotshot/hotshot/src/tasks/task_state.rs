@@ -155,6 +155,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
         Self {
             storage: handle.storage.clone(),
             private_key: handle.private_key().clone(),
+            public_key: handle.public_key().clone(),
+            membership_coordinator: handle.membership_coordinator.clone(),
+            consensus: OuterConsensus::new(handle.hotshot.consensus()),
         }
     }
 }

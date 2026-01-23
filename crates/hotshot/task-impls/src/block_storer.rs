@@ -4,7 +4,9 @@ use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
+    consensus::OuterConsensus,
     data::DaProposal2,
+    epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     traits::{
         node_implementation::{NodeImplementation, NodeType},
@@ -21,6 +23,9 @@ use crate::events::HotShotEvent;
 pub struct BlockStorerTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub storage: I::Storage,
     pub private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+    pub public_key: TYPES::SignatureKey,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub consensus: OuterConsensus<TYPES>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>> BlockStorerTaskState<TYPES, I> {
@@ -50,12 +55,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> BlockStorerTaskState<TYPES, 
             _pd: Default::default(),
         }
     }
+    async fn is_da(&self) -> bool {
+        let epoch = self.consensus.read().await.cur_epoch();
+        let Ok(epoch_membership) = self
+            .membership_coordinator
+            .membership_for_epoch(epoch)
+            .await
+        else {
+            return false;
+        };
+        epoch_membership.has_da_stake(&self.public_key).await
+    }
     pub async fn handle(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
     ) -> hotshot_utils::anytrace::Result<()> {
         match event.as_ref() {
             HotShotEvent::BlockReconstructed(payload, metadata, commit, view) => {
+                if !self.is_da().await {
+                    return Ok(());
+                }
                 tracing::error!("Storing block reconstructed for view {view}");
                 let _ = self
                     .storage
@@ -66,6 +85,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> BlockStorerTaskState<TYPES, 
                     .await;
             },
             HotShotEvent::BlockReady(payload_with_metadata, commit, view) => {
+                if !self.is_da().await {
+                    return Ok(());
+                }
                 tracing::error!("Storing block ready for view {view}");
                 let _ = self
                     .storage
