@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/hotshot/task-impls/src/helpers.rs`."><title>helpers.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="hotshot_task_impls" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">hotshot_task_impls/</div>helpers.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/hotshot/task-impls/src/helpers.rs`."><title>helpers.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="hotshot_task_impls" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">hotshot_task_impls/</div>helpers.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
 <a href=#2 id=2 data-nosnippet>2</a>// This file is part of the HotShot repository.
 <a href=#3 id=3 data-nosnippet>3</a>
 <a href=#4 id=4 data-nosnippet>4</a>// You should have received a copy of the MIT License
@@ -263,7 +263,7 @@
 <a href=#263 id=263 data-nosnippet>263</a>    <span class="kw">let </span>decided_block_number = decided_leaf.block_header().block_number();
 <a href=#264 id=264 data-nosnippet>264</a>
 <a href=#265 id=265 data-nosnippet>265</a>    <span class="comment">// Skip if this is not the expected block.
-<a href=#266 id=266 data-nosnippet>266</a>    </span><span class="kw">if </span>epoch_height != <span class="number">0 </span>&amp;&amp; is_epoch_root(decided_block_number, epoch_height) {
+<a href=#266 id=266 data-nosnippet>266</a>    </span><span class="kw">if </span><span class="macro">epoch_height !</span>= <span class="number">0 </span>&amp;&amp; is_epoch_root(decided_block_number, epoch_height) {
 <a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>next_epoch_number =
 <a href=#268 id=268 data-nosnippet>268</a>            TYPES::Epoch::new(epoch_from_block_number(decided_block_number, epoch_height) + <span class="number">2</span>);
 <a href=#269 id=269 data-nosnippet>269</a>
@@ -760,7 +760,7 @@
 <a href=#760 id=760 data-nosnippet>760</a>        parent_view
 <a href=#761 id=761 data-nosnippet>761</a>    ))<span class="question-mark">?</span>;
 <a href=#762 id=762 data-nosnippet>762</a>
-<a href=#763 id=763 data-nosnippet>763</a>    <span class="kw">if </span>leaf_commitment != consensus_reader.high_qc().data().leaf_commit {
+<a href=#763 id=763 data-nosnippet>763</a>    <span class="kw">if </span><span class="macro">leaf_commitment !</span>= consensus_reader.high_qc().data().leaf_commit {
 <a href=#764 id=764 data-nosnippet>764</a>        <span class="comment">// NOTE: This happens on the genesis block
 <a href=#765 id=765 data-nosnippet>765</a>        </span><span class="macro">tracing::debug!</span>(
 <a href=#766 id=766 data-nosnippet>766</a>            <span class="string">"They don't equal: {:?}   {:?}"</span>,
@@ -789,7 +789,7 @@
 <a href=#789 id=789 data-nosnippet>789</a>        .is_some_and(|bn| {
 <a href=#790 id=790 data-nosnippet>790</a>            !is_transition_block(bn, validation_info.epoch_height)
 <a href=#791 id=791 data-nosnippet>791</a>                &amp;&amp; is_epoch_transition(bn, validation_info.epoch_height)
-<a href=#792 id=792 data-nosnippet>792</a>                &amp;&amp; bn % validation_info.epoch_height != <span class="number">0
+<a href=#792 id=792 data-nosnippet>792</a>                &amp;&amp; bn % validation_info.<span class="macro">epoch_height !</span>= <span class="number">0
 <a href=#793 id=793 data-nosnippet>793</a>        </span>});
 <a href=#794 id=794 data-nosnippet>794</a>    <span class="kw">let </span>justify_qc = proposal.data.justify_qc();
 <a href=#795 id=795 data-nosnippet>795</a>    <span class="kw">let </span>maybe_next_epoch_justify_qc = proposal.data.next_epoch_justify_qc();
@@ -1417,7 +1417,7 @@
 <a href=#1417 id=1417 data-nosnippet>1417</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(second_vid_share) = maybe_second_vid_share {
 <a href=#1418 id=1418 data-nosnippet>1418</a>        <span class="kw">if </span>(target_epoch == da_cert.epoch()
 <a href=#1419 id=1419 data-nosnippet>1419</a>            &amp;&amp; second_vid_share.data.payload_commitment() == da_cert.data().payload_commit)
-<a href=#1420 id=1420 data-nosnippet>1420</a>            || (target_epoch != da_cert.epoch()
+<a href=#1420 id=1420 data-nosnippet>1420</a>            || (<span class="macro">target_epoch !</span>= da_cert.epoch()
 <a href=#1421 id=1421 data-nosnippet>1421</a>                &amp;&amp; <span class="prelude-val">Some</span>(second_vid_share.data.payload_commitment())
 <a href=#1422 id=1422 data-nosnippet>1422</a>                    == da_cert.data().next_epoch_payload_commit)
 <a href=#1423 id=1423 data-nosnippet>1423</a>        {
@@ -1473,7 +1473,7 @@
 <a href=#1473 id=1473 data-nosnippet>1473</a>) {
 <a href=#1474 id=1474 data-nosnippet>1474</a>    <span class="kw">let </span><span class="kw-2">mut </span>broadcast_epoch = epoch;
 <a href=#1475 id=1475 data-nosnippet>1475</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>((first_epoch_view, first_epoch)) = first_epoch {
-<a href=#1476 id=1476 data-nosnippet>1476</a>        <span class="kw">if </span>new_view_number == first_epoch_view &amp;&amp; broadcast_epoch != <span class="prelude-val">Some</span>(first_epoch) {
+<a href=#1476 id=1476 data-nosnippet>1476</a>        <span class="kw">if </span>new_view_number == first_epoch_view &amp;&amp; <span class="macro">broadcast_epoch !</span>= <span class="prelude-val">Some</span>(first_epoch) {
 <a href=#1477 id=1477 data-nosnippet>1477</a>            broadcast_epoch = <span class="prelude-val">Some</span>(first_epoch);
 <a href=#1478 id=1478 data-nosnippet>1478</a>        }
 <a href=#1479 id=1479 data-nosnippet>1479</a>    }
@@ -1502,4 +1502,5 @@
 <a href=#1502 id=1502 data-nosnippet>1502</a>            .abi_encode_packed(),
 <a href=#1503 id=1503 data-nosnippet>1503</a>    );
 <a href=#1504 id=1504 data-nosnippet>1504</a>    CircuitField::from_be_bytes_mod_order(res.as_ref())
-<a href=#1505 id=1505 data-nosnippet>1505</a>}</code></pre></div></section></main></body></html>
+<a href=#1505 id=1505 data-nosnippet>1505</a>}
+</code></pre></div></section></main></body></html>

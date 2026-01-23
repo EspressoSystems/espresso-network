@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["fmt_block_id"],"struct":["QueryServiceClient"],"trait":["Client"]};
