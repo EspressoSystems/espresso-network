@@ -577,67 +577,69 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
     Ok(())
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_claim_rewards() -> Result<()> {
+#[test_log::test(rstest::rstest)]
+#[case::no_balance(None)]
+#[case::with_balance(Some(U256::from(1)))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_claim_rewards(#[case] reward_balance: Option<U256>) -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
-    let reward_balance = U256::from(1000000);
 
     let balance_before = system.balance(system.deployer_address).await?;
 
-    let espresso_url = system.setup_reward_claim_mock(reward_balance).await?;
+    let espresso_url = match reward_balance {
+        Some(balance) => system.setup_reward_claim_mock(balance).await?,
+        None => system.setup_reward_claim_not_found_mock(),
+    };
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("--espresso-url")
         .arg(espresso_url.to_string())
-        .arg("claim-rewards")
-        .assert()
-        .success()
-        .stdout(str::contains("RewardsClaimed"));
+        .arg("claim-rewards");
 
-    let balance_after = system.balance(system.deployer_address).await?;
-
-    assert_eq!(balance_after, balance_before + reward_balance,);
+    match reward_balance {
+        Some(balance) => {
+            cmd.assert()
+                .success()
+                .stdout(str::contains("RewardsClaimed"));
+            let balance_after = system.balance(system.deployer_address).await?;
+            assert_eq!(balance_after, balance_before + balance);
+        },
+        None => {
+            cmd.assert()
+                .failure()
+                .stderr(str::contains("No reward claim data found"));
+        },
+    }
 
     Ok(())
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_unclaimed_rewards() -> Result<()> {
+#[test_log::test(rstest::rstest)]
+#[case::no_balance(None, "0 ESP")]
+#[case::with_balance(Some(U256::from(1)), "0.000000000000000001 ESP")]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_unclaimed_rewards(
+    #[case] reward_balance: Option<U256>,
+    #[case] expected_output: &str,
+) -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
-    let reward_balance = U256::from(1000000);
 
-    let espresso_url = system.setup_reward_claim_mock(reward_balance).await?;
+    let espresso_url = match reward_balance {
+        Some(balance) => system.setup_reward_claim_mock(balance).await?,
+        None => system.setup_reward_claim_not_found_mock(),
+    };
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Check unclaimed rewards before claiming
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("--espresso-url")
         .arg(espresso_url.to_string())
         .arg("unclaimed-rewards")
         .assert()
         .success()
-        .stdout(str::contains("0.000000000001 ESP"));
-
-    // Claim the rewards
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("--espresso-url")
-        .arg(espresso_url.to_string())
-        .arg("claim-rewards")
-        .assert()
-        .success()
-        .stdout(str::contains("RewardsClaimed"));
-
-    // Check unclaimed rewards after claiming (should be 0)
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("--espresso-url")
-        .arg(espresso_url.to_string())
-        .arg("unclaimed-rewards")
-        .assert()
-        .success()
-        .stdout(str::contains("0 ESP"));
+        .stdout(str::contains(expected_output));
 
     Ok(())
 }

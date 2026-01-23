@@ -39,7 +39,7 @@ use hotshot_types::light_client::StateKeyPair;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
-use warp::Filter;
+use warp::{http::StatusCode, Filter};
 
 use crate::{
     parse::Commission, receipt::ReceiptExt as _, registration::fetch_commission,
@@ -389,6 +389,17 @@ impl TestSystem {
         tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
 
         Ok(format!("http://localhost:{}/", port).parse()?)
+    }
+
+    pub fn setup_reward_claim_not_found_mock(&self) -> Url {
+        let port = portpicker::pick_unused_port().expect("No ports available");
+
+        let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String)
+            .map(|_, _| warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND));
+
+        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
+
+        format!("http://localhost:{}/", port).parse().unwrap()
     }
 }
 
