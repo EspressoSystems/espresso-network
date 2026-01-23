@@ -495,7 +495,7 @@ async fn perform_timelock_operation_via_multisig(
         rpc_url,
         multisig_proposer,
         use_hardware_wallet,
-        Some(operation.value.to_string()),
+        Some("0".to_string()), //value is zero because we don't need to send any value to the timelock contract
         dry_run,
     )
     .await?;
