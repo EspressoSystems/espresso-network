@@ -171,13 +171,26 @@ Options:
 
 ### Choose your type of wallet (mnemonic, private key, or Ledger)
 
+**Security** Utmost care must be taken to avoid leaking the Ethereum private key used for staking or registering
+validators. There is currently no built-in key rotation feature for Ethereum keys.
+
 First, determine which signing method you would like to use:
 
+1. **Ledger hardware wallet** - (recommended) sign transactions with a Ledger device
 1. **Mnemonic phrase** - derive keys from a BIP-39 mnemonic with account index
-2. **Private key** - use a raw hex-encoded private key directly
-3. **Ledger hardware wallet** - sign transactions with a Ledger device
+1. **Private key** - use a raw hex-encoded private key directly
 
-If using a mnemonic and you don't know which account index to use, you can find it by running:
+**Security recommendations:** For managing significant funds on mainnet, we recommend using a hardware wallet (Ledger)
+for extra security. Hardware wallets keep your private keys isolated from your computer, offering some protection
+against malware and phishing attacks. If you need support for other hardware signers, please open an issue at
+https://github.com/EspressoSystems/espresso-network.
+
+For mnemonics and private keys, to avoid passing secrets on the command line, use environment variables:
+
+- `MNEMONIC` for mnemonic phrase
+- `PRIVATE_KEY` for raw private key
+
+If using a ledger or mnemonic and you don't know which account index to use, you can find it by running:
 
 ```bash
 staking-cli --mnemonic MNEMONIC --account-index 0 account
@@ -190,10 +203,10 @@ staking-cli --ledger --account-index 1 account
 
 Repeat with different indices until you find the address you want to use.
 
-If using a private key:
+If using a private key, ensure PRIVATE_KEY env var is set
 
 ```bash
-staking-cli --private-key 0x1234...abcd account
+staking-cli account
 ```
 
 Note that for ledger signing to work
@@ -202,12 +215,7 @@ Note that for ledger signing to work
 1. the Ethereum app needs to be open,
 1. blind signing needs to be enabled in the Ethereum app settings on the ledger.
 
-To avoid passing secrets on the command line, use environment variables:
-
-- `MNEMONIC` for mnemonic phrase
-- `PRIVATE_KEY` for raw private key
-
-### Initialize the configuration file
+### Initialize the configuration file (optional)
 
 Once you've identified your desired account index (here 2), initialize a configuration file:
 
@@ -226,7 +234,7 @@ NOTE: only for this `init` command the wallet flags are specified _after_ the co
 
 You can inspect the configuration file by running:
 
-         staking-cli config
+    staking-cli config
 
 ### View the stake table
 
