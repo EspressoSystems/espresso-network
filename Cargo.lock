@@ -7786,6 +7786,7 @@ dependencies = [
  "anyhow",
  "async-lock 3.4.1",
  "bitvec",
+ "clap 4.5.53",
  "committable",
  "derivative",
  "derive_more 2.1.0",
@@ -7809,6 +7810,28 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
+ "vbs",
+]
+
+[[package]]
+name = "light-client-query-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap 4.5.53",
+ "espresso-types",
+ "hotshot-query-service",
+ "hotshot-types",
+ "light-client",
+ "log-panics",
+ "semver 1.0.27",
+ "sequencer",
+ "surf-disco",
+ "tide-disco",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber 0.3.22",
  "vbs",
 ]
 
