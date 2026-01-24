@@ -117,13 +117,17 @@ pub(crate) async fn compute_state_update(
     Ok((state, delta))
 }
 
-async fn store_state_update(
-    tx: &mut impl SequencerStateUpdate,
+async fn store_state_update<T>(
+    storage: &Arc<T>,
     block_number: u64,
     version: vbs::version::Version,
     state: &ValidatedState,
     delta: Delta,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    T: SequencerStateDataSource,
+    for<'a> T::Transaction<'a>: SequencerStateUpdate,
+{
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
@@ -151,13 +155,21 @@ async fn store_state_update(
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     tracing::debug!(count = fee_proofs.len(), "inserting fee accounts in batch");
+
+    let mut tx = storage
+        .write()
+        .await
+        .context("opening transaction for state update")?;
+
     UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes_batch(
-        tx,
+        &mut tx,
         fee_proofs,
         block_number,
     )
     .await
     .context("failed to store fee merkle nodes")?;
+
+    tx.commit().await?;
 
     // Insert block merkle tree nodes
     let (_, proof) = block_merkle_tree
@@ -171,14 +183,21 @@ async fn store_state_update(
 
     {
         tracing::debug!("inserting blocks frontier");
+        let mut tx = storage
+            .write()
+            .await
+            .context("opening transaction for state update")?;
+
         UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
-            tx,
+            &mut tx,
             proof,
             path,
             block_number,
         )
         .await
         .context("failed to store block merkle nodes")?;
+
+        tx.commit().await?;
     }
 
     if version <= EpochVersion::version() {
@@ -207,13 +226,20 @@ async fn store_state_update(
             count = reward_proofs.len(),
             "inserting v1 reward accounts in batch"
         );
+        let mut tx = storage
+            .write()
+            .await
+            .context("opening transaction for state update")?;
+
         UpdateStateData::<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>::insert_merkle_nodes_batch(
-            tx,
+            &mut tx,
             reward_proofs,
             block_number,
         )
         .await
         .context("failed to store reward merkle nodes")?;
+
+        tx.commit().await?;
     } else {
         // Collect reward merkle tree v2 proofs for batch insertion
         let reward_proofs: Vec<_> = rewards_delta
@@ -239,22 +265,38 @@ async fn store_state_update(
             count = reward_proofs.len(),
             "inserting v2 reward accounts in batch"
         );
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
-            tx,
-            reward_proofs,
+
+        for proofs in reward_proofs.chunks(50) {
+            let mut tx = storage
+                .write()
+                .await
+                .context("opening transaction for state update")?;
+
+            UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
+            &mut tx,
+            proofs.to_vec(),
             block_number,
         )
         .await
         .context("failed to store reward merkle nodes")?;
+
+            tx.commit().await?;
+        }
     }
 
     tracing::debug!(block_number, "updating state height");
+    let mut tx = storage
+        .write()
+        .await
+        .context("opening transaction for state update")?;
     UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
-        tx,
+        &mut tx,
         block_number as usize,
     )
     .await
     .context("setting state height")?;
+
+    tx.commit().await?;
 
     Ok(())
 }
@@ -292,19 +334,20 @@ where
     .context("computing state update")?;
 
     tracing::debug!("storing state update");
-    let mut tx = storage
-        .write()
-        .await
-        .context("opening transaction for state update")?;
 
     store_state_update(
-        &mut tx,
+        storage,
         proposed_leaf.height(),
         proposed_leaf.header().version(),
         &state,
         delta,
     )
     .await?;
+
+    let mut tx = storage
+        .write()
+        .await
+        .context("opening transaction for state update")?;
 
     if parent_chain_config != state.chain_config {
         let cf = state
@@ -316,6 +359,7 @@ where
     }
 
     tx.commit().await?;
+
     Ok(state)
 }
 
