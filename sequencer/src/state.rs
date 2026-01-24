@@ -270,24 +270,25 @@ where
                 vec![proof],
                 block_number,
             )
-            .await
-            .context("failed to store reward merkle nodes")?;
-        }
-        tracing::info!(
-            duration_ms = store_start.elapsed().as_millis() as u64,
-            count = num_reward_proofs,
-            block_number,
-            "stored v2 reward accounts"
-        );
+                .await
+                .context("failed to store reward merkle nodes")?;
 
-        tracing::debug!(block_number, "updating state height");
-        UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
-            &mut tx_,
-            block_number as usize,
-        )
-        .await
-        .context("setting state height")?;
-        tx_.commit().await;
+            tracing::info!(
+                duration_ms = store_start.elapsed().as_millis() as u64,
+                count = num_reward_proofs,
+                block_number,
+                "stored v2 reward accounts"
+            );
+
+            tracing::debug!(block_number, "updating state height");
+            UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
+                &mut tx_,
+                block_number as usize,
+            )
+            .await
+            .context("setting state height")?;
+            tx_.commit().await;
+        }
     }
 
     Ok(())
