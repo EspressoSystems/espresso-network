@@ -4,8 +4,12 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
+use anyhow::Context;
 use hotshot_builder_api::v0_1::{
     block_info::AvailableBlockInfo,
     builder::{BuildError, Error as BuilderApiError},
@@ -15,11 +19,15 @@ use hotshot_types::{
     data::VidCommitment,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use simple_moving_average::{SumTreeSMA, SMA};
 use surf_disco::{client::HealthStatus, Client, Url};
 use tagged_base64::TaggedBase64;
 use thiserror::Error;
-use tokio::time::sleep;
+use tokio::{spawn, time::sleep};
+use tokio_util::task::AbortOnDropHandle;
+use tracing::warn;
 use vbs::version::StaticVersionType;
 
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -60,9 +68,17 @@ impl From<BuilderApiError> for BuilderClientError {
 }
 
 /// Client for builder API
-pub struct BuilderClient<TYPES: NodeType, Ver: StaticVersionType> {
+#[derive(Clone)]
+pub struct BuilderClient<TYPES: NodeType, Ver: StaticVersionType + 'static> {
     /// Underlying surf_disco::Client for the legacy builder api
     client: Client<BuilderApiError, Ver>,
+
+    /// A simple moving average of the latency to this builder
+    latency_sma: Arc<RwLock<SumTreeSMA<f64, f64, 10>>>,
+
+    /// A handle to the task that continuously updates the latency SMA
+    latency_eval_task: Option<Arc<AbortOnDropHandle<()>>>,
+
     /// Marker for [`NodeType`] used here
     _marker: std::marker::PhantomData<TYPES>,
 }
@@ -76,12 +92,29 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
     pub fn new(base_url: impl Into<Url>, request_timeout: Duration) -> Self {
         let url = base_url.into();
 
-        Self {
+        // Initialize the latency moving average
+        let latency_sma = Arc::new(RwLock::new(SumTreeSMA::new()));
+
+        // Initialize the client
+        let mut self_ = Self {
             client: Client::builder(url.clone())
                 .set_timeout(Some(request_timeout))
                 .build(),
+            latency_sma,
+            latency_eval_task: None,
             _marker: std::marker::PhantomData,
-        }
+        };
+
+        // Create a handle to the task that continuously updates the latency SMA
+        let self_clone = self_.clone();
+        let latency_eval_task = AbortOnDropHandle::new(spawn(async move {
+            self_clone.run_latency_monitor().await;
+        }));
+
+        // Set the task handle
+        self_.latency_eval_task = Some(Arc::new(latency_eval_task));
+
+        self_
     }
 
     /// Wait for server to become available
@@ -124,6 +157,59 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
             .send()
             .await
             .map_err(Into::into)
+    }
+
+    /// The task that periodically pings the builder to measure latency
+    async fn run_latency_monitor(&self) {
+        // Create a 5 minute interval
+        let mut interval = tokio::time::interval(Duration::from_secs(60 * 5));
+
+        loop {
+            // Wait for the interval to elapse
+            interval.tick().await;
+
+            // Start the timer
+            let now = Instant::now();
+
+            // Ping the builder, continue if it fails
+            if let Err(err) = self.ping().await {
+                warn!("Failed to ping builder: {err:?}");
+                continue;
+            }
+
+            // Calculate the latency and update the SMA
+            let latency = now.elapsed().as_secs_f64();
+            self.latency_sma.write().add_sample(latency);
+        }
+    }
+
+    /// Returns the calculated latency to this builder (in seconds)
+    pub fn latency(&self) -> f64 {
+        self.latency_sma.read().get_average()
+    }
+
+    /// Ping the builder. We use this to measure latency to the builders so we can
+    /// select the closest/least latent one.
+    pub async fn ping(&self) -> anyhow::Result<()> {
+        // Join the request URL with the base URL
+        let url = self
+            .client
+            .base_url()
+            .join("v0/status/ping")
+            .with_context(|| "failed to join request URL")?;
+
+        // Perform the request
+        let response = reqwest::get(url).await.with_context(|| "request failed")?;
+
+        // Make sure the response is OK
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "request failed with status code {}",
+                response.status()
+            ));
+        }
+
+        Ok(())
     }
 }
 

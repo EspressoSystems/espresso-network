@@ -27,6 +27,14 @@ pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
     >(&HotshotBuilderApiOptions::default())
     .expect("Failed to construct the builder API for private mempool txns");
 
+    // The status API
+    let status_api = hotshot_builder_api::v0_1::builder::status_api::<
+        ProxyGlobalState<SeqTypes>,
+        SeqTypes,
+        StaticVersion<0, 1>,
+    >(&HotshotBuilderApiOptions::default())
+    .expect("Failed to construct the builder API for status");
+
     let mut app: App<ProxyGlobalState<SeqTypes>, BuilderApiError> = App::with_state(source);
 
     app.register_module("block_info", builder_api)
@@ -34,6 +42,10 @@ pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
 
     app.register_module("txn_submit", private_mempool_api)
         .expect("Failed to register the private mempool API");
+
+    // Attach the status API to /status
+    app.register_module("status", status_api)
+        .expect("Failed to register the status API");
 
     spawn(app.serve(url, SequencerApiVersion::instance()));
 }
