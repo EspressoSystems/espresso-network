@@ -266,7 +266,7 @@ where
             "inserting v2 reward accounts in batch"
         );
 
-        for proofs in reward_proofs.chunks(50) {
+        for proofs in reward_proofs.chunks(20) {
             let mut tx = storage
                 .write()
                 .await
