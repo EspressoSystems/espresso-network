@@ -7,17 +7,17 @@
     sudo apt-get update
     sudo apt-get install -y curl cmake pkg-config libssl-dev protobuf-compiler git postgresql-client lsb-release gpg
 
-## Install docker
+## Install Docker
 
 Refer to https://docs.docker.com/engine/install/ubuntu
 
 ## Install just
 
-Just is outdated in the official ubuntu repos.
+Just is outdated in the official Ubuntu repos.
 
     curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin/
 
-## Install rust dependencies
+## Install Rust dependencies
 
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
     source $HOME/.cargo/env
