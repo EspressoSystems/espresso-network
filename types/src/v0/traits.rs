@@ -919,9 +919,7 @@ pub trait SequencerPersistence:
         Ok(())
     }
 
-    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()>;
 
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
     async fn migrate_da_proposals(&self) -> anyhow::Result<()>;
