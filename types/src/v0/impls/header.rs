@@ -892,12 +892,31 @@ impl Header {
                     })?;
 
                 if prev_epoch_header.version() >= EpochRewardVersion::version() {
-                    anyhow::bail!(
-                        "rewards missing for V6 epoch {prev_epoch} at epoch {epoch} boundary"
+                    reward_calculator.spawn_background_task(
+                        prev_epoch,
+                        epoch_height,
+                        validated_state.reward_merkle_tree_v2.clone(),
+                        instance_state.clone(),
+                        coordinator.clone(),
+                        None,
                     );
+                    if let Some(result) = reward_calculator.get_result(prev_epoch).await {
+                        tracing::info!(
+                            %epoch,
+                            prev_epoch = %result.epoch,
+                            total = %result.total_distributed.0,
+                            "applying epoch rewards"
+                        );
+                        validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
+                        (result.total_distributed, result.changed_accounts)
+                    } else {
+                        tracing::error!(%epoch, %prev_epoch, "failed to get rewards for V6 epoch");
+                        (RewardAmount::default(), HashSet::new())
+                    }
+                } else {
+                    tracing::info!(%epoch, %prev_epoch, "no rewards for V5 epoch");
+                    (RewardAmount::default(), HashSet::new())
                 }
-                tracing::info!(%epoch, %prev_epoch, "no rewards for V5 epoch");
-                (RewardAmount::default(), HashSet::new())
             };
 
         // Start calculation for current epoch
