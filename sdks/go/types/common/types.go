@@ -46,6 +46,26 @@ type TransactionQueryData struct {
 	BlockHeight uint64          `json:"block_height"`
 }
 
+type NamespaceTransactionsRangeData struct {
+	Proof        NamespaceTransactionsRangeProof `json:"proof"`
+	Transactions []Transaction                   `json:"transactions"`
+}
+
+type NamespaceTransactionsRangeProof struct {
+	V1 V1NamespaceTransactionsRangeProof `json:"V1"`
+}
+
+type V1NamespaceTransactionsRangeProof struct {
+	NsIndex   uint64           `json:"ns_index"`
+	NsPayload NamespacePayload `json:"ns_payload"`
+	NsProof   NamespaceProof   `json:"ns_proof"`
+}
+
+type LimitsData struct {
+	SmallObjectRangeLimit uint64 `json:"small_object_range_limit"`
+	LargeObjectRangeLimit uint64 `json:"large_object_range_limit"`
+}
+
 type L1BlockInfo struct {
 	Number    uint64      `json:"number"`
 	Timestamp U256        `json:"timestamp"`
@@ -96,6 +116,7 @@ type NsTable struct {
 }
 
 type NamespaceProof = json.RawMessage
+type NamespacePayload = json.RawMessage
 
 type BlockMerkleSnapshot struct {
 	Root   BlockMerkleRoot
@@ -485,10 +506,10 @@ func (b *BlockPayload) BuilderCommitment() (*BuilderCommitment, error) {
 }
 
 type PayloadQueryData struct {
-	Height 		 uint64 	   `json:"height"`
+	Height       uint64        `json:"height"`
 	BlockHash    *TaggedBase64 `json:"block_hash"`
-	Hash 		 *TaggedBase64 `json:"hash"`
-	Size 		 uint64 	   `json:"size"`
+	Hash         *TaggedBase64 `json:"hash"`
+	Size         uint64        `json:"size"`
 	BlockPayload *BlockPayload `json:"data"`
 }
 

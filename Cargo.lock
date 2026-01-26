@@ -6164,7 +6164,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -7561,17 +7561,56 @@ dependencies = [
 name = "light-client"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
+ "async-lock 3.4.1",
+ "bitvec",
+ "clap 4.5.53",
  "committable",
  "derivative",
+ "derive_more 2.1.0",
  "espresso-types",
+ "futures",
+ "hotshot-contract-adapter",
  "hotshot-query-service",
  "hotshot-types",
+ "jf-advz",
+ "jf-merkle-tree-compat",
+ "light-client",
+ "portpicker",
+ "pretty_assertions",
+ "rand 0.8.5",
+ "sequencer",
  "serde",
+ "serde_json",
+ "sqlx",
  "static_assertions",
+ "surf-disco",
  "test-log",
  "tokio",
  "tracing",
+ "vbs",
+]
+
+[[package]]
+name = "light-client-query-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap 4.5.53",
+ "espresso-types",
+ "hotshot-query-service",
+ "hotshot-types",
+ "light-client",
+ "log-panics",
+ "semver 1.0.27",
+ "sequencer",
+ "surf-disco",
+ "tide-disco",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber 0.3.22",
  "vbs",
 ]
 
@@ -7857,17 +7896,19 @@ checksum = "f2b8f3a258db515d5e91a904ce4ae3f73e091149b90cadbdb93d210bee07f63b"
 
 [[package]]
 name = "moka"
-version = "0.12.11"
+version = "0.12.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8261cd88c312e0004c1d51baad2980c66528dfdb2bee62003e643a4d8f86b077"
+checksum = "a3dec6bd31b08944e08b58fd99373893a6c17054d6f3ea5006cc894f4f4eee2a"
 dependencies = [
+ "async-lock 3.4.1",
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
  "equivalent",
+ "event-listener 5.4.1",
+ "futures-util",
  "parking_lot",
  "portable-atomic",
- "rustc_version 0.4.1",
  "smallvec",
  "tagptr",
  "uuid",
@@ -9733,9 +9774,9 @@ dependencies = [
 
 [[package]]
 name = "rkyv"
-version = "0.7.45"
+version = "0.7.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9008cd6385b9e161d8229e1f6549dd23c3d022f132a2ea37ac3a10ac4935779b"
+checksum = "2297bf9c81a3f0dc96bc9521370b88f054168c29826a75e89c55ff196e7ed6a1"
 dependencies = [
  "bitvec",
  "bytecheck",
@@ -9751,9 +9792,9 @@ dependencies = [
 
 [[package]]
 name = "rkyv_derive"
-version = "0.7.45"
+version = "0.7.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "503d1d27590a2b0a3a4ca4c94755aa2875657196ecbf401a42eff41d7de532c0"
+checksum = "84d7b42d4b8d06048d3ac8db0eb31bcb942cbeb709f0b5f2b2ebde398d3038f5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9891,9 +9932,9 @@ dependencies = [
 
 [[package]]
 name = "ruint"
-version = "1.17.0"
+version = "1.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a68df0380e5c9d20ce49534f292a36a7514ae21350726efe1865bdb1fa91d278"
+checksum = "c141e807189ad38a07276942c6623032d3753c8859c146104ac2e4d68865945a"
 dependencies = [
  "alloy-rlp",
  "ark-ff 0.3.0",
@@ -10374,6 +10415,7 @@ dependencies = [
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "libp2p",
  "light-client",
+ "moka",
  "num_enum",
  "parking_lot",
  "portpicker",
@@ -10833,6 +10875,7 @@ dependencies = [
  "rstest",
  "sequencer",
  "serde",
+ "serde_json",
  "staking-cli",
  "surf-disco",
  "tempfile",
@@ -11799,9 +11842,9 @@ dependencies = [
 
 [[package]]
 name = "tide-disco"
-version = "0.9.5"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f960e4a89ca4a73ecdff98a6a7cef4d79a197511845170cb91a8e70316e8a43"
+checksum = "dbe10c8886d96e3cd22aaf962dcb9de254918d5424c658829e4d13c238ffce12"
 dependencies = [
  "anyhow",
  "async-h1",
@@ -13090,23 +13133,10 @@ version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ed2439a290666cd67ecce2b0ffaad89c2a56b976b736e6ece670297897832d"
 dependencies = [
- "windows-implement 0.57.0",
- "windows-interface 0.57.0",
+ "windows-implement",
+ "windows-interface",
  "windows-result 0.1.2",
  "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement 0.60.2",
- "windows-interface 0.59.3",
- "windows-link",
- "windows-result 0.4.1",
- "windows-strings",
 ]
 
 [[package]]
@@ -13121,32 +13151,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-implement"
-version = "0.60.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.111",
-]
-
-[[package]]
 name = "windows-interface"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29bee4b38ea3cde66011baa44dba677c432a78593e202392d1e9070cf2a7fca7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.111",
-]
-
-[[package]]
-name = "windows-interface"
-version = "0.59.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",

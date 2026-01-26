@@ -443,6 +443,19 @@ where
             .insert_merkle_nodes(path, traversal_path, block_number)
             .await
     }
+
+    async fn insert_merkle_nodes_batch(
+        &mut self,
+        proofs: Vec<(
+            MerkleProof<State::Entry, State::Key, State::T, ARITY>,
+            Vec<usize>,
+        )>,
+        block_number: u64,
+    ) -> anyhow::Result<()> {
+        self.data_source
+            .insert_merkle_nodes_batch(proofs, block_number)
+            .await
+    }
 }
 
 #[async_trait]

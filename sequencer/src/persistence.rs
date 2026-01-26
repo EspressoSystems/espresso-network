@@ -132,8 +132,8 @@ mod tests {
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_commitment, vid_disperse::VidDisperseShare2, DaProposal2,
-            EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+            ns_table::parse_ns_table, vid_commitment, vid_disperse::AvidMDisperseShare,
+            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
             ViewNumber,
         },
         event::{EventType, HotShotAction, LeafInfo},
@@ -521,7 +521,7 @@ mod tests {
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
         let signature = PubKey::sign(&privkey, &[]).unwrap();
-        let mut vid = VidDisperseShare2::<SeqTypes> {
+        let mut vid = AvidMDisperseShare::<SeqTypes> {
             view_number: ViewNumber::new(0),
             payload_commitment,
             share: shares[0].clone(),
@@ -552,43 +552,43 @@ mod tests {
             _pd: Default::default(),
         };
 
-        let vid_share0 = vid.clone().to_proposal(&privkey).unwrap().clone();
+        let vid_share0 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
 
-        storage.append_vid2(&vid_share0).await.unwrap();
+        storage.append_vid(&vid_share0).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(ViewNumber::new(0)).await.unwrap(),
-            Some(convert_proposal(vid_share0.clone()))
+            Some(vid_share0.clone())
         );
 
         vid.view_number = ViewNumber::new(1);
 
-        let vid_share1 = vid.clone().to_proposal(&privkey).unwrap().clone();
-        storage.append_vid2(&vid_share1).await.unwrap();
+        let vid_share1 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
+        storage.append_vid(&vid_share1).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(vid.view_number()).await.unwrap(),
-            Some(convert_proposal(vid_share1.clone()))
+            Some(vid_share1.clone())
         );
 
         vid.view_number = ViewNumber::new(2);
 
-        let vid_share2 = vid.clone().to_proposal(&privkey).unwrap().clone();
-        storage.append_vid2(&vid_share2).await.unwrap();
+        let vid_share2 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
+        storage.append_vid(&vid_share2).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(vid.view_number()).await.unwrap(),
-            Some(convert_proposal(vid_share2.clone()))
+            Some(vid_share2.clone())
         );
 
         vid.view_number = ViewNumber::new(3);
 
-        let vid_share3 = vid.clone().to_proposal(&privkey).unwrap().clone();
-        storage.append_vid2(&vid_share3).await.unwrap();
+        let vid_share3 = convert_proposal(vid.clone().to_proposal(&privkey).unwrap().clone());
+        storage.append_vid(&vid_share3).await.unwrap();
 
         assert_eq!(
             storage.load_vid_share(vid.view_number()).await.unwrap(),
-            Some(convert_proposal(vid_share3.clone()))
+            Some(vid_share3.clone())
         );
 
         let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
@@ -813,11 +813,7 @@ mod tests {
         for (leaf, info) in leaves.iter().zip(consumer.leaf_chain().await.iter()) {
             assert_eq!(info.leaf, *leaf);
             let decided_vid_share = info.vid_share.as_ref().unwrap();
-            let view_number = match decided_vid_share {
-                VidDisperseShare::V0(share) => share.view_number,
-                VidDisperseShare::V1(share) => share.view_number,
-            };
-            assert_eq!(view_number, leaf.view_number());
+            assert_eq!(decided_vid_share.view_number(), leaf.view_number());
         }
 
         // The decided leaf should not have been garbage collected.
@@ -1017,7 +1013,7 @@ mod tests {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let mut vid = VidDisperseShare2::<SeqTypes> {
+        let mut vid = AvidMDisperseShare::<SeqTypes> {
             view_number: ViewNumber::new(0),
             payload_commitment,
             share: shares[0].clone(),
@@ -1088,7 +1084,10 @@ mod tests {
         for (_, _, vid, da) in &chain {
             tracing::info!(?da, ?vid, "insert proposal");
             storage.append_da2(da, vid_commitment).await.unwrap();
-            storage.append_vid2(vid).await.unwrap();
+            storage
+                .append_vid(&convert_proposal(vid.clone()))
+                .await
+                .unwrap();
         }
 
         // Decide 2 leaves, but fail in event processing.
@@ -1196,11 +1195,7 @@ mod tests {
         for ((leaf, ..), info) in chain.iter().zip(leaf_chain.iter()) {
             assert_eq!(info.leaf, *leaf);
             let decided_vid_share = info.vid_share.as_ref().unwrap();
-            let view_number = match decided_vid_share {
-                VidDisperseShare::V0(share) => share.view_number,
-                VidDisperseShare::V1(share) => share.view_number,
-            };
-            assert_eq!(view_number, leaf.view_number());
+            assert_eq!(decided_vid_share.view_number(), leaf.view_number());
             assert!(info.leaf.block_payload().is_some());
         }
     }
@@ -1230,18 +1225,20 @@ mod tests {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = VidDisperseShare2::<SeqTypes> {
-            view_number: ViewNumber::new(0),
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param,
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid_share = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: ViewNumber::new(0),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param,
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
 
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
@@ -1288,7 +1285,7 @@ mod tests {
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
             .unwrap();
-        storage.append_vid2(&vid_share).await.unwrap();
+        storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
             .await
@@ -1316,7 +1313,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap(),
-            convert_proposal(vid_share)
+            vid_share
         );
         assert_eq!(
             storage
@@ -1355,7 +1352,7 @@ mod tests {
         stake_table_contract: Address,
     ) -> anyhow::Result<()> {
         // Load persisted events
-        let (stored_l1, events) = persistence.load_events(block).await?;
+        let (stored_l1, events) = persistence.load_events(0, block).await?;
         assert!(!events.is_empty());
         assert!(stored_l1.is_some());
         assert!(events.iter().all(|((l1_block, _), _)| *l1_block <= block));
@@ -1665,7 +1662,7 @@ mod tests {
                 .await
                 .expect("latest l1 block");
 
-            let (read_offset, persisted_events) = persistence.load_events(block).await?;
+            let (read_offset, persisted_events) = persistence.load_events(0, block).await?;
             let read_offset = read_offset.unwrap();
             let l1_block = match read_offset {
                 EventsPersistenceRead::Complete => block,

@@ -5,24 +5,51 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = []
-testing = ["espresso-types/testing"]
+default = ["decaf"]
+decaf = []
+testing = [
+    "espresso-types/testing",
+    "bitvec",
+    "hotshot-contract-adapter",
+    "rand",
+]
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
+async-lock = { workspace = true }
 committable = { workspace = true }
 derivative = { workspace = true }
+derive_more = { workspace = true }
 espresso-types = { workspace = true }
+futures = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+jf-advz = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
 static_assertions = { workspace = true }
+surf-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 
+clap = { workspace = true, optional = true }
+
+# Testing dependencies
+bitvec = { workspace = true, optional = true }
+hotshot-contract-adapter = { path = "../contracts/rust/adapter", optional = true }
+rand = { workspace = true, optional = true }
+
 [dev-dependencies]
-espresso-types = { workspace = true, features = ["testing"] }
+# Add test dependencies when building tests.
+light-client = { path = ".", features = ["testing"] }
+
+portpicker = { workspace = true }
+pretty_assertions = { workspace = true }
+sequencer = { path = "../sequencer", features = ["testing"] }
 test-log = { workspace = true }
 
 [lints]

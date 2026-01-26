@@ -15,6 +15,7 @@ import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "../src/libraries/BLSSig.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { LightClient } from "../src/LightClient.sol";
+import { ILightClient } from "../src/interfaces/ILightClient.sol";
 import { LightClientV2 } from "../src/LightClientV2.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 import { LightClientCommonTest } from "./LightClientV3.t.sol";
@@ -990,7 +991,7 @@ contract StakeTableV2Test is S {
     }
 }
 
-contract StakeTableMissingFieldTest is Test {
+contract StakeTableMissingFieldTest {
     struct Validator {
         uint256 delegatedAmount;
         ValidatorStatus status;
@@ -1007,7 +1008,8 @@ contract StakeTableMissingFieldTest is Test {
         uint256 unlocksAt;
     }
 
-    LightClient public lightClient;
+    uint256 public initializedAtBlock;
+    ILightClient public lightClient;
     ERC20 public token;
     mapping(address account => Validator validator) public validators;
     mapping(bytes32 blsKeyHash => bool used) public blsKeys;
@@ -1017,7 +1019,7 @@ contract StakeTableMissingFieldTest is Test {
     // missing field: exitEscrowPeriod
 }
 
-contract StakeTableFieldsReorderedTest is Test {
+contract StakeTableFieldsReorderedTest {
     struct Validator {
         uint256 delegatedAmount;
         ValidatorStatus status;
@@ -1034,13 +1036,14 @@ contract StakeTableFieldsReorderedTest is Test {
         uint256 unlocksAt;
     }
 
+    uint256 public initializedAtBlock;
     ERC20 public token;
     mapping(address account => Validator validator) public validators;
     mapping(bytes32 blsKeyHash => bool used) public blsKeys;
     mapping(address validator => uint256 unlocksAt) public validatorExits;
     mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
     mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
-    LightClient public lightClient; //re-ordered field
+    ILightClient public lightClient; // re-ordered field
 }
 
 contract StakeTableUpgradeV2Test is Test {
@@ -2853,10 +2856,10 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         address user = makeAddr("user");
         vm.startPrank(user);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxy.delegate(makeAddr("validator"), 100);
+        proxy.delegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxy.undelegate(makeAddr("validator"), 100);
+        proxy.undelegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         proxy.claimValidatorExit(makeAddr("validator"));
@@ -2897,10 +2900,10 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         //it will revert because the validator doesn't exist but that proves that the functions are
         // callable
         vm.expectRevert(S.ValidatorInactive.selector);
-        proxy.delegate(makeAddr("validator"), 100);
+        proxy.delegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(S.ValidatorInactive.selector);
-        proxy.undelegate(makeAddr("validator"), 100);
+        proxy.undelegate(makeAddr("validator"), 100 ether);
 
         vm.expectRevert(S.ValidatorNotExited.selector);
         proxy.claimValidatorExit(makeAddr("validator"));
