@@ -7,7 +7,7 @@ use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
-    Leaf2, NetworkConfig, PubKey, StakeTableHash, ValidatorMap,
+    Leaf2, NetworkConfig, PubKey, RewardCheckpointPersistence, StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -298,6 +298,23 @@ impl SequencerPersistence for NoStorage {
     }
 
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
+}
+
+#[async_trait]
+impl RewardCheckpointPersistence for NoStorage {
+    async fn save_reward_checkpoint(
+        &self,
+        _epoch: EpochNumber,
+        _tree: &espresso_types::v0_4::RewardMerkleTreeV2,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_reward_checkpoint(
+        &self,
+    ) -> anyhow::Result<Option<(EpochNumber, espresso_types::v0_4::RewardMerkleTreeV2)>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]

@@ -177,8 +177,24 @@ impl NodeState {
             coordinator,
             genesis_version,
             epoch_start_block: 0,
-            epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::new())),
+            epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::default())),
         }
+    }
+
+    /// Configure the reward calculator with persistence and checkpoint.
+    /// Uses builder pattern for fluent API.
+    pub fn with_reward_checkpoint_persistence<P>(
+        mut self,
+        persistence: Arc<P>,
+        last_complete_epoch: Option<EpochNumber>,
+    ) -> Self
+    where
+        P: crate::RewardCheckpointPersistence + 'static,
+    {
+        let mut calculator = EpochRewardsCalculator::new(persistence);
+        calculator.last_complete_epoch = last_complete_epoch;
+        self.epoch_rewards_calculator = Arc::new(Mutex::new(calculator));
+        self
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -604,6 +620,27 @@ pub mod mock {
 
         fn is_local(&self) -> bool {
             true
+        }
+    }
+
+    /// Mock persistence that does nothing, for testing.
+    #[derive(Debug, Clone, Copy)]
+    pub struct MockPersistence;
+
+    #[async_trait]
+    impl crate::RewardCheckpointPersistence for MockPersistence {
+        async fn save_reward_checkpoint(
+            &self,
+            _epoch: EpochNumber,
+            _tree: &crate::v0_4::RewardMerkleTreeV2,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_reward_checkpoint(
+            &self,
+        ) -> anyhow::Result<Option<(EpochNumber, crate::v0_4::RewardMerkleTreeV2)>> {
+            Ok(None)
         }
     }
 }

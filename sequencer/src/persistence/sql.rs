@@ -18,7 +18,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
-    StakeTableHash, ValidatorMap,
+    RewardCheckpointPersistence, StakeTableHash, ValidatorMap,
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -2379,6 +2379,54 @@ impl SequencerPersistence for Persistence {
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
         self.internal_metrics = PersistenceMetricsValue::new(metrics);
+    }
+}
+
+#[async_trait]
+impl RewardCheckpointPersistence for Persistence {
+    async fn save_reward_checkpoint(
+        &self,
+        epoch: EpochNumber,
+        tree: &espresso_types::v0_4::RewardMerkleTreeV2,
+    ) -> anyhow::Result<()> {
+        tracing::debug!(%epoch, "saving reward checkpoint to database");
+
+        let tree_bytes =
+            bincode::serialize(tree).context("failed to serialize reward merkle tree")?;
+
+        let mut tx = self.db.write().await?;
+
+        // Upsert with fixed ID=1 to maintain only one checkpoint
+        tx.upsert(
+            "reward_checkpoint",
+            ["id", "epoch", "tree"],
+            ["id"],
+            [(1_i32, *epoch as i64, tree_bytes)],
+        )
+        .await?;
+
+        tx.commit().await
+    }
+
+    async fn load_reward_checkpoint(
+        &self,
+    ) -> anyhow::Result<Option<(EpochNumber, espresso_types::v0_4::RewardMerkleTreeV2)>> {
+        let Some(row) = self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT epoch, tree FROM reward_checkpoint ORDER BY id DESC LIMIT 1")
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let epoch: i64 = row.try_get("epoch")?;
+        let tree_bytes: Vec<u8> = row.try_get("tree")?;
+        let tree = bincode::deserialize(&tree_bytes)
+            .context("failed to deserialize reward merkle tree")?;
+
+        Ok(Some((EpochNumber::new(epoch as u64), tree)))
     }
 }
 

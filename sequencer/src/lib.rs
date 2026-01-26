@@ -620,6 +620,23 @@ where
         &persistence.clone(),
     );
 
+    // Load reward checkpoint for crash recovery
+    let checkpoint = persistence
+        .load_reward_checkpoint()
+        .await
+        .context("failed to load reward checkpoint")?;
+
+    if let Some((epoch, _)) = &checkpoint {
+        tracing::info!(%epoch, "loaded reward checkpoint");
+    }
+
+    // Initialize reward calculator with checkpoint
+    let epoch_rewards_calculator = {
+        let mut calculator = EpochRewardsCalculator::new(persistence.clone());
+        calculator.last_complete_epoch = checkpoint.as_ref().map(|(epoch, _)| *epoch);
+        Arc::new(Mutex::new(calculator))
+    };
+
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
         genesis_chain_config,
@@ -635,7 +652,7 @@ where
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
-        epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::new())),
+        epoch_rewards_calculator,
     };
 
     // Initialize the Libp2p network
@@ -1386,7 +1403,10 @@ pub mod testing {
                 V::Base::VERSION,
                 coordinator.clone(),
                 V::Base::VERSION,
-            )
+            );
+
+            let node_state = node_state
+            .with_reward_checkpoint_persistence(persistence.clone(), None)
             .with_current_version(V::Base::version())
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)

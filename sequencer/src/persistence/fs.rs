@@ -16,7 +16,8 @@ use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
-    Leaf, Leaf2, NetworkConfig, Payload, PubKey, SeqTypes, StakeTableHash, ValidatorMap,
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, RewardCheckpointPersistence, SeqTypes,
+    StakeTableHash, ValidatorMap,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -164,6 +165,10 @@ impl Inner {
 
     fn restart_view_path(&self) -> PathBuf {
         self.path.join("restart_view")
+    }
+
+    fn reward_checkpoint_path(&self) -> PathBuf {
+        self.path.join("reward_checkpoint")
     }
 
     /// Path to a directory containing decided leaves.
@@ -1726,6 +1731,47 @@ impl SequencerPersistence for Persistence {
 
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
         // todo!()
+    }
+}
+
+#[async_trait]
+impl RewardCheckpointPersistence for Persistence {
+    async fn save_reward_checkpoint(
+        &self,
+        epoch: EpochNumber,
+        tree: &espresso_types::v0_4::RewardMerkleTreeV2,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.write().await;
+        let path = inner.reward_checkpoint_path();
+        tracing::debug!(%epoch, "saving reward checkpoint to {}", path.display());
+
+        let tree_bytes = bincode::serialize(tree)
+            .context("failed to serialize reward merkle tree")?;
+
+        // Create a temporary file with epoch and tree
+        let checkpoint_data = bincode::serialize(&(epoch, tree_bytes))
+            .context("failed to serialize checkpoint data")?;
+
+        fs::write(&path, checkpoint_data)?;
+        Ok(())
+    }
+
+    async fn load_reward_checkpoint(
+        &self,
+    ) -> anyhow::Result<Option<(EpochNumber, espresso_types::v0_4::RewardMerkleTreeV2)>> {
+        let inner = self.inner.read().await;
+        let path = inner.reward_checkpoint_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+
+        let checkpoint_bytes = fs::read(&path)?;
+        let (epoch, tree_bytes): (EpochNumber, Vec<u8>) = bincode::deserialize(&checkpoint_bytes)
+            .context("failed to deserialize checkpoint data")?;
+        let tree = bincode::deserialize(&tree_bytes)
+            .context("failed to deserialize reward merkle tree")?;
+
+        Ok(Some((epoch, tree)))
     }
 }
 

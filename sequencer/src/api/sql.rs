@@ -14,8 +14,8 @@ use espresso_types::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, ValidatedState,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Header,
+    Leaf2, NodeState, ValidatedState,
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
@@ -496,6 +496,16 @@ impl CatchupStorage for SqlStorage {
 
         Ok(chain)
     }
+
+    async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
+        let mut tx = self
+            .read()
+            .await
+            .context(format!("opening transaction to fetch header at {height}"))?;
+        tx.get_header(BlockId::<SeqTypes>::from(height as usize))
+            .await
+            .context(format!("header {height} not available"))
+    }
 }
 
 impl RewardAccountProofDataSource for DataSource {
@@ -585,6 +595,13 @@ impl CatchupStorage for DataSource {
         self.as_ref()
             .get_all_reward_accounts(height, offset, limit)
             .await
+    }
+
+    async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
+        self.as_ref()
+            .get_header(BlockId::<SeqTypes>::from(height as usize))
+            .await
+            .context(format!("header {height} not available"))
     }
 }
 

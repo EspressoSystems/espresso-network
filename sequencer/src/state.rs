@@ -370,6 +370,13 @@ where
     let instance = instance.await;
     let peers = SqlStateCatchup::new(storage.clone(), Default::default());
 
+    // Load checkpoint to determine starting point
+    // Both consensus and merklized loop use the same checkpoint for initialization
+    let checkpoint_epoch = {
+        let calculator = instance.epoch_rewards_calculator.lock().await;
+        calculator.last_complete_epoch
+    };
+
     // get last saved merklized state
     let (last_height, parent_leaf, mut leaves) = {
         let last_height = storage.get_last_state_height().await?;
@@ -390,7 +397,8 @@ where
             node_id = instance.node_id,
             last_height,
             current_height,
-            "updating state storage"
+            ?checkpoint_epoch,
+            "updating state storage (with checkpoint)"
         );
 
         let parent_leaf = storage.get_leaf(height).await;
@@ -401,6 +409,33 @@ where
     // ready yet and another task needs a mutable lock on the state to produce the parent leaf.
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
+
+    // Load checkpoint appropriate for the merklized state loop's starting height
+    // This allows the loop to fast-forward to the checkpoint position
+    if let Some(epoch_height) = instance.epoch_height {
+        if epoch_height > 0 && checkpoint_epoch.is_some() {
+            let calculator = instance.epoch_rewards_calculator.lock().await;
+            let checkpoint_result = calculator
+                .load_checkpoint_for_height(parent_leaf.height(), epoch_height)
+                .await;
+
+            if let Ok(Some((checkpoint_epoch, checkpoint_tree))) = checkpoint_result {
+                tracing::info!(
+                    checkpoint_epoch = %checkpoint_epoch,
+                    parent_height = parent_leaf.height(),
+                    node_id = instance.node_id,
+                    "loaded reward checkpoint for merklized state loop"
+                );
+                parent_state.reward_merkle_tree_v2 = checkpoint_tree;
+            } else {
+                tracing::debug!(
+                    parent_height = parent_leaf.height(),
+                    node_id = instance.node_id,
+                    "no applicable checkpoint found for merklized state loop"
+                );
+            }
+        }
+    }
 
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
