@@ -2980,7 +2980,6 @@ name = "cliquenet"
 version = "0.1.0"
 dependencies = [
  "bimap",
- "bincode",
  "bon",
  "bs58",
  "bytes 1.11.0",

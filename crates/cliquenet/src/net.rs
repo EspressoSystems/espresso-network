@@ -1034,8 +1034,10 @@ async fn handshake(
     mut stream: TcpStream,
 ) -> Result<(TcpStream, TransportState)> {
     let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
-    let n = hs.write_message(&[], &mut b)?;
-    send_frame(&mut stream, Header::data(n as u16), &b[..n]).await?;
+    let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
+    let h = Header::data(n as u16);
+    b[..Header::SIZE].copy_from_slice(&h.to_bytes());
+    stream.write_all(&b[..Header::SIZE + n]).await?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
@@ -1056,8 +1058,10 @@ async fn on_handshake(
     }
     let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
     hs.read_message(&m, &mut b)?;
-    let n = hs.write_message(&[], &mut b)?;
-    send_frame(&mut stream, Header::data(n as u16), &b[..n]).await?;
+    let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
+    let h = Header::data(n as u16);
+    b[..Header::SIZE].copy_from_slice(&h.to_bytes());
+    stream.write_all(&b[..Header::SIZE + n]).await?;
     Ok((stream, hs.into_transport_mode()?))
 }
 
@@ -1166,26 +1170,33 @@ where
     while let Some(msg) = rx.recv().await {
         match msg {
             Message::Ping(ping) => {
-                let n = state.lock().write_message(&ping.to_bytes()[..], &mut buf)?;
+                let n = state
+                    .lock()
+                    .write_message(&ping.to_bytes()[..], &mut buf[Header::SIZE..])?;
                 let h = Header::ping(n as u16);
-                send_frame(&mut writer, h, &buf[..n]).await?;
+                buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
+                writer.write_all(&buf[..Header::SIZE + n]).await?;
                 countdown.start(REPLY_TIMEOUT)
             },
             Message::Pong(pong) => {
-                let n = state.lock().write_message(&pong.to_bytes()[..], &mut buf)?;
+                let n = state
+                    .lock()
+                    .write_message(&pong.to_bytes()[..], &mut buf[Header::SIZE..])?;
                 let h = Header::pong(n as u16);
-                send_frame(&mut writer, h, &buf[..n]).await?;
+                buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
+                writer.write_all(&buf[..Header::SIZE + n]).await?
             },
             Message::Data(msg) => {
                 let mut it = msg.chunks(MAX_PAYLOAD_SIZE).peekable();
                 while let Some(m) = it.next() {
-                    let n = state.lock().write_message(m, &mut buf)?;
+                    let n = state.lock().write_message(m, &mut buf[Header::SIZE..])?;
                     let h = if it.peek().is_some() {
                         Header::data(n as u16).partial()
                     } else {
                         Header::data(n as u16)
                     };
-                    send_frame(&mut writer, h, &buf[..n]).await?
+                    buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
+                    writer.write_all(&buf[..Header::SIZE + n]).await?
                 }
             },
         }
@@ -1203,15 +1214,4 @@ where
     let mut v = vec![0; h.len().into()];
     r.read_exact(&mut v).await?;
     Ok((h, v))
-}
-
-/// Write a single frame (header + payload) to the remote.
-async fn send_frame<W>(w: &mut W, hdr: Header, msg: &[u8]) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    debug_assert_eq!(usize::from(hdr.len()), msg.len());
-    w.write_all(&hdr.to_bytes()).await?;
-    w.write_all(msg).await?;
-    Ok(())
 }

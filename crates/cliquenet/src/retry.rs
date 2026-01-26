@@ -3,7 +3,6 @@ use std::{
     convert::Infallible,
     fmt::{self, Display},
     hash::Hash,
-    io::Cursor,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -126,7 +125,7 @@ where
     K: Eq + Ord + Clone + Display + Hash + Send + Sync + 'static,
 {
     pub async fn create(mut cfg: NetConf<K>) -> Result<Self> {
-        cfg.max_message_size += Trailer::MAX_LEN + 1;
+        cfg.max_message_size += Trailer::SIZE;
         let delays = cfg.retry_delays;
         let net = Network::create(cfg).await?;
         let buffer = Buffer::default();
@@ -190,17 +189,9 @@ where
         loop {
             let (src, mut bytes) = self.inner.net.receive().await?;
 
-            let Some(trailer_bytes) = Trailer::split_off(&mut bytes) else {
-                warn!(node = %self.inner.this, "invalid trailer bytes");
+            let Some((trailer, trailer_bytes)) = Trailer::from_bytes(&mut bytes) else {
+                warn!(node = %self.inner.this, "invalid trailer");
                 continue;
-            };
-
-            let trailer: Trailer = match bincode::deserialize(&trailer_bytes) {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!(node = %self.inner.this, err = %e, "invalid trailer");
-                    continue;
-                },
             };
 
             if !bytes.is_empty() {
@@ -268,12 +259,8 @@ where
 
         let trailer = Trailer { bucket: b, id };
 
-        let mut encoded = Cursor::new([0u8; Trailer::MAX_LEN]);
-        bincode::serialize_into(&mut encoded, &trailer).expect("trailer encoding never fails");
-
         let mut msg = BytesMut::from(Bytes::from(data));
-        msg.extend_from_slice(&encoded.get_ref()[..encoded.position() as usize]);
-        msg.extend_from_slice(&[encoded.position().try_into().expect("|trailer| <= 32")]);
+        msg.extend_from_slice(&trailer.to_bytes());
         let msg = msg.freeze();
 
         let now = Instant::now();
@@ -403,16 +390,26 @@ impl fmt::Display for Bucket {
 }
 
 impl Trailer {
-    /// Max. byte length of a trailer.
-    pub const MAX_LEN: usize = 32;
+    const SIZE: usize = 17;
+    const VERSION: u8 = 1;
 
-    fn split_off(bytes: &mut Bytes) -> Option<Bytes> {
-        let len = usize::from(*bytes.last()?);
-
-        if bytes.len() < len + 1 {
+    fn from_bytes(bytes: &mut Bytes) -> Option<(Self, Bytes)> {
+        if bytes.len() < Self::SIZE {
             return None;
         }
+        let slice = bytes.split_off(bytes.len() - Self::SIZE);
+        let this = Self {
+            bucket: u64::from_be_bytes(*slice[..8].as_array().expect("8 bytes")).into(),
+            id: u64::from_be_bytes(*slice[8..16].as_array().expect("8 bytes")).into(),
+        };
+        Some((this, slice))
+    }
 
-        Some(bytes.split_off(bytes.len() - (len + 1)))
+    fn to_bytes(self) -> [u8; Self::SIZE] {
+        let mut bytes = [0; Self::SIZE];
+        bytes[..8].copy_from_slice(&u64::from(self.bucket).to_be_bytes());
+        bytes[8..16].copy_from_slice(&u64::from(self.id).to_be_bytes());
+        bytes[16] = Self::VERSION;
+        bytes
     }
 }

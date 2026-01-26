@@ -37,6 +37,8 @@ use std::fmt;
 pub struct Header(u32);
 
 impl Header {
+    pub const SIZE: usize = 4;
+
     /// Create a data header with the given payload length.
     pub fn data(len: u16) -> Self {
         Self(len as u32)
