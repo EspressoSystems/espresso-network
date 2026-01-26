@@ -1,8 +1,5 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct Id(u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Id(pub(crate) u64);
 
 impl From<u64> for Id {
     fn from(n: u64) -> Self {

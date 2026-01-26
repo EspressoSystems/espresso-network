@@ -12,7 +12,6 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use tokio::{
     spawn,
     sync::mpsc::{Sender, error::TrySendError},
@@ -66,8 +65,7 @@ impl<K> Drop for Retry<K> {
 }
 
 /// Buckets conceptionally contain messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Bucket(u64);
 
 /// Messages are associated with IDs and put into buckets.
@@ -98,7 +96,7 @@ struct Message<K> {
 }
 
 /// Meta information appended at the end of a message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Trailer {
     /// The bucket number the message corresponds to.
     bucket: Bucket,
@@ -390,26 +388,42 @@ impl fmt::Display for Bucket {
 }
 
 impl Trailer {
-    const SIZE: usize = 17;
-    const VERSION: u8 = 1;
+    const SIZE: usize = 16;
 
     fn from_bytes(bytes: &mut Bytes) -> Option<(Self, Bytes)> {
         if bytes.len() < Self::SIZE {
             return None;
         }
         let slice = bytes.split_off(bytes.len() - Self::SIZE);
+        let both = u128::from_be_bytes(slice[..].try_into().ok()?);
         let this = Self {
-            bucket: u64::from_be_bytes(*slice[..8].as_array().expect("8 bytes")).into(),
-            id: u64::from_be_bytes(*slice[8..16].as_array().expect("8 bytes")).into(),
+            bucket: ((both >> 64) as u64).into(),
+            id: (both as u64).into(),
         };
         Some((this, slice))
     }
 
     fn to_bytes(self) -> [u8; Self::SIZE] {
-        let mut bytes = [0; Self::SIZE];
-        bytes[..8].copy_from_slice(&u64::from(self.bucket).to_be_bytes());
-        bytes[8..16].copy_from_slice(&u64::from(self.id).to_be_bytes());
-        bytes[16] = Self::VERSION;
-        bytes
+        (u128::from(self.bucket.0) << 64 | u128::from(self.id.0)).to_be_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use quickcheck::quickcheck;
+
+    use super::Trailer;
+
+    quickcheck! {
+        fn to_from_bytes(b: u64, i: u64) -> bool {
+            let a = Trailer {
+                bucket: b.into(),
+                id: i.into()
+            };
+            let mut bytes = Bytes::copy_from_slice(&a.to_bytes());
+            let (b, _) = Trailer::from_bytes(&mut bytes).unwrap();
+            a == b
+        }
     }
 }
