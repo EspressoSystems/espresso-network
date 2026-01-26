@@ -2,6 +2,8 @@ use std::{collections::HashMap, io, net::Ipv4Addr, sync::LazyLock, time::Duratio
 
 use cliquenet::{Address, Keypair, MAX_MESSAGE_SIZE, NetConf, NetworkError, PublicKey, Retry};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+#[cfg(feature = "metrics")]
+use hotshot_types::traits::metrics::NoMetrics;
 use rand::RngCore;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -12,7 +14,14 @@ use tokio::{
 
 const A: u8 = 0;
 const B: u8 = 1;
-const SIZES: &[usize] = &[128 * 1024, 512 * 1024, 1024 * 1024, MAX_MESSAGE_SIZE];
+
+const SIZES: &[usize] = &[
+    128 * 1024,
+    512 * 1024,
+    1024 * 1024,
+    5 * 1024 * 1024,
+    MAX_MESSAGE_SIZE,
+];
 
 static DATA: LazyLock<HashMap<usize, Vec<u8>>> = LazyLock::new(|| {
     let mut g = rand::rng();
@@ -57,26 +66,41 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
         ),
     ];
 
-    let net_a = Retry::create(
-        NetConf::builder()
+    let net_a = Retry::create({
+        let cfg = NetConf::builder()
             .name("bench")
             .label(A)
             .keypair(a)
             .bind(all[0].2.clone())
-            .parties(all.clone())
-            .build(),
-    )
+            .parties(all.clone());
+        #[cfg(not(feature = "metrics"))]
+        {
+            cfg.build()
+        }
+        #[cfg(feature = "metrics")]
+        {
+            cfg.metrics(Box::new(NoMetrics)).build()
+        }
+    })
     .await
     .unwrap();
-    let net_b = Retry::create(
-        NetConf::builder()
+
+    let net_b = Retry::create({
+        let cfg = NetConf::builder()
             .name("bench")
             .label(B)
             .keypair(b)
             .bind(all[1].2.clone())
-            .parties(all.clone())
-            .build(),
-    )
+            .parties(all.clone());
+        #[cfg(not(feature = "metrics"))]
+        {
+            cfg.build()
+        }
+        #[cfg(feature = "metrics")]
+        {
+            cfg.metrics(Box::new(NoMetrics)).build()
+        }
+    })
     .await
     .unwrap();
 

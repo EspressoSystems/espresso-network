@@ -27,9 +27,6 @@ pub enum NetworkError {
     #[error("unknown frame type: {0}")]
     UnknownFrameType(u8),
 
-    #[error("bincode error: {0}")]
-    Bincode(#[from] bincode::Error),
-
     /// Generic Noise error.
     #[error("noise error: {0}")]
     Noise(#[from] snow::Error),

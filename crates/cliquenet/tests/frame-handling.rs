@@ -2,6 +2,8 @@ use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::Bytes;
 use cliquenet::{Address, Keypair, NetConf, Retry};
+#[cfg(feature = "metrics")]
+use hotshot_types::traits::metrics::NoMetrics;
 use rand::RngCore;
 
 /// Send and receive messages of various sizes between 1 byte and 5 MiB.
@@ -25,8 +27,8 @@ async fn multiple_frames() {
     for (k, x, a) in parties.clone() {
         networks.insert(
             k,
-            Retry::create(
-                NetConf::builder()
+            Retry::create({
+                let cfg = NetConf::builder()
                     .name("frames")
                     .keypair(x)
                     .label(k)
@@ -35,9 +37,16 @@ async fn multiple_frames() {
                         parties
                             .iter()
                             .map(|(i, x, a)| (*i, x.public_key(), a.clone())),
-                    )
-                    .build(),
-            )
+                    );
+                #[cfg(not(feature = "metrics"))]
+                {
+                    cfg.build()
+                }
+                #[cfg(feature = "metrics")]
+                {
+                    cfg.metrics(Box::new(NoMetrics)).build()
+                }
+            })
             .await
             .unwrap(),
         );

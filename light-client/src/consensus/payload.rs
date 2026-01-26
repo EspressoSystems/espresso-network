@@ -41,6 +41,13 @@ impl PayloadProof {
     ///
     /// If the data in this proof matches the expected `header`, the full payload data is returned.
     pub fn verify(self, header: &Header) -> Result<Payload> {
+        Ok(self.verify_with_vid_common(header)?.0)
+    }
+
+    /// Verify a [`PayloadProof`] and get the corresponding [`VidCommon`].
+    ///
+    /// If the data in this proof matches the expected `header`, the full payload data is returned.
+    pub fn verify_with_vid_common(self, header: &Header) -> Result<(Payload, VidCommon)> {
         let commit = match &self.vid_common {
             VidCommon::V0(common) => {
                 advz_scheme(ADVZScheme::get_num_storage_nodes(common) as usize)
@@ -75,6 +82,6 @@ impl PayloadProof {
             commit == header.payload_commitment(),
             "commitment of payload does not match commitment in header"
         );
-        Ok(self.payload)
+        Ok((self.payload, self.vid_common))
     }
 }

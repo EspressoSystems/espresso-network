@@ -14,7 +14,10 @@ use hotshot_types::traits::network::{
 };
 use hotshot_types::{
     boxed_sync,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
+        metrics::Metrics,
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
@@ -27,17 +30,19 @@ pub struct Cliquenet<T: NodeType> {
 }
 
 impl<T: NodeType> Cliquenet<T> {
-    pub async fn create<A, B, P>(
+    pub async fn create<A, B, P, M>(
         name: &'static str,
         key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
+        metrics: M,
     ) -> Result<Self, NetworkError>
     where
         A: Into<Address>,
         B: Into<Address>,
         P: IntoIterator<Item = (T::SignatureKey, PublicKey, B)>,
+        M: Metrics + 'static,
     {
         let cfg = NetConf::builder()
             .name(name)
@@ -45,6 +50,7 @@ impl<T: NodeType> Cliquenet<T> {
             .keypair(keypair)
             .bind(addr.into())
             .parties(parties.into_iter().map(|(k, x, a)| (k, x, a.into())))
+            .metrics(Box::new(metrics))
             .build();
         let net = Retry::create(cfg)
             .await
@@ -61,11 +67,12 @@ pub fn derive_keypair<K: SignatureKey>(k: &K::PrivateKey) -> Keypair {
 impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
     async fn broadcast_message(
         &self,
+        v: ViewNumber,
         m: Vec<u8>,
         _: Topic,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.net.broadcast(0, m).await.map_err(|e| {
+        self.net.broadcast(*v, m).await.map_err(|e| {
             NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}"))
         })?;
         Ok(())
@@ -73,11 +80,12 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 
     async fn da_broadcast_message(
         &self,
+        v: ViewNumber,
         m: Vec<u8>,
         recipients: Vec<T::SignatureKey>,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.net.multicast(recipients, 0, m).await.map_err(|e| {
+        self.net.multicast(recipients, *v, m).await.map_err(|e| {
             NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
         })?;
         Ok(())
@@ -85,11 +93,12 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 
     async fn direct_message(
         &self,
+        v: ViewNumber,
         m: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), NetworkError> {
         self.net
-            .unicast(recipient, 0, m)
+            .unicast(recipient, *v, m)
             .await
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))?;
         Ok(())
@@ -101,6 +110,17 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
                 NetworkError::MessageSendError(format!("cliquenet receive error: {e}"))
             })?;
         Ok(Vec::from(&data[..]))
+    }
+
+    async fn update_view<U>(
+        &self,
+        v: ViewNumber,
+        _: Option<EpochNumber>,
+        _: EpochMembershipCoordinator<U>,
+    ) where
+        U: NodeType<SignatureKey = T::SignatureKey>,
+    {
+        self.net.gc(*v)
     }
 
     async fn wait_for_ready(&self) {}
@@ -152,11 +172,13 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
         Box::pin(move |i| {
             let parties = parties.clone();
             let future = async move {
+                use hotshot_types::traits::metrics::NoMetrics;
+
                 let (s, k, a) = &parties[i as usize];
                 let it = parties
                     .iter()
                     .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
-                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it)
+                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, NoMetrics)
                     .await
                     .unwrap();
                 Arc::new(net)

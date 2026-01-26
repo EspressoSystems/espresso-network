@@ -3,7 +3,6 @@ use std::{
     convert::Infallible,
     fmt::{self, Display},
     hash::Hash,
-    io::Cursor,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -13,7 +12,6 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{
     spawn,
     sync::mpsc::{Sender, error::TrySendError},
@@ -22,7 +20,9 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::{Address, Id, NetConf, Network, NetworkError, PublicKey, Role, net::Command};
+use crate::{
+    Address, Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command,
+};
 
 type Result<T> = std::result::Result<T, NetworkError>;
 
@@ -65,8 +65,7 @@ impl<K> Drop for Retry<K> {
 }
 
 /// Buckets conceptionally contain messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Bucket(u64);
 
 /// Messages are associated with IDs and put into buckets.
@@ -97,7 +96,7 @@ struct Message<K> {
 }
 
 /// Meta information appended at the end of a message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Trailer {
     /// The bucket number the message corresponds to.
     bucket: Bucket,
@@ -121,13 +120,14 @@ enum Target<K> {
 
 impl<K> Retry<K>
 where
-    K: Serialize + DeserializeOwned + Eq + Ord + Send + Clone + Display + Hash + 'static,
+    K: Eq + Ord + Clone + Display + Hash + Send + Sync + 'static,
 {
     pub async fn create(mut cfg: NetConf<K>) -> Result<Self> {
-        cfg.max_message_size += Trailer::MAX_LEN + 1;
+        cfg.max_message_size += Trailer::SIZE;
+        let delays = cfg.retry_delays;
         let net = Network::create(cfg).await?;
         let buffer = Buffer::default();
-        let retry = spawn(retry(buffer.clone(), net.sender()));
+        let retry = spawn(retry(buffer.clone(), net.sender(), delays));
         Ok(Self {
             inner: Arc::new(Inner {
                 this: net.public_key().clone(),
@@ -170,7 +170,7 @@ where
         self.inner.net.remove(peers).await
     }
 
-    pub async fn assign(&mut self, r: Role, peers: Vec<K>) -> Result<()> {
+    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
         self.inner.net.assign(r, peers).await
     }
 
@@ -187,17 +187,9 @@ where
         loop {
             let (src, mut bytes) = self.inner.net.receive().await?;
 
-            let Some(trailer_bytes) = Trailer::split_off(&mut bytes) else {
-                warn!(node = %self.inner.this, "invalid trailer bytes");
+            let Some((trailer, trailer_bytes)) = Trailer::from_bytes(&mut bytes) else {
+                warn!(node = %self.inner.this, "invalid trailer");
                 continue;
-            };
-
-            let trailer: Trailer = match bincode::deserialize(&trailer_bytes) {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!(node = %self.inner.this, err = %e, "invalid trailer");
-                    continue;
-                },
             };
 
             if !bytes.is_empty() {
@@ -248,12 +240,12 @@ where
         }
     }
 
-    pub fn gc<B: Into<Bucket>>(&mut self, bucket: B) {
+    pub fn gc<B: Into<Bucket>>(&self, bucket: B) {
         let bucket = bucket.into();
         self.inner.buffer.0.lock().retain(|b, _| *b >= bucket);
     }
 
-    pub fn rm<B: Into<Bucket>>(&mut self, bucket: B, id: Id) {
+    pub fn rm<B: Into<Bucket>>(&self, bucket: B, id: Id) {
         let bucket = bucket.into();
         if let Some(messages) = self.inner.buffer.0.lock().get_mut(&bucket) {
             messages.remove(&id);
@@ -265,12 +257,8 @@ where
 
         let trailer = Trailer { bucket: b, id };
 
-        let mut encoded = Cursor::new([0u8; Trailer::MAX_LEN]);
-        bincode::serialize_into(&mut encoded, &trailer).expect("trailer encoding never fails");
-
         let mut msg = BytesMut::from(Bytes::from(data));
-        msg.extend_from_slice(&encoded.get_ref()[..encoded.position() as usize]);
-        msg.extend_from_slice(&[encoded.position().try_into().expect("|trailer| <= 32")]);
+        msg.extend_from_slice(&trailer.to_bytes());
         let msg = msg.freeze();
 
         let now = Instant::now();
@@ -320,9 +308,10 @@ where
     }
 }
 
-async fn retry<K: Clone>(buf: Buffer<K>, net: Sender<Command<K>>) -> Infallible {
-    const DELAYS: [u64; 5] = [1, 1, 3, 5, 15];
-
+async fn retry<K>(buf: Buffer<K>, net: Sender<Command<K>>, delays: [u8; NUM_DELAYS]) -> Infallible
+where
+    K: Clone,
+{
     let mut i = time::interval(Duration::from_secs(1));
     i.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
@@ -355,9 +344,13 @@ async fn retry<K: Clone>(buf: Buffer<K>, net: Sender<Command<K>>) -> Infallible 
                         continue;
                     };
 
-                    let delay = DELAYS.get(m.retries).copied().unwrap_or(30);
+                    let delay = delays
+                        .get(m.retries)
+                        .copied()
+                        .or_else(|| delays.last().copied())
+                        .unwrap_or(30);
 
-                    if now.saturating_duration_since(m.time) < Duration::from_secs(delay) {
+                    if now.saturating_duration_since(m.time) < Duration::from_secs(delay.into()) {
                         continue;
                     }
 
@@ -395,16 +388,42 @@ impl fmt::Display for Bucket {
 }
 
 impl Trailer {
-    /// Max. byte length of a trailer.
-    pub const MAX_LEN: usize = 32;
+    const SIZE: usize = 16;
 
-    fn split_off(bytes: &mut Bytes) -> Option<Bytes> {
-        let len = usize::from(*bytes.last()?);
-
-        if bytes.len() < len + 1 {
+    fn from_bytes(bytes: &mut Bytes) -> Option<(Self, Bytes)> {
+        if bytes.len() < Self::SIZE {
             return None;
         }
+        let slice = bytes.split_off(bytes.len() - Self::SIZE);
+        let both = u128::from_be_bytes(slice[..].try_into().ok()?);
+        let this = Self {
+            bucket: ((both >> 64) as u64).into(),
+            id: (both as u64).into(),
+        };
+        Some((this, slice))
+    }
 
-        Some(bytes.split_off(bytes.len() - (len + 1)))
+    fn to_bytes(self) -> [u8; Self::SIZE] {
+        (u128::from(self.bucket.0) << 64 | u128::from(self.id.0)).to_be_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use quickcheck::quickcheck;
+
+    use super::Trailer;
+
+    quickcheck! {
+        fn to_from_bytes(b: u64, i: u64) -> bool {
+            let a = Trailer {
+                bucket: b.into(),
+                id: i.into()
+            };
+            let mut bytes = Bytes::copy_from_slice(&a.to_bytes());
+            let (b, _) = Trailer::from_bytes(&mut bytes).unwrap();
+            a == b
+        }
     }
 }

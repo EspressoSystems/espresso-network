@@ -8,7 +8,7 @@ use hotshot::types::Message;
 use hotshot_types::{
     message::MessageKind,
     traits::{
-        network::{BroadcastDelay, ConnectedNetwork, Topic},
+        network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
         node_implementation::Versions,
     },
 };
@@ -95,6 +95,7 @@ impl<V: Versions> ExternalEventHandler<V> {
             // Match the message type
             match message {
                 OutboundMessage::Direct(message, recipient) => {
+                    let view = message.view_number();
                     // Wrap it in the real message type
                     let message_inner = Message {
                         sender: public_key,
@@ -112,12 +113,13 @@ impl<V: Versions> ExternalEventHandler<V> {
                         };
 
                     // Send the message to the recipient
-                    if let Err(err) = network.direct_message(message_bytes, recipient).await {
+                    if let Err(err) = network.direct_message(view, message_bytes, recipient).await {
                         tracing::warn!("Failed to send message: {:?}", err);
                     };
                 },
 
                 OutboundMessage::Broadcast(message) => {
+                    let view = message.view_number();
                     // Wrap it in the real message type
                     let message_inner = Message {
                         sender: public_key,
@@ -136,7 +138,7 @@ impl<V: Versions> ExternalEventHandler<V> {
 
                     // Broadcast the message to the global topic
                     if let Err(err) = network
-                        .broadcast_message(message_bytes, Topic::Global, BroadcastDelay::None)
+                        .broadcast_message(view, message_bytes, Topic::Global, BroadcastDelay::None)
                         .await
                     {
                         tracing::error!("Failed to broadcast message: {:?}", err);
