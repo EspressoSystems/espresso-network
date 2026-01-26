@@ -6,7 +6,7 @@ use either::Either;
 use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{Delta, RewardAccountProofV2, RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     ValidatedState,
 };
@@ -127,7 +127,6 @@ async fn store_state_update(
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
-        reward_merkle_tree_v2,
         reward_merkle_tree_v1,
         ..
     } = state;
@@ -214,38 +213,6 @@ async fn store_state_update(
         )
         .await
         .context("failed to store reward merkle nodes")?;
-    } else {
-        // Collect reward merkle tree v2 proofs for batch insertion
-        let reward_proofs: Vec<_> = rewards_delta
-            .iter()
-            .map(|delta| {
-                let proof = match reward_merkle_tree_v2.universal_lookup(*delta) {
-                    LookupResult::Ok(_, proof) => proof,
-                    LookupResult::NotFound(proof) => proof,
-                    LookupResult::NotInMemory => {
-                        bail!("missing merkle path for reward account {delta}")
-                    },
-                };
-                let path = <RewardAccountV2 as ToTraversalPath<
-                        { RewardMerkleTreeV2::ARITY },
-                    >>::to_traversal_path(
-                        delta, reward_merkle_tree_v2.height()
-                    );
-                Ok((proof, path))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        tracing::debug!(
-            count = reward_proofs.len(),
-            "inserting v2 reward accounts in batch"
-        );
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
-            tx,
-            reward_proofs,
-            block_number,
-        )
-        .await
-        .context("failed to store reward merkle nodes")?;
     }
 
     tracing::debug!(block_number, "updating state height");
@@ -316,6 +283,17 @@ where
     }
 
     tx.commit().await?;
+
+    if proposed_leaf.header().version() > EpochVersion::version() {
+        storage
+            .insert_v2_reward_merkle_tree(
+                proposed_leaf.height(),
+                state.reward_merkle_tree_v2.clone(),
+            )
+            .await
+            .context("failed to store reward merkle nodes")?;
+    }
+
     Ok(state)
 }
 

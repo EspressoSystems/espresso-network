@@ -20,7 +20,10 @@ use espresso_types::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
         StakeTableEvent, Validator,
     },
-    v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
+        RewardMerkleProofV2, RewardMerkleTreeV2,
+    },
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
 };
@@ -32,7 +35,10 @@ use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::{availability::VidCommonQueryData, data_source::ExtensibleDataSource};
+use hotshot_query_service::{
+    availability::VidCommonQueryData, data_source::ExtensibleDataSource,
+    merklized_state::MerklizedState,
+};
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
@@ -49,7 +55,9 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use jf_merkle_tree_compat::MerkleTreeScheme;
+use jf_merkle_tree_compat::{
+    ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
+};
 use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
@@ -1284,24 +1292,119 @@ pub(crate) trait RewardAccountProofDataSource: Sync {
         &self,
         _height: u64,
         _account: RewardAccountV1,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>>;
+
+    fn registry(
+        &self,
+    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>>;
+
+    fn load_v2_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move {
+            let registry_lock = self.registry()?;
+            let registry = registry_lock.read().await;
+            let tree_lock = registry
+                .get(&height)
+                .context(format!("Tree for height {} missing from memory", height))?;
+            let tree = tree_lock.read().await;
+
+            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
+                .context("Account missing from internal RewardMerkleTreeV2")?;
+
+            Ok(RewardAccountQueryDataV2 { balance, proof })
+        }
+    }
+
+    //    fn snapshot(
+    //      &self,
+    //      height: u64,
+    //    ) -> impl Send + Future<Output = anyhow::Result<Arc<RwLock<RewardMerkleTreeV2>>>>
+    //    {
+    //      async move {
+    //            let registry_lock = self.registry()?;
+    //            let registry = registry_lock.read().await;
+    //            Ok(registry
+    //                .get(&height)
+    //                .context(format!("Tree for height {} missing from memory", height))?.clone())
+    //      }
+    //    }
+
+    fn insert_v2_reward_merkle_tree(
+        &self,
+        height: u64,
+        merkle_tree: RewardMerkleTreeV2,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            let registry_lock = self.registry()?;
+            let mut registry = registry_lock.write().await;
+
+            let tree = Arc::new(RwLock::new(merkle_tree));
+            registry.insert(height, tree);
+
+            let n = std::env::var("REWARD_MERKLE_TREE_V2_RETAIN_HISTORY")
+                .ok()
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0);
+
+            registry.retain(|&k, _| k >= height - n);
+
+            Ok(())
+        }
+    }
+
+    //    fn insert_v2_reward_account_proofs<I>(
+    //        &self,
+    //        height: u64,
+    //        merkle_root: RewardMerkleCommitmentV2,
+    //        proofs: I,
+    //    ) -> impl Send + Future<Output = anyhow::Result<()>>
+    //    where
+    //        I: IntoIterator<Item = RewardAccountProofV2> + Send,
+    //    {
+    //        async move {
+    //            let registry_lock = self.registry()?;
+    //            let registry = registry_lock.write().await;
+    //
+    //            let new_tree = Arc::new(RwLock::new(RewardMerkleTreeV2::from_commitment(merkle_root)));
+    //            let tree_lock = registry.get(&height).unwrap_or_else(|| &new_tree);
+    //            let mut tree = tree_lock.write().await;
+    //
+    //            for proof in proofs {
+    //                match proof.proof {
+    //                    RewardMerkleProofV2::Presence(pf) | RewardMerkleProofV2::Absence(pf) => {
+    //                        tree.insert_path(RewardAccountV2(proof.account), &pf)?;
+    //                    },
+    //                }
+    //            }
+    //
+    //            let mut registry = registry_lock.write().await;
+    //            registry.insert(height, tree_lock.clone());
+    //
+    //            Ok(())
+    //        }
+    //    }
+}
+
+impl RewardAccountProofDataSource for hotshot_query_service::data_source::MetricsDataSource {
+    fn load_v1_reward_account_proof(
+        &self,
+        _height: u64,
+        _account: RewardAccountV1,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
         async {
             bail!("reward merklized state is not supported for this data source");
         }
     }
 
-    fn load_v2_reward_account_proof(
+    fn registry(
         &self,
-        _height: u64,
-        _account: RewardAccountV2,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
-        async {
-            bail!("reward merklized state is not supported for this data source");
-        }
+    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>> {
+        bail!("reward merklized state is not supported for this data source");
     }
 }
-
-impl RewardAccountProofDataSource for hotshot_query_service::data_source::MetricsDataSource {}
 
 impl<T, S> RewardAccountProofDataSource
     for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
@@ -1319,14 +1422,10 @@ where
             .await
     }
 
-    async fn load_v2_reward_account_proof(
+    fn registry(
         &self,
-        height: u64,
-        account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        self.inner()
-            .load_v2_reward_account_proof(height, account)
-            .await
+    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>> {
+        self.inner().registry()
     }
 }
 
