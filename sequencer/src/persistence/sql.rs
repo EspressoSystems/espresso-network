@@ -3308,8 +3308,9 @@ mod test {
             assert!(!json_obj.contains_key("authenticated"));
         }
 
-        // Create a new persistence which triggers the migration
+        // Create a new persistence and run migrations
         let persistence = Persistence::connect(&db).await;
+        persistence.migrate_storage().await.unwrap();
 
         // Verify stake_table_validators now has authenticated explicitly set
         {
