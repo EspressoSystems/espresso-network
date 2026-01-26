@@ -95,8 +95,8 @@ impl Header {
     }
 
     /// Convert this header into a byte array.
-    pub fn to_bytes(self) -> [u8; 4] {
-        self.into()
+    pub fn to_bytes(self) -> [u8; Self::SIZE] {
+        self.0.to_be_bytes()
     }
 }
 
@@ -108,9 +108,9 @@ pub enum Type {
     Pong,
 }
 
-impl From<Header> for [u8; 4] {
+impl From<Header> for [u8; Header::SIZE] {
     fn from(val: Header) -> Self {
-        val.0.to_be_bytes()
+        val.to_bytes()
     }
 }
 
@@ -118,15 +118,16 @@ impl TryFrom<&[u8]> for Header {
     type Error = InvalidHeader;
 
     fn try_from(val: &[u8]) -> Result<Self, Self::Error> {
-        let n = <[u8; 4]>::try_from(val).map_err(|_| InvalidHeader("4-byte slice required"))?;
+        let n = <[u8; Self::SIZE]>::try_from(val)
+            .map_err(|_| InvalidHeader("4-byte slice required"))?;
         Ok(Self(u32::from_be_bytes(n)))
     }
 }
 
-impl TryFrom<[u8; 4]> for Header {
+impl TryFrom<[u8; Header::SIZE]> for Header {
     type Error = InvalidHeader;
 
-    fn try_from(val: [u8; 4]) -> Result<Self, Self::Error> {
+    fn try_from(val: [u8; Self::SIZE]) -> Result<Self, Self::Error> {
         Ok(Self(u32::from_be_bytes(val)))
     }
 }
