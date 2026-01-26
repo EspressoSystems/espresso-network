@@ -1036,8 +1036,7 @@ async fn handshake(
     let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
     let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
     let h = Header::data(n as u16);
-    b[..Header::SIZE].copy_from_slice(&h.to_bytes());
-    stream.write_all(&b[..Header::SIZE + n]).await?;
+    send_frame(&mut stream, h, &mut b[..Header::SIZE + n]).await?;
     let (h, m) = recv_frame(&mut stream).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
@@ -1060,8 +1059,7 @@ async fn on_handshake(
     hs.read_message(&m, &mut b)?;
     let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
     let h = Header::data(n as u16);
-    b[..Header::SIZE].copy_from_slice(&h.to_bytes());
-    stream.write_all(&b[..Header::SIZE + n]).await?;
+    send_frame(&mut stream, h, &mut b[..Header::SIZE + n]).await?;
     Ok((stream, hs.into_transport_mode()?))
 }
 
@@ -1174,8 +1172,7 @@ where
                     .lock()
                     .write_message(&ping.to_bytes()[..], &mut buf[Header::SIZE..])?;
                 let h = Header::ping(n as u16);
-                buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
-                writer.write_all(&buf[..Header::SIZE + n]).await?;
+                send_frame(&mut writer, h, &mut buf[..Header::SIZE + n]).await?;
                 countdown.start(REPLY_TIMEOUT)
             },
             Message::Pong(pong) => {
@@ -1183,8 +1180,7 @@ where
                     .lock()
                     .write_message(&pong.to_bytes()[..], &mut buf[Header::SIZE..])?;
                 let h = Header::pong(n as u16);
-                buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
-                writer.write_all(&buf[..Header::SIZE + n]).await?
+                send_frame(&mut writer, h, &mut buf[..Header::SIZE + n]).await?
             },
             Message::Data(msg) => {
                 let mut it = msg.chunks(MAX_PAYLOAD_SIZE).peekable();
@@ -1195,8 +1191,7 @@ where
                     } else {
                         Header::data(n as u16)
                     };
-                    buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
-                    writer.write_all(&buf[..Header::SIZE + n]).await?
+                    send_frame(&mut writer, h, &mut buf[..Header::SIZE + n]).await?
                 }
             },
         }
@@ -1214,4 +1209,18 @@ where
     let mut v = vec![0; h.len().into()];
     r.read_exact(&mut v).await?;
     Ok((h, v))
+}
+
+/// Write a single frame (header + payload) to the remote.
+///
+/// The header is serialised into the first 4 bytes of `msg`. It is the
+/// caller's responsibility to ensure there is room at the beginning.
+async fn send_frame<W>(w: &mut W, hdr: Header, msg: &mut [u8]) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    debug_assert!(msg.len() <= MAX_NOISE_MESSAGE_SIZE);
+    msg[..Header::SIZE].copy_from_slice(&hdr.to_bytes());
+    w.write_all(msg).await?;
+    Ok(())
 }
