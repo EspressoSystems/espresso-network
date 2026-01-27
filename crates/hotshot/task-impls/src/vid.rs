@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidDisperse, VidDisperseAndDuration},
+    data::{PackedBundle, VidDisperse, VidDisperseAndDuration, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
@@ -22,6 +22,8 @@ use hotshot_types::{
         BlockPayload,
     },
     utils::{is_epoch_transition, option_epoch_from_block_number},
+    vid::avidm_gf2::AvidmGf2Scheme,
+    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::Result;
 use tracing::{debug, error, info, instrument};
@@ -256,6 +258,57 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                             _pd: PhantomData,
                         },
                         self.public_key.clone(),
+                    )),
+                    &event_stream,
+                )
+                .await;
+            },
+            HotShotEvent::VidShareValidated(share) => {
+                let VidDisperseShare::V2(ref share) = share.data else {
+                    return None;
+                };
+                let view = share.view_number();
+                let common = share.common.clone();
+                let epoch = share.epoch;
+                let shares = self
+                    .consensus
+                    .read()
+                    .await
+                    .vid_shares()
+                    .get(&view)
+                    .cloned()?;
+
+                let mut reconstruct_shares = vec![];
+
+                for share in shares.values() {
+                    let share = share.get(&epoch)?;
+                    let VidDisperseShare::V2(ref share) = share.data else {
+                        continue;
+                    };
+                    reconstruct_shares.push(share.share.clone());
+                }
+
+                let Ok(payload_bytes) = AvidmGf2Scheme::recover(&common, &reconstruct_shares)
+                else {
+                    return None;
+                };
+
+                let proposal = self
+                    .consensus
+                    .read()
+                    .await
+                    .last_proposals()
+                    .get(&view)
+                    .cloned()?;
+                let metadata = proposal.data.block_header().metadata();
+
+                let payload = TYPES::BlockPayload::from_bytes(&payload_bytes, metadata);
+
+                broadcast_event(
+                    Arc::new(HotShotEvent::BlockReconstructed(
+                        payload,
+                        metadata.clone(),
+                        view,
                     )),
                     &event_stream,
                 )

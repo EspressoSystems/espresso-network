@@ -13,6 +13,7 @@ use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 use async_broadcast::{broadcast, RecvError};
 use async_lock::RwLock;
 use async_trait::async_trait;
+use collector_common::{send_trace, Trace};
 use futures::{
     future::{BoxFuture, FutureExt},
     stream, StreamExt,
@@ -21,13 +22,12 @@ use hotshot_task::task::Task;
 #[cfg(feature = "rewind")]
 use hotshot_task_impls::rewind::RewindTaskState;
 use hotshot_task_impls::{
-    da::DaTaskState,
+    block::BlockTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
     stats::StatsTaskState,
-    transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
     vid::VidTaskState,
     view_sync::ViewSyncTaskState,
@@ -35,12 +35,16 @@ use hotshot_task_impls::{
 use hotshot_types::{
     consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
-    message::{Message, MessageKind, UpgradeLock, EXTERNAL_MESSAGE_VERSION},
+    message::{
+        GeneralConsensusMessage, Message, MessageKind, SequencingMessage, UpgradeLock,
+        EXTERNAL_MESSAGE_VERSION,
+    },
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
+    vote::HasViewNumber,
 };
 use tokio::{spawn, time::sleep};
 use vbs::version::{StaticVersionType, Version};
@@ -175,6 +179,27 @@ pub fn add_network_message_task<
                         }
                     };
 
+                    // Match on the message kind
+                    match &deserialized_message.kind {
+                        MessageKind::Consensus(SequencingMessage::General(
+                            GeneralConsensusMessage::Proposal(proposal),
+                        )) => {
+                            let _ = send_trace(&Trace::ProposalReceived(*(proposal.data.view_number())));
+                        },
+                        MessageKind::Consensus(SequencingMessage::General(
+                            GeneralConsensusMessage::Proposal2Legacy(proposal),
+                        )) => {
+                            let _ = send_trace(&Trace::ProposalReceived(*(proposal.data.view_number())));
+                        },
+                        MessageKind::Consensus(SequencingMessage::General(
+                            GeneralConsensusMessage::Proposal2(proposal),
+                        )) => {
+                            let _ = send_trace(&Trace::ProposalReceived(*(proposal.data.view_number())));
+                        },
+                        _ => {},
+                    }
+
+
                     // Special case: external messages (version 0.0). We want to make sure it is an external message
                     // and warn and continue otherwise.
                     if version == EXTERNAL_MESSAGE_VERSION
@@ -230,8 +255,8 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
 ) {
     handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
     handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
-    handle.add_task(DaTaskState::<TYPES, I, V>::create_from(handle).await);
-    handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
+    handle.add_task(BlockTaskState::<TYPES, V>::create_from(handle).await);
+    // handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
 
     {
         let mut upgrade_certificate_lock = handle
@@ -365,6 +390,7 @@ where
             consensus_metrics,
             storage.clone(),
             storage_metrics,
+            None,
         )
         .await;
         let consensus_registry = ConsensusTaskRegistry::new();

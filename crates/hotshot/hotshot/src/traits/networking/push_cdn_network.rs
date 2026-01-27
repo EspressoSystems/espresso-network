@@ -155,7 +155,7 @@ impl<K: SignatureKey + 'static> RunDef for ProductionDef<K> {
 pub struct UserDefQuic<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> ConnectionDef for UserDefQuic<K> {
     type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
