@@ -371,18 +371,27 @@ pub(crate) async fn batch_insert_hashes(
         return Ok(HashMap::new());
     }
 
+    let total_hashes = hashes.len();
+    tracing::info!(total_hashes, "batch inserting hashes");
+
+    let mut result: HashMap<Vec<u8>, i32> = HashMap::with_capacity(total_hashes);
+
     // Use UNNEST-based batch insert (more efficient and avoids parameter limits)
     let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
                UPDATE SET value = EXCLUDED.value RETURNING value, id";
 
-    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
-        .bind(&hashes)
-        .fetch(tx.as_mut())
-        .try_collect()
-        .await
-        .map_err(|e| QueryError::Error {
-            message: format!("batch hash insert failed: {e}"),
-        })?;
+    for (chunk_idx, chunk) in hashes.chunks(1000).enumerate() {
+        let chunk_result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
+            .bind(chunk)
+            .fetch(tx.as_mut())
+            .try_collect()
+            .await
+            .map_err(|e| QueryError::Error {
+                message: format!("batch hash insert chunk {chunk_idx} failed: {e}"),
+            })?;
+
+        result.extend(chunk_result);
+    }
 
     Ok(result)
 }
@@ -641,48 +650,59 @@ impl Node {
             deduped.insert((node.path.to_string(), node.created), node);
         }
 
-        let mut paths = Vec::with_capacity(deduped.len());
-        let mut createds = Vec::with_capacity(deduped.len());
-        let mut hash_ids = Vec::with_capacity(deduped.len());
-        let mut childrens = Vec::with_capacity(deduped.len());
-        let mut children_bitvecs = Vec::with_capacity(deduped.len());
-        let mut idxs = Vec::with_capacity(deduped.len());
-        let mut entries = Vec::with_capacity(deduped.len());
-
-        for node in deduped.into_values() {
-            paths.push(node.path);
-            createds.push(node.created);
-            hash_ids.push(node.hash_id);
-            childrens.push(node.children);
-            children_bitvecs.push(node.children_bitvec);
-            idxs.push(node.idx);
-            entries.push(node.entry);
-        }
-
-        let sql = format!(
-            r#"
-            INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
-            ON CONFLICT (path, created) DO UPDATE SET
-                hash_id = EXCLUDED.hash_id,
-                children = EXCLUDED.children,
-                children_bitvec = EXCLUDED.children_bitvec,
-                idx = EXCLUDED.idx,
-                entry = EXCLUDED.entry
-            "#
+        let total_nodes = deduped.len();
+        tracing::info!(
+            table = name,
+            total_nodes,
+            "upserting merkle tree nodes in batches"
         );
 
-        sqlx::query(&sql)
-            .bind(&paths)
-            .bind(&createds)
-            .bind(&hash_ids)
-            .bind(&childrens)
-            .bind(&children_bitvecs)
-            .bind(&idxs)
-            .bind(&entries)
-            .execute(tx.as_mut())
-            .await
-            .context("batch upsert with UNNEST failed")?;
+        let all_nodes: Vec<_> = deduped.into_values().collect();
+
+        for (chunk_idx, chunk) in all_nodes.chunks(1000).enumerate() {
+            let mut paths = Vec::with_capacity(chunk.len());
+            let mut createds = Vec::with_capacity(chunk.len());
+            let mut hash_ids = Vec::with_capacity(chunk.len());
+            let mut childrens = Vec::with_capacity(chunk.len());
+            let mut children_bitvecs = Vec::with_capacity(chunk.len());
+            let mut idxs = Vec::with_capacity(chunk.len());
+            let mut entries = Vec::with_capacity(chunk.len());
+
+            for node in chunk {
+                paths.push(node.path.clone());
+                createds.push(node.created);
+                hash_ids.push(node.hash_id);
+                childrens.push(node.children.clone());
+                children_bitvecs.push(node.children_bitvec.clone());
+                idxs.push(node.idx.clone());
+                entries.push(node.entry.clone());
+            }
+
+            let sql = format!(
+                r#"
+                INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
+                SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+                ON CONFLICT (path, created) DO UPDATE SET
+                    hash_id = EXCLUDED.hash_id,
+                    children = EXCLUDED.children,
+                    children_bitvec = EXCLUDED.children_bitvec,
+                    idx = EXCLUDED.idx,
+                    entry = EXCLUDED.entry
+                "#
+            );
+
+            sqlx::query(&sql)
+                .bind(&paths)
+                .bind(&createds)
+                .bind(&hash_ids)
+                .bind(&childrens)
+                .bind(&children_bitvecs)
+                .bind(&idxs)
+                .bind(&entries)
+                .execute(tx.as_mut())
+                .await
+                .with_context(|| format!("batch upsert chunk {chunk_idx} into {name} failed"))?;
+        }
 
         Ok(())
     }
