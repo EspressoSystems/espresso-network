@@ -5,7 +5,7 @@ use anyhow::{bail, ensure, Context};
 use either::Either;
 use espresso_types::{
     traits::StateCatchup,
-    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
+    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
     v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     ValidatedState,
@@ -215,37 +215,59 @@ async fn store_state_update(
         .await
         .context("failed to store reward merkle nodes")?;
     } else {
-        // Collect reward merkle tree v2 proofs for batch insertion
-        let reward_proofs: Vec<_> = rewards_delta
-            .iter()
-            .map(|delta| {
-                let proof = match reward_merkle_tree_v2.universal_lookup(*delta) {
-                    LookupResult::Ok(_, proof) => proof,
-                    LookupResult::NotFound(proof) => proof,
-                    LookupResult::NotInMemory => {
-                        bail!("missing merkle path for reward account {delta}")
-                    },
-                };
-                let path = <RewardAccountV2 as ToTraversalPath<
+        // For versions > EpochVersion, store V2 proofs only up to DrbAndHeaderUpgradeVersion
+        if version <= DrbAndHeaderUpgradeVersion::version() {
+            let reward_proofs: Vec<_> = rewards_delta
+                .iter()
+                .map(|delta| {
+                    let proof = match reward_merkle_tree_v2.universal_lookup(*delta) {
+                        LookupResult::Ok(_, proof) => proof,
+                        LookupResult::NotFound(proof) => proof,
+                        LookupResult::NotInMemory => {
+                            bail!("missing merkle path for reward account {delta}")
+                        },
+                    };
+                    let path = <RewardAccountV2 as ToTraversalPath<
                         { RewardMerkleTreeV2::ARITY },
                     >>::to_traversal_path(
                         delta, reward_merkle_tree_v2.height()
                     );
-                Ok((proof, path))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+                    Ok((proof, path))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
-        tracing::debug!(
-            count = reward_proofs.len(),
-            "inserting v2 reward accounts in batch"
-        );
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
-            tx,
-            reward_proofs,
-            block_number,
-        )
-        .await
-        .context("failed to store reward merkle nodes")?;
+            tracing::debug!(
+                count = reward_proofs.len(),
+                "inserting v2 reward accounts in batch"
+            );
+            UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
+                tx,
+                reward_proofs,
+                block_number,
+            )
+            .await
+            .context("failed to store reward merkle nodes")?;
+        }
+
+        if !rewards_delta.is_empty() {
+            let account_balances: Vec<(RewardAccountV2, RewardAmount)> = rewards_delta
+                .iter()
+                .filter_map(|account| match reward_merkle_tree_v2.lookup(*account) {
+                    LookupResult::Ok(balance, _) => Some((*account, *balance)),
+                    _ => None,
+                })
+                .collect();
+
+            if !account_balances.is_empty() {
+                tracing::debug!(
+                    count = account_balances.len(),
+                    "storing reward state to reward_state table"
+                );
+                tx.store_reward_state(block_number, account_balances)
+                    .await
+                    .context("failed to store reward state")?;
+            }
+        }
     }
 
     tracing::debug!(block_number, "updating state height");
@@ -370,13 +392,6 @@ where
     let instance = instance.await;
     let peers = SqlStateCatchup::new(storage.clone(), Default::default());
 
-    // Load checkpoint to determine starting point
-    // Both consensus and merklized loop use the same checkpoint for initialization
-    let checkpoint_epoch = {
-        let calculator = instance.epoch_rewards_calculator.lock().await;
-        calculator.last_complete_epoch
-    };
-
     // get last saved merklized state
     let (last_height, parent_leaf, mut leaves) = {
         let last_height = storage.get_last_state_height().await?;
@@ -397,8 +412,7 @@ where
             node_id = instance.node_id,
             last_height,
             current_height,
-            ?checkpoint_epoch,
-            "updating state storage (with checkpoint)"
+            "updating state storage"
         );
 
         let parent_leaf = storage.get_leaf(height).await;
@@ -409,33 +423,6 @@ where
     // ready yet and another task needs a mutable lock on the state to produce the parent leaf.
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
-
-    // Load checkpoint appropriate for the merklized state loop's starting height
-    // This allows the loop to fast-forward to the checkpoint position
-    if let Some(epoch_height) = instance.epoch_height {
-        if epoch_height > 0 && checkpoint_epoch.is_some() {
-            let calculator = instance.epoch_rewards_calculator.lock().await;
-            let checkpoint_result = calculator
-                .load_checkpoint_for_height(parent_leaf.height(), epoch_height)
-                .await;
-
-            if let Ok(Some((checkpoint_epoch, checkpoint_tree))) = checkpoint_result {
-                tracing::info!(
-                    checkpoint_epoch = %checkpoint_epoch,
-                    parent_height = parent_leaf.height(),
-                    node_id = instance.node_id,
-                    "loaded reward checkpoint for merklized state loop"
-                );
-                parent_state.reward_merkle_tree_v2 = checkpoint_tree;
-            } else {
-                tracing::debug!(
-                    parent_height = parent_leaf.height(),
-                    node_id = instance.node_id,
-                    "no applicable checkpoint found for merklized state loop"
-                );
-            }
-        }
-    }
 
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
@@ -511,6 +498,16 @@ impl<T> SequencerStateDataSource for T where
 {
 }
 
+#[async_trait::async_trait]
+pub(crate) trait RewardStatePersistence {
+    /// Store reward account balances at a specific height.
+    async fn store_reward_state(
+        &mut self,
+        height: u64,
+        accounts: Vec<(RewardAccountV2, RewardAmount)>,
+    ) -> anyhow::Result<()>;
+}
+
 pub(crate) trait SequencerStateUpdate:
     Transaction
     + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
@@ -518,6 +515,7 @@ pub(crate) trait SequencerStateUpdate:
     + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
     + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
     + ChainConfigPersistence
+    + RewardStatePersistence
 {
 }
 
@@ -528,5 +526,6 @@ impl<T> SequencerStateUpdate for T where
         + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
         + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
+        + RewardStatePersistence
 {
 }

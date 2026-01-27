@@ -181,22 +181,6 @@ impl NodeState {
         }
     }
 
-    /// Configure the reward calculator with persistence and checkpoint.
-    /// Uses builder pattern for fluent API.
-    pub fn with_reward_checkpoint_persistence<P>(
-        mut self,
-        persistence: Arc<P>,
-        last_complete_epoch: Option<EpochNumber>,
-    ) -> Self
-    where
-        P: crate::RewardCheckpointPersistence + 'static,
-    {
-        let mut calculator = EpochRewardsCalculator::new(persistence);
-        calculator.last_complete_epoch = last_complete_epoch;
-        self.epoch_rewards_calculator = Arc::new(Mutex::new(calculator));
-        self
-    }
-
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
@@ -610,6 +594,16 @@ pub mod mock {
             anyhow::bail!("unimplemented")
         }
 
+        async fn try_fetch_all_reward_accounts(
+            &self,
+            _retry: usize,
+            _height: u64,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+            anyhow::bail!("unimplemented")
+        }
+
         fn backoff(&self) -> &BackoffParams {
             &self.backoff
         }
@@ -620,27 +614,6 @@ pub mod mock {
 
         fn is_local(&self) -> bool {
             true
-        }
-    }
-
-    /// Mock persistence that does nothing, for testing.
-    #[derive(Debug, Clone, Copy)]
-    pub struct MockPersistence;
-
-    #[async_trait]
-    impl crate::RewardCheckpointPersistence for MockPersistence {
-        async fn save_reward_checkpoint(
-            &self,
-            _epoch: EpochNumber,
-            _tree: &crate::v0_4::RewardMerkleTreeV2,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn load_reward_checkpoint(
-            &self,
-        ) -> anyhow::Result<Option<(EpochNumber, crate::v0_4::RewardMerkleTreeV2)>> {
-            Ok(None)
         }
     }
 }

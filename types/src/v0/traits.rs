@@ -284,6 +284,42 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch all reward accounts at a given height without retrying on transient errors.
+    /// This is used to rebuild the reward merkle tree when catching up.
+    async fn try_fetch_all_reward_accounts(
+        &self,
+        retry: usize,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>;
+
+    /// Fetch all reward accounts at a given height, retrying on transient errors.
+    /// This is used to rebuild the reward merkle tree when catching up.
+    async fn fetch_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                async move {
+                    provider
+                        .try_fetch_all_reward_accounts(retry, height, offset, limit)
+                        .await
+                        .map_err(|err| {
+                            err.context(format!(
+                                "fetching all reward accounts at height {height}, offset \
+                                 {offset}, limit {limit}"
+                            ))
+                        })
+                }
+                .boxed()
+            })
+            .await
+    }
+
     /// Fetch the state certificate for a given epoch without retrying on transient errors.
     async fn try_fetch_state_cert(
         &self,
@@ -491,6 +527,29 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
+    async fn try_fetch_all_reward_accounts(
+        &self,
+        retry: usize,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        (**self)
+            .try_fetch_all_reward_accounts(retry, height, offset, limit)
+            .await
+    }
+
+    async fn fetch_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        (**self)
+            .fetch_all_reward_accounts(height, offset, limit)
+            .await
+    }
+
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
@@ -588,14 +647,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized
-    + Send
-    + Sync
-    + Clone
-    + 'static
-    + DhtPersistentStorage
-    + MembershipPersistence
-    + super::RewardCheckpointPersistence
+    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
@@ -941,6 +993,7 @@ pub trait SequencerPersistence:
         self.migrate_vid_shares().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
+        self.backfill_reward_state().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");
 
@@ -952,6 +1005,11 @@ pub trait SequencerPersistence:
     async fn migrate_vid_shares(&self) -> anyhow::Result<()>;
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()>;
     async fn migrate_quorum_certificates(&self) -> anyhow::Result<()>;
+
+    /// Backfill reward state from reward_merkle_tree_v2 to reward_state table.
+    /// This populates the reward_state table with all (height, account, balance) entries.
+    /// Continues adding entries like other migrations until all historical data is processed.
+    async fn backfill_reward_state(&self) -> anyhow::Result<()>;
 
     async fn load_anchor_view(&self) -> anyhow::Result<ViewNumber> {
         match self.load_anchor_leaf().await? {

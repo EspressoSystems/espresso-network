@@ -23,8 +23,7 @@ pub use header::Header;
 pub use impls::mock;
 // export reward types for staking-ui-service
 pub use impls::reward::{
-    ComputedRewards, EpochRewardsCalculator, EpochRewardsResult, RewardCheckpointPersistence,
-    RewardDistributor,
+    ComputedRewards, EpochRewardsCalculator, EpochRewardsResult, RewardDistributor,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;

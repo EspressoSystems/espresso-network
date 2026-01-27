@@ -3,7 +3,6 @@ use std::{
     collections::{HashMap, HashSet},
     iter::once,
     str::FromStr,
-    sync::Arc,
 };
 
 use alloy::primitives::{
@@ -1029,132 +1028,21 @@ pub struct EpochRewardsResult {
     pub changed_accounts: HashSet<RewardAccountV2>,
 }
 
-/// Trait for persisting reward checkpoints.
-/// Implemented by persistence backends to save checkpoint state.
-#[async_trait::async_trait]
-pub trait RewardCheckpointPersistence: Send + Sync + std::fmt::Debug {
-    /// Save the complete reward merkle tree state for an epoch.
-    /// This allows full recovery after a crash without needing to replay.
-    async fn save_reward_checkpoint(
-        &self,
-        epoch: EpochNumber,
-        tree: &RewardMerkleTreeV2,
-    ) -> anyhow::Result<()>;
-
-    /// Load the most recent reward checkpoint.
-    /// Returns (epoch, tree) if a checkpoint exists, None otherwise.
-    async fn load_reward_checkpoint(
-        &self,
-    ) -> anyhow::Result<Option<(EpochNumber, RewardMerkleTreeV2)>>;
-}
-
 /// Manages epoch-based reward calculations in the background.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct EpochRewardsCalculator {
     /// Cached results by epoch - multiple consumers can read these
     pub results: HashMap<EpochNumber, EpochRewardsResult>,
     /// Pending calculations by epoch
     pending: HashMap<EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>>,
-    /// Last epoch for which rewards were successfully applied.
-    /// This serves as a checkpoint - we have the complete reward tree state after this epoch.
-    pub last_complete_epoch: Option<EpochNumber>,
-    /// Persistence backend for saving checkpoints
-    persistence: Arc<dyn RewardCheckpointPersistence>,
-}
-
-impl Default for EpochRewardsCalculator {
-    fn default() -> Self {
-        #[derive(Debug)]
-        struct NoPersistence;
-
-        #[async_trait::async_trait]
-        impl RewardCheckpointPersistence for NoPersistence {
-            async fn save_reward_checkpoint(
-                &self,
-                _epoch: EpochNumber,
-                _tree: &RewardMerkleTreeV2,
-            ) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            async fn load_reward_checkpoint(
-                &self,
-            ) -> anyhow::Result<Option<(EpochNumber, RewardMerkleTreeV2)>> {
-                Ok(None)
-            }
-        }
-
-        Self {
-            results: HashMap::new(),
-            pending: HashMap::new(),
-            last_complete_epoch: None,
-            persistence: Arc::new(NoPersistence),
-        }
-    }
 }
 
 impl EpochRewardsCalculator {
-    pub fn new(persistence: Arc<dyn RewardCheckpointPersistence>) -> Self {
+    pub fn new() -> Self {
         Self {
             results: HashMap::new(),
             pending: HashMap::new(),
-            last_complete_epoch: None,
-            persistence,
         }
-    }
-
-    /// Load the reward checkpoint from persistence.
-    /// Used by both consensus and merklized state loop for initialization.
-    pub async fn load_checkpoint(
-        &self,
-    ) -> anyhow::Result<Option<(EpochNumber, RewardMerkleTreeV2)>> {
-        self.persistence.load_reward_checkpoint().await
-    }
-
-    /// Load the reward checkpoint appropriate for a given block height.
-    /// Returns the checkpoint if the block is in or before the checkpoint epoch.
-    pub async fn load_checkpoint_for_height(
-        &self,
-        block_height: u64,
-        epoch_height: u64,
-    ) -> anyhow::Result<Option<(EpochNumber, RewardMerkleTreeV2)>> {
-        if let Some((checkpoint_epoch, checkpoint_tree)) = self.persistence.load_reward_checkpoint().await? {
-            // Calculate which epoch the block is in
-            let block_epoch = epoch_from_block_number(block_height, epoch_height);
-
-            // Only return checkpoint if block is in or before the checkpoint epoch
-            if block_epoch <= *checkpoint_epoch {
-                Ok(Some((checkpoint_epoch, checkpoint_tree)))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Update the checkpoint and persist the complete reward tree in a background task.
-    /// This should be called after rewards have been successfully applied to a tree.
-    /// The checkpoint is saved asynchronously to avoid blocking consensus.
-    pub fn update_checkpoint(&mut self, epoch: EpochNumber, tree: &RewardMerkleTreeV2) {
-        self.last_complete_epoch = Some(epoch);
-
-        // Clone data for the background task
-        let persistence = self.persistence.clone();
-        let tree = tree.clone();
-
-        // Spawn background task to persist the checkpoint
-        tokio::spawn(async move {
-            if let Err(err) = persistence.save_reward_checkpoint(epoch, &tree).await {
-                tracing::error!(
-                    %epoch,
-                    error = %err,
-                    "failed to persist reward checkpoint"
-                );
-            } else {
-                tracing::debug!(%epoch, "saved reward checkpoint");
-            }
-        });
     }
 
     /// Check if we have a cached result for epoch.
@@ -1217,11 +1105,8 @@ impl EpochRewardsCalculator {
         tracing::info!(
             %epoch,
             has_leader_counts = leader_counts.is_some(),
-            last_complete = ?self.last_complete_epoch,
             "starting background epoch rewards task"
         );
-
-        let last_complete_epoch = self.last_complete_epoch;
 
         let handle = tokio::spawn(async move {
             Self::fetch_and_calculate(
@@ -1231,7 +1116,6 @@ impl EpochRewardsCalculator {
                 instance_state,
                 coordinator,
                 leader_counts,
-                last_complete_epoch,
             )
             .await
         });
@@ -1245,7 +1129,6 @@ impl EpochRewardsCalculator {
         instance_state: NodeState,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         leader_counts: Option<LeaderCounts>,
-        last_complete_epoch: Option<EpochNumber>,
     ) -> anyhow::Result<EpochRewardsResult> {
         let epoch_last_block_height = (*epoch) * epoch_height;
 
@@ -1253,7 +1136,6 @@ impl EpochRewardsCalculator {
             %epoch,
             epoch_last_block_height,
             has_leader_counts = leader_counts.is_some(),
-            ?last_complete_epoch,
             "fetch_and_calculate: starting"
         );
 
@@ -1342,187 +1224,67 @@ impl EpochRewardsCalculator {
             .cloned()
             .collect();
 
-        // If we have missing accounts, try to rebuild the tree from checkpoint by replaying epochs
+        // If we have missing accounts, fetch all reward accounts from peers and rebuild the tree
         if !missing_accounts.is_empty() {
             tracing::info!(
                 %epoch,
                 num_missing = missing_accounts.len(),
-                ?last_complete_epoch,
-                "missing accounts detected, attempting to rebuild tree"
+                "missing accounts detected, fetching all reward accounts from peers"
             );
 
-            // Determine checkpoint epoch - the last epoch where we had a complete tree
-            let checkpoint_epoch = last_complete_epoch.unwrap_or_else(|| {
-                // If no checkpoint, we'll need to rebuild from first epoch
-                // This shouldn't happen in normal operation but handle gracefully
-                tracing::warn!(%epoch, "no checkpoint found, will replay from epoch 0");
-                EpochNumber::new(0)
-            });
+            // Fetch all reward accounts at the height just before this epoch
+            // This fetches from the reward_state table which stores all account balances
+            let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
 
-            // Replay intermediate epochs to rebuild the tree
-            // We need to apply rewards from (checkpoint_epoch + 1) through (epoch - 1)
-            let start_replay_epoch = *checkpoint_epoch + 1;
-            let end_replay_epoch = *epoch;
+            tracing::info!(
+                %epoch,
+                catchup_height,
+                "fetching all reward accounts from peers to rebuild tree"
+            );
 
-            if start_replay_epoch < end_replay_epoch {
-                tracing::info!(
-                    %epoch,
-                    checkpoint = %checkpoint_epoch,
-                    replay_start = start_replay_epoch,
-                    replay_end = end_replay_epoch - 1,
-                    "replaying intermediate epochs to rebuild tree"
-                );
+            // Fetch all reward accounts from peers (paginated)
+            let mut all_accounts = Vec::new();
+            let mut offset = 0u64;
+            let limit = 10_000u64;
 
-                for replay_epoch_num in start_replay_epoch..end_replay_epoch {
-                    let replay_epoch = EpochNumber::new(replay_epoch_num);
-                    let replay_height = replay_epoch_num * epoch_height;
-
-                    tracing::debug!(
-                        %epoch,
-                        %replay_epoch,
-                        replay_height,
-                        "replaying epoch to rebuild tree"
-                    );
-
-                    // Fetch header for this intermediate epoch
-                    let replay_header = instance_state
-                        .state_catchup
-                        .as_ref()
-                        .fetch_header(replay_height)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to fetch header at height {replay_height} for replay \
-                                 epoch {replay_epoch}"
-                            )
-                        })?;
-
-                    // Only replay V6+ epochs (pre-V6 doesn't have per-epoch rewards)
-                    if replay_header.version() < EpochRewardVersion::version() {
-                        tracing::debug!(
-                            %replay_epoch,
-                            version = %replay_header.version(),
-                            "skipping pre-V6 epoch"
-                        );
-                        continue;
-                    }
-
-                    let replay_leader_counts = replay_header
-                        .leader_counts()
-                        .context("V6+ header must have leader_counts")?;
-
-                    // Ensure stake table for replay epoch
-                    if coordinator.stake_table_for_epoch(Some(replay_epoch)).await.is_err() {
-                        coordinator
-                            .wait_for_catchup(replay_epoch)
-                            .await
-                            .with_context(|| {
-                                format!("failed to catch up stake table for epoch {replay_epoch}")
-                            })?;
-                    }
-
-                    let replay_membership = coordinator.membership().read().await;
-                    let replay_validators: Vec<_> = replay_membership
-                        .stake_table(Some(replay_epoch))
-                        .iter()
-                        .filter_map(|entry| {
-                            replay_membership
-                                .get_validator_config(&replay_epoch, entry.stake_table_entry.stake_key)
-                                .ok()
-                        })
-                        .collect();
-                    let replay_block_reward = replay_membership
-                        .epoch_block_reward(replay_epoch)
-                        .with_context(|| {
-                            format!("block reward not found for replay epoch {replay_epoch}")
-                        })?;
-                    drop(replay_membership);
-
-                    // Apply rewards for this intermediate epoch (in memory only, don't store)
-                    let replay_result = Self::calculate_all_rewards(
-                        replay_epoch,
-                        *replay_leader_counts,
-                        reward_tree,
-                        replay_block_reward,
-                        replay_validators,
-                    )
-                    .await?;
-
-                    tracing::debug!(
-                        %replay_epoch,
-                        total_distributed = %replay_result.total_distributed.0,
-                        "replayed epoch rewards"
-                    );
-
-                    // Use the updated tree for next iteration
-                    reward_tree = replay_result.reward_tree;
-                }
-
-                tracing::info!(
-                    %epoch,
-                    "tree rebuild complete, all intermediate epochs replayed"
-                );
-            }
-
-            // After replay, check if we still have missing accounts
-            let still_missing: Vec<_> = accounts_to_update
-                .iter()
-                .filter(|account| reward_tree.lookup(**account).expect_not_in_memory().is_ok())
-                .cloned()
-                .collect();
-
-            // If accounts are still missing after replay, use catchup to fetch them
-            if !still_missing.is_empty() {
-                tracing::warn!(
-                    %epoch,
-                    num_still_missing = still_missing.len(),
-                    "accounts still missing after replay, fetching via catchup"
-                );
-
-                // Fetch accounts from the block just before this epoch starts
-                let catchup_height = epoch_last_block_height.saturating_sub(1);
-                let reward_merkle_tree_root = reward_tree.commitment();
-
-                tracing::info!(
-                    %epoch,
-                    catchup_height,
-                    %reward_merkle_tree_root,
-                    num_accounts = still_missing.len(),
-                    "fetching missing reward accounts from peers/storage"
-                );
-
-                // Fetch the missing account proofs from peers or storage
-                let account_proofs = instance_state
+            loop {
+                let accounts = instance_state
                     .state_catchup
                     .as_ref()
-                    .fetch_reward_accounts_v2(
-                        &instance_state,
-                        catchup_height,
-                        ViewNumber::new(0),
-                        reward_merkle_tree_root,
-                        still_missing.clone(),
-                    )
+                    .fetch_all_reward_accounts(catchup_height, offset, limit)
                     .await
                     .with_context(|| {
                         format!(
-                            "failed to fetch {} missing reward accounts at height {catchup_height}",
-                            still_missing.len()
+                            "failed to fetch reward accounts at height {catchup_height}, offset \
+                             {offset}"
                         )
                     })?;
 
-                // Remember the proofs into the tree
-                for proof in account_proofs.iter() {
-                    proof
-                        .remember(&mut reward_tree)
-                        .context("failed to remember reward account proof")?;
-                }
+                let count = accounts.len();
+                all_accounts.extend(accounts);
 
-                tracing::info!(
-                    %epoch,
-                    num_fetched = account_proofs.len(),
-                    "successfully fetched and remembered missing reward accounts via catchup"
-                );
+                if (count as u64) < limit {
+                    break;
+                }
+                offset += limit;
             }
+
+            tracing::info!(
+                %epoch,
+                num_accounts = all_accounts.len(),
+                "fetched all reward accounts, rebuilding tree"
+            );
+
+            // Rebuild the tree from scratch with all the accounts
+            let kv_pairs: Vec<(RewardAccountV2, RewardAmount)> = all_accounts;
+            reward_tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, kv_pairs)
+                .context("failed to rebuild reward merkle tree from accounts")?;
+
+            tracing::info!(
+                %epoch,
+                reward_tree_commitment = %reward_tree.commitment(),
+                "reward tree rebuilt successfully"
+            );
         }
 
         tracing::info!(

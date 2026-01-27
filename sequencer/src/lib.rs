@@ -620,22 +620,7 @@ where
         &persistence.clone(),
     );
 
-    // Load reward checkpoint for crash recovery
-    let checkpoint = persistence
-        .load_reward_checkpoint()
-        .await
-        .context("failed to load reward checkpoint")?;
-
-    if let Some((epoch, _)) = &checkpoint {
-        tracing::info!(%epoch, "loaded reward checkpoint");
-    }
-
-    // Initialize reward calculator with checkpoint
-    let epoch_rewards_calculator = {
-        let mut calculator = EpochRewardsCalculator::new(persistence.clone());
-        calculator.last_complete_epoch = checkpoint.as_ref().map(|(epoch, _)| *epoch);
-        Arc::new(Mutex::new(calculator))
-    };
+    let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
@@ -1406,12 +1391,11 @@ pub mod testing {
             );
 
             let node_state = node_state
-            .with_reward_checkpoint_persistence(persistence.clone(), None)
-            .with_current_version(V::Base::version())
-            .with_genesis(state)
-            .with_epoch_height(config.epoch_height)
-            .with_upgrades(upgrades)
-            .with_epoch_start_block(config.epoch_start_block);
+                .with_current_version(V::Base::version())
+                .with_genesis(state)
+                .with_epoch_height(config.epoch_height)
+                .with_upgrades(upgrades)
+                .with_epoch_start_block(config.epoch_start_block);
 
             tracing::info!(
                 i,
