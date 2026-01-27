@@ -15,7 +15,7 @@ use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
@@ -25,8 +25,8 @@ use crate::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
-    v0_3::{RewardAmount, Validator},
-    EpochCommittees, PubKey, ValidatorMap,
+    v0_3::{RegisteredValidator, RewardAmount},
+    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -83,10 +83,7 @@ impl NodeState {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         Ok(None)
     }
 
@@ -97,7 +94,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorMap,
+        _stake: AuthenticatedValidatorMap,
         _block_reward: Option<RewardAmount>,
         _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -126,7 +123,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_all_validators(
         &self,
         _epoch: EpochNumber,
-        _all_validators: ValidatorMap,
+        _all_validators: RegisteredValidatorMap,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -136,7 +133,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _offset: u64,
         _limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         bail!("unimplemented")
     }
 }
