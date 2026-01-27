@@ -1,0 +1,13 @@
+startup_environment
+
+# Use this genesis file to make sure addresses stay correct to the old version
+export ESPRESSO_SEQUENCER_GENESIS_FILE=genesis/demo-binary-upgrade.toml
+
+upgrade_container sequencer0
+upgrade_container permissionless-builder
+
+# submit transactions will have exited due to closed stream
+start_old_container submit-transactions-public
+start_old_container submit-transactions-private
+
+smoke_test
