@@ -172,7 +172,7 @@ impl From<[u8; 32]> for SecretKey {
 
 #[derive(Debug, thiserror::Error)]
 #[error("invalid keypair")]
-pub struct InvalidKeypair(());
+pub struct InvalidKeypair(pub(crate) ());
 
 #[derive(Debug, thiserror::Error)]
 #[error("invalid secret key")]

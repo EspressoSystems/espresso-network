@@ -7,6 +7,9 @@ mod net;
 mod time;
 mod x25519;
 
+#[cfg(feature = "tls")]
+pub mod tls;
+
 #[cfg(feature = "metrics")]
 mod metrics;
 
