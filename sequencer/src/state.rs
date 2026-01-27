@@ -252,11 +252,16 @@ async fn store_state_update(
         if !rewards_delta.is_empty() {
             let account_balances: Vec<(RewardAccountV2, RewardAmount)> = rewards_delta
                 .iter()
-                .filter_map(|account| match reward_merkle_tree_v2.lookup(*account) {
-                    LookupResult::Ok(balance, _) => Some((*account, *balance)),
-                    _ => None,
+                .map(|account| match reward_merkle_tree_v2.lookup(*account) {
+                    LookupResult::Ok(balance, _) => Ok((*account, *balance)),
+                    LookupResult::NotFound(_) => {
+                        bail!("reward account {account} in delta but not found in tree")
+                    },
+                    LookupResult::NotInMemory => {
+                        bail!("reward account {account} in delta but not in memory")
+                    },
                 })
-                .collect();
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
             if !account_balances.is_empty() {
                 tracing::debug!(

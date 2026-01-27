@@ -2041,13 +2041,15 @@ impl SequencerPersistence for Persistence {
         let batch_size: i64 = 10000;
         let mut tx = self.db.read().await?;
 
-        // Check if migration is already completed
-        let (is_completed, mut offset) = query_as::<(bool, i64)>(
+        // Check migration progress - row may not exist yet
+        let result = query_as::<(bool, i64)>(
             "SELECT completed, migrated_rows FROM epoch_migration WHERE table_name = \
              'reward_state'",
         )
-        .fetch_one(tx.as_mut())
+        .fetch_optional(tx.as_mut())
         .await?;
+
+        let (is_completed, mut offset) = result.unwrap_or((false, 0));
 
         if is_completed {
             tracing::info!("reward state backfill already done");

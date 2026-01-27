@@ -908,7 +908,7 @@ impl Header {
                         validated_state.reward_merkle_tree_v2.clone(),
                         instance_state.clone(),
                         coordinator.clone(),
-                        None, // Will fetch header inside task
+                      prev_epoch_header.leader_counts().copied(),
                     );
                 }
 
