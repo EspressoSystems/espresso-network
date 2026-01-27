@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["output_error","output_success"]};
+window.SIDEBAR_ITEMS = {"fn":["format_esp","output_calldata","output_error","output_success","output_warn"],"struct":["CalldataInfo"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NodeSignatureDestination","NodeSignatureInput","NodeSignatureSource","SerializationFormat"],"struct":["NodeSignatureArgs","NodeSignatures","NodeSignaturesSol","OutputArgs"]};
+window.SIDEBAR_ITEMS = {"enum":["NodeSignatureDestination","NodeSignatureInput","NodeSignatureSource","SerializationFormat"],"struct":["NodeSignatureArgs","NodeSignatures","OutputArgs"]};

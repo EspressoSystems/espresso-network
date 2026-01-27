@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["approve","delegate","undelegate"]};
+window.SIDEBAR_ITEMS = {};

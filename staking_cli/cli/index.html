@@ -1,0 +1,165 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Espresso Network"><title>staking_cli::cli - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cli</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../staking_cli/index.html">staking_<wbr>cli</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cli</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#espresso-network" title="Espresso Network">Espresso Network</a><ul><li><a href="#architecture" title="Architecture">Architecture</a></li></ul></li><li><a href="#running-the-demo" title="Running the demo">Running the demo</a></li><li><a href="#development" title="Development">Development</a><ul><li><a href="#documentation" title="Documentation">Documentation</a></li><li><a href="#run-the-tests" title="Run the tests">Run the tests</a></li><li><a href="#building-figures" title="Building figures">Building figures</a></li><li><a href="#building-and-running" title="Building and running">Building and running</a></li></ul></li><li><a href="#license" title="License">License</a><ul><li><a href="#copyright" title="Copyright">Copyright</a></li></ul></li><li><a href="#disclaimer" title="Disclaimer">Disclaimer</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate staking_<wbr>cli</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">staking_cli</a></div><h1>Module <span>cli</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/staking_cli/cli.rs.html#1-634">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="espresso-network"><a class="doc-anchor" href="#espresso-network">§</a>Espresso Network</h2>
+<p><a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml/badge.svg" alt="Build" /></a>
+<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml/badge.svg" alt="Test" /></a>
+<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml/badge.svg" alt="Docs" /></a>
+<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml/badge.svg" alt="Contracts" /></a>
+<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml/badge.svg" alt="Lint" /></a>
+<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml/badge.svg" alt="Audit" /></a>
+<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml/badge.svg" alt="Ubuntu" /></a>
+<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml/badge.svg" alt="Build without lockfile" /></a>
+<a href="https://coveralls.io/github/EspressoSystems/espresso-network?branch=main"><img src="https://coveralls.io/repos/github/EspressoSystems/espresso-network/badge.svg?branch=main" alt="Coverage Status" /></a></p>
+<p>The Espresso Network is the global confirmation layer for rollups in the Ethereum ecosystem. Espresso’s
+<a href="https://docs.espressosys.com/network">global confirmation layer(GCL)</a> provides agreement on inputs to a collection of
+composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
+confirmations in return.</p>
+<ul>
+<li><a href="https://docs.espressosys.com/network/">Official Documentation</a></li>
+<li><a href="https://sequencer.docs.espressosys.com/sequencer/">Rust Documentation</a></li>
+<li><a href="https://sequencer.docs.espressosys.com/contracts/">Smart Contract Documentation</a></li>
+</ul>
+<h4 id="architecture"><a class="doc-anchor" href="#architecture">§</a>Architecture</h4>
+<p>The diagram below shows how the Espresso Confirmation Layer fits into the rollup centric Ethereum ecosystem. See
+<a href="./doc/architecture.md">Architecture</a> for details.</p>
+<p><img src="./doc/espresso-overview.svg" alt="Architecture" /></p>
+<h5 id="zk-rollups-integration"><a class="doc-anchor" href="#zk-rollups-integration">§</a>ZK rollups integration</h5>
+<p>In order for ZK rollups to rely on blocks produced by Espresso as a source of transactions, it is required to adjust the
+circuit that encodes the state update logic. See <a href="doc/zk-integration.md">zk-rollups integration</a> for more details.</p>
+<h2 id="running-the-demo"><a class="doc-anchor" href="#running-the-demo">§</a>Running the demo</h2>
+<p>Refer to <a href="https://github.com/EspressoSystems/sequencer-example-l2">sequencer-example-l2</a> for instructions on how to run
+a dockerized Espresso Sequencer network with an example Layer 2 rollup application.</p>
+<h2 id="development"><a class="doc-anchor" href="#development">§</a>Development</h2>
+<ul>
+<li>Obtain code: <code>git clone git@github.com:EspressoSystems/espresso-network</code>.</li>
+<li>Make sure <a href="https://nixos.org/download.html">nix</a> is installed.</li>
+<li>Activate the environment with <code>nix-shell</code>, or <code>nix develop</code>, or <code>direnv allow</code> if using <a href="https://direnv.net/">direnv</a>.</li>
+<li>For installation without nix please see <a href="./doc/ubuntu.md">ubuntu.md</a>.</li>
+</ul>
+<h3 id="documentation"><a class="doc-anchor" href="#documentation">§</a>Documentation</h3>
+<p>The rust code documentation can be found at <a href="https://sequencer.docs.espressosys.com">sequencer.docs.espressosys.com</a>.
+Please note the disclaimer about API stability at the end of the readme.</p>
+<p>To generate the documentation locally and view it in the browser, run</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>just doc --open</code></pre></div><h3 id="run-the-tests"><a class="doc-anchor" href="#run-the-tests">§</a>Run the tests</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>just pull # to pull docker images
+just test</code></pre></div><h3 id="building-figures"><a class="doc-anchor" href="#building-figures">§</a>Building figures</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>make doc</code></pre></div><h3 id="building-and-running"><a class="doc-anchor" href="#building-and-running">§</a>Building and running</h3>
+<p>Docker images and the <a href="docker-compose-demo.yaml">docker-compose-demo.yaml</a> file are provided for convenience. The
+Docker-based demo fetches the images from the <code>ghcr</code> repository, where they are updated with every push to <code>main</code> on
+GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.</p>
+<p>Build all executables with <code>cargo build --release</code>. You may then start an Espresso network. First, start an
+orchestrator. Choose a port <code>$PORT</code> to run it on and decide how many Espresso nodes <code>$N</code> you will use, then run
+<code>target/release/orchestrator -p $PORT -n $N</code>.</p>
+<p>The Espresso Network will distribute a HotShot configuration to all the nodes which connect to it, which specifies
+consensus parameters like view timers. There is a default config, but you can override any parameters you want by
+passing additional options to the <code>orchestrator</code> executable. Run <code>target/release/orchestrator --help</code> to see a list of
+available options.</p>
+<p>Next, you must launch a <code>cdn</code> instance, which is necessary to facilitate consensus.</p>
+<div class="example-wrap"><pre class="language-bash"><code>just dev-cdn -- -p 1738</code></pre></div>
+<p>In this case, we run it on port 1738.</p>
+<p>Once you have started the orchestrator and the CDN, you must connect <code>$N</code> Espresso nodes to them, after which the
+network will start up automatically. To start one node, run</p>
+<div class="example-wrap"><pre class="language-bash"><code>target/release/sequencer \
+    --orchestrator-url http://localhost:$PORT \
+    --cdn-endpoint &quot;127.0.0.1:1738&quot;  \
+    -- http --port 8083 -- query --storage-path storage -- submit</code></pre></div>
+<p>A useful Bash snippet for running <code>$N</code> nodes simultaneously in the background of your shell is:</p>
+<div class="example-wrap"><pre class="language-bash"><code>for i in `seq $N`; do
+    target/release/sequencer \
+        --orchestrator-url http://localhost:$PORT \
+        --cdn-endpoint &quot;127.0.0.1:1738&quot;  \
+done</code></pre></div>
+<p>For running a full demo natively run <code>just demo-native</code>.</p>
+<h4 id="contracts"><a class="doc-anchor" href="#contracts">§</a>Contracts</h4><h5 id="development-1"><a class="doc-anchor" href="#development-1">§</a>Development</h5>
+<p>A foundry project for the contracts specific to HotShot can be found in the directory <code>contracts</code>.</p>
+<p>To compile</p>
+<div class="example-wrap"><pre class="language-shell"><code>forge build</code></pre></div>
+<p>To run the tests</p>
+<div class="example-wrap"><pre class="language-shell"><code>just sol-test</code></pre></div>
+<p>In order to avoid constant warnings about checksum mismatches with <a href="https://github.com/roynalnaruto/svm-rs">svm-rs</a>
+managed <code>solc</code> we set <code>FOUNDRY_SRC</code> to solc installed via flake.nix.</p>
+<ul>
+<li>To use the contracts from rust generate the rust contracts bindings: <code>just gen-bindings</code>.</li>
+<li>Bindings are only generated for contracts in the <code>contracts/src</code> folder</li>
+</ul>
+<p>To generate documentation in <code>./docs</code> for solidity code run</p>
+<div class="example-wrap"><pre class="language-shell"><code>forge doc</code></pre></div><h5 id="deployment-via-foundry"><a class="doc-anchor" href="#deployment-via-foundry">§</a>Deployment via Foundry</h5>
+<p>To deploy the contracts to a local testnet, first run a dev chain (e.g. <code>anvil</code>), then run</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>forge script DeployHotShot --broadcast --rpc-url local</code></pre></div>
+<p>To deploy to sepolia set <code>SEPOLIA_RPC_URL</code> and <code>MNEMONIC</code> env vars and run</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>forge script DeployHotShot --broadcast --rpc-url sepolia</code></pre></div>
+<p>To additionally verify the contract on etherscan set the <code>ETHERSCAN_API_KEY</code> env var and run</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>forge script DeployHotShot --broadcast --rpc-url sepolia --verify</code></pre></div>
+<p>Running the script will save a file with details about the deployment in <code>contracts/broadcast/$CHAIN_ID</code>.</p>
+<h5 id="deployment-via-rust"><a class="doc-anchor" href="#deployment-via-rust">§</a>Deployment via Rust</h5>
+<p><strong>Build and Run</strong></p>
+<div class="example-wrap"><pre class="language-bash"><code>cargo run --bin deploy -- [FLAGS/OPTIONS]</code></pre></div>
+<p>Or, for help</p>
+<div class="example-wrap"><pre class="language-bash"><code>cargo run --bin deploy -- --help</code></pre></div>
+<p><strong>Configuration</strong></p>
+<p>You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
+variables (see the code for the full list <code>sequencer/src/bin/deploy.rs</code>). Common environment variables:</p>
+<ul>
+<li><code>ESPRESSO_SEQUENCER_L1_PROVIDER</code> — L1 JSON-RPC endpoint</li>
+<li><code>ESPRESSO_SEQUENCER_ETH_MNEMONIC</code> — Mnemonic for the deployer wallet</li>
+<li><code>ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS</code> — Multisig admin address</li>
+<li><code>ESPRESSO_DEPLOYER_ACCOUNT_INDEX</code> — Account index in the wallet</li>
+<li><code>ESPRESSO_SEQUENCER_URL</code> — Sequencer node URL for HotShot config</li>
+</ul>
+<p>You can use a <code>.env</code> file and load it with:</p>
+<div class="example-wrap"><pre class="language-bash"><code>set -a
+source .env
+set +a</code></pre></div><h5 id="deployment-via-docker"><a class="doc-anchor" href="#deployment-via-docker">§</a>Deployment via Docker</h5>
+<p>You can run the deployer in a container but you need to stand up all services via docker compose</p>
+<div class="example-wrap"><pre class="language-bash"><code>just pull
+just demo deploy-prover-contracts</code></pre></div>
+<p>If making dev changes locally run, <code>./scripts/build-docker-images-native --image $IMAGE_TO_BE_REBUILT</code> instead of
+<code>just pull</code>.</p>
+<h5 id="dry-run-upgrades-via-docker"><a class="doc-anchor" href="#dry-run-upgrades-via-docker">§</a>Dry run upgrades via Docker</h5>
+<p>You can only run a dry run for multisig upgrades but you need to stand up all services via docker compose Example:</p>
+<div class="example-wrap"><pre class="language-bash"><code>just pull
+just demo
+docker compose run --rm upgrade-prover-contracts-v2 /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig</code></pre></div>
+<p>If making dev changes locally run, <code>./scripts/build-docker-images-native</code> instead of <code>just pull</code>.</p>
+<p>For AWS ECS, ensure all required environment variables and secrets are set in your task definition.</p>
+<h4 id="logging"><a class="doc-anchor" href="#logging">§</a>Logging</h4>
+<p>You can control the log level using the <code>RUST_LOG</code> environment variable. For example:</p>
+<div class="example-wrap"><pre class="language-bash"><code>RUST_LOG=info cargo run --bin deploy -- [FLAGS]
+RUST_LOG=debug cargo run --bin deploy -- [FLAGS]</code></pre></div>
+<p>For Docker:</p>
+<div class="example-wrap"><pre class="language-bash"><code>docker run --env-file .env.docker -e RUST_LOG=debug ...</code></pre></div>
+<p>(see .env.docker.example for the vars required for .env.docker)</p>
+<h4 id="folder-structure-rationale"><a class="doc-anchor" href="#folder-structure-rationale">§</a>Folder Structure Rationale</h4>
+<ul>
+<li>code for demo purposes goes into the <code>contracts/demo</code> folder</li>
+<li>code that eventually ends up in production goes into the <code>contracts/src</code> folder</li>
+</ul>
+<h4 id="benchmarking-and-profiling"><a class="doc-anchor" href="#benchmarking-and-profiling">§</a>Benchmarking and profiling</h4>
+<p>The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
+by running:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>&gt; just gas-benchmarks
+&gt; cat gas-benchmarks.txt
+[PASS] test_verify_succeeds() (gas: <span class="number">507774</span>)
+[PASS] testCorrectUpdateBench() (gas: <span class="number">594533</span>)</code></pre></div>
+<p>In order to profile the gas consumption of the light client contract do the following:</p>
+<ol>
+<li>Set the environment variables <code>SEPOLIA_RPC_URL</code>, <code>MNEMONIC</code> and <code>ETHERSCAN_API_KEY</code>.</li>
+<li><code>just lc-contract-profiling-sepolia</code></li>
+<li>Create an account on <a href="https://app.sentio.xyz/">sentio.xyz</a>.</li>
+<li>Use the hash of the transaction generated in step two when calling the function <code>newFinalizedState</code> in order to
+obtain the gas profile.</li>
+</ol>
+<h2 id="license"><a class="doc-anchor" href="#license">§</a>License</h2><h3 id="copyright"><a class="doc-anchor" href="#copyright">§</a>Copyright</h3>
+<p><strong>(c) 2022 Espresso Systems</strong> <code>espresso-sequencer</code> was developed by Espresso Systems. While we plan to adopt an open
+source license, we have not yet selected one. As such, all rights are reserved for the time being. Please reach out to
+us if you have thoughts on licensing.</p>
+<h2 id="disclaimer"><a class="doc-anchor" href="#disclaimer">§</a>Disclaimer</h2>
+<p><strong>DISCLAIMER:</strong> This software is provided “as is” and its security has not been externally audited. Use at your own
+risk.</p>
+<p><strong>DISCLAIMER:</strong> The Rust library crates provided in this repository are intended primarily for use by the binary targets
+in this repository. We make no guarantees of public API stability. If you are building on these crates, reach out by
+opening an issue to discuss the APIs you need.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Args.html" title="struct staking_cli::cli::Args">Args</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.AddressExt.html" title="trait staking_cli::cli::AddressExt">Address<wbr>Ext</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.decode_and_display_logs.html" title="fn staking_cli::cli::decode_and_display_logs">decode_<wbr>and_<wbr>display_<wbr>logs</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit.html" title="fn staking_cli::cli::exit">exit</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit_err.html" title="fn staking_cli::cli::exit_err">exit_<wbr>err</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.resolve_node_signatures.html" title="fn staking_cli::cli::resolve_node_signatures">resolve_<wbr>node_<wbr>signatures</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.run.html" title="fn staking_cli::cli::run">run</a></dt></dl></section></div></main></body></html>

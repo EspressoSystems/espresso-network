@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["display_stake_table","fetch_token_address","stake_table_info"]};
+window.SIDEBAR_ITEMS = {"enum":["StakeTableContractVersion"],"fn":["display_stake_table","fetch_stake_table_version","fetch_token_address","stake_table_info"]};
