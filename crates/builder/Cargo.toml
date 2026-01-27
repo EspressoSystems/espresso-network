@@ -6,11 +6,12 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [features]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
+default = ["fee", "pos", "drb-and-header", "da-upgrade", "epoch-reward"]
 fee = ["sequencer/fee"]
 pos = ["sequencer/pos"]
 drb-and-header = ["sequencer/drb-and-header"]
 da-upgrade = ["sequencer/da-upgrade"]
+epoch-reward = ["sequencer/epoch-reward"]
 
 [dependencies]
 alloy = { workspace = true }

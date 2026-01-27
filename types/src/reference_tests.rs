@@ -263,6 +263,7 @@ async fn reference_header(version: Version) -> Header {
         None,
         version,
         Some(staket_table_hash),
+        None,
     )
 }
 
