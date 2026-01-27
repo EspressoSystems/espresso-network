@@ -7,13 +7,16 @@ use std::{
 
 use alloy::{
     contract::Error as ContractError,
-    network::{Ethereum, EthereumWallet},
+    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
     primitives::{
         utils::{format_ether, parse_ether},
         Address, U256,
     },
     providers::{PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider},
-    rpc::{client::RpcClient, types::TransactionReceipt},
+    rpc::{
+        client::RpcClient,
+        types::{TransactionReceipt, TransactionRequest},
+    },
     signers::local::PrivateKeySigner,
     transports::{http::Http, TransportError},
 };
@@ -33,13 +36,11 @@ use thiserror::Error;
 use url::Url;
 
 use crate::{
-    delegation::{approve, delegate},
-    funding::{send_esp, send_eth},
     info::fetch_token_address,
     parse::{parse_bls_priv_key, parse_state_priv_key, Commission, ParseCommissionError},
     receipt::ReceiptExt as _,
-    registration::register_validator,
     signature::NodeSignatures,
+    transaction::Transaction,
     tx_log::{execute_signed_tx_log, sign_all_transactions, TxInput, TxLog, TxPhase},
     Config,
 };
@@ -328,6 +329,7 @@ struct TransactionProcessor<P> {
     funder: P,
     stake_table: Address,
     token: Address,
+    version: StakeTableContractVersion,
 }
 
 impl<P: Provider + Clone> TransactionProcessor<P> {
@@ -339,9 +341,18 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
 
     async fn send_next(&self, tx: StakeTableTx) -> Result<PendingTransactionBuilder<Ethereum>> {
         match tx {
-            StakeTableTx::SendEth { to, amount } => send_eth(&self.funder, to, amount).await,
+            StakeTableTx::SendEth { to, amount } => {
+                let tx = TransactionRequest::default().with_to(to).with_value(amount);
+                Ok(self.funder.send_transaction(tx).await?)
+            },
             StakeTableTx::SendEsp { to, amount } => {
-                send_esp(&self.funder, self.token, to, amount).await
+                Transaction::Transfer {
+                    token: self.token,
+                    to,
+                    amount,
+                }
+                .send(&self.funder)
+                .await
             },
             StakeTableTx::RegisterValidator {
                 from,
@@ -349,23 +360,38 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                 payload,
             } => {
                 let metadata_uri = "https://example.com/metadata".parse()?;
-                register_validator(
-                    self.provider(from)?,
-                    self.stake_table,
+                Transaction::RegisterValidator {
+                    stake_table: self.stake_table,
                     commission,
                     metadata_uri,
-                    *payload,
-                )
+                    payload: *payload,
+                    version: self.version,
+                }
+                .send(self.provider(from)?)
                 .await
             },
             StakeTableTx::Approve { from, amount } => {
-                approve(self.provider(from)?, self.token, self.stake_table, amount).await
+                Transaction::Approve {
+                    token: self.token,
+                    spender: self.stake_table,
+                    amount,
+                }
+                .send(self.provider(from)?)
+                .await
             },
             StakeTableTx::Delegate {
                 from,
                 validator,
                 amount,
-            } => delegate(self.provider(from)?, self.stake_table, validator, amount).await,
+            } => {
+                Transaction::Delegate {
+                    stake_table: self.stake_table,
+                    validator,
+                    amount,
+                }
+                .send(self.provider(from)?)
+                .await
+            },
         }
     }
 
@@ -755,6 +781,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
                 funder: token_holder_provider,
                 stake_table,
                 token,
+                version,
             },
             queues: TransactionQueues {
                 funding,
@@ -1252,16 +1279,23 @@ pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> 
         let delegator_signer = generate_delegator_signer(delegator_index);
         let delegator_address = delegator_signer.address();
 
-        send_eth(&funder_provider, delegator_address, fund_amount_eth)
+        // Send ETH for gas
+        let eth_tx = TransactionRequest::default()
+            .with_to(delegator_address)
+            .with_value(fund_amount_eth);
+        funder_provider
+            .send_transaction(eth_tx)
             .await?
             .assert_success()
             .await?;
-        send_esp(
-            &funder_provider,
-            token_address,
-            delegator_address,
-            fund_amount_esp,
-        )
+
+        // Send ESP tokens
+        Transaction::Transfer {
+            token: token_address,
+            to: delegator_address,
+            amount: fund_amount_esp,
+        }
+        .send(&funder_provider)
         .await?
         .assert_success()
         .await?;
@@ -1270,12 +1304,12 @@ pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> 
             .wallet(EthereumWallet::from(delegator_signer))
             .connect_client(shared_client.clone());
 
-        approve(
-            &delegator_provider,
-            token_address,
-            config.stake_table_address,
-            fund_amount_esp,
-        )
+        Transaction::Approve {
+            token: token_address,
+            spender: config.stake_table_address,
+            amount: fund_amount_esp,
+        }
+        .send(&delegator_provider)
         .await?
         .assert_success()
         .await?;
@@ -1312,12 +1346,12 @@ pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> 
                     .wallet(EthereumWallet::from(delegator_signer.clone()))
                     .connect_client(shared_client.clone());
 
-                crate::delegation::undelegate(
-                    &delegator_provider,
-                    config.stake_table_address,
-                    *validator,
-                    delegation_amount,
-                )
+                Transaction::Undelegate {
+                    stake_table: config.stake_table_address,
+                    validator: *validator,
+                    amount: delegation_amount,
+                }
+                .send(&delegator_provider)
                 .await?
                 .assert_success()
                 .await?;
@@ -1347,12 +1381,12 @@ pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> 
                 .wallet(EthereumWallet::from(delegator_signer))
                 .connect_client(shared_client.clone());
 
-            delegate(
-                &delegator_provider,
-                config.stake_table_address,
+            Transaction::Delegate {
+                stake_table: config.stake_table_address,
                 validator,
-                delegation_amount,
-            )
+                amount: delegation_amount,
+            }
+            .send(&delegator_provider)
             .await?
             .assert_success()
             .await?;

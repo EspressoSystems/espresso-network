@@ -10,10 +10,12 @@ This CLI helps users interact with the Espresso staking contract, either as a de
 - [Espresso staking CLI](#espresso-staking-cli)
   - [Getting Started](#getting-started)
     - [Overview](#overview)
-    - [Choose your type of wallet (mnemonic based or Ledger)](#choose-your-type-of-wallet-mnemonic-based-or-ledger)
+    - [Getting Help](#getting-help)
+    - [Choose your type of wallet (mnemonic, private key, or Ledger)](#choose-your-type-of-wallet-mnemonic-private-key-or-ledger)
     - [Initialize the configuration file](#initialize-the-configuration-file)
     - [Inspect the configuration](#inspect-the-configuration)
     - [View the stake table](#view-the-stake-table)
+  - [Calldata Export (for Multisig Wallets)](#calldata-export-for-multisig-wallets)
   - [Delegators (or stakers)](#delegators-or-stakers)
     - [Delegating](#delegating)
     - [Undelegating](#undelegating)
@@ -100,6 +102,11 @@ Options:
 
             [env: STAKE_TABLE_ADDRESS=]
 
+        --espresso-url [<ESPRESSO_URL>]
+            Espresso sequencer API URL for reward claims
+
+            [env: ESPRESSO_URL=]
+
         --mnemonic <MNEMONIC>
             The mnemonic to use when deriving the key
 
@@ -116,6 +123,34 @@ Options:
             NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app settings.
 
             [env: USE_LEDGER=]
+
+        --private-key <PRIVATE_KEY>
+            Raw private key (hex-encoded with or without 0x prefix)
+
+            [env: PRIVATE_KEY=]
+
+        --export-calldata
+            Export calldata for multisig wallets instead of sending transaction
+
+            [env: EXPORT_CALLDATA=]
+
+        --sender-address <SENDER_ADDRESS>
+            Sender address for calldata export (required for simulation)
+
+            [env: SENDER_ADDRESS=]
+
+        --skip-simulation
+            Skip eth_call validation when exporting calldata
+
+            [env: SKIP_SIMULATION=]
+
+        --output <OUTPUT>
+            Output file path. If not specified, outputs to stdout
+
+        --format <FORMAT>
+            Output format for calldata export
+
+            [possible values: json, toml]
 
 ```
 
@@ -136,22 +171,45 @@ Options:
 -h, --help                                   Print help
 ```
 
-### Choose your type of wallet (mnemonic based or Ledger)
+### Choose your type of wallet (mnemonic, private key, or Ledger)
 
-First, determine if you would like to use a Mnemonic phrase or ledger hardware wallet.
+**Security** Utmost care must be taken to avoid leaking the Ethereum private key used for staking or registering
+validators. There is currently no built-in key rotation feature for Ethereum keys.
 
-If you don't know which account index to use, you can find it by running:
+First, determine which signing method you would like to use:
+
+1. **Ledger hardware wallet** - (recommended) sign transactions with a Ledger device
+1. **Mnemonic phrase** - derive keys from a BIP-39 mnemonic with account index
+1. **Private key** - use a raw hex-encoded private key directly
+
+**Security recommendations:** For managing significant funds on mainnet, we recommend using a hardware wallet (Ledger)
+for extra security. Hardware wallets keep your private keys isolated from your computer, offering some protection
+against malware and phishing attacks. If you need support for other hardware signers, please open an issue at
+https://github.com/EspressoSystems/espresso-network.
+
+For mnemonics and private keys, to avoid passing secrets on the command line, use environment variables:
+
+- `MNEMONIC` for mnemonic phrase
+- `PRIVATE_KEY` for raw private key
+
+If using a ledger or mnemonic and you don't know which account index to use, you can find it by running:
 
 ```bash
 staking-cli --mnemonic MNEMONIC --account-index 0 account
 staking-cli --mnemonic MNEMONIC --account-index 1 account
 # etc, or
-staking-cli --ledger-index 0 account
-staking-cli --ledger-index 1 account
+staking-cli --ledger --account-index 0 account
+staking-cli --ledger --account-index 1 account
 # etc
 ```
 
 Repeat with different indices until you find the address you want to use.
+
+If using a private key, ensure PRIVATE_KEY env var is set
+
+```bash
+staking-cli account
+```
 
 Note that for ledger signing to work
 
@@ -159,32 +217,88 @@ Note that for ledger signing to work
 1. the Ethereum app needs to be open,
 1. blind signing needs to be enabled in the Ethereum app settings on the ledger.
 
-To avoid passing the mnemonic on the command line, the MNEMONIC env var can be set instead.
-
-### Initialize the configuration file
+### Initialize the configuration file (optional)
 
 Once you've identified your desired account index (here 2), initialize a configuration file:
 
     staking-cli init --mnemonic MNEMONIC --account-index 2
     # or
-    staking-cli init --ledger-index 2
+    staking-cli init --ledger --account-index 2
+    # or
+    staking-cli init --private-key 0x1234...abcd
 
 This creates a TOML config file with the contracts of our decaf Testnet, deployed on Sepolia. With the config file you
 don't need to provide the configuration values every time you run the CLI.
 
-NOTE: only for this `init` command the `--mnemonic` and `--ledger-index` flags are specified _after_ the command.
+NOTE: only for this `init` command the wallet flags are specified _after_ the command.
 
 ### Inspect the configuration
 
 You can inspect the configuration file by running:
 
-         staking-cli config
+    staking-cli config
 
 ### View the stake table
 
 You can use the following command to display the current L1 stake table:
 
     staking-cli stake-table
+
+## Calldata Export (for Multisig Wallets)
+
+If you're using a multisig wallet (e.g., Safe, Gnosis Safe) or other smart contract wallet, you can export the
+transaction calldata instead of signing and sending the transaction directly. This allows you to propose the transaction
+through your multisig's interface.
+
+To export calldata for any command, add the `--export-calldata` flag:
+
+```bash
+# Export delegate calldata as JSON (default)
+staking-cli --export-calldata delegate --validator-address 0x12...34 --amount 100
+
+# Export as TOML
+staking-cli --export-calldata --format toml delegate --validator-address 0x12...34 --amount 100
+
+# Save to file
+staking-cli --export-calldata --format json --output delegate.json delegate --validator-address 0x12...34 --amount 100
+```
+
+The output includes the target contract address and the encoded calldata:
+
+```json
+{
+  "to": "0x...",
+  "data": "0x..."
+}
+```
+
+This works with all state-changing commands: `approve`, `delegate`, `undelegate`, `claim-withdrawal`,
+`claim-validator-exit`, `claim-rewards`, `register-validator`, `update-commission`, `update-metadata-uri`,
+`update-consensus-keys`, `deregister-validator`, and `transfer`.
+
+Note: When using `--export-calldata`, no wallet/signer is required since the transaction is not sent.
+
+### Calldata Simulation
+
+By default, the CLI simulates exported calldata via `eth_call` to catch errors before you submit the transaction through
+your multisig. Provide `--sender-address` (your multisig address) for accurate simulation:
+
+```bash
+staking-cli --export-calldata --sender-address 0xYourSafe... delegate --validator-address 0x12...34 --amount 100
+```
+
+To skip simulation (e.g., for batch exports):
+
+```bash
+staking-cli --export-calldata --skip-simulation delegate --validator-address 0x12...34 --amount 100
+```
+
+Note: The `claim-rewards` command always requires `--sender-address` (even with `--skip-simulation`) because the address
+is needed to fetch the reward proof from the Espresso node:
+
+```bash
+staking-cli --export-calldata --sender-address 0xYourSafe... --espresso-url https://... claim-rewards
+```
 
 ## Delegators (or stakers)
 
@@ -246,7 +360,8 @@ This section covers commands for node operators.
 
 ### Registering a validator
 
-1.  Obtain your validator's BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare a metadata URL.
+1.  Obtain your validator's BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare
+    a metadata URL.
 1.  Use the `register-validator` command to register your validator.
 
         staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
@@ -283,6 +398,7 @@ This section covers commands for node operators.
 ### Updating your commission
 
 Validators can update their commission rate, subject to the following rate limits:
+
 - Commission updates are limited to once per week (7 days by default)
 - Commission increases are capped at 5% per update (e.g., from 10% to 15%)
 - Commission decreases have no limit
@@ -297,8 +413,8 @@ Note: The minimum time interval and maximum increase are contract parameters tha
 
 ### Updating your metadata URL
 
-Validators can update their metadata URL at any time. The metadata URL is used to provide additional
-information about your validator but the official schema is yet to be decided.
+Validators can update their metadata URL at any time. The metadata URL is used to provide additional information about
+your validator but the official schema is yet to be decided.
 
 To update your metadata URL:
 
@@ -309,12 +425,13 @@ To clear your metadata URL (set it to empty):
     staking-cli update-metadata-uri --no-metadata-uri
 
 The metadata URL:
+
 - Must be a valid URL (e.g., starting with `https://`) unless using --no-metadata-uri flag
 - Can be empty when using --no-metadata-uri flag
 - Cannot exceed 2048 bytes
 
-Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by
-listening to registration and update events.
+Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by listening to registration
+and update events.
 
 ### De-registering your validator
 
@@ -354,12 +471,13 @@ key updates. The exported payload can later be used to build the Ethereum transa
 
 Output formats:
 
-- JSON to stdout (default): `staking-cli export-node-signatures --address 0x12...34 --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>`
+- JSON to stdout (default):
+  `staking-cli export-node-signatures --address 0x12...34 --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>`
 - JSON to file: `--output signatures.json`
 - TOML to file: `--output signatures.toml`
 - Explicit format override: `--output signatures.json --format toml` (saves TOML content to .json file)
 
-The command will generate a signature payload file that doesn't contain any secrets: 
+The command will generate a signature payload file that doesn't contain any secrets:
 
 ```toml
 address = "0x..."
@@ -378,7 +496,8 @@ Format handling:
 
 - File extension auto-detection: `.json` and `.toml` files are automatically parsed in the correct format
 - Stdin defaults to JSON: `cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99`
-- Explicit format for stdin: `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
+- Explicit format for stdin:
+  `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
 
 ### Demo Commands
 

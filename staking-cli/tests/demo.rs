@@ -4,12 +4,12 @@ use alloy::primitives::{utils::parse_ether, Address, U256};
 use anyhow::Result;
 use common::{Signer, TestSystemExt};
 use espresso_contract_deployer::build_signer;
-use hotshot_contract_adapter::sol_types::StakeTableV2;
+use hotshot_contract_adapter::{sol_types::StakeTableV2, stake_table::StakeTableContractVersion};
 use rand::{rngs::StdRng, SeedableRng};
 use rstest::rstest;
 use staking_cli::{
     demo::generate_delegator_signer, deploy::TestSystem, parse::Commission,
-    signature::NodeSignatures,
+    signature::NodeSignatures, transaction::Transaction,
 };
 
 mod common;
@@ -54,22 +54,28 @@ impl DemoTestExt for TestSystem {
                 .wallet(alloy::network::EthereumWallet::from(signer))
                 .connect_http(self.rpc_url.clone());
 
-            staking_cli::delegation::approve(&provider, self.token, self.stake_table, fund_amount)
-                .await?
-                .get_receipt()
-                .await?;
+            Transaction::Approve {
+                token: self.token,
+                spender: self.stake_table,
+                amount: fund_amount,
+            }
+            .send(&provider)
+            .await?
+            .get_receipt()
+            .await?;
 
             let payload = NodeSignatures::create(validator_address, &bls_key, &state_key);
             let metadata_uri = "https://example.com/metadata".parse()?;
             let commission = Commission::try_from("10.0")?;
 
-            staking_cli::registration::register_validator(
-                &provider,
-                self.stake_table,
+            Transaction::RegisterValidator {
+                stake_table: self.stake_table,
                 commission,
                 metadata_uri,
                 payload,
-            )
+                version: StakeTableContractVersion::V2,
+            }
+            .send(&provider)
             .await?
             .get_receipt()
             .await?;
