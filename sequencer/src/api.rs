@@ -2641,9 +2641,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{
-            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
-        },
+        v0_4::{RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2},
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
@@ -2686,10 +2684,7 @@ mod test {
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
-    use jf_merkle_tree_compat::{
-        prelude::{MerkleProof, Sha3Node},
-        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
-    };
+    use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
@@ -7361,8 +7356,8 @@ mod test {
         }
 
         // Insert reward state at height 5
-        let account_json = serde_json::to_value(&account1)?;
-        let balance_json = serde_json::to_value(&RewardAmount::from(1000u64))?;
+        let account_json = serde_json::to_value(account1)?;
+        let balance_json = serde_json::to_value(RewardAmount::from(1000u64))?;
         query("INSERT INTO reward_state (height, account, balance) VALUES ($1, $2, $3)")
             .bind(5i64)
             .bind(&account_json)
