@@ -83,6 +83,7 @@ jf-rescue = { workspace = true }
 jf-advz = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 libp2p = { workspace = true }
+moka = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }

@@ -13,7 +13,11 @@ use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, traits::node_implementation::ConsensusTime,
 };
 use serde_json::Value;
-use sqlx::{query, query_as, sqlite::SqlitePoolOptions, QueryBuilder, SqlitePool};
+use sqlx::{
+    query, query_as,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    QueryBuilder, SqlitePool,
+};
 
 /// Different ways to ask the database for a leaf.
 #[derive(Clone, Copy, Debug, Display, From)]
@@ -34,6 +38,14 @@ pub trait Storage: Sized + Send + Sync + 'static {
     /// This is an async, fallible version of [`Default::default`]. If `Self: Default`, this is
     /// equivalent to `ready(Ok(<Self as Default>::default()))`.
     fn default() -> impl Send + Future<Output = Result<Self>>;
+
+    /// Get the number of blocks known to be in the chain.
+    ///
+    /// This is equivalent to one more than the block number of the latest known block.
+    ///
+    /// Because the database is not constantly being updated, this may be an underestimate of the
+    /// true number of blocks that exist.
+    fn block_height(&self) -> impl Send + Future<Output = Result<u64>>;
 
     /// Get the earliest available leaf which is later than or equal to the requested leaf.
     ///
@@ -80,44 +92,74 @@ pub trait Storage: Sized + Send + Sync + 'static {
 }
 
 #[derive(Clone, Debug)]
-pub struct SqliteOptions {
+#[cfg_attr(feature = "clap", derive(clap::Parser))]
+pub struct LightClientSqliteOptions {
     /// Maximum number of simultaneous DB connections to allow.
+    #[cfg_attr(
+        feature = "clap",
+        clap(
+            long = "light-client-db-num-connections",
+            env = "LIGHT_CLIENT_DB_NUM_CONNECTIONS",
+            default_value = "5",
+        )
+    )]
     pub num_connections: u32,
 
     /// Maximum number of leaves to cache in the local DB.
+    #[cfg_attr(
+        feature = "clap",
+        clap(
+            long = "light-client-db-num-leaves",
+            env = "LIGHT_CLIENT_DB_NUM_LEAVES",
+            default_value = "100",
+        )
+    )]
     pub num_leaves: u32,
 
     /// Maximum number of stake tables to cache in the local DB.
+    #[cfg_attr(
+        feature = "clap",
+        clap(
+            long = "light-client-db-num-stake-tables",
+            env = "LIGHT_CLIENT_DB_NUM_STAKE_TABLES",
+            default_value = "100",
+        )
+    )]
     pub num_stake_tables: u32,
 
     /// Create or open storage that is persisted on the file system.
     ///
     /// If not present, the database will exist only in memory and will be destroyed when the
     /// [`SqlitePersistence`] object is dropped.
-    pub path: Option<PathBuf>,
+    #[cfg_attr(
+        feature = "clap",
+        clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")
+    )]
+    pub lc_path: Option<PathBuf>,
 }
 
-impl Default for SqliteOptions {
+impl Default for LightClientSqliteOptions {
     fn default() -> Self {
         Self {
             num_connections: 5,
             num_leaves: 100,
             num_stake_tables: 100,
-            path: None,
+            lc_path: None,
         }
     }
 }
 
-impl SqliteOptions {
+impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
     pub async fn connect(self) -> Result<SqliteStorage> {
-        let path = match &self.path {
+        let path = match &self.lc_path {
             Some(path) => path.to_str().context("invalid file path")?,
             None => ":memory:",
         };
+        let opt = SqliteConnectOptions::from_str(path)?.create_if_missing(true);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
-            .connect(path)
+            .connect_with(opt)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
 
@@ -139,7 +181,15 @@ pub struct SqliteStorage {
 
 impl Storage for SqliteStorage {
     async fn default() -> Result<Self> {
-        SqliteOptions::default().connect().await
+        LightClientSqliteOptions::default().connect().await
+    }
+
+    async fn block_height(&self) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let (height,) = query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
+            .fetch_one(tx.as_mut())
+            .await?;
+        Ok(height)
     }
 
     async fn leaf_upper_bound(
@@ -461,6 +511,20 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_block_height() {
+        let db = SqliteStorage::default().await.unwrap();
+
+        // Test with empty db.
+        assert_eq!(db.block_height().await.unwrap(), 0);
+
+        // Test with nonconsecutive leaves.
+        let leaf = leaf_chain::<EpochVersion>(100..101).await.remove(0);
+        db.insert_leaf(leaf).await.unwrap();
+        assert_eq!(db.block_height().await.unwrap(), 101);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_leaf_upper_bound_exact() {
         let db = SqliteStorage::default().await.unwrap();
 
@@ -570,7 +634,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_gc_last_inserted() {
-        let db = SqliteOptions {
+        let db = LightClientSqliteOptions {
             num_leaves: 1,
             ..Default::default()
         }
@@ -595,7 +659,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_gc_last_selected() {
-        let db = SqliteOptions {
+        let db = LightClientSqliteOptions {
             num_leaves: 2,
             ..Default::default()
         }
@@ -742,7 +806,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_stake_table_gc() {
-        let db = SqliteOptions {
+        let db = LightClientSqliteOptions {
             num_stake_tables: 2,
             ..Default::default()
         }

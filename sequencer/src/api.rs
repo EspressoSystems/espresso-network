@@ -1,5 +1,6 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
+use alloy::primitives::{Address, U256};
 use anyhow::{bail, ensure, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -27,6 +28,7 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
+use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -48,12 +50,14 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
+use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
 use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
+    api::data_source::TokenDataSource,
     catchup::{
         add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state, CatchupStorage,
@@ -91,12 +95,23 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
     // without waiting.
     #[derivative(Debug = "ignore")]
     sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
+
+    // we cache `token_contract_address` for the lifetime of the program, since we do not expect this to ever change
+    token_contract_address: Cache<(), Address>,
+
+    // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
+    token_supply: Cache<(), U256>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState<N, P, V> {
     fn new(context_init: impl Future<Output = SequencerContext<N, P, V>> + Send + 'static) -> Self {
         Self {
             sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
+            token_contract_address: Cache::builder().max_capacity(1).build(),
+            token_supply: Cache::builder()
+                .max_capacity(1)
+                .time_to_live(Duration::from_secs(3600))
+                .build(),
         }
     }
 
@@ -181,6 +196,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
 }
 
 impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
+    TokenDataSource<SeqTypes> for StorageState<N, P, D, V>
+{
+    async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
+        self.as_ref().get_total_supply_l1().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
     SubmitDataSource<N, P> for StorageState<N, P, D, V>
 {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
@@ -258,6 +281,62 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref()
             .stake_table_events(from_l1_block, to_l1_block)
             .await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDataSource<SeqTypes>
+    for ApiState<N, P, V>
+{
+    async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
+        match self.token_supply.get(&()).await {
+            Some(supply) => Ok(supply),
+            None => match self.token_contract_address.get(&()).await {
+                Some(token_contract_address) => {
+                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                    let provider = node_state.l1_client.provider;
+
+                    let token = EspToken::new(token_contract_address, provider.clone());
+
+                    let supply = token
+                        .totalSupply()
+                        .call()
+                        .await
+                        .context("Failed to retrieve totalSupply from the contract")?;
+
+                    self.token_supply.insert((), supply).await;
+
+                    Ok(supply)
+                },
+                None => {
+                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                    let stake_table_address = node_state
+                        .chain_config
+                        .stake_table_contract
+                        .context("No stake table contract in chain config")?;
+
+                    let provider = node_state.l1_client.provider;
+
+                    let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
+                    let token_contract_address = stake_table.token().call().await?;
+
+                    self.token_contract_address
+                        .insert((), token_contract_address)
+                        .await;
+
+                    let token = EspToken::new(token_contract_address, provider.clone());
+
+                    let supply = token
+                        .totalSupply()
+                        .call()
+                        .await
+                        .context("Failed to retrieve totalSupply from the contract")?;
+
+                    self.token_supply.insert((), supply).await;
+
+                    Ok(supply)
+                },
+            },
+        }
     }
 }
 
@@ -5720,6 +5799,73 @@ mod test {
         tracing::info!("block_reward={block_reward:?}");
 
         assert!(block_reward.0 > U256::ZERO);
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(PosVersionV4::new())]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_token_supply_api<Ver: Versions>(#[case] versions: Ver) -> anyhow::Result<()> {
+        let epoch_height = 10;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 1;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<Ver>(DelegationConfig::VariableAmounts, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, versions).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(3)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let total_minted_supply = client
+            .get::<String>("token/total-minted-supply")
+            .send()
+            .await
+            .expect("failed to get total_minted_supply");
+        tracing::info!("total_minted_supply={total_minted_supply:?}");
+
+        assert_eq!(total_minted_supply, "100000.0");
 
         Ok(())
     }

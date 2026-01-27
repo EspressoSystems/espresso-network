@@ -345,6 +345,7 @@ struct InnerTestClient {
     first_epoch_with_dynamic_stake_table: u64,
     missing_quorums: HashSet<u64>,
     invalid_quorums: HashSet<u64>,
+    mock_block_height: Option<u64>,
 }
 
 impl InnerTestClient {
@@ -556,6 +557,9 @@ impl TestClient {
             first_epoch_with_dynamic_stake_table: EpochNumber::new(
                 inner.first_epoch_with_dynamic_stake_table,
             ),
+
+            #[cfg(feature = "decaf")]
+            decaf_first_pos_epoch: None,
         }
     }
 
@@ -630,9 +634,21 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.vid_common(height, self.epoch_height)
     }
+
+    pub async fn mock_block_height(&self, height: u64) {
+        let mut inner = self.inner.lock().await;
+        inner.mock_block_height = Some(height);
+    }
 }
 
 impl Client for TestClient {
+    async fn block_height(&self) -> Result<u64> {
+        let inner = self.inner.lock().await;
+        Ok(inner
+            .mock_block_height
+            .unwrap_or_else(|| inner.leaves.len() as u64))
+    }
+
     async fn leaf_proof(
         &self,
         id: impl Into<LeafRequest> + Send,

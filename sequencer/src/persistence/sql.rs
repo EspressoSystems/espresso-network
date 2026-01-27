@@ -2630,10 +2630,6 @@ impl MembershipPersistence for Persistence {
         l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        if events.is_empty() {
-            return Ok(());
-        }
-
         let mut tx = self.db.write().await?;
 
         // check last l1 block if there is any
@@ -2657,28 +2653,31 @@ impl MembershipPersistence for Persistence {
             return Ok(());
         }
 
-        let mut query_builder: sqlx::QueryBuilder<Db> =
-            sqlx::QueryBuilder::new("INSERT INTO stake_table_events (l1_block, log_index, event) ");
+        if !events.is_empty() {
+            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+            );
 
-        let events = events
-            .into_iter()
-            .map(|((block_number, index), event)| {
-                Ok((
-                    i64::try_from(block_number)?,
-                    i64::try_from(index)?,
-                    serde_json::to_value(event).context("l1 event to value")?,
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            let events = events
+                .into_iter()
+                .map(|((block_number, index), event)| {
+                    Ok((
+                        i64::try_from(block_number)?,
+                        i64::try_from(index)?,
+                        serde_json::to_value(event).context("l1 event to value")?,
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
-        query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
-            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
-        });
+            query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
+                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+            });
 
-        query_builder.push(" ON CONFLICT DO NOTHING");
-        let query = query_builder.build();
+            query_builder.push(" ON CONFLICT DO NOTHING");
+            let query = query_builder.build();
 
-        query.execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
+        }
 
         // update l1 block
         tx.upsert(
@@ -3725,6 +3724,47 @@ mod test {
         );
 
         storage.migrate_storage().await.unwrap();
+    }
+
+    /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
+    ///
+    /// Previously, `store_events` did nothing when given an empty events list (in fact,
+    /// `fetch_and_store_stake_table_events` was not even calling it). But this means that the
+    /// `stake_table_events_l1_block` column does not get updated when we enter a new epoch with no
+    /// new stake table events. This makes it impossible to distinguish between two very different
+    /// scenarios:
+    ///
+    /// 1. The node has successfully processed events through the latest L1 finalized block, but
+    ///    there are no new events from the last epoch.
+    /// 2. The node is lagging behind the latest L1 finalized block, and is possibly missing some
+    ///    new events.
+    ///
+    /// In scenario 1, clients of this node should be able to treat the empty list of stake table
+    /// events as authoritative, and derive the stake table for the next epoch (which will end up
+    /// being the same as the previous one. However, in scenario 2, clients need to wait, because we
+    /// don't yet know whether there could be any events that modify the stake table. Thus,
+    /// distinguishing these two scenarios is important.
+    ///
+    /// This regression test ensures that even if there are no new events, at least the
+    /// `stake_table_events_l1_block` column gets updated. We can then distinguish the two scenarios
+    /// using the `EventsPersistenceRead`` return value from load_events.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_events_empty() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        assert_eq!(storage.load_events(0, 100).await.unwrap(), (None, vec![]));
+
+        // Storing an empty events list still updates the latest L1 block.
+        for i in 1..=2 {
+            tracing::info!(i, "update l1 height");
+            storage.store_events(i, vec![]).await.unwrap();
+            assert_eq!(
+                storage.load_events(0, 100).await.unwrap(),
+                (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
+            );
+        }
     }
 }
 

@@ -48,6 +48,7 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@mdbook
 
       - name: Build Contract Docs
         run: just doc-contracts
