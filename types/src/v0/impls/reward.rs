@@ -1235,7 +1235,7 @@ impl EpochRewardsCalculator {
             // Fetch all reward accounts at the height just before this epoch
             // This fetches from the reward_state table which stores all account balances
 
-             let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
+            let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
 
             tracing::info!(
                 %epoch,

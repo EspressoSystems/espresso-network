@@ -4,11 +4,18 @@ use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeAccount, FeeMerkleTree, Header, Leaf2, NodeState, ValidatedState, get_l1_deposits, v0_1::IterableFeeInfo, v0_3::{
-        ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1
-    }, v0_4::{
-        REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2
-    }
+    get_l1_deposits,
+    v0_1::IterableFeeInfo,
+    v0_3::{
+        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
+        RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
+    },
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeAccount,
+    FeeMerkleTree, Header, Leaf2, NodeState, ValidatedState,
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
@@ -1185,8 +1192,6 @@ async fn reward_header_dependencies(
         if version < EpochVersion::version() || version >= EpochRewardVersion::version() {
             continue;
         }
-
-
 
         let first_epoch = first_epoch.context("first epoch not found")?;
 
