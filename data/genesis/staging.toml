@@ -1,9 +1,9 @@
 base_version = "0.4"
 upgrade_version = "0.4"
 genesis_version = "0.4"
-epoch_height = 3000
-drb_difficulty = 5000000000
-drb_upgrade_difficulty = 5000000000
+epoch_height = 300
+drb_difficulty = 10
+drb_upgrade_difficulty = 10
 epoch_start_block = 1
 
 [stake_table]
