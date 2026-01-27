@@ -946,10 +946,18 @@ impl Header {
             Some(*leader_counts),
         );
 
-        // Keep last 3 epochs in cache
-        if *epoch > *first_epoch + 3 {
-            let cutoff_epoch = EpochNumber::new(*epoch - 3);
-            reward_calculator.results.retain(|&e, _| e > cutoff_epoch);
+        // Keep only the 2 most recently inserted entries
+        // one for consensus
+        // one for state loop
+        while reward_calculator.results.len() > 2 {
+            if let Some(oldest) = reward_calculator
+                .results
+                .iter()
+                .min_by_key(|(_, r)| r.inserted_at)
+                .map(|(e, _)| *e)
+            {
+                reward_calculator.results.remove(&oldest);
+            }
         }
 
         Ok((epoch_rewards_applied, changed_accounts))

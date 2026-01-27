@@ -1026,6 +1026,8 @@ pub struct EpochRewardsResult {
     pub total_distributed: RewardAmount,
     /// Set of all reward accounts that were modified.
     pub changed_accounts: HashSet<RewardAccountV2>,
+    /// Timestamp when this result was inserted into the cache.
+    pub inserted_at: std::time::Instant,
 }
 
 /// Manages epoch-based reward calculations in the background.
@@ -1363,6 +1365,7 @@ impl EpochRewardsCalculator {
             reward_tree,
             total_distributed: RewardAmount(total_distributed),
             changed_accounts,
+            inserted_at: std::time::Instant::now(),
         })
     }
 }
