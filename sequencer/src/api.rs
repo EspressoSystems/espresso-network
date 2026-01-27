@@ -7160,8 +7160,8 @@ mod test {
             .iter()
             .map(|(addr, amt)| (*addr, *amt))
             .collect();
-        // Results are sorted by account address descending
-        expected.sort_by_key(|(acct, _)| std::cmp::Reverse(*acct));
+        // Results are sorted by account address ascending
+        expected.sort_by_key(|(acct, _)| *acct);
 
         tracing::info!("expected accounts = {expected:?}");
         let limit = expected.len().min(10_000) as u64;
@@ -7198,8 +7198,6 @@ mod test {
             SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
         >(&validated_state, &instance_state)
         .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
         let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
         let account2 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000002")?;
@@ -7240,28 +7238,21 @@ mod test {
             .await?;
         }
 
+        // Insert into reward_state table
         for (height, accounts) in [
-            (5u64, &accounts_height_5),
+            (5i64, &accounts_height_5),
             (10, &accounts_height_10),
             (15, &accounts_height_15),
         ] {
             for (account, balance) in accounts {
-                reward_tree.update(*account, *balance)?;
-
-                let (_, proof) = reward_tree.lookup(*account).expect_ok().unwrap();
-
-                let traversal_path = <RewardAccountV2 as ToTraversalPath<
-                    { RewardMerkleTreeV2::ARITY },
-                >>::to_traversal_path(
-                    account, reward_tree.height()
-                );
-
-                UpdateStateData::<
-                    SeqTypes,
-                    RewardMerkleTreeV2,
-                    { RewardMerkleTreeV2::ARITY },
-                >::insert_merkle_nodes(&mut tx, proof, traversal_path, height)
-                .await?;
+                let account_json = serde_json::to_value(account)?;
+                let balance_json = serde_json::to_value(balance)?;
+                query("INSERT INTO reward_state (height, account, balance) VALUES ($1, $2, $3)")
+                    .bind(height)
+                    .bind(&account_json)
+                    .bind(&balance_json)
+                    .execute(tx.as_mut())
+                    .await?;
             }
         }
 
@@ -7315,16 +7306,16 @@ mod test {
         }
 
         // Test pagination
-        // results are sorted by account address descending
+        // results are sorted by account address ascending
         let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
         assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account4, RewardAmount::from(4000u64)));
-        assert_eq!(result_limit_2[1], (account3, RewardAmount::from(3000u64)));
+        assert_eq!(result_limit_2[0], (account1, RewardAmount::from(1500u64)));
+        assert_eq!(result_limit_2[1], (account2, RewardAmount::from(2500u64)));
 
         let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
         assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account2, RewardAmount::from(2500u64)));
-        assert_eq!(result_offset_2[1], (account1, RewardAmount::from(1500u64)));
+        assert_eq!(result_offset_2[0], (account3, RewardAmount::from(3000u64)));
+        assert_eq!(result_offset_2[1], (account4, RewardAmount::from(4000u64)));
 
         Ok(())
     }
@@ -7349,7 +7340,6 @@ mod test {
         >(&validated_state, &instance_state)
         .await;
 
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
         let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
 
         let mut tx = db.write().await?;
@@ -7370,20 +7360,15 @@ mod test {
             .await?;
         }
 
-        // Insert merkle data at height 5
-        reward_tree.update(account1, RewardAmount::from(1000u64))?;
-        let (_, proof) = reward_tree.lookup(account1).expect_ok().unwrap();
-        let traversal_path =
-            <RewardAccountV2 as ToTraversalPath<{ RewardMerkleTreeV2::ARITY }>>::to_traversal_path(
-                &account1,
-                reward_tree.height(),
-            );
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::insert_merkle_nodes(&mut tx, proof, traversal_path, 5)
-        .await?;
+        // Insert reward state at height 5
+        let account_json = serde_json::to_value(&account1)?;
+        let balance_json = serde_json::to_value(&RewardAmount::from(1000u64))?;
+        query("INSERT INTO reward_state (height, account, balance) VALUES ($1, $2, $3)")
+            .bind(5i64)
+            .bind(&account_json)
+            .bind(&balance_json)
+            .execute(tx.as_mut())
+            .await?;
 
         // Set the merklized state height to 10
         // less than max block height of 20
