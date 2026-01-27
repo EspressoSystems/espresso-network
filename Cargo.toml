@@ -304,6 +304,7 @@ debug = "full"
 # workspace compilation artifacts are therefore not cached. However, some of our tests don't work if
 # we don't have any optimizations in the workspace.
 [profile.test]
+opt-level = 1
 
 [profile.test.package.sequencer]
 opt-level = 0
