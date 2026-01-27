@@ -298,14 +298,12 @@ debug = "line-tables-only"
 inherits = "dev"
 strip = "none"
 debug = "full"
-opt-level = 2
 
 # Don't optimize the binaries in the workspace. Compilation of dependencies can be cached
 # effectively on the CI because they rarely change, whereas the workspace code usually changes and
 # workspace compilation artifacts are therefore not cached. However, some of our tests don't work if
 # we don't have any optimizations in the workspace.
 [profile.test]
-opt-level = 2
 
 [profile.test.package.sequencer]
 opt-level = 0
