@@ -856,6 +856,7 @@ impl<
                     )),
                 }
             };
+            let view = message.view_number();
             let serialized_message = match self.upgrade_lock.serialize(&message).await {
                 Ok(serialized) => serialized,
                 Err(e) => {
@@ -864,7 +865,7 @@ impl<
                 },
             };
 
-            messages.insert(recipient, serialized_message);
+            messages.insert(recipient, (view.u64().into(), serialized_message));
         }
 
         let net = Arc::clone(&self.network);
@@ -1399,10 +1400,10 @@ impl<
                 let keep_view = TYPES::View::new(view.saturating_sub(1));
                 self.cancel_tasks(keep_view);
                 let net = Arc::clone(&self.network);
-                let epoch = self.epoch.map(|x| x.u64());
+                let epoch = self.epoch.map(|x| x.u64().into());
                 let membership_coordinator = self.membership_coordinator.clone();
                 spawn(async move {
-                    net.update_view::<TYPES>(*keep_view, epoch, membership_coordinator)
+                    net.update_view::<TYPES>(keep_view.u64().into(), epoch, membership_coordinator)
                         .await;
                 });
                 None
@@ -1603,16 +1604,24 @@ impl<
 
             let transmit_result = match transmit {
                 TransmitType::Direct(recipient) => {
-                    network.direct_message(serialized_message, recipient).await
+                    network
+                        .direct_message(view_number.u64().into(), serialized_message, recipient)
+                        .await
                 },
                 TransmitType::Broadcast => {
                     network
-                        .broadcast_message(serialized_message, committee_topic, broadcast_delay)
+                        .broadcast_message(
+                            view_number.u64().into(),
+                            serialized_message,
+                            committee_topic,
+                            broadcast_delay,
+                        )
                         .await
                 },
                 TransmitType::DaCommitteeBroadcast => {
                     network
                         .da_broadcast_message(
+                            view_number.u64().into(),
                             serialized_message,
                             da_committee.iter().cloned().collect(),
                             broadcast_delay,
