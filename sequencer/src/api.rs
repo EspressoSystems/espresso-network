@@ -101,6 +101,9 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
+
+    // we cache `token_distributed_supply` for up to 12 seconds, to avoid repeatedly locking consensus
+    token_distributed_supply: Cache<(), U256>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState<N, P, V> {
@@ -111,6 +114,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
             token_supply: Cache::builder()
                 .max_capacity(1)
                 .time_to_live(Duration::from_secs(3600))
+                .build(),
+            token_distributed_supply: Cache::builder()
+                .max_capacity(1)
+                .time_to_live(Duration::from_secs(12))
                 .build(),
         }
     }
@@ -200,6 +207,10 @@ impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersi
 {
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_total_supply_l1().await
+    }
+
+    async fn get_total_distributed_supply(&self) -> anyhow::Result<U256> {
+        self.as_ref().get_total_distributed_supply().await
     }
 }
 
@@ -335,6 +346,29 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDat
 
                     Ok(supply)
                 },
+            },
+        }
+    }
+
+    async fn get_total_distributed_supply(&self) -> anyhow::Result<U256> {
+        match self.token_distributed_supply.get(&()).await {
+            Some(supply) => Ok(supply),
+            None => {
+                let supply = self
+                    .consensus()
+                    .await
+                    .read()
+                    .await
+                    .decided_leaf()
+                    .await
+                    .block_header()
+                    .total_reward_distributed()
+                    .context("Last decided block was formed prior to rewards being enabled")?
+                    .0;
+
+                self.token_distributed_supply.insert((), supply).await;
+
+                Ok(supply)
             },
         }
     }
@@ -5552,6 +5586,15 @@ mod test {
         tracing::info!("total_minted_supply={total_minted_supply:?}");
 
         assert_eq!(total_minted_supply, "100000.0");
+
+        let total_distributed_supply = client
+            .get::<String>("token/total-distributed-supply")
+            .send()
+            .await
+            .expect("failed to get total_distributed_supply");
+        tracing::info!("total_distributed_supply={total_distributed_supply:?}");
+
+        assert_eq!(total_distributed_supply, "0.0");
 
         Ok(())
     }
