@@ -27,7 +27,7 @@ use hotshot_query_service::{
             AvailabilityStorage, MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage,
             SqlStorage,
         },
-        VersionedDataSource,
+        Transaction as _, VersionedDataSource,
     },
     merklized_state::{MerklizedState, Snapshot},
     Resolvable,
@@ -44,7 +44,7 @@ use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme,
 };
 use serde_json::Value;
-use sqlx::{Encode, Type};
+use sqlx::{Encode, Executor, Type};
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -495,6 +495,36 @@ impl CatchupStorage for SqlStorage {
         }
 
         Ok(chain)
+    }
+}
+
+#[async_trait]
+impl crate::state::RewardStatePruning for SqlStorage {
+    async fn prune_reward_state(&self, prune_height: u64) -> anyhow::Result<()> {
+        let mut tx = self
+            .write()
+            .await
+            .context("opening transaction for reward state pruning")?;
+
+        let reward_table_v2 = RewardMerkleTreeV2::state_type();
+        tx.execute(
+            sqlx::query(&format!(
+                "DELETE FROM {reward_table_v2} WHERE (path, created) IN
+                (SELECT path, created FROM
+                (SELECT path, created,
+                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank
+                FROM {reward_table_v2} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
+            ))
+            .bind(prune_height as i64),
+        )
+        .await
+        .context("pruning reward_merkle_tree_v2")?;
+
+        tx.commit()
+            .await
+            .context("committing reward state pruning")?;
+
+        Ok(())
     }
 }
 
