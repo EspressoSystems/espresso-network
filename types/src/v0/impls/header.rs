@@ -865,40 +865,76 @@ impl Header {
         // At epoch boundary: apply prev epoch rewards
         tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
-        let (epoch_rewards_applied, changed_accounts) =
-            if let Some(result) = reward_calculator.get_result(prev_epoch).await {
-                tracing::info!(
-                    %epoch,
-                    prev_epoch = %result.epoch,
-                    total = %result.total_distributed.0,
-                    "applying epoch rewards"
-                );
-                validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
-                (result.total_distributed, result.changed_accounts)
-            } else if prev_epoch <= first_epoch + 1 {
-                (RewardAmount::default(), HashSet::new())
-            } else {
-                let prev_epoch_last_block = *prev_epoch * epoch_height;
-                let prev_epoch_header = instance_state
-                    .state_catchup
-                    .as_ref()
-                    .fetch_header(prev_epoch_last_block)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to fetch header at height {prev_epoch_last_block} for \
-                             prev_epoch {prev_epoch}"
-                        )
-                    })?;
+        let (epoch_rewards_applied, changed_accounts) = if let Some(result) =
+            reward_calculator.get_result(prev_epoch).await
+        {
+            tracing::info!(
+                %epoch,
+                prev_epoch = %result.epoch,
+                total = %result.total_distributed.0,
+                "applying epoch rewards"
+            );
+            validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
+            (result.total_distributed, result.changed_accounts)
+        } else if prev_epoch <= first_epoch + 1 {
+            (RewardAmount::default(), HashSet::new())
+        } else {
+            // Missing prev_epoch calculation - need to compute it now
+            let prev_epoch_last_block = *prev_epoch * epoch_height;
+            let prev_epoch_header = instance_state
+                .state_catchup
+                .as_ref()
+                .fetch_header(prev_epoch_last_block)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to fetch header at height {prev_epoch_last_block} for prev_epoch \
+                         {prev_epoch}"
+                    )
+                })?;
 
-                if prev_epoch_header.version() >= EpochRewardVersion::version() {
-                    anyhow::bail!(
-                        "rewards missing for V6 epoch {prev_epoch} at epoch {epoch} boundary"
+            if prev_epoch_header.version() >= EpochRewardVersion::version() {
+                // V6+ epoch needs rewards - spawn and wait for calculation
+                tracing::warn!(
+                    %epoch,
+                    %prev_epoch,
+                    "missing V6 epoch rewards at boundary, spawning calculation now"
+                );
+
+                if !reward_calculator.is_calculating(prev_epoch) {
+                    reward_calculator.spawn_background_task(
+                        prev_epoch,
+                        epoch_height,
+                        validated_state.reward_merkle_tree_v2.clone(),
+                        instance_state.clone(),
+                        coordinator.clone(),
+                        None, // Will fetch header inside task
                     );
                 }
-                tracing::info!(%epoch, %prev_epoch, "no rewards for V5 epoch");
+
+                // Wait for the calculation to complete
+                let result = reward_calculator
+                    .get_result(prev_epoch)
+                    .await
+                    .context(format!(
+                        "failed to calculate missing rewards for epoch {prev_epoch}"
+                    ))?;
+
+                tracing::info!(
+                    %epoch,
+                    %prev_epoch,
+                    total = %result.total_distributed.0,
+                    "applied delayed epoch rewards"
+                );
+
+                validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
+                (result.total_distributed, result.changed_accounts)
+            } else {
+                // Pre-V6 epoch has no rewards
+                tracing::info!(%epoch, %prev_epoch, "no rewards for pre-V6 epoch");
                 (RewardAmount::default(), HashSet::new())
-            };
+            }
+        };
 
         // Start calculation for current epoch
         reward_calculator.spawn_background_task(
@@ -910,10 +946,11 @@ impl Header {
             Some(*leader_counts),
         );
 
-        // // keep last 3 epochs
-        // if *epoch > *first_epoch + 3 {
-        //     reward_calculator.results.retain(|&e, _| e >= epoch);
-        // }
+        // Keep last 3 epochs in cache
+        if *epoch > *first_epoch + 3 {
+            let cutoff_epoch = EpochNumber::new(*epoch - 3);
+            reward_calculator.results.retain(|&e, _| e > cutoff_epoch);
+        }
 
         Ok((epoch_rewards_applied, changed_accounts))
     }

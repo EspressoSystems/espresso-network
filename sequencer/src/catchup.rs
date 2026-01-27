@@ -476,6 +476,25 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
+    #[tracing::instrument(skip(self))]
+    async fn try_fetch_all_reward_accounts(
+        &self,
+        retry: usize,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.fetch(retry, |client| async move {
+            client
+                .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
+                    "catchup/{height}/reward-amounts/{limit}/{offset}"
+                ))
+                .send()
+                .await
+        })
+        .await
+    }
+
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
@@ -892,6 +911,21 @@ where
         Ok(proofs)
     }
 
+    async fn try_fetch_all_reward_accounts(
+        &self,
+        _retry: usize,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        self.db
+            .get_all_reward_accounts(height, offset, limit)
+            .await
+            .with_context(|| {
+                format!("failed to get all reward accounts at height {height} from DB")
+            })
+    }
+
     async fn try_fetch_state_cert(
         &self,
         _retry: usize,
@@ -1015,6 +1049,16 @@ impl StateCatchup for NullStateCatchup {
         _fee_merkle_tree_root: RewardMerkleCommitmentV1,
         _account: &[RewardAccountV1],
     ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        bail!("state catchup is disabled");
+    }
+
+    async fn try_fetch_all_reward_accounts(
+        &self,
+        _retry: usize,
+        _height: u64,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
         bail!("state catchup is disabled");
     }
 
@@ -1444,6 +1488,36 @@ impl StateCatchup for ParallelStateCatchup {
                 ).await
             }}
         }})
+        .await
+    }
+
+    async fn try_fetch_all_reward_accounts(
+        &self,
+        retry: usize,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        // Try to get the accounts on local providers first
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider
+                    .try_fetch_all_reward_accounts(retry, height, offset, limit)
+                    .await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(move |provider| async move {
+            provider
+                .try_fetch_all_reward_accounts(retry, height, offset, limit)
+                .await
+        })
         .await
     }
 

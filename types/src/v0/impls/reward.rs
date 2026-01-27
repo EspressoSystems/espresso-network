@@ -1039,7 +1039,10 @@ pub struct EpochRewardsCalculator {
 
 impl EpochRewardsCalculator {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            results: HashMap::new(),
+            pending: HashMap::new(),
+        }
     }
 
     /// Check if we have a cached result for epoch.
@@ -1078,7 +1081,7 @@ impl EpochRewardsCalculator {
         None
     }
 
-    /// Start a background task that fetches data and calculates epoch rewards.
+    /// Start a background task that calculates epoch rewards.
     /// Does nothing if calculation is already done or in progress for this epoch.
     ///
     pub fn spawn_background_task(
@@ -1099,7 +1102,11 @@ impl EpochRewardsCalculator {
             return;
         }
 
-        tracing::info!(%epoch, has_leader_counts = leader_counts.is_some(), "starting background epoch rewards task");
+        tracing::info!(
+            %epoch,
+            has_leader_counts = leader_counts.is_some(),
+            "starting background epoch rewards task"
+        );
 
         let handle = tokio::spawn(async move {
             Self::fetch_and_calculate(
@@ -1124,17 +1131,15 @@ impl EpochRewardsCalculator {
         leader_counts: Option<LeaderCounts>,
     ) -> anyhow::Result<EpochRewardsResult> {
         let epoch_last_block_height = (*epoch) * epoch_height;
-        // For fetching missing accounts, we need the tree state from epoch - 1
-        let catchup_height = (*epoch - 1) * epoch_height;
 
         tracing::info!(
             %epoch,
             epoch_last_block_height,
-            catchup_height,
             has_leader_counts = leader_counts.is_some(),
             "fetch_and_calculate: starting"
         );
 
+        // Get leader_counts for this epoch if not provided
         let leader_counts = if let Some(lc) = leader_counts {
             lc
         } else {
@@ -1169,6 +1174,7 @@ impl EpochRewardsCalculator {
                 .expect("V6+ header must have leader_counts")
         };
 
+        // Ensure stake table is available for this epoch
         if let Err(err) = coordinator.stake_table_for_epoch(Some(epoch)).await {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
@@ -1199,6 +1205,7 @@ impl EpochRewardsCalculator {
             "fetch_and_calculate: got validators and block_reward"
         );
 
+        // Check if we're missing accounts that need to be in the tree
         let accounts_to_update: Vec<_> = leader_counts
             .iter()
             .enumerate()
@@ -1217,66 +1224,73 @@ impl EpochRewardsCalculator {
             .cloned()
             .collect();
 
+        // If we have missing accounts, fetch all reward accounts from peers and rebuild the tree
         if !missing_accounts.is_empty() {
-            let reward_merkle_tree_root = reward_tree.commitment();
-
             tracing::info!(
                 %epoch,
                 num_missing = missing_accounts.len(),
-                %reward_merkle_tree_root,
-                catchup_height,
-                "fetch_and_calculate: fetching missing reward accounts"
+                "missing accounts detected, fetching all reward accounts from peers"
             );
 
-            const MAX_RETRIES: u32 = 10;
-            for attempt in 1..=MAX_RETRIES {
-                match instance_state
+            // Fetch all reward accounts at the height just before this epoch
+            // This fetches from the reward_state table which stores all account balances
+            let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
+
+            tracing::info!(
+                %epoch,
+                catchup_height,
+                "fetching all reward accounts from peers to rebuild tree"
+            );
+
+            // Fetch all reward accounts from peers (paginated)
+            let mut all_accounts = Vec::new();
+            let mut offset = 0u64;
+            let limit = 10_000u64;
+
+            loop {
+                let accounts = instance_state
                     .state_catchup
-                    .fetch_reward_accounts_v2(
-                        &instance_state,
-                        catchup_height,
-                        ViewNumber::new(catchup_height),
-                        reward_merkle_tree_root,
-                        missing_accounts.clone(),
-                    )
+                    .as_ref()
+                    .fetch_all_reward_accounts(catchup_height, offset, limit)
                     .await
-                {
-                    Ok(proofs) => {
-                        for proof in proofs {
-                            proof
-                                .remember(&mut reward_tree)
-                                .expect("proof previously verified");
-                        }
-                        tracing::info!(
-                            %epoch,
-                            "fetch_and_calculate: remembered missing accounts"
-                        );
-                        break;
-                    },
-                    Err(e) => {
-                        if attempt == MAX_RETRIES {
-                            anyhow::bail!(
-                                "failed to fetch missing reward accounts after {MAX_RETRIES} \
-                                 retries: {e}"
-                            );
-                        }
-                        tracing::warn!(
-                            %epoch,
-                            attempt,
-                            MAX_RETRIES,
-                            error = %e,
-                            "fetch_and_calculate: failed to fetch accounts, retrying"
-                        );
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    },
+                    .with_context(|| {
+                        format!(
+                            "failed to fetch reward accounts at height {catchup_height}, offset \
+                             {offset}"
+                        )
+                    })?;
+
+                let count = accounts.len();
+                all_accounts.extend(accounts);
+
+                if (count as u64) < limit {
+                    break;
                 }
+                offset += limit;
             }
+
+            tracing::info!(
+                %epoch,
+                num_accounts = all_accounts.len(),
+                "fetched all reward accounts, rebuilding tree"
+            );
+
+            // Rebuild the tree from scratch with all the accounts
+            let kv_pairs: Vec<(RewardAccountV2, RewardAmount)> = all_accounts;
+            reward_tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, kv_pairs)
+                .context("failed to rebuild reward merkle tree from accounts")?;
+
+            tracing::info!(
+                %epoch,
+                reward_tree_commitment = %reward_tree.commitment(),
+                "reward tree rebuilt successfully"
+            );
         }
 
         tracing::info!(
             %epoch,
             reward_tree_commitment = %reward_tree.commitment(),
-            "fetch_and_calculate: starting calculation"
+            "starting final epoch calculation"
         );
 
         Self::calculate_all_rewards(epoch, leader_counts, reward_tree, block_reward, validators)

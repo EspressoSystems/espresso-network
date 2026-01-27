@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
-    v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
+    v0_3::{
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+    },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Header, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
@@ -171,6 +173,17 @@ impl<
         )
         .await
         .with_context(|| "timed out while fetching reward accounts")?
+    }
+
+    async fn try_fetch_all_reward_accounts(
+        &self,
+        _retry: usize,
+        _height: u64,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        // Not supported via request-response protocol - use HTTP catchup
+        anyhow::bail!("fetching all reward accounts not supported via request-response protocol")
     }
 
     async fn try_fetch_state_cert(

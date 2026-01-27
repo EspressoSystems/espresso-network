@@ -177,7 +177,7 @@ impl NodeState {
             coordinator,
             genesis_version,
             epoch_start_block: 0,
-            epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::new())),
+            epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::default())),
         }
     }
 
@@ -591,6 +591,16 @@ pub mod mock {
             _retry: usize,
             _epoch: u64,
         ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+            anyhow::bail!("unimplemented")
+        }
+
+        async fn try_fetch_all_reward_accounts(
+            &self,
+            _retry: usize,
+            _height: u64,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
             anyhow::bail!("unimplemented")
         }
 

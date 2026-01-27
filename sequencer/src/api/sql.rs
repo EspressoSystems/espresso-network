@@ -14,8 +14,8 @@ use espresso_types::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, ValidatedState,
+    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Header,
+    Leaf2, NodeState, ValidatedState,
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
@@ -29,7 +29,7 @@ use hotshot_query_service::{
         },
         VersionedDataSource,
     },
-    merklized_state::{MerklizedState, Snapshot},
+    merklized_state::Snapshot,
     Resolvable,
 };
 use hotshot_types::{
@@ -310,46 +310,39 @@ impl CatchupStorage for SqlStorage {
             return Ok(Vec::new());
         }
 
-        // get the latest balance for each account.
-        // use DISTINCT ON for Postgres
-        // use ROW_NUMBER() as DISTINCT ON is not supported for SQLite
+        // Query reward_state table for the latest balance for each account up to the given height
+        // Use DISTINCT ON for Postgres, ROW_NUMBER for SQLite
         #[cfg(not(feature = "embedded-db"))]
-        let query = format!(
-            "SELECT DISTINCT ON (idx) idx, entry
-               FROM {}
-              WHERE idx IS NOT NULL AND created <= $1
-              ORDER BY idx DESC, created DESC
-              LIMIT $2 OFFSET $3",
-            RewardMerkleTreeV2::state_type()
-        );
+        let query = "SELECT DISTINCT ON (account) account, balance
+               FROM reward_state
+              WHERE height <= $1
+              ORDER BY account, height DESC
+              LIMIT $2 OFFSET $3";
 
         #[cfg(feature = "embedded-db")]
-        let query = format!(
-            "SELECT idx, entry FROM (
-                 SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
-             rn
-                   FROM {}
-                  WHERE created <= $1 AND idx IS NOT NULL
+        let query = "SELECT account, balance FROM (
+                 SELECT account, balance, ROW_NUMBER() OVER (PARTITION BY account ORDER BY height \
+                     DESC) as rn
+                   FROM reward_state
+                  WHERE height <= $1
              ) sub
              WHERE rn = 1
-             ORDER BY idx DESC
-             LIMIT $2 OFFSET $3",
-            RewardMerkleTreeV2::state_type()
-        );
+             ORDER BY account
+             LIMIT $2 OFFSET $3";
 
-        let rows = query_as::<(Value, Value)>(&query)
+        let rows = query_as::<(Value, Value)>(query)
             .bind(height as i64)
             .bind(limit as i64)
             .bind(offset as i64)
             .fetch_all(tx.as_mut())
             .await
-            .context("loading reward accounts from storage")?;
+            .context("loading reward accounts from reward_state table")?;
 
         let mut accounts = Vec::new();
-        for (idx, entry) in rows {
+        for (account_json, balance_json) in rows {
             let account: RewardAccountV2 =
-                serde_json::from_value(idx).context("deserializing reward account")?;
-            let balance: RewardAmount = serde_json::from_value(entry).context(format!(
+                serde_json::from_value(account_json).context("deserializing reward account")?;
+            let balance: RewardAmount = serde_json::from_value(balance_json).context(format!(
                 "deserializing reward balance for account {account}"
             ))?;
 
@@ -496,6 +489,16 @@ impl CatchupStorage for SqlStorage {
 
         Ok(chain)
     }
+
+    async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
+        let mut tx = self
+            .read()
+            .await
+            .context(format!("opening transaction to fetch header at {height}"))?;
+        tx.get_header(BlockId::<SeqTypes>::from(height as usize))
+            .await
+            .context(format!("header {height} not available"))
+    }
 }
 
 impl RewardAccountProofDataSource for DataSource {
@@ -586,6 +589,13 @@ impl CatchupStorage for DataSource {
             .get_all_reward_accounts(height, offset, limit)
             .await
     }
+
+    async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
+        self.as_ref()
+            .get_header(BlockId::<SeqTypes>::from(height as usize))
+            .await
+            .context(format!("header {height} not available"))
+    }
 }
 
 #[async_trait]
@@ -600,6 +610,40 @@ impl ChainConfigPersistence for Transaction<Write> {
             [(commitment.to_string(), data)],
         )
         .await
+    }
+}
+
+#[async_trait]
+impl crate::state::RewardStatePersistence for Transaction<Write> {
+    async fn store_reward_state(
+        &mut self,
+        height: u64,
+        accounts: Vec<(RewardAccountV2, RewardAmount)>,
+    ) -> anyhow::Result<()> {
+        if accounts.is_empty() {
+            return Ok(());
+        }
+
+        // Build batch of (height, account, balance) tuples for upsert
+        let rows: Vec<_> = accounts
+            .iter()
+            .map(|(account, balance)| {
+                let account_json =
+                    serde_json::to_value(account).expect("failed to serialize account");
+                let balance_json =
+                    serde_json::to_value(balance).expect("failed to serialize balance");
+                (height as i64, account_json, balance_json)
+            })
+            .collect();
+
+        self.upsert(
+            "reward_state",
+            ["height", "account", "balance"],
+            ["height", "account"],
+            rows,
+        )
+        .await
+        .context("failed to upsert reward state")
     }
 }
 

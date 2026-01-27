@@ -242,6 +242,10 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
+    async fn backfill_reward_state(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
