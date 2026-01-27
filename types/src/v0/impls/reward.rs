@@ -1031,7 +1031,7 @@ pub struct EpochRewardsResult {
 /// Manages epoch-based reward calculations in the background.
 #[derive(Debug, Default)]
 pub struct EpochRewardsCalculator {
-    /// Cached results by epoch - multiple consumers can read these
+    /// Cached results by epoch
     pub results: HashMap<EpochNumber, EpochRewardsResult>,
     /// Pending calculations by epoch
     pending: HashMap<EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>>,

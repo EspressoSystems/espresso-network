@@ -384,6 +384,26 @@ impl<
 
                 Ok(Response::EpochHeader(Box::new(header)))
             },
+            Request::AllRewardAccounts(height, offset, limit) => {
+                // Get all reward accounts from storage
+                let accounts = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_all_reward_accounts(*height, *offset, *limit)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to get all reward accounts at height {height} from sql \
+                                 storage"
+                            )
+                        })?,
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for all reward accounts")
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                Ok(Response::AllRewardAccounts(accounts))
+            },
         }
     }
 }

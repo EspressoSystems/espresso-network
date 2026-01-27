@@ -2041,7 +2041,7 @@ impl SequencerPersistence for Persistence {
         let batch_size: i64 = 10000;
         let mut tx = self.db.read().await?;
 
-        // Check migration progress - migrated_rows tracks the number of accounts processed
+        // Check if migration is already completed
         let (is_completed, mut offset) = query_as::<(bool, i64)>(
             "SELECT completed, migrated_rows FROM epoch_migration WHERE table_name = \
              'reward_state'",

@@ -178,12 +178,20 @@ impl<
     async fn try_fetch_all_reward_accounts(
         &self,
         _retry: usize,
-        _height: u64,
-        _offset: u64,
-        _limit: u64,
+        height: u64,
+        offset: u64,
+        limit: u64,
     ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        // Not supported via request-response protocol - use HTTP catchup
-        anyhow::bail!("fetching all reward accounts not supported via request-response protocol")
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Fetch all reward accounts
+        timeout(
+            timeout_duration,
+            self.fetch_all_reward_accounts(height, offset, limit),
+        )
+        .await
+        .with_context(|| "timed out while fetching all reward accounts")?
     }
 
     async fn try_fetch_state_cert(
@@ -551,6 +559,44 @@ impl<
             .with_context(|| "failed to request state cert")?;
 
         tracing::info!("Fetched state cert for epoch: {epoch}");
+
+        Ok(response)
+    }
+
+    async fn fetch_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        tracing::info!(
+            "Fetching all reward accounts for height: {height}, offset: {offset}, limit: {limit}"
+        );
+
+        // Create the response validation function
+        let response_validation_fn = move |_request: &Request, response: Response| async move {
+            // Make sure the response is an all reward accounts response
+            let Response::AllRewardAccounts(accounts) = response else {
+                return Err(anyhow::anyhow!("expected all reward accounts response"));
+            };
+
+            Ok(accounts)
+        };
+
+        // Wait for the protocol to send us the reward accounts
+        let response = self
+            .request_indefinitely(
+                Request::AllRewardAccounts(height, offset, limit),
+                RequestType::Batched,
+                response_validation_fn,
+            )
+            .await
+            .with_context(|| "failed to request all reward accounts")?;
+
+        tracing::info!(
+            "Fetched {} reward accounts for height: {height}",
+            response.len()
+        );
 
         Ok(response)
     }
