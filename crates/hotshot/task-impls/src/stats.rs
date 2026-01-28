@@ -225,6 +225,11 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::DaCertificateValidated(_simple_certificate) => {},
             HotShotEvent::QuorumProposalSend(proposal, _) => {
+                tracing::warn!(
+                    "Quorum proposal sent: view {}, timestamp {:?}",
+                    proposal.data.view_number(),
+                    now
+                );
                 self.leader_entry(proposal.data.view_number())
                     .proposal_send
                     .get_or_insert(now);
