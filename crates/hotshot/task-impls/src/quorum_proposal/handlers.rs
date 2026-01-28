@@ -547,6 +547,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 );
             }
         }
+        let now = Instant::now();
         let block_header = TYPES::BlockHeader::new(
             state.as_ref(),
             self.instance_state.as_ref(),
@@ -561,6 +562,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         .await
         .wrap()
         .context(warn!("Failed to construct block header"))?;
+        let block_header_duration = now.elapsed();
+        tracing::error!("Block header construction time: {block_header_duration:?}");
         let epoch = option_epoch_from_block_number::<TYPES>(
             version >= V::Epochs::VERSION,
             block_header.block_number(),
