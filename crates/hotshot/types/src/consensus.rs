@@ -910,14 +910,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &mut self,
         proposal: Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     ) -> Result<()> {
-        ensure!(
-            proposal.data.view_number()
-                > self
-                    .last_proposals
-                    .last_key_value()
-                    .map_or(TYPES::View::genesis(), |(k, _)| { *k }),
-            debug!("New view isn't newer than the previously proposed view.")
-        );
         self.last_proposals
             .insert(proposal.data.view_number(), proposal);
         Ok(())

@@ -568,6 +568,7 @@ where
             ConsensusMetricsValue::default(),
             storage,
             StorageMetricsValue::default(),
+            None,
         )
         .await
     }
@@ -610,6 +611,7 @@ where
             StorageMetricsValue::default(),
             internal_channel,
             external_channel,
+            None,
         )
         .await
     }

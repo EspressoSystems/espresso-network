@@ -19,10 +19,9 @@ use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
-use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
+    data::{Leaf2, QuorumProposalWrapper, ViewChangeEvidence2},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
@@ -30,8 +29,8 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        CertificatePair, DaCertificate2, LightClientStateUpdateCertificateV2,
-        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
@@ -1006,7 +1005,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         // Update our internal storage of the proposal. The proposal is valid, so
         // we swallow this error and just log if it occurs.
         if let Err(e) = consensus_writer.update_proposed_view(proposal.clone()) {
-            tracing::debug!("Internal proposal update failed; error = {e:#}");
+            tracing::error!("Internal proposal update failed; error = {e:#}");
         };
     }
 
@@ -1393,77 +1392,76 @@ pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
         && qc.view_number().u64() == state_cert.light_client_state.view_number
 }
 
-/// Gets the second VID share, the current or the next epoch accordingly, from the shared consensus state;
-/// makes sure it corresponds to the given DA certificate;
-/// if it's not yet available, waits for it with the given timeout.
-pub async fn wait_for_second_vid_share<TYPES: NodeType>(
-    target_epoch: Option<TYPES::Epoch>,
-    vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
-    da_cert: &DaCertificate2<TYPES>,
-    consensus: &OuterConsensus<TYPES>,
-    receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
-    cancel_receiver: Receiver<()>,
-    id: u64,
-) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
-    tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
-    let maybe_second_vid_share = consensus
-        .read()
-        .await
-        .vid_shares()
-        .get(&vid_share.data.view_number())
-        .and_then(|key_map| key_map.get(vid_share.data.recipient_key()))
-        .and_then(|epoch_map| epoch_map.get(&target_epoch))
-        .cloned();
-    if let Some(second_vid_share) = maybe_second_vid_share {
-        if (target_epoch == da_cert.epoch()
-            && second_vid_share.data.payload_commitment() == da_cert.data().payload_commit)
-            || (target_epoch != da_cert.epoch()
-                && Some(second_vid_share.data.payload_commitment())
-                    == da_cert.data().next_epoch_payload_commit)
-        {
-            return Ok(second_vid_share);
-        }
-    }
+// /// Gets the second VID share, the current or the next epoch accordingly, from the shared consensus state;
+// /// makes sure it corresponds to the given DA certificate;
+// /// if it's not yet available, waits for it with the given timeout.
+// pub async fn wait_for_second_vid_share<TYPES: NodeType>(
+//     target_epoch: Option<TYPES::Epoch>,
+//     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
+//     consensus: &OuterConsensus<TYPES>,
+//     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
+//     cancel_receiver: Receiver<()>,
+//     id: u64,
+// ) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
+//     tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
+//     let maybe_second_vid_share = consensus
+//         .read()
+//         .await
+//         .vid_shares()
+//         .get(&vid_share.data.view_number())
+//         .and_then(|key_map| key_map.get(vid_share.data.recipient_key()))
+//         .and_then(|epoch_map| epoch_map.get(&target_epoch))
+//         .cloned();
+//     if let Some(second_vid_share) = maybe_second_vid_share {
+//         if (target_epoch == vid_share.data.epoch()
+//             && second_vid_share.data.payload_commitment() == vid_share.data.payload_commitment())
+//             || (target_epoch != vid_share.data.epoch()
+//                 && Some(second_vid_share.data.payload_commitment())
+//                     == vid_share.data.next_epoch_payload_commitment())
+//         {
+//             return Ok(second_vid_share);
+//         }
+//     }
 
-    let receiver = receiver.clone();
-    let da_cert_clone = da_cert.clone();
-    let Some(event) = EventDependency::new(
-        receiver,
-        cancel_receiver,
-        format!(
-            "VoteDependency Second VID share for view {:?}, my id {:?}",
-            vid_share.data.view_number(),
-            id
-        ),
-        Box::new(move |event| {
-            let event = event.as_ref();
-            if let HotShotEvent::VidShareValidated(second_vid_share) = event {
-                if target_epoch == da_cert_clone.epoch() {
-                    second_vid_share.data.payload_commitment()
-                        == da_cert_clone.data().payload_commit
-                } else {
-                    Some(second_vid_share.data.payload_commitment())
-                        == da_cert_clone.data().next_epoch_payload_commit
-                }
-            } else {
-                false
-            }
-        }),
-    )
-    .completed()
-    .await
-    else {
-        return Err(warn!("Error while waiting for the second VID share."));
-    };
-    let HotShotEvent::VidShareValidated(second_vid_share) = event.as_ref() else {
-        // this shouldn't happen
-        return Err(warn!(
-            "Received event is not VidShareValidated but we checked it earlier. Shouldn't be \
-             possible."
-        ));
-    };
-    Ok(second_vid_share.clone())
-}
+//     let receiver = receiver.clone();
+//     let vid_share_clone = vid_share.clone();
+//     let Some(event) = EventDependency::new(
+//         receiver,
+//         cancel_receiver,
+//         format!(
+//             "VoteDependency Second VID share for view {:?}, my id {:?}",
+//             vid_share.data.view_number(),
+//             id
+//         ),
+//         Box::new(move |event| {
+//             let event = event.as_ref();
+//             if let HotShotEvent::VidShareValidated(second_vid_share) = event {
+//                 if target_epoch == vid_share_clone.data.epoch() {
+//                     second_vid_share.data.payload_commitment()
+//                         == vid_share_clone.data.payload_commitment()
+//                 } else {
+//                     Some(second_vid_share.data.payload_commitment())
+//                         == vid_share_clone.data.next_epoch_payload_commitment()
+//                 }
+//             } else {
+//                 false
+//             }
+//         }),
+//     )
+//     .completed()
+//     .await
+//     else {
+//         return Err(warn!("Error while waiting for the second VID share."));
+//     };
+//     let HotShotEvent::VidShareValidated(second_vid_share) = event.as_ref() else {
+//         // this shouldn't happen
+//         return Err(warn!(
+//             "Received event is not VidShareValidated but we checked it earlier. Shouldn't be \
+//              possible."
+//         ));
+//     };
+//     Ok(second_vid_share.clone())
+// }
 
 pub async fn broadcast_view_change<TYPES: NodeType>(
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,

@@ -6,10 +6,13 @@ use std::{
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use either::Either;
+use hotshot_orchestrator::client::{BenchResults, OrchestratorClient};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
+    benchmarking::{LeaderViewStats, ReplicaViewStats},
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
+    simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
@@ -21,106 +24,39 @@ use hotshot_utils::{
     anytrace::{Error, Level, Result},
     line_info, warn,
 };
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use url::Url;
 
 use crate::events::HotShotEvent;
 
-#[derive(Serialize, Deserialize)]
-pub struct LeaderViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
-    pub prev_proposal_send: Option<i128>,
-    pub proposal_send: Option<i128>,
-    pub vote_recv: Option<i128>,
-    pub da_proposal_send: Option<i128>,
-    pub builder_start: Option<i128>,
-    pub block_built: Option<i128>,
-    pub vid_disperse_send: Option<i128>,
-    pub timeout_certificate_formed: Option<i128>,
-    pub qc_formed: Option<i128>,
-    pub da_cert_send: Option<i128>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ReplicaViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
-    pub view_change: Option<i128>,
-    pub proposal_timestamp: Option<i128>,
-    pub proposal_recv: Option<i128>,
-    pub vote_send: Option<i128>,
-    pub timeout_vote_send: Option<i128>,
-    pub da_proposal_received: Option<i128>,
-    pub da_proposal_validated: Option<i128>,
-    pub da_certificate_recv: Option<i128>,
-    pub proposal_prelim_validated: Option<i128>,
-    pub proposal_validated: Option<i128>,
-    pub timeout_triggered: Option<i128>,
-    pub vid_share_validated: Option<i128>,
-    pub vid_share_recv: Option<i128>,
-}
-
-impl<TYPES: NodeType> LeaderViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
-        Self {
-            view,
-            prev_proposal_send: None,
-            proposal_send: None,
-            vote_recv: None,
-            da_proposal_send: None,
-            builder_start: None,
-            block_built: None,
-            vid_disperse_send: None,
-            timeout_certificate_formed: None,
-            qc_formed: None,
-            da_cert_send: None,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ReplicaViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
-        Self {
-            view,
-            view_change: None,
-            proposal_timestamp: None,
-            proposal_recv: None,
-            vote_send: None,
-            timeout_vote_send: None,
-            da_proposal_received: None,
-            da_proposal_validated: None,
-            da_certificate_recv: None,
-            proposal_prelim_validated: None,
-            proposal_validated: None,
-            timeout_triggered: None,
-            vid_share_validated: None,
-            vid_share_recv: None,
-        }
-    }
-}
-
 pub struct StatsTaskState<TYPES: NodeType> {
+    node_index: u64,
     view: TYPES::View,
     epoch: Option<TYPES::Epoch>,
     public_key: TYPES::SignatureKey,
     consensus: OuterConsensus<TYPES>,
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES>>,
-    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES>>,
+    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES::View>>,
+    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES::View>>,
     latencies_by_view: BTreeMap<TYPES::View, i128>,
     sizes_by_view: BTreeMap<TYPES::View, i128>,
     epoch_start_times: BTreeMap<TYPES::Epoch, i128>,
     timeouts: BTreeSet<TYPES::View>,
+    orchestrator_client: Option<OrchestratorClient>,
 }
 
 impl<TYPES: NodeType> StatsTaskState<TYPES> {
     pub fn new(
+        node_index: u64,
         view: TYPES::View,
         epoch: Option<TYPES::Epoch>,
         public_key: TYPES::SignatureKey,
         consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        orchestrator_url: Option<Url>,
     ) -> Self {
         Self {
+            node_index,
             view,
             epoch,
             public_key,
@@ -132,14 +68,15 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             sizes_by_view: BTreeMap::new(),
             epoch_start_times: BTreeMap::new(),
             timeouts: BTreeSet::new(),
+            orchestrator_client: orchestrator_url.map(OrchestratorClient::new),
         }
     }
-    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES> {
+    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES::View> {
         self.leader_stats
             .entry(view)
             .or_insert_with(|| LeaderViewStats::new(view))
     }
-    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES> {
+    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES::View> {
         self.replica_stats
             .entry(view)
             .or_insert_with(|| ReplicaViewStats::new(view))
@@ -184,16 +121,21 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         Ok(())
     }
 
-    fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) {
+    fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) -> i128 {
         let num_views = self.latencies_by_view.len();
         let total_size = self.sizes_by_view.values().sum::<i128>();
 
         // Either we have no views logged yet, no TXNs or we are not in the DA committee and don't know block sizes
         if num_views == 0 || total_size == 0 {
-            return;
+            return 0;
         }
 
         let total_latency = self.latencies_by_view.values().sum::<i128>();
+        let elapsed_time = if let Some(epoch_start_time) = self.epoch_start_times.get(epoch) {
+            now - epoch_start_time
+        } else {
+            0
+        };
         let average_latency = total_latency / num_views as i128;
         tracing::warn!("Average latency: {}ms", average_latency);
         tracing::warn!(
@@ -201,12 +143,18 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             epoch,
             self.timeouts.len()
         );
-        if let Some(epoch_start_time) = self.epoch_start_times.get(epoch) {
-            let elapsed_time = now - epoch_start_time;
+        let total_size = self.sizes_by_view.values().sum::<i128>();
+        if total_size == 0 {
+            // Either no TXNs or we are not in the DA committee and don't know block sizes
+            return elapsed_time;
+        }
+        if elapsed_time > 0 {
             // multiply by 1000 to convert to seconds
             let throughput = (total_size / elapsed_time) * 1000;
             tracing::warn!("Throughput: {} bytes/s", throughput);
+            return elapsed_time;
         }
+        elapsed_time
     }
 }
 
@@ -224,33 +172,67 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
 
         match event.as_ref() {
             HotShotEvent::BlockRecv(block_recv) => {
-                self.leader_entry(block_recv.view_number).block_built = Some(now);
+                tracing::warn!(
+                    "Block received: view {}, timestamp {:?}",
+                    block_recv.view_number,
+                    now
+                );
+                self.leader_entry(block_recv.view_number)
+                    .block_built
+                    .get_or_insert(now);
+                self.replica_entry(block_recv.view_number)
+                    .block_reconstructed
+                    .get_or_insert(now);
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(block_recv.epoch_number)
+                    .await?
+                    .leader(block_recv.view_number)
+                    .await?;
+                if leader == self.public_key {
+                    self.leader_entry(block_recv.view_number)
+                        .prev_block_received
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::QuorumProposalRecv(proposal, _) => {
+                tracing::warn!(
+                    "Quorum proposal received: view {}, timestamp {:?}",
+                    proposal.data.view_number(),
+                    now
+                );
                 self.replica_entry(proposal.data.view_number())
-                    .proposal_recv = Some(now);
+                    .proposal_recv
+                    .get_or_insert(now);
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(proposal.data.epoch())
+                    .await?
+                    .leader(proposal.data.view_number() + 1)
+                    .await?;
+                if leader == self.public_key {
+                    self.leader_entry(proposal.data.view_number() + 1)
+                        .builder_start
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::QuorumVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteRecv(_vote) => {},
             HotShotEvent::TimeoutVoteSend(vote) => {
-                self.replica_entry(vote.view_number()).timeout_vote_send = Some(now);
-            },
-            HotShotEvent::DaProposalRecv(proposal, _) => {
-                self.replica_entry(proposal.data.view_number())
-                    .da_proposal_received = Some(now);
-            },
-            HotShotEvent::DaProposalValidated(proposal, _) => {
-                self.replica_entry(proposal.data.view_number())
-                    .da_proposal_validated = Some(now);
-            },
-            HotShotEvent::DaVoteRecv(_simple_vote) => {},
-            HotShotEvent::DaCertificateRecv(simple_certificate) => {
-                self.replica_entry(simple_certificate.view_number())
-                    .da_certificate_recv = Some(now);
+                self.replica_entry(vote.view_number())
+                    .timeout_vote_send
+                    .get_or_insert(now);
             },
             HotShotEvent::DaCertificateValidated(_simple_certificate) => {},
             HotShotEvent::QuorumProposalSend(proposal, _) => {
-                self.leader_entry(proposal.data.view_number()).proposal_send = Some(now);
+                tracing::warn!(
+                    "Quorum proposal sent: view {}, timestamp {:?}",
+                    proposal.data.view_number(),
+                    now
+                );
+                self.leader_entry(proposal.data.view_number())
+                    .proposal_send
+                    .get_or_insert(now);
 
                 // If the last view succeeded, add the metric for time between proposals
                 if proposal.data.view_change_evidence().is_none() {
@@ -259,7 +241,8 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         .proposal_recv
                     {
                         self.leader_entry(proposal.data.view_number())
-                            .prev_proposal_send = Some(previous_proposal_time);
+                            .prev_proposal_send
+                            .get_or_insert(previous_proposal_time);
 
                         // calculate the elapsed time as milliseconds (from nanoseconds)
                         let elapsed_time = (now - previous_proposal_time) / 1_000_000;
@@ -277,58 +260,52 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 }
             },
             HotShotEvent::QuorumVoteSend(simple_vote) => {
-                self.replica_entry(simple_vote.view_number()).vote_send = Some(now);
+                self.replica_entry(simple_vote.view_number())
+                    .vote_send
+                    .get_or_insert(now);
             },
             HotShotEvent::ExtendedQuorumVoteSend(simple_vote) => {
-                self.replica_entry(simple_vote.view_number()).vote_send = Some(now);
+                self.replica_entry(simple_vote.view_number())
+                    .vote_send
+                    .get_or_insert(now);
             },
             HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 self.replica_entry(proposal.data.view_number())
-                    .proposal_validated = Some(now);
+                    .proposal_validated
+                    .get_or_insert(now);
                 self.replica_entry(proposal.data.view_number())
                     .proposal_timestamp =
                     Some(proposal.data.block_header().timestamp_millis() as i128);
             },
-            HotShotEvent::DaProposalSend(proposal, _) => {
-                self.leader_entry(proposal.data.view_number())
-                    .da_proposal_send = Some(now);
-            },
-            HotShotEvent::DaVoteSend(simple_vote) => {
-                self.replica_entry(simple_vote.view_number()).vote_send = Some(now);
-            },
             HotShotEvent::QcFormed(either) => {
                 match either {
-                    Either::Left(qc) => {
-                        self.leader_entry(qc.view_number() + 1).qc_formed = Some(now)
-                    },
-                    Either::Right(tc) => {
-                        self.leader_entry(tc.view_number())
-                            .timeout_certificate_formed = Some(now)
-                    },
+                    Either::Left(qc) => self
+                        .leader_entry(qc.view_number() + 1)
+                        .qc_formed
+                        .get_or_insert(now),
+                    Either::Right(tc) => self
+                        .leader_entry(tc.view_number())
+                        .timeout_certificate_formed
+                        .get_or_insert(now),
                 };
             },
             HotShotEvent::Qc2Formed(either) => {
                 match either {
-                    Either::Left(qc) => {
-                        self.leader_entry(qc.view_number() + 1).qc_formed = Some(now)
-                    },
-                    Either::Right(tc) => {
-                        self.leader_entry(tc.view_number())
-                            .timeout_certificate_formed = Some(now)
-                    },
+                    Either::Left(qc) => self
+                        .leader_entry(qc.view_number() + 1)
+                        .qc_formed
+                        .get_or_insert(now),
+                    Either::Right(tc) => self
+                        .leader_entry(tc.view_number())
+                        .timeout_certificate_formed
+                        .get_or_insert(now),
                 };
-            },
-            HotShotEvent::DacSend(simple_certificate, _) => {
-                self.leader_entry(simple_certificate.view_number())
-                    .da_cert_send = Some(now);
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 // Record the timestamp of the first observed view change
                 // This can happen when transitioning to the next view, either due to voting
                 // or receiving a proposal, but we only store the first one
-                if self.replica_entry(*view + 1).view_change.is_none() {
-                    self.replica_entry(*view + 1).view_change = Some(now);
-                }
+                self.replica_entry(*view + 1).view_change.get_or_insert(now);
 
                 if *epoch <= self.epoch && *view <= self.view {
                     return Ok(());
@@ -347,10 +324,25 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 }
 
                 if new_epoch {
-                    if let Some(prev_epoch) = prev_epoch {
-                        self.log_basic_stats(now, &prev_epoch);
-                    }
+                    let elapsed_time = if let Some(prev_epoch) = prev_epoch {
+                        self.log_basic_stats(now, &prev_epoch)
+                    } else {
+                        0
+                    };
                     let _ = self.dump_stats();
+                    if let Some(orchestrator_client) = self.orchestrator_client.as_ref() {
+                        orchestrator_client
+                            .post_bench_results::<TYPES>(BenchResults::<TYPES::View> {
+                                node_index: self.node_index,
+                                leader_view_stats: self.leader_stats.clone(),
+                                replica_view_stats: self.replica_stats.clone(),
+                                latencies_by_view: self.latencies_by_view.clone(),
+                                sizes_by_view: self.sizes_by_view.clone(),
+                                timeouts: self.timeouts.clone(),
+                                total_time_millis: elapsed_time,
+                            })
+                            .await;
+                    }
                     self.garbage_collect(*view - 1);
                 }
 
@@ -361,7 +353,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .leader(*view)
                     .await?;
                 if leader == self.public_key {
-                    self.leader_entry(*view).builder_start = Some(now);
+                    self.leader_entry(*view).builder_start.get_or_insert(now);
                 }
             },
             HotShotEvent::Timeout(view, _) => {
@@ -373,19 +365,28 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
             },
             HotShotEvent::SendPayloadCommitmentAndMetadata(_, _, _, view, _) => {
-                self.leader_entry(*view).vid_disperse_send = Some(now);
+                self.leader_entry(*view)
+                    .vid_disperse_send
+                    .get_or_insert(now);
             },
             HotShotEvent::VidShareRecv(_, proposal) => {
-                self.replica_entry(proposal.data.view_number())
-                    .vid_share_recv = Some(now);
+                if self.public_key == *proposal.data.recipient_key() {
+                    self.replica_entry(proposal.data.view_number())
+                        .vid_share_recv
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::VidShareValidated(proposal) => {
-                self.replica_entry(proposal.data.view_number())
-                    .vid_share_validated = Some(now);
+                if self.public_key == *proposal.data.recipient_key() {
+                    self.replica_entry(proposal.data.view_number())
+                        .vid_share_validated
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 self.replica_entry(proposal.data.view_number())
-                    .proposal_prelim_validated = Some(now);
+                    .proposal_prelim_validated
+                    .get_or_insert(now);
             },
             HotShotEvent::LeavesDecided(leaves) => {
                 for leaf in leaves {
@@ -403,6 +404,22 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         leaf.block_payload().map(|p| p.txn_bytes()).unwrap_or(0) as i128,
                     );
                 }
+            },
+            HotShotEvent::BlockReconstructed(_, _, _, view) => {
+                self.replica_entry(*view)
+                    .block_reconstructed
+                    .get_or_insert(now);
+                self.leader_entry(*view)
+                    .prev_block_received
+                    .get_or_insert(now);
+            },
+            HotShotEvent::BlockDirectlyRecv(_, view) => {
+                self.replica_entry(*view)
+                    .block_reconstructed
+                    .get_or_insert(now);
+                self.leader_entry(*view)
+                    .prev_block_received
+                    .get_or_insert(now);
             },
             _ => {},
         }
