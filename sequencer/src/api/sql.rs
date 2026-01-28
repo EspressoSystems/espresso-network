@@ -1,10 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, OnceLock},
-};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::{bail, ensure, Context};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
@@ -15,12 +11,12 @@ use espresso_types::{
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{
-        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleProofV2,
-        RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
+        RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
     },
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     NodeState, ValidatedState,
 };
+use futures::future::Future;
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
     availability::{BlockId, LeafId},
@@ -48,7 +44,7 @@ use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme,
 };
 use serde_json::Value;
-use sqlx::{Encode, Type};
+use sqlx::{Encode, Row, Type};
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -56,7 +52,9 @@ use super::{
     BlocksFrontier,
 };
 use crate::{
-    api::RewardAccountProofDataSource,
+    api::{
+        RewardAccountProofDataSource, RewardMerkleTreeV2Registry, REWARD_MERKLE_TREE_V2_REGISTRY,
+    },
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{sql::Options, ChainConfigPersistence},
     state::compute_state_update,
@@ -147,18 +145,93 @@ impl RewardAccountProofDataSource for SqlStorage {
         }
     }
 
-    fn registry(
-        &self,
-    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>> {
+    fn registry(&self) -> anyhow::Result<RewardMerkleTreeV2Registry> {
         Ok(REWARD_MERKLE_TREE_V2_REGISTRY
-            .get_or_init(|| Arc::new(RwLock::new(HashMap::new())))
+            .get_or_init(RewardMerkleTreeV2Registry::new)
             .clone())
     }
-}
 
-static REWARD_MERKLE_TREE_V2_REGISTRY: std::sync::OnceLock<
-    Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>,
-> = std::sync::OnceLock::new();
+    fn persist(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            let mut tx = self
+                .write()
+                .await
+                .context("opening transaction for state update")?;
+
+            tokio::spawn(async move {
+                tx.upsert(
+                    "reward_merkle_tree_v2_bincode",
+                    ["height", "serialized_bytes"],
+                    ["height"],
+                    [(height as i64, merkle_tree)],
+                )
+                .await?;
+
+                hotshot_query_service::data_source::Transaction::commit(tx)
+                    .await
+                    .context("Transaction to store reward merkle tree failed.")?;
+                Ok::<_, anyhow::Error>(())
+            });
+
+            Ok(())
+        }
+    }
+
+    fn load(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction for state update")?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT serialized_bytes
+                FROM reward_merkle_tree_v2_bincode
+                WHERE height = $1
+                "#,
+            )
+            .bind(height as i64)
+            .fetch_optional(tx.as_mut())
+            .await?
+            .context("No reward merkle tree for height {height} in storage")?;
+
+            row.try_get::<Vec<u8>, _>("serialized_bytes")
+                .context("Missing field serialized_bytes from row; this should never happen")
+        }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            let mut tx = self
+                .write()
+                .await
+                .context("opening transaction for state update")?;
+
+            sqlx::query(
+                r#"
+                  DELETE FROM reward_merkle_tree_v2_bincode
+                  WHERE height < $1
+                "#,
+            )
+            .bind(height as i64)
+            .fetch_optional(tx.as_mut())
+            .await?;
+
+            hotshot_query_service::data_source::Transaction::commit(tx)
+                .await
+                .context(
+                    "Transaction to garbage collect reward merkle trees from storage failed.",
+                )?;
+
+            Ok(())
+        }
+    }
+}
 
 impl CatchupStorage for SqlStorage {
     async fn get_reward_accounts_v1(
@@ -486,10 +559,24 @@ impl RewardAccountProofDataSource for DataSource {
             .await
     }
 
-    fn registry(
-        &self,
-    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>> {
+    fn registry(&self) -> anyhow::Result<RewardMerkleTreeV2Registry> {
         self.as_ref().registry()
+    }
+
+    fn persist(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.as_ref().persist(height, merkle_tree).await }
+    }
+
+    fn load(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.as_ref().load(height).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.as_ref().garbage_collect(height).await }
     }
 }
 

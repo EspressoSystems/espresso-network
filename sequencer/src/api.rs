@@ -20,10 +20,7 @@ use espresso_types::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
         StakeTableEvent, Validator,
     },
-    v0_4::{
-        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
-        RewardMerkleProofV2, RewardMerkleTreeV2,
-    },
+    v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
 };
@@ -31,14 +28,11 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
-use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
+use hotshot_contract_adapter::sol_types::{EspToken, LightClientV3, StakeTableV2};
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::{
-    availability::VidCommonQueryData, data_source::ExtensibleDataSource,
-    merklized_state::MerklizedState,
-};
+use hotshot_query_service::{availability::VidCommonQueryData, data_source::ExtensibleDataSource};
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
@@ -55,9 +49,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use jf_merkle_tree_compat::{
-    ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
-};
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
@@ -1287,6 +1279,26 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct RewardMerkleTreeV2Registry {
+    light_client_address: Cache<(), Address>,
+    latest: Arc<RwLock<Option<(u64, RewardMerkleTreeV2)>>>,
+    finalized: Arc<RwLock<Option<(u64, RewardMerkleTreeV2)>>>,
+}
+
+impl RewardMerkleTreeV2Registry {
+    fn new() -> Self {
+        Self {
+            light_client_address: Cache::builder().max_capacity(1).build(),
+            latest: Arc::new(RwLock::new(None)),
+            finalized: Arc::new(RwLock::new(None)),
+        }
+    }
+}
+
+static REWARD_MERKLE_TREE_V2_REGISTRY: std::sync::OnceLock<RewardMerkleTreeV2Registry> =
+    std::sync::OnceLock::new();
+
 pub(crate) trait RewardAccountProofDataSource: Sync {
     fn load_v1_reward_account_proof(
         &self,
@@ -1294,9 +1306,7 @@ pub(crate) trait RewardAccountProofDataSource: Sync {
         _account: RewardAccountV1,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>>;
 
-    fn registry(
-        &self,
-    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>>;
+    fn registry(&self) -> anyhow::Result<RewardMerkleTreeV2Registry>;
 
     fn load_v2_reward_account_proof(
         &self,
@@ -1304,88 +1314,111 @@ pub(crate) trait RewardAccountProofDataSource: Sync {
         account: RewardAccountV2,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
         async move {
-            let registry_lock = self.registry()?;
-            let registry = registry_lock.read().await;
-            let tree_lock = registry
-                .get(&height)
-                .context(format!("Tree for height {} missing from memory", height))?;
-            let tree = tree_lock.read().await;
+            let registry = self.registry()?;
+            let Some((latest_height, ref latest)) = *registry.latest.read().await else {
+                bail!("No reward merkle tree in memory");
+            };
 
-            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
-                .context("Account missing from internal RewardMerkleTreeV2")?;
+            if height == latest_height {
+                return RewardAccountProofV2::prove(latest, account.into())
+                    .context("Account missing from internal RewardMerkleTreeV2")
+                    .map(|(proof, balance)| RewardAccountQueryDataV2 { balance, proof });
+            }
 
-            Ok(RewardAccountQueryDataV2 { balance, proof })
+            let Some((finalized_height, ref finalized)) = *registry.finalized.read().await else {
+                bail!("No finalized reward merkle tree in memory");
+            };
+
+            if height == finalized_height {
+                return RewardAccountProofV2::prove(finalized, account.into())
+                    .context("Account missing from internal RewardMerkleTreeV2")
+                    .map(|(proof, balance)| RewardAccountQueryDataV2 { balance, proof });
+            }
+
+            bail!(
+                "RewardMerkleTreeV2 for height {height} is not in memory. We have trees in memory \
+                 for heights {latest_height} and {finalized_height}"
+            );
         }
     }
 
-    //    fn snapshot(
-    //      &self,
-    //      height: u64,
-    //    ) -> impl Send + Future<Output = anyhow::Result<Arc<RwLock<RewardMerkleTreeV2>>>>
-    //    {
-    //      async move {
-    //            let registry_lock = self.registry()?;
-    //            let registry = registry_lock.read().await;
-    //            Ok(registry
-    //                .get(&height)
-    //                .context(format!("Tree for height {} missing from memory", height))?.clone())
-    //      }
-    //    }
-
     fn insert_v2_reward_merkle_tree(
         &self,
+        node_state: &NodeState,
         height: u64,
         merkle_tree: RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            let registry_lock = self.registry()?;
-            let mut registry = registry_lock.write().await;
+            let registry = self.registry()?;
 
-            let tree = Arc::new(RwLock::new(merkle_tree));
-            registry.insert(height, tree);
+            {
+                let serialization = bincode::serialize(&merkle_tree)
+                    .context("Merkle tree serialization failed; this should never happen.")?;
+                self.persist(height, serialization).await?;
+            }
 
-            let n = std::env::var("REWARD_MERKLE_TREE_V2_RETAIN_HISTORY")
-                .ok()
-                .and_then(|n| n.parse::<u64>().ok())
-                .unwrap_or(0);
+            let mut latest_writer = registry.latest.write().await;
+            *latest_writer = Some((height, merkle_tree));
 
-            registry.retain(|&k, _| k >= height - n);
+            if height.is_multiple_of(30) {
+                let provider = &node_state.l1_client.provider;
+                let light_client_address = match registry.light_client_address.get(&()).await {
+                    Some(address) => address,
+                    None => {
+                        let stake_table_address = node_state
+                            .chain_config
+                            .stake_table_contract
+                            .context("No stake table contract in chain config")?;
+
+                        let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
+                        let light_client_address = stake_table.lightClient().call().await?;
+
+                        registry
+                            .light_client_address
+                            .insert((), light_client_address)
+                            .await;
+
+                        light_client_address
+                    },
+                };
+
+                let light_client_contract =
+                    LightClientV3::new(light_client_address, provider.clone());
+
+                let finalized_block_height = light_client_contract
+                    .finalizedState()
+                    .call()
+                    .await
+                    .context("Failed to retrieve finalizedState.blockHeight from the contract")?
+                    .blockHeight;
+
+                let mut finalized_writer = registry.finalized.write().await;
+                *finalized_writer = None;
+
+                self.garbage_collect(finalized_block_height).await?;
+
+                let finalized = bincode::deserialize(&self.load(finalized_block_height).await?)
+                    .context(
+                        "Failed to deserialize RewardMerkleTreeV2 for height \
+                         {finalized_block_height} from storage; this should never happen.",
+                    )?;
+
+                *finalized_writer = Some((finalized_block_height, finalized));
+            }
 
             Ok(())
         }
     }
 
-    //    fn insert_v2_reward_account_proofs<I>(
-    //        &self,
-    //        height: u64,
-    //        merkle_root: RewardMerkleCommitmentV2,
-    //        proofs: I,
-    //    ) -> impl Send + Future<Output = anyhow::Result<()>>
-    //    where
-    //        I: IntoIterator<Item = RewardAccountProofV2> + Send,
-    //    {
-    //        async move {
-    //            let registry_lock = self.registry()?;
-    //            let registry = registry_lock.write().await;
-    //
-    //            let new_tree = Arc::new(RwLock::new(RewardMerkleTreeV2::from_commitment(merkle_root)));
-    //            let tree_lock = registry.get(&height).unwrap_or_else(|| &new_tree);
-    //            let mut tree = tree_lock.write().await;
-    //
-    //            for proof in proofs {
-    //                match proof.proof {
-    //                    RewardMerkleProofV2::Presence(pf) | RewardMerkleProofV2::Absence(pf) => {
-    //                        tree.insert_path(RewardAccountV2(proof.account), &pf)?;
-    //                    },
-    //                }
-    //            }
-    //
-    //            let mut registry = registry_lock.write().await;
-    //            registry.insert(height, tree_lock.clone());
-    //
-    //            Ok(())
-    //        }
-    //    }
+    fn persist(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn load(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
 impl RewardAccountProofDataSource for hotshot_query_service::data_source::MetricsDataSource {
@@ -1399,10 +1432,30 @@ impl RewardAccountProofDataSource for hotshot_query_service::data_source::Metric
         }
     }
 
-    fn registry(
-        &self,
-    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>> {
+    fn registry(&self) -> anyhow::Result<RewardMerkleTreeV2Registry> {
         bail!("reward merklized state is not supported for this data source");
+    }
+
+    fn persist(
+        &self,
+        _height: u64,
+        _merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn garbage_collect(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
     }
 }
 
@@ -1422,10 +1475,24 @@ where
             .await
     }
 
-    fn registry(
-        &self,
-    ) -> anyhow::Result<Arc<RwLock<HashMap<u64, Arc<RwLock<RewardMerkleTreeV2>>>>>> {
+    fn registry(&self) -> anyhow::Result<RewardMerkleTreeV2Registry> {
         self.inner().registry()
+    }
+
+    fn persist(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().persist(height, merkle_tree).await }
+    }
+
+    fn load(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load(height).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().garbage_collect(height).await }
     }
 }
 

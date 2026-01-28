@@ -6,7 +6,7 @@ use either::Either;
 use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardAccountProofV2, RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2},
+    v0_4::{Delta, RewardMerkleTreeV2},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     ValidatedState,
 };
@@ -287,6 +287,7 @@ where
     if proposed_leaf.header().version() > EpochVersion::version() {
         storage
             .insert_v2_reward_merkle_tree(
+                instance,
                 proposed_leaf.height(),
                 state.reward_merkle_tree_v2.clone(),
             )
