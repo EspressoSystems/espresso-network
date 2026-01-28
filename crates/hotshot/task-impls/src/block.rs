@@ -281,7 +281,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             if upgrade {
                 None
             } else {
-                self.wait_for_block(block_view, receiver).await
+                self.wait_for_block(block_view).await
             }
         };
 
@@ -329,22 +329,24 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
-        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        // receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
-        let now = Instant::now();
-        let (previous_block, metadata) = timeout(
-            Duration::from_secs(1),
-            self.wait_for_previous_block(block_view - 1, receiver),
-        )
-        .await
-        .ok()?
-        .ok()?;
-        let elapsed = now.elapsed();
-        tracing::error!("Waited for previous block in {elapsed:?}");
+        // let now = Instant::now();
+        // let (previous_block, metadata) = timeout(
+        //     Duration::from_secs(1),
+        //     self.wait_for_previous_block(block_view - 1, receiver),
+        // )
+        // .await
+        // .ok()?
+        // .ok()?;
+        // let elapsed = now.elapsed();
+        // tracing::error!("Waited for previous block in {elapsed:?}");
 
-        let now = Instant::now();
-        self.handle_block(block_view - 1, previous_block, metadata)
-            .await;
+        // let now = Instant::now();
+        // self.handle_block(block_view - 1, previous_block, metadata)
+        //     .await;
+        // let elapsed = now.elapsed();
+        // tracing::error!("Handled previous block in {elapsed:?}");
         let now = Instant::now();
         let PayloadWithMetadata { payload, metadata } = self.build_block(block_view).await?;
         let elapsed = now.elapsed();

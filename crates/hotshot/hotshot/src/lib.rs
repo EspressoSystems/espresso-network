@@ -611,18 +611,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             Ok(m) => m,
             Err(e) => return Err(HotShotError::InvalidState(e.message)),
         };
+        let leader = match membership.leader(TYPES::View::new(*view_number + 2)).await {
+            Ok(l) => l,
+            Err(e) => return Err(HotShotError::InvalidState(e.message)),
+        };
 
         spawn(async move {
-            // send the transaction to the leader of the next 3 views
-            let mut leaders = vec![];
-            for view in *view_number + 1..*view_number + 4 {
-                if let Ok(leader) = membership.leader(TYPES::View::new(view)).await {
-                    leaders.push(leader);
-                } else {
-                    tracing::error!("No leader found for view {view}");
-                }
-            }
-
+            // send the transaction to the leader of the next view
             join! {
                 // TODO We should have a function that can return a network error if there is one
                 // but first we'd need to ensure our network implementations can support that
@@ -632,10 +627,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 // and will be updated to be part of SystemContext. I wanted to use associated
                 // constants in NodeType, but that seems to be unavailable in the current Rust.
                 api
-                    .network.da_broadcast_message(
+                    .network.direct_message(
                         serialized_message,
-                        leaders,
-                        BroadcastDelay::None,
+                        leader,
                     ),
                 api
                     .send_external_event(Event {

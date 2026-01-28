@@ -70,6 +70,10 @@ pub struct HotShotTaskCompleted;
 #[derive(Eq, PartialEq, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum HotShotEvent<TYPES: NodeType> {
+    /// Block sent directly to the network
+    BlockSend(PayloadWithMetadata<TYPES>, TYPES::View),
+    /// Block received directly from the leader
+    BlockDirectlyRecv(PayloadWithMetadata<TYPES>, TYPES::View),
     /// A block has been reconstructed and is ready to be stored
     BlockReady(Arc<PayloadWithMetadata<TYPES>>, VidCommitment, TYPES::View),
     /// Shutdown the task
@@ -413,6 +417,8 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             HotShotEvent::SetFirstEpoch(..) => None,
             HotShotEvent::LeavesDecided(..) => None,
             HotShotEvent::BlockReconstructed(_, _, _, view) => Some(*view),
+            HotShotEvent::BlockSend(_, view) => Some(*view),
+            HotShotEvent::BlockDirectlyRecv(_, view) => Some(*view),
         }
     }
 }
@@ -422,6 +428,12 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HotShotEvent::BlockReady(_, _, view) => write!(f, "BlockReady(view_number={:?})", view),
+            HotShotEvent::BlockSend(payload, view) => {
+                write!(f, "BlockSend(view_number={:?})", view)
+            },
+            HotShotEvent::BlockDirectlyRecv(payload, view) => {
+                write!(f, "BlockDirectlyRecv(view_number={:?})", view)
+            },
             HotShotEvent::Shutdown => write!(f, "Shutdown"),
             HotShotEvent::QuorumProposalRecv(proposal, _) => write!(
                 f,

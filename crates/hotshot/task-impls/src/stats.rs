@@ -172,11 +172,35 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
 
         match event.as_ref() {
             HotShotEvent::BlockRecv(block_recv) => {
+                tracing::warn!(
+                    "Block received: view {}, timestamp {:?}",
+                    block_recv.view_number,
+                    now
+                );
                 self.leader_entry(block_recv.view_number)
                     .block_built
                     .get_or_insert(now);
+                self.replica_entry(block_recv.view_number)
+                    .block_reconstructed
+                    .get_or_insert(now);
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(block_recv.epoch_number)
+                    .await?
+                    .leader(block_recv.view_number)
+                    .await?;
+                if leader == self.public_key {
+                    self.leader_entry(block_recv.view_number)
+                        .prev_block_received
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::QuorumProposalRecv(proposal, _) => {
+                tracing::warn!(
+                    "Quorum proposal received: view {}, timestamp {:?}",
+                    proposal.data.view_number(),
+                    now
+                );
                 self.replica_entry(proposal.data.view_number())
                     .proposal_recv
                     .get_or_insert(now);
@@ -197,22 +221,6 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             HotShotEvent::TimeoutVoteSend(vote) => {
                 self.replica_entry(vote.view_number())
                     .timeout_vote_send
-                    .get_or_insert(now);
-            },
-            HotShotEvent::DaProposalRecv(proposal, _) => {
-                self.replica_entry(proposal.data.view_number())
-                    .da_proposal_received
-                    .get_or_insert(now);
-            },
-            HotShotEvent::DaProposalValidated(proposal, _) => {
-                self.replica_entry(proposal.data.view_number())
-                    .da_proposal_validated
-                    .get_or_insert(now);
-            },
-            HotShotEvent::DaVoteRecv(_simple_vote) => {},
-            HotShotEvent::DaCertificateRecv(simple_certificate) => {
-                self.replica_entry(simple_certificate.view_number())
-                    .da_certificate_recv
                     .get_or_insert(now);
             },
             HotShotEvent::DaCertificateValidated(_simple_certificate) => {},
@@ -264,16 +272,6 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .proposal_timestamp =
                     Some(proposal.data.block_header().timestamp_millis() as i128);
             },
-            HotShotEvent::DaProposalSend(proposal, _) => {
-                self.leader_entry(proposal.data.view_number())
-                    .da_proposal_send
-                    .get_or_insert(now);
-            },
-            HotShotEvent::DaVoteSend(simple_vote) => {
-                self.replica_entry(simple_vote.view_number())
-                    .vote_send
-                    .get_or_insert(now);
-            },
             HotShotEvent::QcFormed(either) => {
                 match either {
                     Either::Left(qc) => self
@@ -297,11 +295,6 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         .timeout_certificate_formed
                         .get_or_insert(now),
                 };
-            },
-            HotShotEvent::DacSend(simple_certificate, _) => {
-                self.leader_entry(simple_certificate.view_number())
-                    .da_cert_send
-                    .get_or_insert(now);
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 // Record the timestamp of the first observed view change
@@ -372,14 +365,18 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .get_or_insert(now);
             },
             HotShotEvent::VidShareRecv(_, proposal) => {
-                self.replica_entry(proposal.data.view_number())
-                    .vid_share_recv
-                    .get_or_insert(now);
+                if self.public_key == *proposal.data.recipient_key() {
+                    self.replica_entry(proposal.data.view_number())
+                        .vid_share_recv
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::VidShareValidated(proposal) => {
-                self.replica_entry(proposal.data.view_number())
-                    .vid_share_validated
-                    .get_or_insert(now);
+                if self.public_key == *proposal.data.recipient_key() {
+                    self.replica_entry(proposal.data.view_number())
+                        .vid_share_validated
+                        .get_or_insert(now);
+                }
             },
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 self.replica_entry(proposal.data.view_number())
@@ -402,6 +399,22 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                         leaf.block_payload().map(|p| p.txn_bytes()).unwrap_or(0) as i128,
                     );
                 }
+            },
+            HotShotEvent::BlockReconstructed(_, _, _, view) => {
+                self.replica_entry(*view)
+                    .block_reconstructed
+                    .get_or_insert(now);
+                self.leader_entry(*view)
+                    .prev_block_received
+                    .get_or_insert(now);
+            },
+            HotShotEvent::BlockDirectlyRecv(_, view) => {
+                self.replica_entry(*view)
+                    .block_reconstructed
+                    .get_or_insert(now);
+                self.leader_entry(*view)
+                    .prev_block_received
+                    .get_or_insert(now);
             },
             _ => {},
         }

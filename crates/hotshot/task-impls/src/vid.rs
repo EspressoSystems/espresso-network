@@ -85,6 +85,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 } = packed_bundle;
                 let payload =
                     <TYPES as NodeType>::BlockPayload::from_bytes(encoded_transactions, metadata);
+                broadcast_event(
+                    Arc::new(HotShotEvent::BlockSend(
+                        PayloadWithMetadata {
+                            payload: payload.clone(),
+                            metadata: metadata.clone(),
+                        },
+                        *view_number,
+                    )),
+                    &event_stream,
+                )
+                .await;
                 let builder_commitment = payload.builder_commitment(metadata);
                 let epoch = self.cur_epoch;
                 if self
