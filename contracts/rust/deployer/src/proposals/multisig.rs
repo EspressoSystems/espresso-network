@@ -534,9 +534,11 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 
     if !dry_run {
         tracing::info!("Checking if owner is a contract");
-        if !crate::is_contract(&provider, owner_addr).await? {
-            anyhow::bail!("Owner is not a contract so not a multisig wallet");
-        }
+        anyhow::ensure!(
+            crate::is_contract(&provider, owner_addr).await?,
+            "Owner {:#x} is not a contract so not a multisig wallet",
+            owner_addr
+        );
     }
 
     // Prepare addresses

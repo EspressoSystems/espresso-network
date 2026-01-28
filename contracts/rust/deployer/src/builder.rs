@@ -613,8 +613,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     // Perform a timelock operation
     ///
     /// This function can perform timelock operations via two paths:
-    /// - **Multisig path**: If `multisig` is set, the operation will be proposed via Safe multisig
-    /// - **EOA path**: If `multisig` is not set, the operation will be executed directly via EOA (useful for tests/local development)
+    /// - **Multisig path**: If `multisig` field from DeployerArgs is set, the operation will be proposed via Safe multisig
+    /// - **EOA path**: If `multisig` field from DeployerArgs is not set, the operation will be executed directly via EOA (useful for tests/local development)
     ///
     /// Parameters:
     /// - `contracts`: ref to deployed contracts
@@ -632,75 +632,71 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .address(contract_type)
             .context(format!("{:?} address not found", contract_type))?;
 
-        let (timelock_operation_data, operation_id) =
-            if timelock_operation_type == TimelockOperationType::Cancel {
-                // Cancel operation - we need the operation ID
-                match self.timelock_operation_id.as_ref() {
-                    Some(op_id_str) => {
-                        let op_id = if let Some(stripped) = op_id_str.strip_prefix("0x") {
-                            B256::from_hex(stripped).context("Invalid operation ID hex format")?
-                        } else {
-                            B256::from_hex(op_id_str).context("Invalid operation ID hex format")?
-                        };
-
-                        let minimal_payload = TimelockOperationPayload {
-                            target: target_addr,
-                            value: U256::ZERO,
-                            data: Bytes::new(),
-                            predecessor: B256::ZERO,
-                            salt: B256::ZERO,
-                            delay: U256::ZERO,
-                        };
-                        (minimal_payload, Some(op_id))
-                    },
-                    None => {
-                        anyhow::bail!("Operation ID is required for Cancel operations");
-                    },
-                }
+        let (timelock_operation_data, operation_id) = if timelock_operation_type
+            == TimelockOperationType::Cancel
+            && self.timelock_operation_id.is_some()
+        {
+            // Cancel operation with explicit operation_id - use minimal payload
+            let op_id_str = self.timelock_operation_id.as_ref().unwrap();
+            let op_id = if let Some(stripped) = op_id_str.strip_prefix("0x") {
+                B256::from_hex(stripped).context("Invalid operation ID hex format")?
             } else {
-                // Schedule or Execute operation - we need full operation details
-                let value = self
-                    .timelock_operation_value
-                    .context("Timelock operation value not found")?;
-                let function_signature = self
-                    .timelock_operation_function_signature
-                    .as_ref()
-                    .context("Timelock operation function signature not found")?;
-                let function_values = self
-                    .timelock_operation_function_values
-                    .clone()
-                    .context("Timelock operation function values not found")?;
-                let salt = self
-                    .timelock_operation_salt
-                    .clone()
-                    .context("Timelock operation salt not found")?;
-                let delay = self
-                    .timelock_operation_delay
-                    .context("Timelock operation delay not found")?;
-
-                let function_calldata =
-                    encode_function_call(function_signature, function_values.clone())
-                        .context("Failed to encode function data")?;
-
-                // Parse salt from string to B256
-                let salt_trimmed = salt.trim();
-                let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
-                    B256::ZERO
-                } else {
-                    let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
-                    B256::from_hex(hex_str).context("Invalid salt hex format")?
-                };
-
-                let operation = TimelockOperationPayload {
-                    target: target_addr,
-                    value,
-                    data: function_calldata,
-                    predecessor: B256::ZERO, // Default to no predecessor
-                    salt: salt_bytes,
-                    delay,
-                };
-                (operation, None)
+                B256::from_hex(op_id_str).context("Invalid operation ID hex format")?
             };
+
+            let minimal_payload = TimelockOperationPayload {
+                target: target_addr,
+                value: U256::ZERO,
+                data: Bytes::new(),
+                predecessor: B256::ZERO,
+                salt: B256::ZERO,
+                delay: U256::ZERO,
+            };
+            (minimal_payload, Some(op_id))
+        } else {
+            // Schedule or Execute operation - we need full operation details
+            let value = self
+                .timelock_operation_value
+                .context("Timelock operation value not found")?;
+            let function_signature = self
+                .timelock_operation_function_signature
+                .as_ref()
+                .context("Timelock operation function signature not found")?;
+            let function_values = self
+                .timelock_operation_function_values
+                .clone()
+                .context("Timelock operation function values not found")?;
+            let salt = self
+                .timelock_operation_salt
+                .clone()
+                .context("Timelock operation salt not found")?;
+            let delay = self
+                .timelock_operation_delay
+                .context("Timelock operation delay not found")?;
+
+            let function_calldata =
+                encode_function_call(function_signature, function_values.clone())
+                    .context("Failed to encode function data")?;
+
+            // Parse salt from string to B256
+            let salt_trimmed = salt.trim();
+            let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
+                B256::ZERO
+            } else {
+                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+                B256::from_hex(hex_str).context("Invalid salt hex format")?
+            };
+
+            let operation = TimelockOperationPayload {
+                target: target_addr,
+                value,
+                data: function_calldata,
+                predecessor: B256::ZERO, // Default to no predecessor
+                salt: salt_bytes,
+                delay,
+            };
+            (operation, None)
+        };
 
         let params = if let Some(multisig_proposer) = self.multisig {
             // Multisig path

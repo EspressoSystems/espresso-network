@@ -352,6 +352,8 @@ pub async fn perform_timelock_operation(
     params: TimelockOperationParams,
 ) -> Result<B256> {
     let timelock = get_timelock_for_contract(provider, contract_type, operation.target).await?;
+    // for cancel operations: if operation_id is provided, use it directly;
+    // otherwise, compute it from the operation payload
     let operation_id =
         if let (TimelockOperationType::Cancel, Some(id)) = (operation_type, params.operation_id) {
             id
@@ -409,19 +411,22 @@ async fn perform_timelock_operation_via_eoa(
     // Verify operation state based on type
     match operation_type {
         TimelockOperationType::Schedule => {
-            if !(timelock
-                .is_operation_pending(operation_id, &provider)
-                .await?
-                || timelock.is_operation_ready(operation_id, &provider).await?)
-            {
-                anyhow::bail!("tx not correctly scheduled: {}", operation_id);
-            }
+            anyhow::ensure!(
+                timelock
+                    .is_operation_pending(operation_id, &provider)
+                    .await?
+                    || timelock.is_operation_ready(operation_id, &provider).await?,
+                "tx not correctly scheduled: {}",
+                operation_id
+            );
             tracing::info!("tx scheduled with id: {}", operation_id);
         },
         TimelockOperationType::Execute => {
-            if !timelock.is_operation_done(operation_id, &provider).await? {
-                anyhow::bail!("tx not correctly executed: {}", operation_id);
-            }
+            anyhow::ensure!(
+                timelock.is_operation_done(operation_id, &provider).await?,
+                "tx not correctly executed: {}",
+                operation_id
+            );
             tracing::info!("tx executed with id: {}", operation_id);
         },
         TimelockOperationType::Cancel => {
