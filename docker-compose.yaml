@@ -4,7 +4,7 @@ networks:
 
 services:
   demo-l1-network:
-    image: ghcr.io/paradigmxyz/reth:latest
+    image: ghcr.io/paradigmxyz/reth:v1.10.2
     command:
       - node
       - --dev
