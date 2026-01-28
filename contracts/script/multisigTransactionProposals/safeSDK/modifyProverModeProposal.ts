@@ -111,6 +111,7 @@ export async function proposeSetProverTransaction(
     safeSDK,
     contractAddress,
     data,
+    "0",
     useHardwareWallet,
   );
 
@@ -167,6 +168,7 @@ export async function proposeDisableProverTransaction(
     safeSDK,
     contractAddress,
     data,
+    "0",
     useHardwareWallet,
   );
 
