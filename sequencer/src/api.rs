@@ -1299,7 +1299,7 @@ impl RewardMerkleTreeV2Registry {
 static REWARD_MERKLE_TREE_V2_REGISTRY: std::sync::OnceLock<RewardMerkleTreeV2Registry> =
     std::sync::OnceLock::new();
 
-pub(crate) trait RewardAccountProofDataSource: Sync {
+pub(crate) trait RewardAccountProofDataSource: Send + Sync + Clone + 'static {
     fn load_v1_reward_account_proof(
         &self,
         _height: u64,
@@ -1361,49 +1361,58 @@ pub(crate) trait RewardAccountProofDataSource: Sync {
             *latest_writer = Some((height, merkle_tree));
 
             if height.is_multiple_of(30) {
-                let provider = &node_state.l1_client.provider;
-                let light_client_address = match registry.light_client_address.get(&()).await {
-                    Some(address) => address,
-                    None => {
-                        let stake_table_address = node_state
-                            .chain_config
-                            .stake_table_contract
-                            .context("No stake table contract in chain config")?;
+                let data_source = self.clone();
+                let node_state = node_state.clone();
 
-                        let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
-                        let light_client_address = stake_table.lightClient().call().await?;
+                tokio::spawn(async move {
+                    let provider = &node_state.l1_client.provider;
+                    let light_client_address = match registry.light_client_address.get(&()).await {
+                        Some(address) => address,
+                        None => {
+                            let stake_table_address = node_state
+                                .chain_config
+                                .stake_table_contract
+                                .context("No stake table contract in chain config")?;
 
-                        registry
-                            .light_client_address
-                            .insert((), light_client_address)
-                            .await;
+                            let stake_table =
+                                StakeTableV2::new(stake_table_address, provider.clone());
+                            let light_client_address = stake_table.lightClient().call().await?;
 
-                        light_client_address
-                    },
-                };
+                            registry
+                                .light_client_address
+                                .insert((), light_client_address)
+                                .await;
 
-                let light_client_contract =
-                    LightClientV3::new(light_client_address, provider.clone());
+                            light_client_address
+                        },
+                    };
 
-                let finalized_block_height = light_client_contract
-                    .finalizedState()
-                    .call()
-                    .await
-                    .context("Failed to retrieve finalizedState.blockHeight from the contract")?
-                    .blockHeight;
+                    let light_client_contract =
+                        LightClientV3::new(light_client_address, provider.clone());
 
-                let mut finalized_writer = registry.finalized.write().await;
-                *finalized_writer = None;
+                    let finalized_block_height = light_client_contract
+                        .finalizedState()
+                        .call()
+                        .await
+                        .context("Failed to retrieve finalizedState.blockHeight from the contract")?
+                        .blockHeight;
 
-                self.garbage_collect(finalized_block_height).await?;
+                    let mut finalized_writer = registry.finalized.write().await;
+                    *finalized_writer = None;
 
-                let finalized = bincode::deserialize(&self.load(finalized_block_height).await?)
-                    .context(
-                        "Failed to deserialize RewardMerkleTreeV2 for height \
-                         {finalized_block_height} from storage; this should never happen.",
-                    )?;
+                    data_source.garbage_collect(finalized_block_height).await?;
 
-                *finalized_writer = Some((finalized_block_height, finalized));
+                    let finalized =
+                        bincode::deserialize(&data_source.load(finalized_block_height).await?)
+                            .context(
+                                "Failed to deserialize RewardMerkleTreeV2 for height \
+                                 {finalized_block_height} from storage; this should never happen.",
+                            )?;
+
+                    *finalized_writer = Some((finalized_block_height, finalized));
+
+                    Ok::<(), anyhow::Error>(())
+                });
             }
 
             Ok(())
@@ -1463,7 +1472,7 @@ impl<T, S> RewardAccountProofDataSource
     for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
     T: RewardAccountProofDataSource,
-    S: Sync,
+    S: Send + Sync + Clone + 'static,
 {
     async fn load_v1_reward_account_proof(
         &self,
