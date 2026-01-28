@@ -2224,7 +2224,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2864,7 +2864,7 @@ dependencies = [
  "anyhow",
  "espresso-types",
  "futures",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "surf-disco",
  "tokio",
  "tracing",
@@ -2978,7 +2978,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -3814,7 +3814,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "jf-pcs",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.7.0)",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
@@ -4206,7 +4206,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-types",
  "jf-crhf",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
  "openssl",
  "primitive-types 0.13.1",
@@ -4234,7 +4234,7 @@ dependencies = [
  "hotshot-state-prover",
  "hotshot-types",
  "itertools 0.12.1",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "portpicker",
  "rand 0.8.5",
  "rstest",
@@ -4308,7 +4308,7 @@ dependencies = [
  "insta",
  "itertools 0.12.1",
  "jf-advz",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "jf-utils",
  "lru 0.12.5",
  "num-traits",
@@ -5688,7 +5688,7 @@ dependencies = [
  "include_dir",
  "itertools 0.12.1",
  "jf-advz",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "lazy_static",
  "log",
  "portpicker",
@@ -6643,7 +6643,7 @@ dependencies = [
  "generic-array 0.14.9",
  "getrandom 0.2.16",
  "itertools 0.14.0",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.2.0",
  "jf-pcs",
  "jf-utils",
  "rayon",
@@ -6703,6 +6703,34 @@ dependencies = [
 name = "jf-merkle-tree-compat"
 version = "0.2.0"
 source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.2.0#a2ee55546807c7e6c41ee02945b8c722eeb29023"
+dependencies = [
+ "ark-bls12-377",
+ "ark-bls12-381",
+ "ark-bn254 0.5.0",
+ "ark-ec 0.5.0",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "derivative",
+ "digest 0.10.7",
+ "displaydoc",
+ "getrandom 0.2.16",
+ "hashbrown 0.16.1",
+ "itertools 0.14.0",
+ "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
+ "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
+ "jf-utils",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "sha3",
+ "tagged-base64",
+]
+
+[[package]]
+name = "jf-merkle-tree-compat"
+version = "0.3.0"
+source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.3.0#9c501f5c21eb1f263d70d3ab74185802fc916ad8"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -7575,7 +7603,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-types",
  "jf-advz",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "light-client",
  "portpicker",
  "pretty_assertions",
@@ -9162,7 +9190,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -10410,7 +10438,7 @@ dependencies = [
  "itertools 0.12.1",
  "jf-advz",
  "jf-crhf",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "libp2p",
@@ -10868,7 +10896,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "itertools 0.12.1",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "portpicker",
  "rand 0.8.5",
  "reqwest",
@@ -10966,7 +10994,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -11275,7 +11303,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-merkle-tree-compat",
+ "jf-merkle-tree-compat 0.3.0",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "portpicker",
  "predicates",
