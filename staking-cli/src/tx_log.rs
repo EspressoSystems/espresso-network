@@ -35,10 +35,11 @@ const GETH_PENDING_LIMIT: usize = 64;
 /// Maximum unconfirmed transactions in flight (outer semaphore).
 /// Provides backpressure: we don't submit faster than confirmations.
 /// Set high enough that blocks are mostly full (~1000 txs/sec throughput).
-const MAX_UNCONFIRMED: usize = 4000;
+const MAX_UNCONFIRMED: usize = 1000;
 
 /// Timeout for waiting on a single transaction confirmation.
-const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(60);
+/// Set high to tolerate temporary geth dev mode deadlocks.
+const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
@@ -143,10 +144,13 @@ impl TxParams {
     pub async fn fetch(provider: &impl Provider) -> Result<Self> {
         let chain_id = provider.get_chain_id().await?;
         let fees = provider.estimate_eip1559_fees().await?;
+        // Use high gas price floor (100 gwei) for pre-signed txs since base fee can rise
+        // significantly over thousands of blocks in dev mode
+        let min_gas_price = 100_000_000_000u128; // 100 gwei
+        let estimated_with_buffer = fees.max_fee_per_gas * 100;
         Ok(Self {
             chain_id,
-            // 10 x to add some buffer because we're pre-signing many txns
-            max_fee_per_gas: fees.max_fee_per_gas * 10,
+            max_fee_per_gas: estimated_with_buffer.max(min_gas_price),
             max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
         })
     }
@@ -263,6 +267,11 @@ fn is_retriable_error(err: &str) -> bool {
     !non_retriable.iter().any(|s| err_lower.contains(s))
 }
 
+fn is_timeout_error(err: &str) -> bool {
+    let err_lower = err.to_lowercase();
+    err_lower.contains("timed out") || err_lower.contains("timeout")
+}
+
 pub async fn submit_with_retry(
     provider: &impl Provider,
     signed_tx: &Bytes,
@@ -282,6 +291,14 @@ pub async fn submit_with_retry(
 
                 if !is_retriable_error(&err_str) {
                     bail!("non-retriable error: {}", err_str);
+                }
+
+                // On timeout, tx might have been accepted - check if already confirmed
+                if is_timeout_error(&err_str) {
+                    if let Ok(Some(_receipt)) = provider.get_transaction_receipt(tx_hash).await {
+                        tracing::info!("tx {} already confirmed despite timeout", tx_hash);
+                        return Ok(tx_hash);
+                    }
                 }
 
                 attempts += 1;
@@ -389,6 +406,9 @@ async fn execute_single_sender_batched<P: Provider + Clone + 'static>(
         submitted += batch.len();
         tracing::info!("phase {}: submitted {}/{}", phase, submitted, total);
 
+        // Give geth time to process the batch before submitting more
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
         // Spawn confirm tasks (release permit on confirmation)
         for (tx, permit) in batch.iter().cloned().zip(permits) {
             let provider = provider.clone();
@@ -418,26 +438,56 @@ async fn execute_single_sender_batched<P: Provider + Clone + 'static>(
 /// 2. **Inner semaphore** (`parallelism`): Limits concurrent RPC requests to the node.
 ///    Prevents overwhelming the RPC endpoint with too many simultaneous calls.
 ///
-/// For single-sender phases (FundEth, FundEsp): submits in batches of 64 to avoid
-/// geth txpool drops, with outer semaphore for backpressure.
-///
-/// For multi-sender phases (Approve, Delegate): spawns one task per tx, both
-/// semaphores control submission rate and RPC load.
+/// When `geth_mode` is true, single-sender phases (FundEth, FundEsp) use batched
+/// submission (64 txs at a time) to avoid geth txpool drops. When false, all phases
+/// use the simpler multi-sender flow which works well with reth and other clients.
 pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
     provider: P,
     log: &TxLog,
     parallelism: usize,
+    geth_mode: bool,
 ) -> Result<()> {
     let total = log.transactions.len();
     let phases = log.phases();
 
     tracing::info!(
-        "executing {} txs across {} phases (parallelism={})",
+        "executing {} txs across {} phases (parallelism={}, geth_mode={})",
         total,
         phases.len(),
-        parallelism
+        parallelism,
+        geth_mode
     );
 
+    // Background task to periodically poke geth's miner (only in geth_mode).
+    // Works around a known deadlock bug in geth dev mode where the miner
+    // stops producing blocks under load. Periodic RPC calls can unstick it.
+    let poker_handle = if geth_mode {
+        let poker_provider = provider.clone();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+                let _ = poker_provider.get_block_number().await;
+            }
+        }))
+    } else {
+        None
+    };
+
+    let result = execute_signed_tx_log_inner(&provider, log, parallelism, phases, geth_mode).await;
+    if let Some(h) = poker_handle {
+        h.abort();
+    }
+    result
+}
+
+async fn execute_signed_tx_log_inner<P: Provider + Clone + 'static>(
+    provider: &P,
+    log: &TxLog,
+    parallelism: usize,
+    phases: Vec<TxPhase>,
+    geth_mode: bool,
+) -> Result<()> {
     for phase in phases {
         let phase_txs = log.transactions_for_phase(phase);
         let phase_total = phase_txs.len();
@@ -498,11 +548,11 @@ pub async fn execute_signed_tx_log<P: Provider + Clone + 'static>(
         let senders: HashSet<_> = to_submit.iter().map(|tx| tx.from).collect();
         let is_single_sender = senders.len() == 1 && to_submit.len() > GETH_PENDING_LIMIT;
 
-        if is_single_sender {
-            // Use batching for single-sender phases (avoids geth txpool drops)
+        if is_single_sender && geth_mode {
+            // Use batching for single-sender phases in geth mode (avoids geth txpool drops)
             execute_single_sender_batched(provider.clone(), phase, to_submit).await?;
         } else {
-            // Multi-sender: semaphore for unconfirmed + semaphore for concurrency
+            // Multi-sender flow: semaphore for unconfirmed + semaphore for concurrency
             let total = to_submit.len();
             let unconfirmed_sem = Arc::new(Semaphore::new(MAX_UNCONFIRMED));
             let concurrency_sem = Arc::new(Semaphore::new(parallelism));
@@ -617,5 +667,17 @@ mod tests {
         assert!(is_retriable_error("connection reset"));
         assert!(is_retriable_error("timeout"));
         assert!(is_retriable_error("rate limited"));
+    }
+
+    #[test]
+    fn test_is_timeout_error() {
+        assert!(is_timeout_error("request timed out"));
+        assert!(is_timeout_error("-32002: request timed out"));
+        assert!(is_timeout_error("Request Timed Out"));
+        assert!(is_timeout_error("connection timeout"));
+        assert!(is_timeout_error("Timeout waiting for response"));
+        assert!(!is_timeout_error("nonce too low"));
+        assert!(!is_timeout_error("connection reset"));
+        assert!(!is_timeout_error("rate limited"));
     }
 }

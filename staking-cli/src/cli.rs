@@ -445,6 +445,7 @@ pub async fn run() -> Result<()> {
         num_validators,
         num_delegators_per_validator,
         delegation_config,
+        concurrency,
     } = config.commands
     {
         tracing::info!(
@@ -455,6 +456,7 @@ pub async fn run() -> Result<()> {
             num_validators,
             num_delegators_per_validator,
             delegation_config,
+            concurrency,
         )
         .await
         .unwrap();
@@ -468,6 +470,7 @@ pub async fn run() -> Result<()> {
                 num_validators,
                 num_delegators_per_validator,
                 delegation_config,
+                concurrency,
             } => {
                 tracing::info!(
                     "Staking for demo with {num_validators} validators and config \
@@ -478,6 +481,7 @@ pub async fn run() -> Result<()> {
                     *num_validators,
                     *num_delegators_per_validator,
                     *delegation_config,
+                    *concurrency,
                 )
                 .await
                 .unwrap();
@@ -543,6 +547,7 @@ pub async fn run() -> Result<()> {
                 min_amount,
                 max_amount,
                 delay,
+                concurrency,
             } => {
                 tracing::info!(
                     "Starting churn with {} validators and {} delegators",
@@ -559,6 +564,7 @@ pub async fn run() -> Result<()> {
                         min_amount: *min_amount,
                         max_amount: *max_amount,
                         delay: *delay,
+                        concurrency: *concurrency,
                     },
                 )
                 .await

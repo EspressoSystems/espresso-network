@@ -9,13 +9,7 @@ use common::{base_cmd, Signer, TestSystemExt};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use predicates::str;
 use rand::{rngs::StdRng, SeedableRng as _};
-use staking_cli::{
-    demo::DelegationConfig,
-    deploy::{self},
-    Config,
-};
-
-use crate::deploy::TestSystem;
+use staking_cli::{demo::DelegationConfig, deploy::TestSystem, Config};
 
 mod common;
 

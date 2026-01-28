@@ -253,7 +253,7 @@ mod test {
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let espresso_url = format!("http://localhost:{}/", port).parse()?;
+        let espresso_url = format!("http://127.0.0.1:{}/", port).parse()?;
 
         let unclaimed = unclaimed_rewards(
             &system.provider,

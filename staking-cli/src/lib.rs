@@ -63,6 +63,9 @@ pub const DEV_MNEMONIC: &str = "test test test test test test test test test tes
 pub const DEV_PRIVATE_KEY: &str =
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
+/// Mnemonic account index where demo validators start (indices 0-19 reserved for other uses).
+pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
+
 /// CLI to interact with the Espresso stake table contract.
 ///
 /// Used by staking-cli integration tests.
@@ -422,6 +425,10 @@ pub enum Commands {
 
         #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = demo::DelegationConfig::default())]
         delegation_config: demo::DelegationConfig,
+
+        /// Number of concurrent transaction submissions
+        #[clap(long, default_value_t = tx_log::DEFAULT_CONCURRENCY)]
+        concurrency: usize,
     },
     /// Export validator node signatures for address validation.
     ExportNodeSignatures {

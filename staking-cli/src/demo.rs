@@ -42,7 +42,7 @@ use crate::{
     signature::NodeSignatures,
     transaction::Transaction,
     tx_log::{execute_signed_tx_log, sign_all_transactions, TxInput, TxLog, TxPhase},
-    Config,
+    Config, DEMO_VALIDATOR_START_INDEX,
 };
 
 #[derive(Debug, Error)]
@@ -97,6 +97,10 @@ pub enum DemoCommands {
 
         #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = DelegationConfig::default())]
         delegation_config: DelegationConfig,
+
+        /// Number of concurrent transaction submissions
+        #[clap(long, default_value_t = crate::tx_log::DEFAULT_CONCURRENCY)]
+        concurrency: usize,
     },
     /// Mass delegate to existing validators
     Delegate {
@@ -186,6 +190,10 @@ pub enum DemoCommands {
         /// Delay between operations
         #[clap(long, value_parser = parse_duration, default_value = "1s")]
         delay: Duration,
+
+        /// Number of concurrent transaction submissions for initial funding
+        #[clap(long, default_value_t = crate::tx_log::DEFAULT_CONCURRENCY)]
+        concurrency: usize,
     },
 }
 
@@ -488,6 +496,214 @@ impl<P: Provider + Clone> StakingTransactions<P> {
         Ok(Some(pending.assert_success().await?))
     }
 
+    /// Sends and awaits all transactions with backpressure using the tx_log pattern.
+    ///
+    /// This method pre-signs all transactions and executes them with bounded concurrency,
+    /// providing backpressure when the node is overloaded. Registration transactions are
+    /// handled sequentially since they are typically few in number and have complex calldata.
+    ///
+    /// The phases are executed in order with synchronization between:
+    /// 1. Funding (ETH + ESP sends) and Approvals
+    /// 2. Registrations (sequential)
+    /// 3. Delegations
+    ///
+    /// Delegations must happen after registrations because you cannot delegate to a validator
+    /// that doesn't exist yet.
+    pub async fn apply_with_backpressure(&mut self, concurrency: usize) -> Result<()>
+    where
+        P: WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
+    {
+        tracing::info!(
+            "applying staking transactions with backpressure (concurrency={})",
+            concurrency
+        );
+
+        let token = self.processor.token;
+        let stake_table = self.processor.stake_table;
+
+        // Build wallets map from providers
+        let wallets: HashMap<Address, EthereumWallet> = self
+            .processor
+            .providers
+            .iter()
+            .map(|(addr, p)| (*addr, p.wallet().clone()))
+            .collect();
+
+        // Get funder wallet
+        let funder_address = self.processor.funder.default_signer_address();
+        let funder_wallet = self.processor.funder.wallet().clone();
+
+        // Build complete wallets map including funder
+        let mut all_wallets = wallets.clone();
+        all_wallets.insert(funder_address, funder_wallet);
+
+        // Phase 1: Build TxInput entries for funding and approvals only (no delegations yet)
+        let mut funding_approval_inputs: Vec<TxInput> = Vec::new();
+
+        // Funding phase: ETH sends then ESP sends (from funder)
+        for tx in &self.queues.funding {
+            match tx {
+                StakeTableTx::SendEth { to, amount } => {
+                    funding_approval_inputs.push(TxInput {
+                        phase: TxPhase::FundEth,
+                        from: funder_address,
+                        to: *to,
+                        amount: *amount,
+                        delegator_index: None,
+                    });
+                },
+                StakeTableTx::SendEsp { to, amount } => {
+                    funding_approval_inputs.push(TxInput {
+                        phase: TxPhase::FundEsp,
+                        from: funder_address,
+                        to: *to,
+                        amount: *amount,
+                        delegator_index: None,
+                    });
+                },
+                _ => {},
+            }
+        }
+
+        // Approval phase
+        for tx in &self.queues.approvals {
+            if let StakeTableTx::Approve { from, amount } = tx {
+                funding_approval_inputs.push(TxInput {
+                    phase: TxPhase::Approve,
+                    from: *from,
+                    to: stake_table,
+                    amount: *amount,
+                    delegator_index: None,
+                });
+            }
+        }
+
+        // Execute funding and approvals
+        if !funding_approval_inputs.is_empty() {
+            tracing::info!(
+                "signing {} funding/approval transactions...",
+                funding_approval_inputs.len()
+            );
+            let signed_txs = sign_all_transactions(
+                &self.processor.funder,
+                &all_wallets,
+                funding_approval_inputs,
+                concurrency,
+                |input| {
+                    match input.phase {
+                        TxPhase::FundEth => TransactionRequest::default()
+                            .with_to(input.to)
+                            .with_value(input.amount),
+                        TxPhase::FundEsp => {
+                            let call = EspToken::transferCall {
+                                to: input.to,
+                                value: input.amount,
+                            };
+                            TransactionRequest::default()
+                                .with_to(token)
+                                .with_call(&call)
+                        },
+                        TxPhase::Approve => {
+                            let call = EspToken::approveCall {
+                                spender: stake_table,
+                                value: input.amount,
+                            };
+                            TransactionRequest::default()
+                                .with_to(token)
+                                .with_call(&call)
+                        },
+                        // Delegate and Undelegate are not included in funding/approval phase
+                        TxPhase::Delegate | TxPhase::Undelegate => unreachable!(),
+                    }
+                },
+            )
+            .await?;
+
+            let log = TxLog::new(signed_txs);
+            execute_signed_tx_log(self.processor.funder.clone(), &log, concurrency, false).await?;
+        }
+
+        // Phase 2: Handle registrations sequentially (typically few transactions, complex calldata)
+        if !self.queues.registration.is_empty() {
+            tracing::info!(
+                "processing {} registrations sequentially",
+                self.queues.registration.len()
+            );
+            for tx in std::mem::take(&mut self.queues.registration) {
+                let pending = self.processor.send_next(tx).await?;
+                pending.assert_success().await?;
+            }
+        }
+
+        // Phase 3: Build TxInput entries for delegations (after registrations complete)
+        let mut delegation_inputs: Vec<TxInput> = Vec::new();
+
+        for tx in &self.queues.delegations {
+            if let StakeTableTx::Delegate {
+                from,
+                validator,
+                amount,
+            } = tx
+            {
+                delegation_inputs.push(TxInput {
+                    phase: TxPhase::Delegate,
+                    from: *from,
+                    to: *validator,
+                    amount: *amount,
+                    delegator_index: None,
+                });
+            }
+        }
+
+        // Execute delegations
+        if !delegation_inputs.is_empty() {
+            tracing::info!(
+                "signing {} delegation transactions...",
+                delegation_inputs.len()
+            );
+            let signed_txs = sign_all_transactions(
+                &self.processor.funder,
+                &all_wallets,
+                delegation_inputs,
+                concurrency,
+                |input| {
+                    match input.phase {
+                        TxPhase::Delegate => {
+                            let call = StakeTableV2::delegateCall {
+                                validator: input.to,
+                                amount: input.amount,
+                            };
+                            TransactionRequest::default()
+                                .with_to(stake_table)
+                                .with_call(&call)
+                        },
+                        // Only Delegate phase is expected here; Undelegate is never used in
+                        // apply_with_backpressure (it's only for the undelegate_for_demo flow)
+                        TxPhase::FundEth
+                        | TxPhase::FundEsp
+                        | TxPhase::Approve
+                        | TxPhase::Undelegate => {
+                            unreachable!()
+                        },
+                    }
+                },
+            )
+            .await?;
+
+            let log = TxLog::new(signed_txs);
+            execute_signed_tx_log(self.processor.funder.clone(), &log, concurrency, false).await?;
+        }
+
+        // Clear processed queues
+        self.queues.funding.clear();
+        self.queues.approvals.clear();
+        self.queues.delegations.clear();
+        self.queues.current_phase = SetupPhase::Delegation;
+
+        tracing::info!("completed all staking transactions with backpressure");
+        Ok(())
+    }
+
     /// Returns pending validator registrations for staking UI service tests.
     ///
     /// Retrieves validator addresses that were set up by `staking_cli::demo::create()`.
@@ -758,6 +974,13 @@ impl StakingTransactions<HttpProviderWithWallet> {
         let esp_required = fund_amount_esp * U256::from(delegator_info.len());
         let eth_required = fund_amount_eth * U256::from(eth_recipients.len()) * U256::from(2);
 
+        tracing::info!(
+            "Balance check: have {} ESP, need {} ESP for {} delegators",
+            format_ether(token_balance),
+            format_ether(esp_required),
+            delegator_info.len()
+        );
+
         if token_balance < esp_required {
             return Err(CreateTransactionsError::InsufficientEsp {
                 have: format_ether(token_balance),
@@ -767,6 +990,14 @@ impl StakingTransactions<HttpProviderWithWallet> {
         }
 
         let eth_balance = token_holder_provider.get_balance(token_holder_addr).await?;
+
+        tracing::info!(
+            "Balance check: have {} ETH, need {} ETH for {} recipients",
+            format_ether(eth_balance),
+            format_ether(eth_required),
+            eth_recipients.len()
+        );
+
         if eth_balance < eth_required {
             return Err(CreateTransactionsError::InsufficientEth {
                 have: format_ether(eth_balance),
@@ -815,6 +1046,7 @@ pub async fn stake_for_demo(
     num_validators: u16,
     num_delegators_per_validator: Option<u64>,
     delegation_config: DelegationConfig,
+    concurrency: usize,
 ) -> Result<()> {
     tracing::info!("staking to stake table contract for demo");
 
@@ -841,7 +1073,7 @@ pub async fn stake_for_demo(
     for val_index in 0..num_validators {
         let signer = build_signer(
             config.signer.mnemonic.clone().unwrap(),
-            20u32 + val_index as u32,
+            DEMO_VALIDATOR_START_INDEX + val_index as u32,
         );
 
         let consensus_private_key = parse_bls_priv_key(&dotenvy::var(format!(
@@ -867,7 +1099,7 @@ pub async fn stake_for_demo(
         delegation_config,
     )
     .await?
-    .apply_all()
+    .apply_with_backpressure(concurrency)
     .await?;
 
     Ok(())
@@ -960,6 +1192,48 @@ pub async fn delegate_for_demo(
             existing
         },
         None => {
+            // Check funder has sufficient balance before creating any transactions
+            let esp_required = fund_amount_esp * U256::from(delegators.len());
+            // ETH required: fund each delegator + gas buffer (2x the funding amount)
+            let eth_required = fund_amount_eth * U256::from(delegators.len()) * U256::from(2);
+
+            let token_contract = EspToken::new(token_address, &funder_provider);
+            let esp_balance = token_contract.balanceOf(funder_address).call().await?;
+
+            tracing::info!(
+                "Balance check: have {} ESP, need {} ESP for {} delegators",
+                format_ether(esp_balance),
+                format_ether(esp_required),
+                delegators.len()
+            );
+
+            if esp_balance < esp_required {
+                return Err(CreateTransactionsError::InsufficientEsp {
+                    have: format_ether(esp_balance),
+                    need: format_ether(esp_required),
+                    delegators: delegators.len(),
+                }
+                .into());
+            }
+
+            let eth_balance = funder_provider.get_balance(funder_address).await?;
+
+            tracing::info!(
+                "Balance check: have {} ETH, need {} ETH for {} delegators",
+                format_ether(eth_balance),
+                format_ether(eth_required),
+                delegators.len()
+            );
+
+            if eth_balance < eth_required {
+                return Err(CreateTransactionsError::InsufficientEth {
+                    have: format_ether(eth_balance),
+                    need: format_ether(eth_required),
+                    recipients: delegators.len(),
+                }
+                .into());
+            }
+
             let total_txs = delegators.len() * 4;
             tracing::info!(
                 "creating tx log at {} ({} transactions)",
@@ -1070,7 +1344,7 @@ pub async fn delegate_for_demo(
         },
     };
 
-    execute_signed_tx_log(funder_provider, &log, concurrency).await?;
+    execute_signed_tx_log(funder_provider, &log, concurrency, false).await?;
 
     log.archive(&log_path)?;
     tracing::info!("completed mass delegation");
@@ -1216,7 +1490,7 @@ pub async fn undelegate_for_demo(
         concurrency
     );
 
-    execute_signed_tx_log(query_provider, &log, concurrency).await?;
+    execute_signed_tx_log(query_provider, &log, concurrency, false).await?;
 
     log.archive(&log_path)?;
     tracing::info!("completed mass undelegation");
@@ -1231,6 +1505,7 @@ pub struct ChurnParams {
     pub min_amount: U256,
     pub max_amount: U256,
     pub delay: Duration,
+    pub concurrency: usize,
 }
 
 pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> {
@@ -1242,11 +1517,13 @@ pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> 
         min_amount,
         max_amount,
         delay,
+        concurrency,
     } = params;
     tracing::info!(
-        "starting churn with {} validators and {} delegators",
+        "starting churn with {} validators and {} delegators (concurrency={})",
         num_validators,
-        num_delegators
+        num_delegators,
+        concurrency
     );
 
     let mnemonic = config.signer.mnemonic.clone().unwrap();
@@ -1273,47 +1550,142 @@ pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> 
         .wallet(grant_recipient.wallet().clone())
         .connect_client(shared_client.clone());
 
-    tracing::info!("funding {} delegators", num_delegators);
-    for i in 0..num_delegators {
-        let delegator_index = delegator_start_index + i;
-        let delegator_signer = generate_delegator_signer(delegator_index);
-        let delegator_address = delegator_signer.address();
+    // Build delegator info
+    let delegators: Vec<_> = (0..num_delegators)
+        .map(|i| {
+            let delegator_index = delegator_start_index + i;
+            generate_delegator_signer(delegator_index)
+        })
+        .collect();
 
-        // Send ETH for gas
-        let eth_tx = TransactionRequest::default()
-            .with_to(delegator_address)
-            .with_value(fund_amount_eth);
-        funder_provider
-            .send_transaction(eth_tx)
-            .await?
-            .assert_success()
-            .await?;
+    // Check funder has sufficient balance before creating any transactions
+    let funder_address = grant_recipient.default_signer_address();
+    let esp_required = fund_amount_esp * U256::from(delegators.len());
+    // ETH required: fund each delegator + gas buffer (2x the funding amount)
+    let eth_required = fund_amount_eth * U256::from(delegators.len()) * U256::from(2);
 
-        // Send ESP tokens
-        Transaction::Transfer {
-            token: token_address,
-            to: delegator_address,
-            amount: fund_amount_esp,
+    let token_contract = EspToken::new(token_address, &funder_provider);
+    let esp_balance = token_contract.balanceOf(funder_address).call().await?;
+
+    tracing::info!(
+        "Balance check: have {} ESP, need {} ESP for {} delegators",
+        format_ether(esp_balance),
+        format_ether(esp_required),
+        delegators.len()
+    );
+
+    if esp_balance < esp_required {
+        return Err(CreateTransactionsError::InsufficientEsp {
+            have: format_ether(esp_balance),
+            need: format_ether(esp_required),
+            delegators: delegators.len(),
         }
-        .send(&funder_provider)
-        .await?
-        .assert_success()
-        .await?;
-
-        let delegator_provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(delegator_signer))
-            .connect_client(shared_client.clone());
-
-        Transaction::Approve {
-            token: token_address,
-            spender: config.stake_table_address,
-            amount: fund_amount_esp,
-        }
-        .send(&delegator_provider)
-        .await?
-        .assert_success()
-        .await?;
+        .into());
     }
+
+    let eth_balance = funder_provider.get_balance(funder_address).await?;
+
+    tracing::info!(
+        "Balance check: have {} ETH, need {} ETH for {} delegators",
+        format_ether(eth_balance),
+        format_ether(eth_required),
+        delegators.len()
+    );
+
+    if eth_balance < eth_required {
+        return Err(CreateTransactionsError::InsufficientEth {
+            have: format_ether(eth_balance),
+            need: format_ether(eth_required),
+            recipients: delegators.len(),
+        }
+        .into());
+    }
+
+    // Build tx_inputs for funding phase with backpressure
+    let stake_table_address = config.stake_table_address;
+
+    let mut tx_inputs: Vec<TxInput> = Vec::with_capacity(delegators.len() * 3);
+
+    // FundEth for each delegator
+    for d in &delegators {
+        tx_inputs.push(TxInput {
+            phase: TxPhase::FundEth,
+            from: funder_address,
+            to: d.address(),
+            amount: fund_amount_eth,
+            delegator_index: None,
+        });
+    }
+
+    // FundEsp for each delegator
+    for d in &delegators {
+        tx_inputs.push(TxInput {
+            phase: TxPhase::FundEsp,
+            from: funder_address,
+            to: d.address(),
+            amount: fund_amount_esp,
+            delegator_index: None,
+        });
+    }
+
+    // Approve for each delegator
+    for d in &delegators {
+        tx_inputs.push(TxInput {
+            phase: TxPhase::Approve,
+            from: d.address(),
+            to: stake_table_address,
+            amount: fund_amount_esp,
+            delegator_index: None,
+        });
+    }
+
+    // Build wallets map
+    let mut wallets: HashMap<Address, EthereumWallet> = HashMap::new();
+    wallets.insert(funder_address, grant_recipient.wallet().clone());
+    for d in &delegators {
+        wallets.insert(d.address(), EthereumWallet::from(d.clone()));
+    }
+
+    tracing::info!(
+        "funding {} delegators ({} transactions)",
+        num_delegators,
+        tx_inputs.len()
+    );
+
+    let signed_txs = sign_all_transactions(
+        &funder_provider,
+        &wallets,
+        tx_inputs,
+        concurrency,
+        |input| match input.phase {
+            TxPhase::FundEth => TransactionRequest::default()
+                .with_to(input.to)
+                .with_value(input.amount),
+            TxPhase::FundEsp => {
+                let call = EspToken::transferCall {
+                    to: input.to,
+                    value: input.amount,
+                };
+                TransactionRequest::default()
+                    .with_to(token_address)
+                    .with_call(&call)
+            },
+            TxPhase::Approve => {
+                let call = EspToken::approveCall {
+                    spender: stake_table_address,
+                    value: input.amount,
+                };
+                TransactionRequest::default()
+                    .with_to(token_address)
+                    .with_call(&call)
+            },
+            TxPhase::Delegate | TxPhase::Undelegate => unreachable!(),
+        },
+    )
+    .await?;
+
+    let log = TxLog::new(signed_txs);
+    execute_signed_tx_log(funder_provider, &log, concurrency, false).await?;
 
     let query_provider = ProviderBuilder::new().connect_client(shared_client.clone());
     let stake_table = StakeTableV2::new(config.stake_table_address, &query_provider);

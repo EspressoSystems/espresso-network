@@ -1,6 +1,14 @@
-use std::time::{Duration, Instant};
+use std::{
+    io::Read as _,
+    process::{Child, Command, Stdio},
+    time::{Duration, Instant},
+};
 
-use alloy::primitives::{utils::parse_ether, Address, U256};
+use alloy::{
+    primitives::{utils::parse_ether, Address, U256},
+    providers::{Provider, ProviderBuilder, WalletProvider},
+    signers::local::PrivateKeySigner,
+};
 use anyhow::Result;
 use common::{Signer, TestSystemExt};
 use espresso_contract_deployer::build_signer;
@@ -9,10 +17,168 @@ use rand::{rngs::StdRng, SeedableRng};
 use rstest::rstest;
 use staking_cli::{
     demo::generate_delegator_signer, deploy::TestSystem, parse::Commission,
-    signature::NodeSignatures, transaction::Transaction,
+    signature::NodeSignatures, transaction::Transaction, DEMO_VALIDATOR_START_INDEX,
 };
+use tokio::time::sleep;
+use url::Url;
 
 mod common;
+
+const RETH_IMAGE: &str = "ghcr.io/paradigmxyz/reth:latest";
+const RETH_STARTUP_RETRIES: u32 = 10;
+
+/// Reth container for stress testing.
+struct RethContainer {
+    port: u16,
+    child: Child,
+}
+
+impl RethContainer {
+    /// Start Reth in dev mode with specified block time.
+    async fn start_with_block_time(block_time: &str) -> Result<Self> {
+        Self::ensure_image().await?;
+
+        let port =
+            portpicker::pick_unused_port().ok_or_else(|| anyhow::anyhow!("No ports available"))?;
+
+        tracing::info!(
+            "Starting reth with {} block time on port {}...",
+            block_time,
+            port
+        );
+
+        let child = Self::spawn_container(port, Some(block_time)).await?;
+
+        let container = RethContainer { port, child };
+
+        container.wait_ready().await?;
+        Ok(container)
+    }
+
+    async fn ensure_image() -> Result<()> {
+        let image_exists = tokio::task::spawn_blocking(|| {
+            Command::new("docker")
+                .args(["image", "inspect", RETH_IMAGE])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .await?;
+
+        if !image_exists {
+            tracing::info!("Pulling docker image {}...", RETH_IMAGE);
+            let pull_output = tokio::task::spawn_blocking(|| {
+                Command::new("docker").args(["pull", RETH_IMAGE]).output()
+            })
+            .await??;
+
+            if !pull_output.status.success() {
+                anyhow::bail!(
+                    "Failed to pull docker image {}: {}",
+                    RETH_IMAGE,
+                    String::from_utf8_lossy(&pull_output.stderr)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn spawn_container(port: u16, block_time: Option<&str>) -> Result<Child> {
+        let port_arg = format!("{}:8545", port);
+        let block_time_owned = block_time.map(|s| s.to_string());
+
+        let mut child = tokio::task::spawn_blocking(move || {
+            let mut cmd = Command::new("docker");
+            cmd.args(["run", "--rm", "-p", &port_arg, RETH_IMAGE, "node", "--dev"]);
+
+            if let Some(ref bt) = block_time_owned {
+                cmd.arg(format!("--dev.block-time={}", bt));
+            }
+
+            cmd.args([
+                "--http",
+                "--http.addr=0.0.0.0",
+                "--http.api=eth,net,web3,txpool,debug",
+                "--txpool.max-account-slots=10000",
+                "--txpool.pending-max-count=20000",
+            ]);
+
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        })
+        .await??;
+
+        sleep(Duration::from_secs(3)).await;
+
+        if let Some(status) = child.try_wait()? {
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+            let stdout_str = stdout
+                .map(|mut s| {
+                    let mut buf = String::new();
+                    s.read_to_string(&mut buf).ok();
+                    buf
+                })
+                .unwrap_or_default();
+            let stderr_str = stderr
+                .map(|mut s| {
+                    let mut buf = String::new();
+                    s.read_to_string(&mut buf).ok();
+                    buf
+                })
+                .unwrap_or_default();
+            anyhow::bail!(
+                "Reth container exited immediately with status {}.\nstdout:\n{}\nstderr:\n{}",
+                status,
+                stdout_str,
+                stderr_str
+            );
+        }
+
+        Ok(child)
+    }
+
+    async fn wait_ready(&self) -> Result<()> {
+        let rpc_url = self.rpc_url();
+        let mut last_error = None;
+
+        for i in 0..RETH_STARTUP_RETRIES {
+            match ProviderBuilder::new()
+                .connect_http(rpc_url.clone())
+                .get_block_number()
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!("Reth ready after {} seconds", i + 1);
+                    return Ok(());
+                },
+                Err(e) => {
+                    last_error = Some(e);
+                    if i < RETH_STARTUP_RETRIES - 1 {
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                },
+            }
+        }
+
+        anyhow::bail!(
+            "Reth not ready after {} seconds. Last error: {:?}",
+            RETH_STARTUP_RETRIES,
+            last_error,
+        )
+    }
+
+    fn rpc_url(&self) -> Url {
+        format!("http://127.0.0.1:{}", self.port)
+            .parse()
+            .expect("valid URL")
+    }
+}
+
+impl Drop for RethContainer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
 
 trait DemoTestExt {
     async fn get_delegation(&self, validator: Address, delegator: Address) -> Result<U256>;
@@ -1074,6 +1240,332 @@ async fn test_demo_multiple_delegator_batches() -> Result<()> {
     system
         .assert_delegations(validators[0], 0, num_delegators, parse_ether(amount)?)
         .await?;
+
+    Ok(())
+}
+
+/// Test that mass delegation commands fail early with insufficient balance.
+///
+/// This is a regression test ensuring that the funder's ESP/ETH balance is checked
+/// before starting any transactions, not mid-way through execution.
+#[derive(Debug, Clone, Copy)]
+enum InsufficientBalanceType {
+    Esp,
+    Eth,
+}
+
+#[rstest]
+#[case::delegate_insufficient_esp(InsufficientBalanceType::Esp)]
+#[case::delegate_insufficient_eth(InsufficientBalanceType::Eth)]
+#[test_log::test(tokio::test)]
+async fn test_delegate_for_demo_insufficient_balance(
+    #[case] balance_type: InsufficientBalanceType,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let validators = system.setup_validators(1).await?;
+
+    let drain_address = PrivateKeySigner::random().address();
+
+    // Drain the funder's balance before attempting mass delegation
+    match balance_type {
+        InsufficientBalanceType::Esp => {
+            // Drain ESP tokens to leave insufficient balance
+            let balance = system
+                .balance(system.provider.default_signer_address())
+                .await?;
+            // Leave only a tiny amount that won't be enough for the operation
+            let drain_amount = balance - parse_ether("1")?;
+            system.transfer(drain_address, drain_amount).await?;
+        },
+        InsufficientBalanceType::Eth => {
+            // Drain ETH to leave insufficient balance for gas + funding
+            let eth_balance = system
+                .provider
+                .get_balance(system.provider.default_signer_address())
+                .await?;
+            // Keep just enough for the balance check calls to succeed
+            let drain_amount = eth_balance - parse_ether("0.1")?;
+            system.transfer_eth(drain_address, drain_amount).await?;
+        },
+    }
+
+    let log_dir = tempfile::tempdir()?;
+    let log_path = log_dir.path().join("delegate_log.json");
+
+    // Attempt mass delegation with insufficient funds
+    // This should fail early with a clear error, NOT mid-execution
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("delegate")
+        .arg("--validators")
+        .arg(validators[0].to_string())
+        .arg("--delegator-start-index")
+        .arg("0")
+        .arg("--num-delegators")
+        .arg("10") // Request 10 delegators which requires significant ESP + ETH
+        .arg("--min-amount")
+        .arg("100")
+        .arg("--max-amount")
+        .arg("500")
+        .arg("--log-path")
+        .arg(&log_path)
+        .assert()
+        .failure();
+
+    // Verify the error message mentions insufficient balance
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    match balance_type {
+        InsufficientBalanceType::Esp => {
+            assert!(
+                stderr.contains("insufficient ESP") || stderr.contains("InsufficientEsp"),
+                "Expected insufficient ESP error, got: {}",
+                stderr
+            );
+        },
+        InsufficientBalanceType::Eth => {
+            assert!(
+                stderr.contains("insufficient ETH") || stderr.contains("InsufficientEth"),
+                "Expected insufficient ETH error, got: {}",
+                stderr
+            );
+        },
+    }
+
+    // Verify no tx_log was created (since we failed before signing)
+    assert!(
+        !log_path.exists(),
+        "tx_log should not be created when failing due to insufficient balance"
+    );
+
+    Ok(())
+}
+
+/// Test that churn command fails early with insufficient balance.
+#[rstest]
+#[case::churn_insufficient_esp(InsufficientBalanceType::Esp)]
+#[case::churn_insufficient_eth(InsufficientBalanceType::Eth)]
+#[test_log::test(tokio::test)]
+async fn test_churn_for_demo_insufficient_balance(
+    #[case] balance_type: InsufficientBalanceType,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let _validators = system.setup_validators(2).await?;
+
+    let drain_address = PrivateKeySigner::random().address();
+
+    // Drain the funder's balance before attempting churn
+    match balance_type {
+        InsufficientBalanceType::Esp => {
+            let balance = system
+                .balance(system.provider.default_signer_address())
+                .await?;
+            let drain_amount = balance - parse_ether("1")?;
+            system.transfer(drain_address, drain_amount).await?;
+        },
+        InsufficientBalanceType::Eth => {
+            let eth_balance = system
+                .provider
+                .get_balance(system.provider.default_signer_address())
+                .await?;
+            let drain_amount = eth_balance - parse_ether("0.1")?;
+            system.transfer_eth(drain_address, drain_amount).await?;
+        },
+    }
+
+    // Attempt churn with insufficient funds
+    // Start churn and let it fail - it should fail early during initial funding
+    let output = system
+        .cmd(Signer::Mnemonic)
+        .timeout(Duration::from_secs(10))
+        .arg("demo")
+        .arg("churn")
+        .arg("--validator-start-index")
+        .arg("20")
+        .arg("--num-validators")
+        .arg("2")
+        .arg("--delegator-start-index")
+        .arg("0")
+        .arg("--num-delegators")
+        .arg("10")
+        .arg("--min-amount")
+        .arg("100")
+        .arg("--max-amount")
+        .arg("500")
+        .arg("--delay")
+        .arg("50ms")
+        .assert()
+        .failure();
+
+    // Verify the error message mentions insufficient balance
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    match balance_type {
+        InsufficientBalanceType::Esp => {
+            assert!(
+                stderr.contains("insufficient ESP") || stderr.contains("InsufficientEsp"),
+                "Expected insufficient ESP error, got: {}",
+                stderr
+            );
+        },
+        InsufficientBalanceType::Eth => {
+            assert!(
+                stderr.contains("insufficient ETH") || stderr.contains("InsufficientEth"),
+                "Expected insufficient ETH error, got: {}",
+                stderr
+            );
+        },
+    }
+
+    Ok(())
+}
+
+/// Stress test command variants for demo subcommands
+#[derive(Debug, Clone, Copy)]
+enum StressTestCommand {
+    Stake,
+    Delegate,
+    Undelegate,
+}
+
+/// Stress test that runs 10k delegators against a reth node via CLI.
+///
+/// 5 validators x 2000 delegators = 10k delegators
+///
+/// Run with: `cargo test -p staking-cli stress_test_demo_cli -- --ignored`
+#[rstest]
+#[case::stake(StressTestCommand::Stake)]
+#[case::delegate(StressTestCommand::Delegate)]
+#[case::undelegate(StressTestCommand::Undelegate)]
+#[ignore]
+#[test_log::test(tokio::test)]
+async fn stress_test_demo_cli(#[case] command: StressTestCommand) -> Result<()> {
+    // Start Reth with 1s block time for realistic stress testing
+    tracing::info!("Starting Reth with 1s block time...");
+    let reth = RethContainer::start_with_block_time("1s").await?;
+
+    // Deploy contracts on Reth
+    tracing::info!("Deploying contracts...");
+    let system = TestSystem::deploy_to_external(reth.rpc_url()).await?;
+    let _reth = reth; // Keep container alive
+
+    let log_dir = tempfile::tempdir()?;
+
+    // 5 validators x 2000 delegators = 10k delegators
+    let num_validators = "5";
+    let num_delegators = "2000";
+
+    match command {
+        StressTestCommand::Stake => {
+            // Test demo stake flow: validators + delegators with self-delegation
+            system
+                .cmd(Signer::Mnemonic)
+                .arg("demo")
+                .arg("stake")
+                .arg("--num-validators")
+                .arg(num_validators)
+                .arg("--num-delegators-per-validator")
+                .arg(num_delegators)
+                .timeout(Duration::from_secs(600)) // 10 min timeout for stress test
+                .assert()
+                .success();
+        },
+        StressTestCommand::Delegate => {
+            // First register validators, then delegate
+            // Register validators first
+            system
+                .cmd(Signer::Mnemonic)
+                .arg("demo")
+                .arg("stake")
+                .arg("--num-validators")
+                .arg(num_validators)
+                .arg("--delegation-config")
+                .arg("no-self-delegation")
+                .timeout(Duration::from_secs(120))
+                .assert()
+                .success();
+
+            // Get validator addresses from mnemonic
+            let validators: Vec<_> = (DEMO_VALIDATOR_START_INDEX..DEMO_VALIDATOR_START_INDEX + 5)
+                .map(|i| {
+                    espresso_contract_deployer::build_signer(staking_cli::DEV_MNEMONIC, i).address()
+                })
+                .collect();
+            let validator_addrs = validators
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+
+            let delegate_log = log_dir.path().join("delegate_log.json");
+
+            // Test demo delegate flow with 500 delegators per validator
+            system
+                .cmd(Signer::Mnemonic)
+                .arg("demo")
+                .arg("delegate")
+                .arg("--validators")
+                .arg(&validator_addrs)
+                .arg("--delegator-start-index")
+                .arg("0")
+                .arg("--num-delegators")
+                .arg(num_delegators)
+                .arg("--min-amount")
+                .arg("100")
+                .arg("--max-amount")
+                .arg("500")
+                .arg("--log-path")
+                .arg(&delegate_log)
+                .timeout(Duration::from_secs(600)) // 10 min timeout for stress test
+                .assert()
+                .success();
+        },
+        StressTestCommand::Undelegate => {
+            // First stake, then undelegate
+            // Register validators and create delegations first
+            system
+                .cmd(Signer::Mnemonic)
+                .arg("demo")
+                .arg("stake")
+                .arg("--num-validators")
+                .arg(num_validators)
+                .arg("--num-delegators-per-validator")
+                .arg(num_delegators)
+                .timeout(Duration::from_secs(600))
+                .assert()
+                .success();
+
+            // Get validator addresses from mnemonic
+            let validators: Vec<_> = (DEMO_VALIDATOR_START_INDEX..DEMO_VALIDATOR_START_INDEX + 5)
+                .map(|i| {
+                    espresso_contract_deployer::build_signer(staking_cli::DEV_MNEMONIC, i).address()
+                })
+                .collect();
+            let validator_addrs = validators
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+
+            let undelegate_log = log_dir.path().join("undelegate_log.json");
+
+            // Test demo undelegate flow
+            system
+                .cmd(Signer::Mnemonic)
+                .arg("demo")
+                .arg("undelegate")
+                .arg("--validators")
+                .arg(&validator_addrs)
+                .arg("--delegator-start-index")
+                .arg("0")
+                .arg("--num-delegators")
+                .arg(num_delegators)
+                .arg("--log-path")
+                .arg(&undelegate_log)
+                .timeout(Duration::from_secs(600)) // 10 min timeout for stress test
+                .assert()
+                .success();
+        },
+    }
 
     Ok(())
 }
