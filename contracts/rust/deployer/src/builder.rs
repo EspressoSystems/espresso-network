@@ -637,7 +637,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             && self.timelock_operation_id.is_some()
         {
             // Cancel operation with explicit operation_id - use minimal payload
-            let op_id_str = self.timelock_operation_id.as_ref().unwrap();
+            let op_id_str = self
+                .timelock_operation_id
+                .as_ref()
+                .context("Operation ID not found")?;
             let op_id = if let Some(stripped) = op_id_str.strip_prefix("0x") {
                 B256::from_hex(stripped).context("Invalid operation ID hex format")?
             } else {
