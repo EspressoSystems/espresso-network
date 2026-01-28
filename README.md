@@ -50,16 +50,22 @@ Please note the disclaimer about API stability at the end of the readme.
 
 To generate the documentation locally and view it in the browser, run
 
-    just doc --open
+```sh
+just doc --open
+```
 
 ## Run the tests
 
-    just pull # to pull docker images
-    just test
+```sh
+just pull # to pull docker images
+just test
+```
 
 ## Building figures
 
-    make doc
+```sh
+make doc
+```
 
 ## Building and running
 
@@ -140,15 +146,21 @@ forge doc
 
 To deploy the contracts to a local testnet, first run a dev chain (e.g. `anvil`), then run
 
-    forge script DeployHotShot --broadcast --rpc-url local
+```sh
+forge script DeployHotShot --broadcast --rpc-url local
+```
 
 To deploy to sepolia set `SEPOLIA_RPC_URL` and `MNEMONIC` env vars and run
 
-    forge script DeployHotShot --broadcast --rpc-url sepolia
+```sh
+forge script DeployHotShot --broadcast --rpc-url sepolia
+```
 
 To additionally verify the contract on etherscan set the `ETHERSCAN_API_KEY` env var and run
 
-    forge script DeployHotShot --broadcast --rpc-url sepolia --verify
+```sh
+forge script DeployHotShot --broadcast --rpc-url sepolia --verify
+```
 
 Running the script will save a file with details about the deployment in `contracts/broadcast/$CHAIN_ID`.
 
@@ -238,11 +250,11 @@ docker run --env-file .env.docker -e RUST_LOG=debug ...
 The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
 by running:
 
-```
-> just gas-benchmarks
-> cat gas-benchmarks.txt
-[PASS] test_verify_succeeds() (gas: 507774)
-[PASS] testCorrectUpdateBench() (gas: 594533)
+```sh
+just gas-benchmarks
+cat gas-benchmarks.txt
+# [PASS] test_verify_succeeds() (gas: 507774)
+# [PASS] testCorrectUpdateBench() (gas: 594533)
 ```
 
 In order to profile the gas consumption of the light client contract do the following:

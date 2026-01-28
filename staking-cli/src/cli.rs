@@ -24,9 +24,14 @@ use hotshot_types::{
 };
 use sysinfo::System;
 
+#[cfg(feature = "testing")]
+use crate::deploy::deploy_contracts_for_testing;
 use crate::{
     claim::fetch_claim_rewards_inputs,
-    demo::stake_for_demo,
+    demo::{
+        churn_for_demo, delegate_for_demo, stake_for_demo, undelegate_for_demo, ChurnParams,
+        DemoCommands,
+    },
     info::{
         display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
         StakeTableContractVersion,
@@ -331,6 +336,27 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Handle deploy-contracts early since it doesn't require stake table address
+    #[cfg(feature = "testing")]
+    if let Commands::Demo(ref demo) = config.commands {
+        if let DemoCommands::DeployContracts { ref output } = demo.command {
+            tracing::info!("Deploying staking contracts for testing");
+            deploy_contracts_for_testing(
+                config.rpc_url.clone(),
+                config
+                    .signer
+                    .mnemonic
+                    .clone()
+                    .expect("mnemonic required for deployment"),
+                config.signer.account_index.unwrap_or(0),
+                output.clone(),
+            )
+            .await
+            .unwrap();
+            return Ok(());
+        }
+    }
+
     // Clap serde will put default value if they aren't set. We check some
     // common configuration mistakes.
     if config.stake_table_address == Address::ZERO {
@@ -419,6 +445,7 @@ pub async fn run() -> Result<()> {
         num_validators,
         num_delegators_per_validator,
         delegation_config,
+        concurrency,
     } = config.commands
     {
         tracing::info!(
@@ -429,10 +456,124 @@ pub async fn run() -> Result<()> {
             num_validators,
             num_delegators_per_validator,
             delegation_config,
+            concurrency,
         )
         .await
         .unwrap();
         return Ok(());
+    }
+
+    // Handle Demo subcommands
+    if let Commands::Demo(ref demo) = config.commands {
+        match &demo.command {
+            DemoCommands::Stake {
+                num_validators,
+                num_delegators_per_validator,
+                delegation_config,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Staking for demo with {num_validators} validators and config \
+                     {delegation_config}"
+                );
+                stake_for_demo(
+                    &config,
+                    *num_validators,
+                    *num_delegators_per_validator,
+                    *delegation_config,
+                    *concurrency,
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
+            DemoCommands::Delegate {
+                validators,
+                delegator_start_index,
+                num_delegators,
+                min_amount,
+                max_amount,
+                log_path,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Mass delegating {} delegators to {} validators",
+                    num_delegators,
+                    validators.len()
+                );
+                delegate_for_demo(
+                    &config,
+                    validators.clone(),
+                    *delegator_start_index,
+                    *num_delegators,
+                    *min_amount,
+                    *max_amount,
+                    log_path.clone(),
+                    *concurrency,
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
+            DemoCommands::Undelegate {
+                validators,
+                delegator_start_index,
+                num_delegators,
+                log_path,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Mass undelegating {} delegators from {} validators",
+                    num_delegators,
+                    validators.len()
+                );
+                undelegate_for_demo(
+                    &config,
+                    validators.clone(),
+                    *delegator_start_index,
+                    *num_delegators,
+                    log_path.clone(),
+                    *concurrency,
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
+            DemoCommands::Churn {
+                validator_start_index,
+                num_validators,
+                delegator_start_index,
+                num_delegators,
+                min_amount,
+                max_amount,
+                delay,
+                concurrency,
+            } => {
+                tracing::info!(
+                    "Starting churn with {} validators and {} delegators",
+                    num_validators,
+                    num_delegators
+                );
+                churn_for_demo(
+                    &config,
+                    ChurnParams {
+                        validator_start_index: *validator_start_index,
+                        num_validators: *num_validators,
+                        delegator_start_index: *delegator_start_index,
+                        num_delegators: *num_delegators,
+                        min_amount: *min_amount,
+                        max_amount: *max_amount,
+                        delay: *delay,
+                        concurrency: *concurrency,
+                    },
+                )
+                .await
+                .unwrap();
+                return Ok(());
+            },
+            #[cfg(feature = "testing")]
+            DemoCommands::DeployContracts { .. } => unreachable!("handled earlier"),
+        }
     }
 
     // Build Transaction for state-changing commands
@@ -570,6 +711,7 @@ pub async fn run() -> Result<()> {
         | Commands::TokenBalance { .. }
         | Commands::TokenAllowance { .. }
         | Commands::ExportNodeSignatures { .. }
+        | Commands::Demo(..)
         | Commands::StakeForDemo { .. } => {
             unreachable!("Non-state-change commands are handled earlier in the function")
         },
