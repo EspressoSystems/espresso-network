@@ -52,6 +52,7 @@ RPC_URL="${RPC_URL:-http://localhost:8545}"
 ACCOUNT_INDEX="${ACCOUNT_INDEX:-0}"
 OPS_DELAY="${OPS_DELAY:-30}" # 30 seconds default
 SAFE_EXIT_DELAY="${SAFE_EXIT_DELAY:-60}" # 60 seconds default
+NEW_ESCROW_PERIOD="${NEW_ESCROW_PERIOD:-172800}" # 2 days in seconds (86400 * 2) default
 
 export RUST_LOG=warn
 DEPLOY_CMD="cargo run --bin deploy --"
@@ -61,7 +62,6 @@ if $USE_LEDGER; then
     unset ESPRESSO_DEPLOYER_ACCOUNT_INDEX
 fi
 
-NEW_ESCROW_PERIOD=$((86400 * 2 ))  # 2 days in seconds
 SALT=$(cast keccak "$(date +%s)")
 
 # Helper function to check if RPC URL is localhost
@@ -156,7 +156,11 @@ $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
 echo ""
 echo "### Test 4: Granting PAUSER_ROLE via timelock ###"
 PAUSER_ROLE="0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a"  # keccak256("PAUSER_ROLE")
-OLD_PAUSER="0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
+if is_localhost_rpc "$RPC_URL"; then
+    OLD_PAUSER="${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:-0xa0Ee7A142d267C1f36714E4a8F75612F20a79720}"
+else
+    OLD_PAUSER="${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:?ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS must be set for non-localhost deployments}"
+fi
 NEW_PAUSER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 GRANT_SALT=$(cast keccak "$(date +%s)grant")
 

@@ -37,7 +37,7 @@ cp .env $ENV_FILE
 
 ```bash
 export RPC_URL={YOUR_RPC_URL}
-export ACCOUNT_INDEX={YOUR_ACCOUNT_INDEX} # Optional:  if it isn't zero
+export ACCOUNT_INDEX={YOUR_ACCOUNT_INDEX} # Optional:  default value is zero
 export OUTPUT_FILE={YOUR_OUTPUT_FILE}  # Optional: customize output file
 ```
 
