@@ -557,6 +557,9 @@ impl TestClient {
             first_epoch_with_dynamic_stake_table: EpochNumber::new(
                 inner.first_epoch_with_dynamic_stake_table,
             ),
+
+            #[cfg(feature = "decaf")]
+            decaf_first_pos_epoch: None,
         }
     }
 
