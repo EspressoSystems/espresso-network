@@ -469,7 +469,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     storage_metrics
         .append_vid_duration
         .add_point(append_vid_duration.as_secs_f64());
-    tracing::debug!("append_vid_general time: {append_vid_duration:?}");
+    tracing::warn!("append_vid_general time: {append_vid_duration:?}");
 
     // Make epoch root vote
 

@@ -70,11 +70,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> BlockStorerTaskState<TYPES, 
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
     ) -> hotshot_utils::anytrace::Result<()> {
+        if !self.is_da().await {
+            return Ok(());
+        }
         match event.as_ref() {
             HotShotEvent::BlockReconstructed(payload, metadata, commit, view) => {
-                if !self.is_da().await {
-                    return Ok(());
-                }
                 tracing::error!("Storing block reconstructed for view {view}");
                 let _ = self
                     .storage
@@ -85,9 +85,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> BlockStorerTaskState<TYPES, 
                     .await;
             },
             HotShotEvent::BlockReady(payload_with_metadata, commit, view) => {
-                if !self.is_da().await {
-                    return Ok(());
-                }
                 tracing::error!("Storing block ready for view {view}");
                 let _ = self
                     .storage
