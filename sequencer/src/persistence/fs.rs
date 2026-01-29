@@ -1422,6 +1422,10 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn backfill_reward_state(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.difficulty_level != drb_input.difficulty_level {

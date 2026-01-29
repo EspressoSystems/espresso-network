@@ -1764,6 +1764,37 @@ impl EpochCommittees {
             .get(&epoch)
             .and_then(|committee| committee.block_reward)
     }
+
+    /// Get the index of a validator's BLS key in the epoch's stake table.
+    /// Returns None if the validator is not in the stake table for this epoch.
+    ///
+    /// The index corresponds to the position in the `leader_counts` array in V6 headers.
+    pub fn get_validator_index(&self, epoch: &EpochNumber, bls_key: &PubKey) -> Option<usize> {
+        self.state
+            .get(epoch)
+            .and_then(|committee| committee.stake_table.keys().position(|k| k == bls_key))
+    }
+
+    /// Get validator by index in the epoch's stake table.
+    /// Returns the full Validator config if found.
+    ///
+    /// The index corresponds to the position in the `leader_counts` array in V6 headers.
+    pub fn get_validator_by_index(
+        &self,
+        epoch: &EpochNumber,
+        index: usize,
+    ) -> Option<Validator<PubKey>> {
+        let committee = self.state.get(epoch)?;
+        let (bls_key, _) = committee.stake_table.get_index(index)?;
+        let address = committee.address_mapping.get(bls_key)?;
+        committee.validators.get(address).cloned()
+    }
+
+    /// Get the total number of active validators for an epoch.
+    pub fn validator_count(&self, epoch: &EpochNumber) -> Option<usize> {
+        self.state.get(epoch).map(|c| c.stake_table.len())
+    }
+
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that

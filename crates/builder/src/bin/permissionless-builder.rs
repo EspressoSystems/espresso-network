@@ -145,6 +145,32 @@ async fn main() -> anyhow::Result<()> {
             >(genesis, opt)
             .await
         },
+        #[cfg(all(feature = "da-upgrade", feature = "epoch-reward"))]
+        (
+            espresso_types::DaUpgradeVersion::VERSION,
+            espresso_types::EpochRewardVersion::VERSION,
+        ) => {
+            run::<
+                SequencerVersions<
+                    espresso_types::DaUpgradeVersion,
+                    espresso_types::EpochRewardVersion,
+                >,
+            >(genesis, opt)
+            .await
+        },
+        #[cfg(feature = "epoch-reward")]
+        (
+            espresso_types::EpochRewardVersion::VERSION,
+            espresso_types::EpochRewardVersion::VERSION,
+        ) => {
+            run::<
+                SequencerVersions<
+                    espresso_types::EpochRewardVersion,
+                    espresso_types::EpochRewardVersion,
+                >,
+            >(genesis, opt)
+            .await
+        },
         #[cfg(all(feature = "pos", feature = "drb-and-header"))]
         (
             espresso_types::EpochVersion::VERSION,
