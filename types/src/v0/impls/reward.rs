@@ -1162,6 +1162,7 @@ impl EpochRewardsCalculator {
                 %epoch,
                 header_height = header.height(),
                 header_version = %header.version(),
+                header_reward_merkle_tree_root = %header.reward_merkle_tree_root(),
                 "fetch_and_calculate: fetched header"
             );
 
@@ -1237,11 +1238,9 @@ impl EpochRewardsCalculator {
             // Fetch all reward accounts at the height just before this epoch
             // This fetches from the reward_state table which stores all account balances
 
-            let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
-
             tracing::info!(
                 %epoch,
-                catchup_height,
+                epoch_last_block_height,
                 "fetching all reward accounts from peers to rebuild tree"
             );
 
@@ -1254,12 +1253,12 @@ impl EpochRewardsCalculator {
                 let accounts = instance_state
                     .state_catchup
                     .as_ref()
-                    .fetch_all_reward_accounts(catchup_height, offset, limit)
+                    .fetch_all_reward_accounts(epoch_last_block_height, offset, limit)
                     .await
                     .with_context(|| {
                         format!(
-                            "failed to fetch reward accounts at height {catchup_height}, offset \
-                             {offset}"
+                            "failed to fetch reward accounts at height {epoch_last_block_height}, \
+                             offset {offset}"
                         )
                     })?;
 

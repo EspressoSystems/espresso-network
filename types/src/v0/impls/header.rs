@@ -18,9 +18,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_ge_epoch_root, is_last_block, BuilderCommitment},
 };
-use jf_merkle_tree_compat::{
-    AppendableMerkleTreeScheme, ForgetableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme,
-};
+use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -45,7 +43,7 @@ use crate::{
         self, RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
+    v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2},
     v0_5,
     v0_6::{self, LeaderCounts, MAX_VALIDATORS},
     BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion,
@@ -820,7 +818,6 @@ impl Header {
     /// A tuple of (total_rewards_applied, changed_accounts). The changed_accounts set contains
     /// all reward accounts that were updated by this epoch's rewards distribution.
     pub async fn handle_epoch_rewards(
-        parent_header: &Header,
         height: u64,
         leader_counts: &LeaderCounts,
         instance_state: &NodeState,
@@ -849,22 +846,11 @@ impl Header {
             && !reward_calculator.has_result(prev_epoch)
             && !reward_calculator.is_calculating(prev_epoch)
         {
-            let reward_tree = {
-                if let Either::Right(v2_root) = parent_header.reward_merkle_tree_root() {
-                    if v2_root == validated_state.reward_merkle_tree_v2.commitment() {
-                        validated_state.reward_merkle_tree_v2.clone()
-                    } else {
-                        RewardMerkleTreeV2::from_commitment(v2_root)
-                    }
-                } else {
-                    validated_state.reward_merkle_tree_v2.clone()
-                }
-            };
             tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
             reward_calculator.spawn_background_task(
                 prev_epoch,
                 epoch_height,
-                reward_tree,
+                validated_state.reward_merkle_tree_v2.clone(),
                 instance_state.clone(),
                 coordinator.clone(),
                 None,
@@ -914,23 +900,12 @@ impl Header {
                     %prev_epoch,
                     "missing V6 epoch rewards at boundary, spawning calculation now"
                 );
-                let reward_tree = {
-                    if let Either::Right(v2_root) = prev_epoch_header.reward_merkle_tree_root() {
-                        if v2_root == validated_state.reward_merkle_tree_v2.commitment() {
-                            validated_state.reward_merkle_tree_v2.clone()
-                        } else {
-                            RewardMerkleTreeV2::from_commitment(v2_root)
-                        }
-                    } else {
-                        validated_state.reward_merkle_tree_v2.clone()
-                    }
-                };
 
                 if !reward_calculator.is_calculating(prev_epoch) {
                     reward_calculator.spawn_background_task(
                         prev_epoch,
                         epoch_height,
-                        reward_tree,
+                        validated_state.reward_merkle_tree_v2.clone(),
                         instance_state.clone(),
                         coordinator.clone(),
                         prev_epoch_header.leader_counts().copied(),
@@ -1404,7 +1379,6 @@ impl BlockHeader<SeqTypes> for Header {
             );
 
             let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
-                parent_leaf.block_header(),
                 new_height,
                 &leader_counts,
                 instance_state,

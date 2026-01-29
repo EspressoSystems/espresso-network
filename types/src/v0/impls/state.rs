@@ -1071,7 +1071,6 @@ impl ValidatedState {
                 epoch_height,
             );
             let (epoch_rewards_applied, changed_accounts) = Header::handle_epoch_rewards(
-                parent_header,
                 proposed_header.height(),
                 &leader_counts,
                 instance,
