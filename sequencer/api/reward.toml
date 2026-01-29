@@ -9,6 +9,12 @@ PATH = ["reward-balance/:height/:address"]
 ":height" = "Integer"
 DOC = "Get balance in reward state at a specific height. Expected parameters are height which is an integer and an Ethereum address in hex format"
 
+[route.get_reward_merkle_tree_v2]
+PATH = ["reward-merkle-tree-v2/:height"]
+METHOD = "GET"
+":height" = "Integer"
+DOC = "Get the snapshot of this node's RewardMerkleTreeV2 at the given hotshot block height, serialized as a RewardMerkleTreeV2Data."
+
 [route.get_reward_account_proof]
 PATH = ["proof/:height/:address"]
 ":address" = "Literal"

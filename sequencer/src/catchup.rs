@@ -56,7 +56,7 @@ use tokio_util::task::AbortOnDropHandle;
 use url::Url;
 use vbs::version::StaticVersionType;
 
-use crate::api::BlocksFrontier;
+use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -426,6 +426,37 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        retry: usize,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        let result = self
+            .fetch(retry, |client| async move {
+                let tree_bytes = client
+                    .inner
+                    .get::<Vec<u8>>(&format!("reward-state-v2/reward-merkle-tree-v2/{height}",))
+                    .send()
+                    .await?;
+
+                Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
+            })
+            .await
+            .context("Fetching from peer failed")?;
+
+        let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
+            .context("Failed to deserialize merkle tree from catchup")?;
+
+        let tree: RewardMerkleTreeV2 = tree_data.try_into()?;
+
+        if tree.commitment() == reward_merkle_tree_root {
+            Ok(tree)
+        } else {
+            bail!("RewardMerkleTreeV2 from peer failed validation");
+        }
+    }
+
     #[tracing::instrument(skip(self, _instance))]
     async fn try_fetch_reward_accounts_v1(
         &self,
@@ -688,7 +719,7 @@ impl<T> SqlStateCatchup<T> {
 #[async_trait]
 impl<T> StateCatchup for SqlStateCatchup<T>
 where
-    T: CatchupStorage + Send + Sync,
+    T: CatchupStorage + RewardMerkleTreeDataSource + Send + Sync,
 {
     async fn try_fetch_leaf(
         &self,
@@ -825,6 +856,19 @@ where
         }
 
         Ok(proofs)
+    }
+
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        _retry: usize,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        let merkle_tree: RewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
+
+        ensure!(merkle_tree.commitment() == reward_merkle_tree_root);
+
+        Ok(merkle_tree)
     }
 
     #[tracing::instrument(skip(self, _retry, instance))]
@@ -966,6 +1010,15 @@ impl StateCatchup for NullStateCatchup {
             .get(&commitment)
             .copied()
             .context(format!("chain config {commitment} not available"))
+    }
+
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        _retry: usize,
+        _height: u64,
+        _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        bail!("state catchup is disabled");
     }
 
     async fn try_fetch_reward_accounts_v1(
@@ -1333,6 +1386,45 @@ impl StateCatchup for ParallelStateCatchup {
                     view,
                     reward_merkle_tree_root,
                     &accounts_vec,
+                ).await
+            }}
+        }})
+        .await
+    }
+
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        retry: usize,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        let local_result = self
+            .on_local_providers(clone! {() move |provider| {
+                clone! {() async move {
+                    provider
+                        .try_fetch_reward_merkle_tree_v2(
+                            retry,
+                            height,
+                            reward_merkle_tree_root,
+                        )
+                        .await
+                }}
+            }})
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(clone! {() move |provider| {
+            clone!{() async move {
+                provider
+                .try_fetch_reward_merkle_tree_v2(
+                    retry,
+                    height,
+                    reward_merkle_tree_root,
                 ).await
             }}
         }})

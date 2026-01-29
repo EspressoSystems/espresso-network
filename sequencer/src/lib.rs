@@ -634,6 +634,7 @@ where
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        ..Default::default()
     };
 
     // Initialize the Libp2p network

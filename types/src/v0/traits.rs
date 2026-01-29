@@ -45,7 +45,7 @@ use crate::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
         Validator,
     },
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
+    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
     PubKey, SeqTypes, ValidatorMap,
 };
@@ -186,6 +186,14 @@ pub trait StateCatchup: Send + Sync {
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<Vec<RewardAccountProofV2>>;
 
+    /// Fetch the given reward merkle tree without retrying on transient errors.
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        retry: usize,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2>;
+
     /// Fetch the given list of reward accounts, retrying on transient errors.
     async fn fetch_reward_accounts_v2(
         &self,
@@ -214,6 +222,26 @@ pub trait StateCatchup: Send + Sync {
                                 "fetching reward accounts {accounts:?}, height {height}, view \
                                  {view}"
                             ))
+                        })
+                }
+                .boxed()
+            })
+            .await
+    }
+
+    async fn fetch_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                async move {
+                    provider
+                        .try_fetch_reward_merkle_tree_v2(retry, height, reward_merkle_tree_root)
+                        .await
+                        .map_err(|err| {
+                            err.context(format!("fetching reward merkle tree for height {height}"))
                         })
                 }
                 .boxed()
@@ -418,6 +446,17 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        retry: usize,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        (**self)
+            .try_fetch_reward_merkle_tree_v2(retry, height, reward_merkle_tree_root)
+            .await
+    }
+
     async fn fetch_reward_accounts_v2(
         &self,
         instance: &NodeState,
@@ -428,6 +467,16 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
         (**self)
             .fetch_reward_accounts_v2(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
+    }
+
+    async fn fetch_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        (**self)
+            .fetch_reward_merkle_tree_v2(height, reward_merkle_tree_root)
             .await
     }
 
