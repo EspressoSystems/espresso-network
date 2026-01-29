@@ -569,6 +569,7 @@ where
             cliquenet_keypair,
             network_params.cliquenet_bind_address,
             cliquenet_peers,
+            metrics.subgroup("cliquenet".into()),
         )
         .await
         .with_context(|| "failed to create cliquenet network")?,

@@ -27,8 +27,8 @@ use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
     StakeTableV2::{
         self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-        StakeTableV2Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        MetadataUriUpdated, StakeTableV2Events, Undelegated, UndelegatedV2, ValidatorExit,
+        ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 use hotshot_types::{
@@ -57,6 +57,7 @@ use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
+use url::Url;
 use vbs::version::StaticVersionType;
 
 #[cfg(any(test, feature = "testing"))]
@@ -120,6 +121,7 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
             StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
             StakeTableV2Events::CommissionUpdated(v) => Ok(StakeTableEvent::CommissionUpdate(v)),
+            StakeTableV2Events::MetadataUriUpdated(v) => Ok(StakeTableEvent::MetadataUriUpdate(v)),
             StakeTableV2Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::ExitEscrowPeriodUpdated({v:?})"
             )),
@@ -162,9 +164,7 @@ impl TryFrom<StakeTableV2Events> for StakeTableEvent {
             StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::Withdrawal({v:?})"
             )),
-            StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
-            )),
+
             StakeTableV2Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV2Events::MinDelegateAmountUpdated({v:?})"
             )),
@@ -329,6 +329,7 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
+                    metadata_uri: None,
                 });
             },
 
@@ -384,6 +385,7 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
+                    metadata_uri: None,
                 });
             },
 
@@ -590,6 +592,24 @@ impl StakeTableState {
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
                 val.commission = newCommission;
             },
+
+            StakeTableEvent::MetadataUriUpdate(MetadataUriUpdated {
+                validator,
+                metadataUri,
+                ..
+            }) => {
+                // Parse the metadata URI
+                let metadata_uri =
+                    Url::parse(&metadataUri).map_err(|e| StakeTableError::InvalidMetadataUri(e))?;
+
+                // The contract enforces that the validator must already exist
+                let val = self
+                    .validators
+                    .get_mut(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
+
+                val.metadata_uri = Some(metadata_uri);
+            },
         }
 
         Ok(Ok(()))
@@ -740,6 +760,9 @@ impl std::fmt::Debug for StakeTableEvent {
             StakeTableEvent::KeyUpdateV2(event) => write!(f, "KeyUpdateV2({:?})", event.account),
             StakeTableEvent::CommissionUpdate(event) => {
                 write!(f, "CommissionUpdate({:?})", event.validator)
+            },
+            StakeTableEvent::MetadataUriUpdate(event) => {
+                write!(f, "MetadataUriUpdate({:?})", event.validator)
             },
         }
     }
@@ -992,6 +1015,14 @@ impl Fetcher {
                     ));
                 }
             },
+            StakeTableV2Events::MetadataUriUpdated(evt) => {
+                // We want to make sure it's a valid URL
+                if Url::parse(&evt.metadataUri).is_err() {
+                    return Ok(false);
+                }
+
+                return Ok(true);
+            },
             _ => {},
         }
 
@@ -1085,6 +1116,7 @@ impl Fetcher {
                                 ConsensusKeysUpdated::SIGNATURE,
                                 ConsensusKeysUpdatedV2::SIGNATURE,
                                 CommissionUpdated::SIGNATURE,
+                                MetadataUriUpdated::SIGNATURE,
                             ])
                             .address(contract)
                             .from_block(from)
@@ -2725,6 +2757,7 @@ pub mod testing {
                 stake: validator_stake,
                 commission: val.commission,
                 delegators,
+                metadata_uri: None,
             }
         }
     }

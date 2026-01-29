@@ -30,19 +30,18 @@ pub struct Cliquenet<T: NodeType> {
 }
 
 impl<T: NodeType> Cliquenet<T> {
-    pub async fn create<A, B, P, M>(
+    pub async fn create<A, B, P>(
         name: &'static str,
         key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
-        metrics: M,
+        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         A: Into<Address>,
         B: Into<Address>,
         P: IntoIterator<Item = (T::SignatureKey, PublicKey, B)>,
-        M: Metrics + 'static,
     {
         let cfg = NetConf::builder()
             .name(name)
@@ -50,7 +49,7 @@ impl<T: NodeType> Cliquenet<T> {
             .keypair(keypair)
             .bind(addr.into())
             .parties(parties.into_iter().map(|(k, x, a)| (k, x, a.into())))
-            .metrics(Box::new(metrics))
+            .metrics(metrics)
             .build();
         let net = Retry::create(cfg)
             .await
@@ -178,7 +177,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
                 let it = parties
                     .iter()
                     .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
-                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, NoMetrics)
+                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, NoMetrics::boxed())
                     .await
                     .unwrap();
                 Arc::new(net)
