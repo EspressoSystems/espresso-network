@@ -152,20 +152,17 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .await
                 .context("opening transaction for state update")?;
 
-            tokio::spawn(async move {
-                tx.upsert(
-                    "reward_merkle_tree_v2_bincode",
-                    ["height", "serialized_bytes"],
-                    ["height"],
-                    [(height as i64, merkle_tree)],
-                )
-                .await?;
+            tx.upsert(
+                "reward_merkle_tree_v2_bincode",
+                ["height", "serialized_bytes"],
+                ["height"],
+                [(height as i64, merkle_tree)],
+            )
+            .await?;
 
-                hotshot_query_service::data_source::Transaction::commit(tx)
-                    .await
-                    .context("Transaction to store reward merkle tree failed.")?;
-                Ok::<_, anyhow::Error>(())
-            });
+            hotshot_query_service::data_source::Transaction::commit(tx)
+                .await
+                .context("Transaction to store reward merkle tree failed.")?;
 
             Ok(())
         }
