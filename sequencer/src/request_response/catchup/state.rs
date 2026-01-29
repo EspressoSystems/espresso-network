@@ -5,7 +5,7 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
+    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };
@@ -137,6 +137,24 @@ impl<
                 reward_merkle_tree_root,
                 accounts.to_vec(),
             ),
+        )
+        .await
+        .with_context(|| "timed out while fetching reward accounts")?
+    }
+
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        _retry: usize,
+        height: u64,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Fetch the reward accounts
+        timeout(
+            timeout_duration,
+            self.fetch_reward_merkle_tree_v2(height, reward_merkle_tree_root),
         )
         .await
         .with_context(|| "timed out while fetching reward accounts")?

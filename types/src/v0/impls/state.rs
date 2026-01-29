@@ -278,7 +278,6 @@ impl ValidatedState {
     ) -> Vec<RewardAccountV2> {
         accounts
             .into_iter()
-            .unique()
             .filter(|account| {
                 self.reward_merkle_tree_v2
                     .lookup(*account)

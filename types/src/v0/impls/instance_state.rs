@@ -1,14 +1,16 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
+use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
+use moka::future::Cache;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
@@ -26,9 +28,9 @@ use crate::{
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::{RewardAmount, Validator},
+    v0_4::RewardMerkleTreeV2,
     EpochCommittees, PubKey, ValidatorMap,
 };
-
 /// Represents the immutable state of a node.
 ///
 /// For mutable state, use `ValidatedState`.
@@ -48,6 +50,12 @@ pub struct NodeState {
     pub epoch_height: Option<u64>,
     pub genesis_version: Version,
     pub epoch_start_block: u64,
+
+    // some address are fetched from the stake table contract,
+    // but we can cache them for the duration of the program since we do not expect this to ever change
+    pub light_client_contract_address: Cache<(), Address>,
+    pub token_contract_address: Cache<(), Address>,
+    pub finalized_hotshot_height: Cache<(), u64>,
 
     /// Map containing all planned and executed upgrades.
     ///
@@ -78,6 +86,76 @@ impl NodeState {
         membership
             .fixed_block_reward()
             .context("fixed block reward not found")
+    }
+
+    pub async fn light_client_contract_address(&self) -> anyhow::Result<Address> {
+        match self.light_client_contract_address.get(&()).await {
+            Some(address) => Ok(address),
+            None => {
+                let stake_table_address = self
+                    .chain_config
+                    .stake_table_contract
+                    .context("No stake table contract in chain config")?;
+
+                let stake_table =
+                    StakeTableV2::new(stake_table_address, self.l1_client.provider.clone());
+                let light_client_contract_address = stake_table.lightClient().call().await?;
+
+                self.light_client_contract_address
+                    .insert((), light_client_contract_address)
+                    .await;
+
+                Ok(light_client_contract_address)
+            },
+        }
+    }
+
+    pub async fn token_contract_address(&self) -> anyhow::Result<Address> {
+        match self.token_contract_address.get(&()).await {
+            Some(address) => Ok(address),
+            None => {
+                let stake_table_address = self
+                    .chain_config
+                    .stake_table_contract
+                    .context("No stake table contract in chain config")?;
+
+                let stake_table =
+                    StakeTableV2::new(stake_table_address, self.l1_client.provider.clone());
+                let token_contract_address = stake_table.token().call().await?;
+
+                self.token_contract_address
+                    .insert((), token_contract_address)
+                    .await;
+
+                Ok(token_contract_address)
+            },
+        }
+    }
+
+    pub async fn finalized_hotshot_height(&self) -> anyhow::Result<u64> {
+        match self.finalized_hotshot_height.get(&()).await {
+            Some(block) => Ok(block),
+            None => {
+                let light_client_contract_address = self.light_client_contract_address().await?;
+
+                let light_client_contract = LightClientV3::new(
+                    light_client_contract_address,
+                    self.l1_client.provider.clone(),
+                );
+
+                let finalized_hotshot_height = light_client_contract
+                    .finalizedState()
+                    .call()
+                    .await?
+                    .blockHeight;
+
+                self.finalized_hotshot_height
+                    .insert((), finalized_hotshot_height)
+                    .await;
+
+                Ok(finalized_hotshot_height)
+            },
+        }
     }
 }
 
@@ -172,6 +250,12 @@ impl NodeState {
             coordinator,
             genesis_version,
             epoch_start_block: 0,
+            light_client_contract_address: Cache::builder().max_capacity(1).build(),
+            token_contract_address: Cache::builder().max_capacity(1).build(),
+            finalized_hotshot_height: Cache::builder()
+                .max_capacity(1)
+                .time_to_live(Duration::from_secs(30))
+                .build(),
         }
     }
 
@@ -560,6 +644,15 @@ pub mod mock {
             _reward_merkle_tree_root: RewardMerkleCommitmentV2,
             _accounts: &[RewardAccountV2],
         ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
+            anyhow::bail!("unimplemented")
+        }
+
+        async fn try_fetch_reward_merkle_tree_v2(
+            &self,
+            _retry: usize,
+            _height: u64,
+            _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        ) -> anyhow::Result<RewardMerkleTreeV2> {
             anyhow::bail!("unimplemented")
         }
 

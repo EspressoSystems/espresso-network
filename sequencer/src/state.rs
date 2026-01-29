@@ -26,7 +26,7 @@ use tokio::time::sleep;
 use vbs::version::StaticVersionType;
 
 use crate::{
-    api::RewardAccountProofDataSource,
+    api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
     NodeState, SeqTypes,
@@ -286,10 +286,10 @@ where
 
     if proposed_leaf.header().version() > EpochVersion::version() {
         storage
-            .insert_v2_reward_merkle_tree(
+            .save_reward_merkle_tree_v2(
                 instance,
                 proposed_leaf.height(),
-                state.reward_merkle_tree_v2.clone(),
+                &state.reward_merkle_tree_v2,
             )
             .await
             .context("failed to store reward merkle nodes")?;
@@ -436,7 +436,7 @@ pub(crate) trait SequencerStateDataSource:
     + StatusDataSource
     + VersionedDataSource
     + CatchupStorage
-    + RewardAccountProofDataSource
+    + RewardMerkleTreeDataSource
     + PrunedHeightDataSource
     + MerklizedStateHeightPersistence
 {
@@ -449,7 +449,7 @@ impl<T> SequencerStateDataSource for T where
         + StatusDataSource
         + VersionedDataSource
         + CatchupStorage
-        + RewardAccountProofDataSource
+        + RewardMerkleTreeDataSource
         + PrunedHeightDataSource
         + MerklizedStateHeightPersistence
 {

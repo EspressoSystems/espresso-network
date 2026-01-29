@@ -985,22 +985,27 @@ pub async fn get_leader_and_fetch_missing_rewards(
                 "fetching missing reward accounts from peers"
             );
 
-            let missing_account_proofs = instance_state
+            validated_state.reward_merkle_tree_v2 = instance_state
                 .state_catchup
-                .fetch_reward_accounts_v2(
-                    instance_state,
-                    parent_height,
-                    parent_view,
-                    reward_merkle_tree_root,
-                    missing_reward_accts,
-                )
+                .fetch_reward_merkle_tree_v2(parent_height, reward_merkle_tree_root)
                 .await?;
 
-            for proof in missing_account_proofs.iter() {
-                proof
-                    .remember(&mut validated_state.reward_merkle_tree_v2)
-                    .expect("proof previously verified");
-            }
+            //            let missing_account_proofs = instance_state
+            //                .state_catchup
+            //                .fetch_reward_accounts_v2(
+            //                    instance_state,
+            //                    parent_height,
+            //                    parent_view,
+            //                    reward_merkle_tree_root,
+            //                    missing_reward_accts,
+            //                )
+            //                .await?;
+            //
+            //            for proof in missing_account_proofs.iter() {
+            //                proof
+            //                    .remember(&mut validated_state.reward_merkle_tree_v2)
+            //                    .expect("proof previously verified");
+            //            }
         }
     }
 

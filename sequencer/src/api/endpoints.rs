@@ -48,9 +48,7 @@ use super::data_source::{
     CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
     StateSignatureDataSource, SubmitDataSource,
 };
-use crate::{
-    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
-};
+use crate::{api::RewardMerkleTreeDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence};
 
 mod availability;
 pub(super) use availability::*;
@@ -109,7 +107,7 @@ where
     <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
-        + RewardAccountProofDataSource
+        + RewardMerkleTreeDataSource
         + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {
@@ -163,6 +161,23 @@ where
             Ok(path.elem().copied())
         }
         .boxed()
+    })?
+    .get("get_reward_merkle_tree_v2", move |req, state| {
+        async move {
+            let height = req.integer_param("height")?;
+
+            state
+                .load_tree(height)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed load serialized RewardMerkleTreeV2Data from storage at height \
+                         {height}: {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
     })?;
 
     match merkle_tree_version {
@@ -205,7 +220,7 @@ where
                         })?;
 
                     state
-                        .load_v2_reward_account_proof(height, account)
+                        .load_reward_account_proof_v2(height, account)
                         .await
                         .map_err(|err| merklized_state::Error::Custom {
                             message: format!(
@@ -230,7 +245,7 @@ where
                         })?;
 
                     let proof = state
-                        .load_v2_reward_account_proof(height, account)
+                        .load_reward_account_proof_v2(height, account)
                         .await
                         .map_err(|err| merklized_state::Error::Custom {
                             message: format!(
