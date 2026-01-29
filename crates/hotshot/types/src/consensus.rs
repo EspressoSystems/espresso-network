@@ -7,7 +7,7 @@
 //! Provides the core consensus types
 
 use std::{
-    collections::{hash_map::Entry::Occupied, BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::Arc,
@@ -26,7 +26,7 @@ use crate::{
         Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseAndDuration,
         VidDisperseShare,
     },
-    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
+    epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     event::{HotShotAction, LeafInfo},
     message::{Proposal, UpgradeLock},

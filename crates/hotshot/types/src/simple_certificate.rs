@@ -7,7 +7,6 @@
 //! Implementations of the simple certificate type.  Used for Quorum, DA, and Timeout Certificates
 
 use std::{
-    collections::HashSet,
     fmt::{self, Debug, Display, Formatter},
     future::Future,
     hash::Hash,
