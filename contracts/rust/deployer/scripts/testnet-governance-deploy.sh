@@ -1,5 +1,5 @@
-# This script deploys the contracts to testnet so that governance flows can be tested
 #!/usr/bin/env bash
+# This script deploys the contracts to testnet so that governance flows can be tested
 set -euo pipefail
 
 # Find repo root and source .env file
