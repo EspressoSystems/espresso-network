@@ -308,6 +308,10 @@ impl Options {
             endpoints::node(ver).context("failed to define node api")
         })?;
 
+        register_api("token", &mut app, move |ver| {
+            endpoints::token(ver).context("failed to define token api")
+        })?;
+
         // Initialize submit API
         if self.submit.is_some() {
             register_api("submit", &mut app, move |ver| {

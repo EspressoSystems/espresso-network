@@ -1,6 +1,6 @@
 use alloy::{
     primitives::{utils::format_ether, Address},
-    providers::ProviderBuilder,
+    providers::{Provider, ProviderBuilder},
 };
 use anyhow::{Context as _, Result};
 use espresso_types::{
@@ -8,6 +8,7 @@ use espresso_types::{
     L1Client,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2;
+pub use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;
 
@@ -77,4 +78,17 @@ pub async fn fetch_token_address(rpc_url: Url, stake_table_address: Address) -> 
                 "Failed to fetch token address from stake table contract at {stake_table_address}"
             )
         })
+}
+
+pub async fn fetch_stake_table_version(
+    provider: impl Provider,
+    stake_table_address: Address,
+) -> Result<StakeTableContractVersion> {
+    let stake_table = StakeTableV2::new(stake_table_address, provider);
+    stake_table
+        .getVersion()
+        .call()
+        .await?
+        .try_into()
+        .with_context(|| "Failed to parse stake table contract version")
 }

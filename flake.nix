@@ -254,6 +254,7 @@
             (python3.withPackages (ps: with ps; [ black ]))
             libusb1
             yarn
+            mdbook
 
             go
             golangci-lint
