@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # This script assumes that the contracts have already been deployed and the .env.governance.testnet file has been sourced
 # It is used to test the governance flows for the contracts, specifically the timelock operations
 # It tests the following flows:
@@ -5,8 +6,6 @@
 # 2. Executing a timelock operation to update the exit escrow period
 # 3. Scheduling a timelock operation to cancel an operation on StakeTable
 # 4. Granting the PAUSER_ROLE via timelock
-
-#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
