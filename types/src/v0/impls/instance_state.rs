@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
+#[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
@@ -10,6 +11,7 @@ use hotshot_types::{
     HotShotConfig,
 };
 use moka::future::Cache;
+#[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
@@ -413,6 +415,7 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 
 // This allows us to turn on `Default` on InstanceState trait
 // which is used in `HotShot` by `TestBuilderImplementation`.
+#[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
