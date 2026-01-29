@@ -556,12 +556,14 @@ async fn execute_signed_tx_log_inner<P: Provider + Clone + 'static>(
             let total = to_submit.len();
             let unconfirmed_sem = Arc::new(Semaphore::new(MAX_UNCONFIRMED));
             let concurrency_sem = Arc::new(Semaphore::new(parallelism));
+            let submitted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
             let mut tasks: JoinSet<Result<TransactionReceipt>> = JoinSet::new();
             for tx in to_submit {
                 let provider = provider.clone();
                 let unconfirmed_sem = unconfirmed_sem.clone();
                 let concurrency_sem = concurrency_sem.clone();
+                let submitted = submitted.clone();
                 tasks.spawn(async move {
                     // Acquire unconfirmed permit (limits total in-flight)
                     let unconfirmed_permit = unconfirmed_sem.acquire_owned().await?;
@@ -570,6 +572,11 @@ async fn execute_signed_tx_log_inner<P: Provider + Clone + 'static>(
                     let concurrency_permit = concurrency_sem.acquire().await?;
                     submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
                     drop(concurrency_permit);
+
+                    let count = submitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if count % 100 == 0 || count == total {
+                        tracing::info!("phase {}: submitted {}/{}", phase, count, total);
+                    }
 
                     // Wait for confirmation (holds unconfirmed_permit)
                     wait_for_confirmation(provider, tx, unconfirmed_permit).await
