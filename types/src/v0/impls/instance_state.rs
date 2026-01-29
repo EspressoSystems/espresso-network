@@ -415,7 +415,6 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 
 // This allows us to turn on `Default` on InstanceState trait
 // which is used in `HotShot` by `TestBuilderImplementation`.
-#[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
