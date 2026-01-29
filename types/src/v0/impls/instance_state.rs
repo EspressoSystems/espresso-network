@@ -2,7 +2,6 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
-#[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
@@ -11,7 +10,6 @@ use hotshot_types::{
     HotShotConfig,
 };
 use moka::future::Cache;
-#[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
