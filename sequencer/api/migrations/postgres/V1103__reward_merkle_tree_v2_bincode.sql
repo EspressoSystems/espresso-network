@@ -6,7 +6,7 @@ CREATE TABLE reward_merkle_tree_v2_bincode (
 CREATE TABLE reward_merkle_tree_v2_proofs (
     height BIGINT,
     account BYTEA NOT NULL,
-    serialized_bytes BYTEA
+    proof BYTEA
 );
 
 ALTER TABLE 

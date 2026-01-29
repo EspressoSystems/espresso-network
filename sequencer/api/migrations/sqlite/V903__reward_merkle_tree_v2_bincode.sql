@@ -6,6 +6,6 @@ CREATE TABLE reward_merkle_tree_v2_bincode (
 CREATE TABLE reward_merkle_tree_v2_proofs (
     height BIGINT,
     account BLOB NOT NULL,
-    serialized_bytes BLOB,
+    proof BLOB,
     PRIMARY KEY (height, account)
 );
