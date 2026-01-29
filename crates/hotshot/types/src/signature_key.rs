@@ -66,6 +66,7 @@ impl SignatureKey for BLSPubKey {
     >;
     type PureAssembledSignatureType =
         <BLSOverBN254CurveSignatureScheme as SignatureScheme>::Signature;
+    type VerificationKeyType = Self;
     type QcType = (Self::PureAssembledSignatureType, BitVec);
     type SignError = SignatureError;
 
@@ -142,6 +143,13 @@ impl SignatureKey for BLSPubKey {
         BitVectorQc::<BLSOverBN254CurveSignatureScheme>::check(real_qc_pp, msg, qc).map(|_| ())
     }
 
+    fn signers(
+        real_qc_pp: &Self::QcParams<'_>,
+        qc: &Self::QcType,
+    ) -> Result<Vec<Self>, SignatureError> {
+        BitVectorQc::<BLSOverBN254CurveSignatureScheme>::signers(real_qc_pp, qc)
+    }
+
     fn sig_proof(signature: &Self::QcType) -> (Self::PureAssembledSignatureType, BitVec) {
         signature.clone()
     }
@@ -158,6 +166,10 @@ impl SignatureKey for BLSPubKey {
     fn genesis_proposer_pk() -> Self {
         let kp = KeyPair::generate(&mut ChaCha20Rng::from_seed([0u8; 32]));
         kp.ver_key()
+    }
+
+    fn to_verification_key(&self) -> Self::VerificationKeyType {
+        *self
     }
 }
 

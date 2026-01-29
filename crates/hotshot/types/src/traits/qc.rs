@@ -94,4 +94,14 @@ pub trait QuorumCertificateScheme<A: AggregateableSignatureSchemes> {
         message: &GenericArray<A::MessageUnit, Self::MessageLength>,
         qc: &Self::Qc,
     ) -> Result<Vec<A::VerificationKey>, SignatureError>;
+
+    /// Get the list of signers given a qc without checking the signature
+    ///
+    /// # Errors
+    ///
+    /// Return error if the inputs mismatch (e.g. wrong verifier parameter or original message).
+    fn signers(
+        qc_vp: &Self::QcVerifierParams<'_>,
+        qc: &Self::Qc,
+    ) -> Result<Vec<A::VerificationKey>, SignatureError>;
 }
