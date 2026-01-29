@@ -162,6 +162,29 @@ where
         }
         .boxed()
     })?
+    .get("get_latest_reward_account_proof", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let account = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: format!("invalid reward address: {address}"),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+
+            state
+                .load_latest_reward_account_proof_v2(account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load latest reward account proof from storage for account \
+                         {account}: {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
+    })?
     .get("get_reward_merkle_tree_v2", move |req, state| {
         async move {
             let height = req.integer_param("height")?;
@@ -171,8 +194,8 @@ where
                 .await
                 .map_err(|err| merklized_state::Error::Custom {
                     message: format!(
-                        "failed load serialized RewardMerkleTreeV2Data from storage at height \
-                         {height}: {err}"
+                        "failed to load RewardMerkleTreeV2Data from storage at height {height}: \
+                         {err}"
                     ),
                     status: StatusCode::NOT_FOUND,
                 })

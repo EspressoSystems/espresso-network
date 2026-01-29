@@ -274,6 +274,35 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         }
     }
 
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction for state update")?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT proof 
+                FROM reward_merkle_tree_v2_proofs
+                WHERE account = $1
+                ORDER BY height DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(account)
+            .fetch_optional(tx.as_mut())
+            .await?
+            .context(format!("Missing proofs"))?;
+
+            row.try_get::<Vec<u8>, _>("proof")
+                .context("Missing field proof from row; this should never happen")
+        }
+    }
+
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
             {
@@ -703,6 +732,13 @@ impl RewardMerkleTreeDataSource for DataSource {
         account: Vec<u8>,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move { self.as_ref().load_proof(height, account).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.as_ref().load_latest_proof(account).await }
     }
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {

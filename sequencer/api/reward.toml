@@ -1,7 +1,17 @@
-[route.get_latest_reward_balance]
-PATH = ["reward-balance/latest/:address"]
+[route.get_reward_merkle_tree_v2]
+PATH = ["reward-merkle-tree-v2/:height"]
+METHOD = "GET"
+":height" = "Integer"
+DOC = "Get the snapshot of this node's RewardMerkleTreeV2 at the given hotshot block height, serialized as a RewardMerkleTreeV2Data."
+
+[route.get_latest_reward_account_proof]
+PATH = ["proof/latest/:address"]
+METHOD = "GET"
 ":address" = "Literal"
-DOC = "Get current balance in reward state. Expected parameter is an Ethereum address in hex format."
+DOC = """The endpoint returns the Merkle proof for a reward account :address at the latest block height
+finalized by the light client contract. This endpoint only returns a `RewardAccountQueryDataV2`,
+containing the balance and a `RewardAccountProofV2`. This proof is based on `RewardMerkleTreeV2`, which uses the 
+Keccak256 hashing algorithm."""
 
 [route.get_reward_balance]
 PATH = ["reward-balance/:height/:address"]
@@ -9,11 +19,10 @@ PATH = ["reward-balance/:height/:address"]
 ":height" = "Integer"
 DOC = "Get balance in reward state at a specific height. Expected parameters are height which is an integer and an Ethereum address in hex format"
 
-[route.get_reward_merkle_tree_v2]
-PATH = ["reward-merkle-tree-v2/:height"]
-METHOD = "GET"
-":height" = "Integer"
-DOC = "Get the snapshot of this node's RewardMerkleTreeV2 at the given hotshot block height, serialized as a RewardMerkleTreeV2Data."
+[route.get_latest_reward_balance]
+PATH = ["reward-balance/latest/:address"]
+":address" = "Literal"
+DOC = "Get current balance in reward state. Expected parameter is an Ethereum address in hex format."
 
 [route.get_reward_account_proof]
 PATH = ["proof/:height/:address"]

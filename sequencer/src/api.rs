@@ -1383,6 +1383,23 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         }
     }
 
+    fn load_latest_reward_account_proof_v2(
+        &self,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move {
+            let serialized_account = bincode::serialize(&account).context(
+                "Failed to serialize RewardAccountV2 for lookup; this should never happen.",
+            )?;
+            let proof_bytes = self.load_latest_proof(serialized_account).await?;
+
+            bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes).context(
+                "Failed to deserialize RewardAccountQueryDataV2 for account {account} from \
+                 storage; this should never happen.",
+            )
+        }
+    }
+
     fn persist_tree(
         &self,
         height: u64,
@@ -1400,6 +1417,11 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
     fn load_proof(
         &self,
         height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn load_latest_proof(
+        &self,
         account: Vec<u8>,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
 
@@ -1461,6 +1483,15 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
         }
     }
 
+    fn load_latest_proof(
+        &self,
+        _account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
     fn proof_exists(&self, _height: u64) -> impl Send + Future<Output = bool> {
         async move { false }
     }
@@ -1512,6 +1543,13 @@ where
         account: Vec<u8>,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move { self.inner().load_proof(height, account).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_latest_proof(account).await }
     }
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
