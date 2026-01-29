@@ -10,8 +10,8 @@ use hotshot_contract_adapter::sol_types::{
 };
 
 use crate::{
-    proposals::multisig::call_propose_transaction_generic_script, Contract, Contracts,
-    OwnableContract,
+    proposals::multisig::call_propose_transaction_generic_script, retry_until_true, Contract,
+    Contracts, OwnableContract,
 };
 
 /// Data structure for timelock operations payload
@@ -275,6 +275,17 @@ impl TimelockContract {
             },
         }
     }
+
+    pub async fn is_operation_canceled(
+        &self,
+        operation_id: B256,
+        provider: &impl Provider,
+    ) -> Result<bool> {
+        let pending = self.is_operation_pending(operation_id, provider).await?;
+        let done = self.is_operation_done(operation_id, provider).await?;
+        // it's canceled if it's not pending and not done
+        Ok(!pending && !done)
+    }
 }
 
 // Derive timelock address from contract type
@@ -408,25 +419,32 @@ async fn perform_timelock_operation_via_eoa(
     if !receipt.inner.is_success() {
         anyhow::bail!("tx failed: {:?}", receipt);
     }
-    // Verify operation state based on type
+
+    // Verify operation state based on type (with retry for RPC timing)
     match operation_type {
         TimelockOperationType::Schedule => {
-            anyhow::ensure!(
-                timelock
+            let check_name = format!("Schedule operation {}", operation_id);
+            let is_scheduled = retry_until_true(&check_name, || async {
+                Ok(timelock
                     .is_operation_pending(operation_id, &provider)
                     .await?
-                    || timelock.is_operation_ready(operation_id, &provider).await?,
-                "tx not correctly scheduled: {}",
-                operation_id
-            );
+                    || timelock.is_operation_ready(operation_id, &provider).await?)
+            })
+            .await?;
+            if !is_scheduled {
+                anyhow::bail!("tx not correctly scheduled: {}", operation_id);
+            }
             tracing::info!("tx scheduled with id: {}", operation_id);
         },
         TimelockOperationType::Execute => {
-            anyhow::ensure!(
-                timelock.is_operation_done(operation_id, &provider).await?,
-                "tx not correctly executed: {}",
-                operation_id
-            );
+            let check_name = format!("Execute operation {}", operation_id);
+            let is_done = retry_until_true(&check_name, || async {
+                timelock.is_operation_done(operation_id, &provider).await
+            })
+            .await?;
+            if !is_done {
+                anyhow::bail!("tx not correctly executed: {}", operation_id);
+            }
             tracing::info!("tx executed with id: {}", operation_id);
         },
         TimelockOperationType::Cancel => {
