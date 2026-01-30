@@ -377,7 +377,8 @@ struct Options {
     #[clap(
         long,
         env = "ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES",
-        requires = "perform_timelock_operation"
+        requires = "perform_timelock_operation",
+        num_args = 0..
     )]
     function_values: Option<Vec<String>>,
 
@@ -646,13 +647,11 @@ async fn main() -> anyhow::Result<()> {
             )
         })?;
         args_builder.timelock_operation_function_signature(function_signature);
-        let function_values = opt.function_values.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --function-values or ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES \
-                 env var when performing timelock operation"
-            )
-        })?;
+
+        // allow empty function_values for functions with no parameters
+        let function_values = opt.function_values.unwrap_or_default();
         args_builder.timelock_operation_function_values(function_values);
+
         let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env \

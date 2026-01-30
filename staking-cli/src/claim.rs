@@ -1,51 +1,23 @@
 use alloy::{
-    network::Ethereum,
     primitives::{Address, U256},
-    providers::{PendingTransactionBuilder, Provider},
+    providers::Provider,
 };
 use anyhow::{bail, Context as _, Result};
 use hotshot_contract_adapter::{
-    evm::DecodeRevert as _,
     reward::RewardClaimInput,
-    sol_types::{
-        EspTokenV2, LightClientV3,
-        RewardClaim::{self, RewardClaimErrors},
-        StakeTableV2::{self, StakeTableV2Errors},
-    },
+    sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2},
 };
 use url::Url;
 
-pub async fn claim_withdrawal(
-    provider: impl Provider,
-    stake_table: Address,
-    validator_address: Address,
-) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let st = StakeTableV2::new(stake_table, provider);
-    st.claimWithdrawal(validator_address)
-        .send()
-        .await
-        .maybe_decode_revert::<StakeTableV2Errors>()
-}
-
-pub async fn claim_validator_exit(
-    provider: impl Provider,
-    stake_table: Address,
-    validator_address: Address,
-) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let st = StakeTableV2::new(stake_table, provider);
-    st.claimValidatorExit(validator_address)
-        .send()
-        .await
-        .maybe_decode_revert::<StakeTableV2Errors>()
-}
+use crate::transaction::Transaction;
 
 struct RewardClaimData {
     reward_claim_address: Address,
     claim_input: RewardClaimInput,
 }
 
-async fn try_fetch_reward_claim_data(
-    provider: impl Provider + Clone,
+async fn fetch_reward_claim_data(
+    provider: impl Provider,
     stake_table_address: Address,
     espresso_url: &Url,
     claimer_address: Address,
@@ -124,39 +96,13 @@ async fn try_fetch_reward_claim_data(
     }))
 }
 
-pub async fn claim_reward(
-    provider: impl Provider + Clone,
-    stake_table_address: Address,
-    espresso_url: Url,
-    claimer_address: Address,
-) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let data = try_fetch_reward_claim_data(
-        &provider,
-        stake_table_address,
-        &espresso_url,
-        claimer_address,
-    )
-    .await?
-    .context("No reward claim data found for address")?;
-
-    let reward_claim = RewardClaim::new(data.reward_claim_address, provider);
-    reward_claim
-        .claimRewards(
-            data.claim_input.lifetime_rewards,
-            data.claim_input.auth_data.into(),
-        )
-        .send()
-        .await
-        .maybe_decode_revert::<RewardClaimErrors>()
-}
-
 pub async fn unclaimed_rewards(
-    provider: impl Provider + Clone,
+    provider: impl Provider,
     stake_table_address: Address,
     espresso_url: Url,
     claimer_address: Address,
 ) -> Result<U256> {
-    let Some(data) = try_fetch_reward_claim_data(
+    let Some(data) = fetch_reward_claim_data(
         &provider,
         stake_table_address,
         &espresso_url,
@@ -179,13 +125,39 @@ pub async fn unclaimed_rewards(
     Ok(unclaimed)
 }
 
+/// Fetch reward claim inputs from the Espresso API and return a Transaction for claiming rewards
+pub async fn fetch_claim_rewards_inputs(
+    provider: impl Provider,
+    stake_table_address: Address,
+    espresso_url: &Url,
+    claimer_address: Address,
+) -> Result<Option<Transaction>> {
+    let Some(data) = fetch_reward_claim_data(
+        &provider,
+        stake_table_address,
+        espresso_url,
+        claimer_address,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(Transaction::ClaimRewards {
+        reward_claim: data.reward_claim_address,
+        lifetime_rewards: data.claim_input.lifetime_rewards,
+        auth_data: data.claim_input.auth_data.into(),
+    }))
+}
+
 #[cfg(test)]
 mod test {
     use alloy::primitives::{utils::parse_ether, U256};
+    use hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV2};
     use warp::Filter as _;
 
     use super::*;
-    use crate::{deploy::TestSystem, receipt::ReceiptExt};
+    use crate::{deploy::TestSystem, receipt::ReceiptExt as _, transaction::Transaction};
 
     #[tokio::test]
     async fn test_claim_withdrawal() -> Result<()> {
@@ -197,10 +169,11 @@ mod test {
         system.warp_to_unlock_time().await?;
 
         let validator_address = system.deployer_address;
-        let receipt = claim_withdrawal(&system.provider, system.stake_table, validator_address)
-            .await?
-            .assert_success()
-            .await?;
+        let tx = Transaction::ClaimWithdrawal {
+            stake_table: system.stake_table,
+            validator: validator_address,
+        };
+        let receipt = tx.send(&system.provider).await?.assert_success().await?;
 
         let event = receipt
             .decoded_log::<StakeTableV2::WithdrawalClaimed>()
@@ -220,10 +193,11 @@ mod test {
         system.warp_to_unlock_time().await?;
 
         let validator_address = system.deployer_address;
-        let receipt = claim_validator_exit(&system.provider, system.stake_table, validator_address)
-            .await?
-            .assert_success()
-            .await?;
+        let tx = Transaction::ClaimValidatorExit {
+            stake_table: system.stake_table,
+            validator: validator_address,
+        };
+        let receipt = tx.send(&system.provider).await?.assert_success().await?;
 
         let event = receipt
             .decoded_log::<StakeTableV2::ValidatorExitClaimed>()
@@ -244,15 +218,16 @@ mod test {
 
         let balance_before = system.balance(system.deployer_address).await?;
 
-        let receipt = claim_reward(
+        let tx = fetch_claim_rewards_inputs(
             &system.provider,
             system.stake_table,
-            espresso_url,
+            &espresso_url,
             system.deployer_address,
         )
         .await?
-        .assert_success()
-        .await?;
+        .expect("claim inputs should be available");
+
+        let receipt = tx.send(&system.provider).await?.assert_success().await?;
 
         let event = receipt
             .decoded_log::<RewardClaim::RewardsClaimed>()

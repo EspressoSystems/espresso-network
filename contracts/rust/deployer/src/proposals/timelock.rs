@@ -9,7 +9,7 @@ use hotshot_contract_adapter::sol_types::{
     EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
 };
 
-use crate::{Contract, Contracts, OwnableContract};
+use crate::{retry_until_true, Contract, Contracts, OwnableContract};
 
 /// Data structure for timelock operations
 #[derive(Debug, Clone)]
@@ -189,6 +189,17 @@ impl TimelockContract {
         }
     }
 
+    pub async fn is_operation_canceled(
+        &self,
+        operation_id: B256,
+        provider: &impl Provider,
+    ) -> Result<bool> {
+        let pending = self.is_operation_pending(operation_id, provider).await?;
+        let done = self.is_operation_done(operation_id, provider).await?;
+        // it's canceled if it's not pending and not done
+        Ok(!pending && !done)
+    }
+
     pub async fn execute(
         &self,
         operation: TimelockOperationData,
@@ -361,12 +372,17 @@ pub async fn schedule_timelock_operation(
         anyhow::bail!("tx failed: {:?}", receipt);
     }
 
-    // check that the tx is scheduled
-    if !(timelock
-        .is_operation_pending(operation_id, &provider)
-        .await?
-        || timelock.is_operation_ready(operation_id, &provider).await?)
-    {
+    // check that the tx is scheduled (with retry for RPC timing)
+    let check_name = format!("Schedule operation {}", operation_id);
+    let is_scheduled = retry_until_true(&check_name, || async {
+        Ok(timelock
+            .is_operation_pending(operation_id, &provider)
+            .await?
+            || timelock.is_operation_ready(operation_id, &provider).await?)
+    })
+    .await?;
+
+    if !is_scheduled {
         anyhow::bail!("tx not correctly scheduled: {}", operation_id);
     }
     tracing::info!("tx scheduled with id: {}", operation_id);
@@ -398,8 +414,14 @@ pub async fn execute_timelock_operation(
         anyhow::bail!("tx failed: {:?}", receipt);
     }
 
-    // check that the tx is executed
-    if !timelock.is_operation_done(operation_id, &provider).await? {
+    // check that the tx is executed (with retry for RPC timing)
+    let check_name = format!("Execute operation {}", operation_id);
+    let is_done = retry_until_true(&check_name, || async {
+        timelock.is_operation_done(operation_id, &provider).await
+    })
+    .await?;
+
+    if !is_done {
         anyhow::bail!("tx not correctly executed: {}", operation_id);
     }
     tracing::info!("tx executed with id: {}", operation_id);
@@ -428,6 +450,20 @@ pub async fn cancel_timelock_operation(
     if !receipt.inner.is_success() {
         anyhow::bail!("tx failed: {:?}", receipt);
     }
+
+    // check that the tx is cancelled (with retry for RPC timing)
+    let check_name = format!("Cancel operation {}", operation_id);
+    let is_cancelled = retry_until_true(&check_name, || async {
+        timelock
+            .is_operation_canceled(operation_id, &provider)
+            .await
+    })
+    .await?;
+
+    if !is_cancelled {
+        anyhow::bail!("tx not correctly cancelled: {}", operation_id);
+    }
+
     tracing::info!("tx cancelled with id: {}", operation_id);
     Ok(operation_id)
 }

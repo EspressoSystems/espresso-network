@@ -255,6 +255,7 @@
             libusb1
             yarn
             mdbook
+            bc
 
             go
             golangci-lint

@@ -80,8 +80,8 @@ wait_for_version() {
     if is_valid_value "$minor" && is_valid_value "$height_from_header"; then
       echo "v0.${minor} height=${height_from_header}"
 
-      if [ "$minor" = "$target_minor" ]; then
-        echo "Version 0.${target_minor} detected at height ${height_from_header}!"
+      if [ "$minor" -ge "$target_minor" ]; then
+        echo "Version 0.${minor} (>= 0.${target_minor}) detected at height ${height_from_header}!"
         exit 0
       fi
     fi
