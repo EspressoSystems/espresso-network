@@ -34,11 +34,11 @@ while [[ $# -gt 0 ]]; do
             echo "    ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS"
             echo "    ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS"
             echo "    ESPRESSO_OPS_TIMELOCK_ADMIN"
-            echo "    ESPRESSO_OPS_TIMELOCK_PROPOSERS"
             echo "    ESPRESSO_OPS_TIMELOCK_EXECUTORS"
             echo "    ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN"
-            echo "    ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS"
             echo "    ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS"
+            echo "    MULTISIG_PROPOSER_1"
+            echo "    MULTISIG_PROPOSER_2"
             echo "    ESPRESSO_OPS_TIMELOCK_DELAY"
             echo "    ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY"
             echo "    ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS"
@@ -68,32 +68,87 @@ done
 OPS_DELAY_EXPECTED="${ESPRESSO_OPS_TIMELOCK_DELAY:-172800}"
 SAFE_EXIT_DELAY_EXPECTED="${ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY:-1209600}"
 
+# Known address registry (lowercase -> name)
+declare -A KNOWN_ADDRESSES
+
+register_address() {
+    local name="$1"
+    local addr="$2"
+    if [ -n "$addr" ]; then
+        local addr_lower=$(echo "$addr" | tr '[:upper:]' '[:lower:]')
+        KNOWN_ADDRESSES["$addr_lower"]="$name"
+    fi
+}
+
+resolve_address() {
+    local addr="$1"
+    local addr_lower=$(echo "$addr" | tr '[:upper:]' '[:lower:]')
+    local name="${KNOWN_ADDRESSES[$addr_lower]:-}"
+    if [ -n "$name" ]; then
+        echo "$name ($addr)"
+    else
+        echo "$addr"
+    fi
+}
+
+# Register known addresses from env vars
+register_address "OpsTimelock" "${ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS:-}"
+register_address "SafeExitTimelock" "${ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS:-}"
+register_address "EspToken" "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS:-}"
+register_address "FeeContract" "${ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS:-}"
+register_address "LightClient" "${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS:-}"
+register_address "StakeTable" "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}"
+register_address "RewardClaim" "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS:-}"
+register_address "Multisig" "${ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS:-}"
+register_address "PauserMultisig" "${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:-}"
+register_address "LabsMultisig" "${ESPRESSO_LABS_ETH_MULTISIG_ADDRESS:-}"
+register_address "OpsTimelockAdmin" "${ESPRESSO_OPS_TIMELOCK_ADMIN:-}"
+register_address "SafeExitTimelockAdmin" "${ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN:-}"
+register_address "ServiceCoMultisig" "${MULTISIG_PROPOSER_2:-}"
+# Hardcoded known addresses
+register_address "TokenCoMultisig" "0x3f7536c93B79685b7833C867109D803Dfe68523e"
+
 check_version() {
     local contract_addr="$1"
     local expected_major="$2"
     local name="$3"
     local version_output=$(cast call "$contract_addr" "getVersion()(uint8,uint8,uint8)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
     local major=$(echo "$version_output" | awk '{print $1}')
-    [ "$major" -eq "$expected_major" ] && echo -e "${GREEN}✓${NC} $name version: $version_output (V$expected_major)" || echo -e "${RED}✗${NC} $name version: $version_output (expected major version $expected_major)"
+    if [ "$major" -eq "$expected_major" ]; then
+        echo -e "${GREEN}✓${NC} $name version: $version_output (V$expected_major)"
+    else
+        echo -e "${RED}✗${NC} $name version: got $version_output, expected V$expected_major"
+    fi
 }
 
 check_has_role() {
     local contract_addr="$1"
     local role="$2"
     local address="$3"
-    local description="$4"
+    local role_name="$4"
     local has_role=$(cast call "$contract_addr" "hasRole(bytes32,address)(bool)" "$role" "$address" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
-    [ "$has_role" = "true" ] && echo -e "${GREEN}✓${NC} $description" || echo -e "${RED}✗${NC} $description mismatch: expected $address"
+    local resolved=$(resolve_address "$address")
+    if [ "$has_role" = "true" ]; then
+        echo -e "${GREEN}✓${NC} $role_name: $resolved"
+    else
+        echo -e "${RED}✗${NC} $role_name: $resolved does not have role"
+    fi
 }
 
 check_owner() {
     local contract_addr="$1"
     local expected_owner="$2"
-    local description="$3"
+    local contract_name="$3"
     local owner=$(cast call "$contract_addr" "owner()(address)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
     local owner_lower=$(echo "$owner" | tr '[:upper:]' '[:lower:]')
     local expected_owner_lower=$(echo "$expected_owner" | tr '[:upper:]' '[:lower:]')
-    [ "$owner_lower" = "$expected_owner_lower" ] && echo -e "${GREEN}✓${NC} $description" || echo -e "${RED}✗${NC} $description mismatch: expected $expected_owner"
+    local actual_resolved=$(resolve_address "$owner")
+    local expected_resolved=$(resolve_address "$expected_owner")
+    if [ "$owner_lower" = "$expected_owner_lower" ]; then
+        echo -e "${GREEN}✓${NC} $contract_name owner: $actual_resolved"
+    else
+        echo -e "${RED}✗${NC} $contract_name owner: got $actual_resolved, expected $expected_resolved"
+    fi
 }
 
 echo ""
@@ -126,64 +181,66 @@ fi
     OPS_DEFAULT_ADMIN_ROLE=$(cast call "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "DEFAULT_ADMIN_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
     OPS_PROPOSER_ROLE=$(cast call "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "PROPOSER_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
     OPS_EXECUTOR_ROLE=$(cast call "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "EXECUTOR_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
-    check_has_role "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "$OPS_DEFAULT_ADMIN_ROLE" "$ESPRESSO_OPS_TIMELOCK_ADMIN" "Ops Timelock admin: $ESPRESSO_OPS_TIMELOCK_ADMIN"
-    check_has_role "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "$OPS_PROPOSER_ROLE" "$ESPRESSO_OPS_TIMELOCK_PROPOSERS" "Ops Timelock proposer: $ESPRESSO_OPS_TIMELOCK_PROPOSERS"
-    check_has_role "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "$OPS_EXECUTOR_ROLE" "$ESPRESSO_OPS_TIMELOCK_EXECUTORS" "Ops Timelock executor: $ESPRESSO_OPS_TIMELOCK_EXECUTORS"
+    check_has_role "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "$OPS_DEFAULT_ADMIN_ROLE" "$ESPRESSO_OPS_TIMELOCK_ADMIN" "OpsTimelock admin"
+    [ -n "${MULTISIG_PROPOSER_1:-}" ] && check_has_role "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "$OPS_PROPOSER_ROLE" "$MULTISIG_PROPOSER_1" "OpsTimelock proposer (LabsMultisig)"
+    [ -n "${MULTISIG_PROPOSER_2:-}" ] && check_has_role "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "$OPS_PROPOSER_ROLE" "$MULTISIG_PROPOSER_2" "OpsTimelock proposer (ServiceCoMultisig)"
+    check_has_role "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "$OPS_EXECUTOR_ROLE" "$ESPRESSO_OPS_TIMELOCK_EXECUTORS" "OpsTimelock executor"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS not set, skipping Ops Timelock role checks"
 
 [ -n "${ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS:-}" ] && {
     SAFE_EXIT_DEFAULT_ADMIN_ROLE=$(cast call "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "DEFAULT_ADMIN_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
     SAFE_EXIT_PROPOSER_ROLE=$(cast call "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "PROPOSER_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
     SAFE_EXIT_EXECUTOR_ROLE=$(cast call "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "EXECUTOR_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
-    check_has_role "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "$SAFE_EXIT_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN" "SafeExit Timelock admin: $ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN"
-    check_has_role "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "$SAFE_EXIT_PROPOSER_ROLE" "$ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS" "SafeExit Timelock proposer: $ESPRESSO_SAFE_EXIT_TIMELOCK_PROPOSERS"
-    check_has_role "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "$SAFE_EXIT_EXECUTOR_ROLE" "$ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS" "SafeExit Timelock executor: $ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS"
+    check_has_role "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "$SAFE_EXIT_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN" "SafeExitTimelock admin"
+    [ -n "${MULTISIG_PROPOSER_1:-}" ] && check_has_role "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "$SAFE_EXIT_PROPOSER_ROLE" "$MULTISIG_PROPOSER_1" "SafeExitTimelock proposer (LabsMultisig)"
+    [ -n "${MULTISIG_PROPOSER_2:-}" ] && check_has_role "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "$SAFE_EXIT_PROPOSER_ROLE" "$MULTISIG_PROPOSER_2" "SafeExitTimelock proposer (ServiceCoMultisig)"
+    check_has_role "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "$SAFE_EXIT_EXECUTOR_ROLE" "$ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS" "SafeExitTimelock executor"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS not set, skipping SafeExit Timelock role checks"
 
 echo ""
 
 # Check contract ownership
 [ -n "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS:-}" ] && {
-    check_owner "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "EspToken owned by SafeExit Timelock: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
+    check_owner "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "EspToken"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS not set, skipping EspToken ownership check"
 
 [ -n "${ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS:-}" ] && {
-    check_owner "$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "FeeContract owned by Ops Timelock: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+    check_owner "$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "FeeContract"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS not set, skipping FeeContract ownership check"
 
 [ -n "${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS:-}" ] && {
-    check_owner "$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "LightClient owned by Ops Timelock: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+    check_owner "$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "LightClient"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS not set, skipping LightClient ownership check"
 
 [ -n "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS:-}" ] && {
-    check_owner "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "StakeTable owned by Ops Timelock: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+    check_owner "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "StakeTable"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS not set, skipping StakeTable ownership check"
 
 # Check admin roles
 [ -n "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}" ] && {
     ST_DEFAULT_ADMIN_ROLE=$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "DEFAULT_ADMIN_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
-    check_has_role "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ST_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "StakeTable admin: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+    check_has_role "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ST_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS" "StakeTable admin"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS not set, skipping StakeTable admin check"
 
 [ -n "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && {
     RC_DEFAULT_ADMIN_ROLE=$(cast call "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "DEFAULT_ADMIN_ROLE()(bytes32)" --rpc-url "$RPC_URL" 2>/dev/null | tr '\n' ' ' | xargs)
-    check_has_role "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "$RC_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "RewardClaim admin: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
+    check_has_role "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "$RC_DEFAULT_ADMIN_ROLE" "$ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS" "RewardClaim admin"
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS not set, skipping RewardClaim admin check"
 
 # Check pauser roles
 [ -n "${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:-}" ] && {
     [ -n "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}" ] && {
         ST_PAUSER_ROLE=$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "PAUSER_ROLE()(bytes32)" --rpc-url "$RPC_URL")
-        check_has_role "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ST_PAUSER_ROLE" "$ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS" "Multisig has PAUSER_ROLE on StakeTable: $ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS"
+        check_has_role "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "$ST_PAUSER_ROLE" "$ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS" "StakeTable pauser"
     }
     [ -n "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && {
         RC_PAUSER_ROLE=$(cast call "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "PAUSER_ROLE()(bytes32)" --rpc-url "$RPC_URL")
-        check_has_role "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "$RC_PAUSER_ROLE" "$ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS" "Multisig has PAUSER_ROLE on RewardClaim: $ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS"
+        check_has_role "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" "$RC_PAUSER_ROLE" "$ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS" "RewardClaim pauser"
     }
 } || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS not set, skipping pauser role checks"
 
 # Check contract versions
-[ -n "${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS" 3 "LightClient" || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS not set, skipping version check"
+[ -n "${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS" 1 "LightClient" || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS not set, skipping version check"
 [ -n "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" 2 "EspToken" || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS not set, skipping version check"
 [ -n "${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" 2 "StakeTable" || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS not set, skipping version check"
 [ -n "${ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS" 1 "RewardClaim" || echo -e "${YELLOW}⚠${NC} ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS not set, skipping version check"
@@ -202,12 +259,31 @@ echo ""
     [ "$RC_ESP_TOKEN_LOWER" = "$ESP_TOKEN_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} RewardClaim espToken: $RC_ESP_TOKEN" || echo -e "${RED}✗${NC} RewardClaim espToken: $RC_ESP_TOKEN (expected $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS)"
 }
 
-# Check token supply
+# Check token supply and grant recipient balance
 if [ -n "${ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS:-}" ]; then
     if [ -n "${ESP_TOKEN_INITIAL_SUPPLY:-}" ]; then
+        # Convert ESP to WEI (18 decimals)
+        EXPECTED_SUPPLY_WEI=$(echo "$ESP_TOKEN_INITIAL_SUPPLY * 10^18" | bc)
+
         ESP_TOKEN_SUPPLY=$(cast call "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" "totalSupply()(uint256)" --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1}')
-        ESP_INITIAL_SUPPLY_IN_WEI=$(echo "$ESP_TOKEN_INITIAL_SUPPLY * 10^18" | bc)
-        [ $(echo "$ESP_TOKEN_SUPPLY == $ESP_INITIAL_SUPPLY_IN_WEI" | bc) -eq 1 ] && echo -e "${GREEN}✓${NC} EspToken supply: $ESP_TOKEN_SUPPLY" || echo -e "${RED}✗${NC} EspToken supply: $ESP_TOKEN_SUPPLY (expected $ESP_INITIAL_SUPPLY_IN_WEI)"
+        if [ "$ESP_TOKEN_SUPPLY" = "$EXPECTED_SUPPLY_WEI" ]; then
+            echo -e "${GREEN}✓${NC} EspToken supply: $ESP_TOKEN_SUPPLY ($ESP_TOKEN_INITIAL_SUPPLY ESP)"
+        else
+            echo -e "${RED}✗${NC} EspToken supply: got $ESP_TOKEN_SUPPLY, expected $EXPECTED_SUPPLY_WEI ($ESP_TOKEN_INITIAL_SUPPLY ESP)"
+        fi
+
+        # Check grant recipient balance equals total supply
+        if [ -n "${ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS:-}" ]; then
+            GRANT_RECIPIENT_BALANCE=$(cast call "$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS" "balanceOf(address)(uint256)" "$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS" --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1}')
+            RECIPIENT_RESOLVED=$(resolve_address "$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")
+            if [ "$GRANT_RECIPIENT_BALANCE" = "$EXPECTED_SUPPLY_WEI" ]; then
+                echo -e "${GREEN}✓${NC} Grant recipient balance: $RECIPIENT_RESOLVED has $ESP_TOKEN_INITIAL_SUPPLY ESP"
+            else
+                echo -e "${RED}✗${NC} Grant recipient balance: $RECIPIENT_RESOLVED has $GRANT_RECIPIENT_BALANCE WEI, expected $EXPECTED_SUPPLY_WEI ($ESP_TOKEN_INITIAL_SUPPLY ESP)"
+            fi
+        else
+            echo -e "${YELLOW}⚠${NC} ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS not set, skipping balance check"
+        fi
     else
         echo -e "${YELLOW}⚠${NC} ESP_TOKEN_INITIAL_SUPPLY not set, skipping supply check"
     fi
