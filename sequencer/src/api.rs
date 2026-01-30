@@ -1252,8 +1252,11 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
 }
 
 #[derive(Serialize, Deserialize)]
+/// Representations of the RewardMerkleTreeV2 that can be used to reconstruct it.
 pub(crate) enum RewardMerkleTreeV2Data {
+    // The raw RewardMerkleTreeV2, used as a fallback
     Tree(RewardMerkleTreeV2),
+    // The full set of reward accounts and balances, which can be used to rebuild the tree
     Balances(Vec<(RewardAccountV2, RewardAmount)>),
 }
 
@@ -1270,6 +1273,11 @@ impl Into<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
         if balances.len() as u64 == num_leaves {
             RewardMerkleTreeV2Data::Balances(balances)
         } else {
+            tracing::error!(
+                "Attempted to serialize an incomplete RewardMerkleTreeV2 in the state storage \
+                 loop. This is not a fatal error, but it should never happen and indicates that \
+                 something may be seriously wrong."
+            );
             RewardMerkleTreeV2Data::Tree(self.clone())
         }
     }
