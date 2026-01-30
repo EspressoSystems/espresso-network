@@ -63,9 +63,7 @@ use hotshot_types::{
     data::Leaf2,
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
-    simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate2, SuccessThreshold, UpgradeCertificate,
-    },
+    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
