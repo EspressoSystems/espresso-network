@@ -1178,7 +1178,7 @@ impl EpochRewardsCalculator {
         };
 
         // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.stake_table_for_epoch(Some(epoch)).await {
+        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
                 .wait_for_catchup(epoch)
