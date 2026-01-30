@@ -493,6 +493,22 @@ where
         }
         .boxed()
     })?
+    .at("current_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.current_vote_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("previous_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.previous_vote_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
     .at("get_block_reward", |req, state| {
         async move {
             let epoch = req
