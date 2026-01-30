@@ -21,6 +21,7 @@ use hotshot_types::{
     traits::{election::Membership, node_implementation::ConsensusTime},
     utils::epoch_from_block_number,
 };
+use itertools::Itertools;
 use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
@@ -1190,6 +1191,7 @@ impl EpochRewardsCalculator {
         let validators: Vec<_> = membership
             .stake_table(Some(epoch))
             .iter()
+            .sorted_by(|a, b| a.stake_table_entry.key().cmp(b.stake_table_entry.key()))
             .filter_map(|entry| {
                 membership
                     .get_validator_config(&epoch, entry.stake_table_entry.stake_key)

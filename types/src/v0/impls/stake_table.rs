@@ -1770,9 +1770,13 @@ impl EpochCommittees {
     ///
     /// The index corresponds to the position in the `leader_counts` array in V6 headers.
     pub fn get_validator_index(&self, epoch: &EpochNumber, bls_key: &PubKey) -> Option<usize> {
-        self.state
-            .get(epoch)
-            .and_then(|committee| committee.stake_table.keys().position(|k| k == bls_key))
+        self.state.get(epoch).and_then(|committee| {
+            committee
+                .stake_table
+                .iter()
+                .sorted_by(|a, b| a.1.stake_table_entry.key().cmp(b.1.stake_table_entry.key()))
+                .position(|k| k.0 == bls_key)
+        })
     }
 
     /// Get validator by index in the epoch's stake table.
