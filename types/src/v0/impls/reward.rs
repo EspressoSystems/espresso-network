@@ -21,6 +21,7 @@ use hotshot_types::{
     traits::{election::Membership, node_implementation::ConsensusTime},
     utils::epoch_from_block_number,
 };
+use itertools::Itertools;
 use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
@@ -1162,6 +1163,7 @@ impl EpochRewardsCalculator {
                 %epoch,
                 header_height = header.height(),
                 header_version = %header.version(),
+                header_reward_merkle_tree_root = %header.reward_merkle_tree_root(),
                 "fetch_and_calculate: fetched header"
             );
 
@@ -1177,7 +1179,7 @@ impl EpochRewardsCalculator {
         };
 
         // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.stake_table_for_epoch(Some(epoch)).await {
+        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
                 .wait_for_catchup(epoch)
@@ -1189,6 +1191,7 @@ impl EpochRewardsCalculator {
         let validators: Vec<_> = membership
             .stake_table(Some(epoch))
             .iter()
+            .sorted_by(|a, b| a.stake_table_entry.key().cmp(b.stake_table_entry.key()))
             .filter_map(|entry| {
                 membership
                     .get_validator_config(&epoch, entry.stake_table_entry.stake_key)
@@ -1237,11 +1240,9 @@ impl EpochRewardsCalculator {
             // Fetch all reward accounts at the height just before this epoch
             // This fetches from the reward_state table which stores all account balances
 
-            let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
-
             tracing::info!(
                 %epoch,
-                catchup_height,
+                epoch_last_block_height,
                 "fetching all reward accounts from peers to rebuild tree"
             );
 
@@ -1254,12 +1255,12 @@ impl EpochRewardsCalculator {
                 let accounts = instance_state
                     .state_catchup
                     .as_ref()
-                    .fetch_all_reward_accounts(catchup_height, offset, limit)
+                    .fetch_all_reward_accounts(epoch_last_block_height, offset, limit)
                     .await
                     .with_context(|| {
                         format!(
-                            "failed to fetch reward accounts at height {catchup_height}, offset \
-                             {offset}"
+                            "failed to fetch reward accounts at height {epoch_last_block_height}, \
+                             offset {offset}"
                         )
                     })?;
 

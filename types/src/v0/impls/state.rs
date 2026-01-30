@@ -1075,6 +1075,7 @@ impl ValidatedState {
                 &leader_counts,
                 instance,
                 &mut validated_state,
+                proposed_header.reward_merkle_tree_root().right(),
             )
             .await?;
 
