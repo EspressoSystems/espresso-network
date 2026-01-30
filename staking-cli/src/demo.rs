@@ -5,13 +5,16 @@ use std::{
 
 use alloy::{
     contract::Error as ContractError,
-    network::{Ethereum, EthereumWallet},
+    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
     primitives::{
         utils::{format_ether, parse_ether},
         Address, U256,
     },
     providers::{PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider},
-    rpc::{client::RpcClient, types::TransactionReceipt},
+    rpc::{
+        client::RpcClient,
+        types::{TransactionReceipt, TransactionRequest},
+    },
     signers::local::PrivateKeySigner,
     transports::{http::Http, TransportError},
 };
@@ -19,7 +22,10 @@ use anyhow::Result;
 use clap::ValueEnum;
 use espresso_contract_deployer::{build_provider, build_signer, HttpProviderWithWallet};
 use futures_util::future;
-use hotshot_contract_adapter::sol_types::EspToken;
+use hotshot_contract_adapter::{
+    sol_types::{EspToken, StakeTableV2},
+    stake_table::StakeTableContractVersion,
+};
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -27,13 +33,11 @@ use thiserror::Error;
 use url::Url;
 
 use crate::{
-    delegation::{approve, delegate},
-    funding::{send_esp, send_eth},
     info::fetch_token_address,
     parse::{parse_bls_priv_key, parse_state_priv_key, Commission, ParseCommissionError},
     receipt::ReceiptExt as _,
-    registration::register_validator,
     signature::NodeSignatures,
+    transaction::Transaction,
     Config,
 };
 
@@ -57,6 +61,8 @@ pub enum CreateTransactionsError {
         need: String,
         recipients: usize,
     },
+    #[error("delegation amount {amount} ESP is below minimum of {min} ESP")]
+    DelegationBelowMinimum { amount: String, min: String },
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
@@ -207,6 +213,7 @@ struct TransactionProcessor<P> {
     funder: P,
     stake_table: Address,
     token: Address,
+    version: StakeTableContractVersion,
 }
 
 impl<P: Provider + Clone> TransactionProcessor<P> {
@@ -218,9 +225,18 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
 
     async fn send_next(&self, tx: StakeTableTx) -> Result<PendingTransactionBuilder<Ethereum>> {
         match tx {
-            StakeTableTx::SendEth { to, amount } => send_eth(&self.funder, to, amount).await,
+            StakeTableTx::SendEth { to, amount } => {
+                let tx = TransactionRequest::default().with_to(to).with_value(amount);
+                Ok(self.funder.send_transaction(tx).await?)
+            },
             StakeTableTx::SendEsp { to, amount } => {
-                send_esp(&self.funder, self.token, to, amount).await
+                Transaction::Transfer {
+                    token: self.token,
+                    to,
+                    amount,
+                }
+                .send(&self.funder)
+                .await
             },
             StakeTableTx::RegisterValidator {
                 from,
@@ -228,23 +244,38 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                 payload,
             } => {
                 let metadata_uri = "https://example.com/metadata".parse()?;
-                register_validator(
-                    self.provider(from)?,
-                    self.stake_table,
+                Transaction::RegisterValidator {
+                    stake_table: self.stake_table,
                     commission,
                     metadata_uri,
-                    *payload,
-                )
+                    payload: *payload,
+                    version: self.version,
+                }
+                .send(self.provider(from)?)
                 .await
             },
             StakeTableTx::Approve { from, amount } => {
-                approve(self.provider(from)?, self.token, self.stake_table, amount).await
+                Transaction::Approve {
+                    token: self.token,
+                    spender: self.stake_table,
+                    amount,
+                }
+                .send(self.provider(from)?)
+                .await
             },
             StakeTableTx::Delegate {
                 from,
                 validator,
                 amount,
-            } => delegate(self.provider(from)?, self.stake_table, validator, amount).await,
+            } => {
+                Transaction::Delegate {
+                    stake_table: self.stake_table,
+                    validator,
+                    amount,
+                }
+                .send(self.provider(from)?)
+                .await
+            },
         }
     }
 
@@ -527,6 +558,20 @@ impl StakingTransactions<HttpProviderWithWallet> {
             }
         }
 
+        let st = StakeTableV2::new(stake_table, &token_holder_provider);
+        let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
+        if let StakeTableContractVersion::V2 = version {
+            let min_delegate_amount = st.minDelegateAmount().call().await?;
+            for delegator in &delegator_info {
+                if delegator.delegate_amount < min_delegate_amount {
+                    return Err(CreateTransactionsError::DelegationBelowMinimum {
+                        amount: format_ether(delegator.delegate_amount),
+                        min: format_ether(min_delegate_amount),
+                    });
+                }
+            }
+        }
+
         let mut funding = VecDeque::new();
 
         let eth_recipients: HashSet<Address> = validator_info
@@ -620,6 +665,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
                 funder: token_holder_provider,
                 stake_table,
                 token,
+                version,
             },
             queues: TransactionQueues {
                 funding,
@@ -906,6 +952,37 @@ mod test {
             Failure::Esp => assert_matches!(err, CreateTransactionsError::InsufficientEsp { .. }),
             Failure::Eth => assert_matches!(err, CreateTransactionsError::InsufficientEth { .. }),
         };
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_delegation_below_minimum() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+
+        // Set min delegate amount higher than the demo amounts (100-500 ESP range)
+        let high_min = parse_ether("2000")?;
+        system.set_min_delegate_amount(high_min).await?;
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = vec![TestSystem::gen_keys(&mut rng)];
+
+        // create() only prepares transactions, it doesn't send any, so returning
+        // an error here guarantees no transactions were broadcast
+        let result = StakingTransactions::create(
+            system.rpc_url.clone(),
+            &system.provider,
+            system.stake_table,
+            keys,
+            None,
+            DelegationConfig::EqualAmounts,
+        )
+        .await;
+
+        assert_matches!(
+            result,
+            Err(CreateTransactionsError::DelegationBelowMinimum { .. })
+        );
 
         Ok(())
     }

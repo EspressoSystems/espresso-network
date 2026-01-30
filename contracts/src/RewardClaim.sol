@@ -18,11 +18,21 @@ import "./interfaces/IRewardClaim.sol";
 /// @title RewardClaim - Espresso Reward Claim Contract
 /// @notice Allows validators and delegators to claim ESP token rewards based on cryptographic
 /// proofs from the Espresso network.
+///
+/// @notice Daily Limit Fairness: This contract enforces daily claim limits on a first-come,
+/// first-served basis. Once the limit is reached, remaining claimers must wait until the next day.
+/// In unlikely but not impossible scenarios they may be unable to claim for multiple days. The
+/// limit (default 1%, max 5% of supply) is set high enough that it should never be reached under
+/// normal operation. This is a simple defense-in-depth mechanism to limit potential damage in the
+/// unlikely case an attacker is able to circumvent authentication of reward claims. It is not a
+/// mechanism to throttle rate of withdrawals under normal operation. Stakers are encouraged to
+/// claim their rewards periodically and take advantage of staking their rewards.
+///
 /// @dev Governance Architecture:
 /// This contract uses ONLY AccessControlUpgradeable.
 /// - DEFAULT_ADMIN_ROLE: Can upgrade contract, manage roles, update daily limits
 /// - PAUSER_ROLE: Can pause/unpause user facing methods in the contract during emergencies
-/// Governance: This contract enforces a single-admin model. `_currentAdmin` and
+/// Governance: This contract enforces a single-admin model. `currentAdmin` and
 /// `DEFAULT_ADMIN_ROLE` always reference the same address and can only be changed via
 /// `grantRole(DEFAULT_ADMIN_ROLE, ...)`. Any attempt to revoke or renounce the default admin role
 /// reverts so that there is always a single admin.
@@ -66,6 +76,9 @@ contract RewardClaim is
     /// intentional to ensure careful consideration and governance of security parameters.
     uint256 public constant MAX_DAILY_LIMIT_BASIS_POINTS = 500; // 5%
 
+    /// @notice Basis points denominator (100% = 10000 bps)
+    uint256 public constant BPS_DENOMINATOR = 10000;
+
     /// @notice Current day number (days since epoch)
     uint256 private _currentDay;
 
@@ -85,7 +98,15 @@ contract RewardClaim is
 
     /// @notice Current admin address with DEFAULT_ADMIN_ROLE
     /// @dev Tracks the single admin to enforce single-admin invariant
-    address private _currentAdmin;
+    address public currentAdmin;
+
+    /// @notice Total amount of rewards claimed across all users
+    ///
+    /// @notice Enables convenient monitoring of unclaimed rewards by subtracting `totalClaimed`
+    /// from `total_reward_distributed` in the Espresso block header. As long as the total unclaimed
+    /// rewards is less than the daily limit, honest claims are guaranteed to never exceed the daily
+    /// limit.
+    uint256 public totalClaimed;
 
     /// @notice The daily limit is updated
     event DailyLimitUpdated(uint256 oldLimit, uint256 newLimit);
@@ -146,7 +167,7 @@ contract RewardClaim is
 
         // Set initial daily limit to 1% (100 basis points) of total supply
         uint256 initialBps = 100; // 1%
-        uint256 _dailyLimit = (totalSupply * initialBps) / 10000;
+        uint256 _dailyLimit = (totalSupply * initialBps) / BPS_DENOMINATOR;
         require(_dailyLimit > 0, ZeroDailyLimit());
 
         __UUPSUpgradeable_init();
@@ -155,7 +176,7 @@ contract RewardClaim is
         __ReentrancyGuard_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _currentAdmin = _admin;
+        currentAdmin = _admin;
         _grantRole(PAUSER_ROLE, _pauser);
 
         espToken = EspTokenV2(_espToken);
@@ -192,7 +213,7 @@ contract RewardClaim is
     {
         require(basisPoints > 0, ZeroDailyLimit());
         require(basisPoints <= MAX_DAILY_LIMIT_BASIS_POINTS, DailyLimitTooHigh());
-        uint256 newLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 newLimit = (espToken.totalSupply() * basisPoints) / BPS_DENOMINATOR;
         require(newLimit > 0, ZeroDailyLimit());
 
         // Due to computation based on current total supply, the new limit is very unlikely to be
@@ -233,6 +254,7 @@ contract RewardClaim is
         require(_verifyAuthRoot(lifetimeRewards, authData), InvalidAuthRoot());
 
         claimedRewards[claimer] = lifetimeRewards;
+        totalClaimed += amountToClaim;
 
         espToken.mint(claimer, amountToClaim);
 
@@ -248,6 +270,7 @@ contract RewardClaim is
         return (1, 0, 0);
     }
 
+    /// @dev See "Daily Limit Fairness" in contract docs.
     function _enforceDailyLimit(uint256 amount) internal virtual {
         uint256 today = block.timestamp / 1 days;
         if (today != _currentDay) {
@@ -280,11 +303,11 @@ contract RewardClaim is
     function grantRole(bytes32 role, address account) public virtual override {
         super.grantRole(role, account);
         if (role == DEFAULT_ADMIN_ROLE) {
-            address oldAdmin = _currentAdmin;
+            address oldAdmin = currentAdmin;
             if (oldAdmin == account) {
                 return;
             }
-            _currentAdmin = account;
+            currentAdmin = account;
             // revoke role from old admin so that there is always one admin
             if (oldAdmin != address(0)) {
                 _revokeRole(DEFAULT_ADMIN_ROLE, oldAdmin);
@@ -321,6 +344,7 @@ contract RewardClaim is
         (bytes32[160] memory proof, bytes32[7] memory authRootInputs) =
             abi.decode(authData, (bytes32[160], bytes32[7]));
 
+        // msg.sender cannot be zero, lifetimeRewards validated non-zero in claimRewards()
         bytes32 rewardCommitment =
             RewardMerkleTreeVerifier.computeRoot(msg.sender, lifetimeRewards, proof);
         bytes32 authRoot = keccak256(

@@ -29,9 +29,9 @@ pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal,
+        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
+        VidDisperseShare1, VidDisperseShare2,
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
@@ -310,7 +310,7 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Initiate VID dispersal.
     ///
     /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
-    VidDisperseMsg(Proposal<TYPES, ADVZDisperseShare<TYPES>>),
+    VidDisperseMsg(Proposal<TYPES, VidDisperseShare0<TYPES>>),
 
     /// Proposal for data availability committee
     DaProposal2(Proposal<TYPES, DaProposal2<TYPES>>),
@@ -321,9 +321,10 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Certificate data is available
     DaCertificate2(DaCertificate2<TYPES>),
 
-    /// Initiate VID dispersal.
-    ///
-    /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
+    /// VID dispersal for AvidM Scheme.
+    VidDisperseMsg1(Proposal<TYPES, VidDisperseShare1<TYPES>>),
+
+    /// VID dispersal for AvidmGf2 Scheme.
     VidDisperseMsg2(Proposal<TYPES, VidDisperseShare2<TYPES>>),
 }
 
@@ -431,6 +432,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     DaConsensusMessage::DaVote2(vote_message) => vote_message.view_number(),
                     DaConsensusMessage::DaCertificate2(cert) => cert.view_number,
+                    DaConsensusMessage::VidDisperseMsg1(disperse) => disperse.data.view_number(),
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.view_number(),
                 }
             },
@@ -507,6 +509,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     DaConsensusMessage::DaVote(vote_message) => vote_message.epoch(),
                     DaConsensusMessage::DaCertificate(cert) => cert.epoch(),
                     DaConsensusMessage::VidDisperseMsg(disperse) => disperse.data.epoch(),
+                    DaConsensusMessage::VidDisperseMsg1(disperse) => disperse.data.epoch(),
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.epoch(),
                     DaConsensusMessage::DaProposal2(p) => {
                         // view of leader in the leaf when proposal
@@ -717,6 +720,10 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     /// Return whether epochs are enabled in the given view
     pub async fn upgraded_drb_and_header(&self, view: TYPES::View) -> bool {
         self.version_infallible(view).await >= V::DrbAndHeaderUpgrade::VERSION
+    }
+
+    pub async fn upgraded_vid2(&self, view: TYPES::View) -> bool {
+        self.version_infallible(view).await >= V::Vid2Upgrade::VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.

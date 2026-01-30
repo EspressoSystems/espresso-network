@@ -12,6 +12,8 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardClaimError},
     FeeAccount, FeeMerkleTree, PubKey, Transaction,
 };
+
+use crate::{api::data_source::TokenDataSource, U256};
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
 #[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
@@ -290,6 +292,47 @@ where
         SequencerApiVersion::instance(),
         api_ver,
     )?;
+    Ok(api)
+}
+
+pub(super) fn token<S>(api_ver: semver::Version) -> Result<Api<S, node::Error, StaticVersion<0, 1>>>
+where
+    S: 'static + Send + Sync + ReadState,
+    <S as ReadState>::State: Send
+        + Sync
+        + TokenDataSource<SeqTypes>
+        + NodeDataSource<SeqTypes>
+        + AvailabilityDataSource<SeqTypes>,
+{
+    // Extend the base API
+    let mut options = node::Options::default();
+    let extension = toml::from_str(include_str!("../../api/token.toml"))?;
+    options.extensions.push(extension);
+
+    // Create the base API with our extensions
+    let mut api =
+        node::define_api::<S, SeqTypes, _>(&options, SequencerApiVersion::instance(), api_ver)?;
+
+    // Tack on the application logic
+    api.at("get_total_minted_supply", |_, state| {
+        async move {
+            let value = state
+                .read(|state| state.get_total_supply_l1().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get total supply. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })?;
+
+            let scale = U256::from(10u64.pow(18));
+            let quotient = value / scale;
+            let remainder = value % scale;
+
+            Ok(format!("{quotient}.{remainder}"))
+        }
+        .boxed()
+    })?;
+
     Ok(api)
 }
 
@@ -658,6 +701,32 @@ where
 
             state
                 .get_reward_account_v2(&state.node_state().await, height, view, account)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .get("reward_amounts", move |req, state| {
+        async move {
+            let height = req
+                .integer_param::<_, u64>("height")
+                .map_err(Error::from_request_error)?;
+            let offset = req
+                .integer_param::<_, u64>("offset")
+                .map_err(Error::from_request_error)?;
+            let limit = req
+                .integer_param::<_, u64>("limit")
+                .map_err(Error::from_request_error)?;
+
+            if limit > 10_000 {
+                return Err(Error::catch_all(
+                    StatusCode::BAD_REQUEST,
+                    format!("limit {limit} exceeds maximum allowed 10000"),
+                ));
+            }
+
+            state
+                .get_all_reward_accounts(height, offset, limit)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
