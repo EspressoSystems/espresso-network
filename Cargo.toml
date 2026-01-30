@@ -12,6 +12,7 @@ members = [
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
+    "crates/cliquenet",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
     "crates/hotshot/builder-api",
@@ -56,6 +57,7 @@ default-members = [
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
+    "crates/cliquenet",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
@@ -118,14 +120,18 @@ async-once-cell = "0.5"
 async-trait = "0.1"
 base64 = "0.22"
 base64-bytes = "0.1"
+bimap = "0.6.3"
 bincode = "1.3.3"
 bitvec = { version = "1", features = ["serde"] }
 blake3 = "1.5"
+bytes = { version = "1.11.0", features = ["serde"] }
+bon = "3.8.2"
 cbor4ii = { version = "1.0", features = ["serde1"] }
 chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
+cliquenet = { path = "crates/cliquenet" }
 dashmap = "6"
 derive_builder = "0.20"
 derive_more = { version = "2.0", features = ["full"] }
@@ -144,8 +150,10 @@ libp2p-swarm-derive = { version = "0.35" }
 moka = { version = "0.12.12", features = ["future"] }
 memoize = { version = "0.4", features = ["full"] }
 multiaddr = { version = "0.18" }
+nohash-hasher = "0.2.0"
 num_cpus = "1"
 parking_lot = { version = "0.12", features = ["send_guard"] }
+quickcheck = "1.0"
 semver = "1"
 serde-inline-default = "0.2"
 serde_bytes = { version = "0.11" }
