@@ -235,6 +235,7 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
+            docker
             process-compose
             lazydocker # a docker compose TUI
             # `postgresql` defaults to an older version (15), so we select the latest version (16)
@@ -275,6 +276,9 @@
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
+
+            # Required for demo-native to run with docker-rootless
+            export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
 
             ${pre-commit.shellHook}
           '';
