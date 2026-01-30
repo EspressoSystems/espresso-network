@@ -220,6 +220,10 @@ struct Options {
     #[clap(short, long, name = "OUT", env = "ESPRESSO_DEPLOYER_OUT_PATH")]
     out: Option<PathBuf>,
 
+    /// Suppress stdout output when writing to file
+    #[clap(long, short = 'q')]
+    quiet: bool,
+
     #[clap(flatten)]
     contracts: DeployedContracts,
 
@@ -373,7 +377,8 @@ struct Options {
     #[clap(
         long,
         env = "ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES",
-        requires = "perform_timelock_operation"
+        requires = "perform_timelock_operation",
+        num_args = 0..
     )]
     function_values: Option<Vec<String>>,
 
@@ -392,6 +397,10 @@ struct Options {
         requires = "perform_timelock_operation"
     )]
     timelock_operation_delay: Option<u64>,
+
+    /// Option to upgrade fee contract v1 patch version
+    #[clap(long, default_value = "false")]
+    upgrade_fee_v1: bool,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -638,13 +647,11 @@ async fn main() -> anyhow::Result<()> {
             )
         })?;
         args_builder.timelock_operation_function_signature(function_signature);
-        let function_values = opt.function_values.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --function-values or ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES \
-                 env var when performing timelock operation"
-            )
-        })?;
+
+        // allow empty function_values for functions with no parameters
+        let function_values = opt.function_values.unwrap_or_default();
         args_builder.timelock_operation_function_values(function_values);
+
         let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env \
@@ -774,6 +781,10 @@ async fn main() -> anyhow::Result<()> {
         args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
+    if opt.upgrade_fee_v1 {
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+    }
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()
@@ -782,6 +793,10 @@ async fn main() -> anyhow::Result<()> {
             .write(true)
             .open(out)?;
         contracts.write(file)?;
+        // Also write to stdout so users can see output immediately
+        if !opt.quiet {
+            contracts.write(stdout())?;
+        }
     } else {
         contracts.write(stdout())?;
     }

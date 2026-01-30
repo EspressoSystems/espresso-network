@@ -9,10 +9,7 @@ use alloy::{
 };
 use anyhow::bail;
 use clap::Args;
-use hotshot_contract_adapter::{
-    sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol},
-    stake_table::{self, StateSignatureSol},
-};
+use hotshot_contract_adapter::stake_table;
 use hotshot_types::{
     light_client::{StateKeyPair, StateSignature, StateVerKey},
     signature_key::BLSPubKey,
@@ -37,21 +34,6 @@ pub struct NodeSignatures {
     pub schnorr_vk: StateVerKey,
     /// Schnorr signature over the address
     pub schnorr_signature: StateSignature,
-}
-
-/// Only used for serialization to Solidity.
-#[derive(Clone, Debug)]
-pub struct NodeSignaturesSol {
-    /// The Ethereum address that was signed
-    pub address: Address,
-    /// BLS verification key
-    pub bls_vk: G2PointSol,
-    /// BLS signature over the address
-    pub bls_signature: G1PointSol,
-    /// Schnorr verification key
-    pub schnorr_vk: EdOnBN254PointSol,
-    /// Schnorr signature over the address
-    pub schnorr_signature: StateSignatureSol,
 }
 
 /// Represents either keys for signing or a pre-prepared node signature source
@@ -122,7 +104,7 @@ pub struct NodeSignatureArgs {
 }
 
 /// Clap arguments for output operations
-#[derive(Args, Clone, Debug)]
+#[derive(Args, Clone, Debug, Default)]
 pub struct OutputArgs {
     /// Output file path. If not specified, outputs to stdout
     #[clap(long)]
@@ -145,18 +127,6 @@ impl TryFrom<&Path> for SerializationFormat {
                 "Unsupported extension in path '{}'. Expected .json or .toml",
                 path.display()
             ),
-        }
-    }
-}
-
-impl From<NodeSignatures> for NodeSignaturesSol {
-    fn from(payload: NodeSignatures) -> Self {
-        Self {
-            address: payload.address,
-            bls_vk: payload.bls_vk.to_affine().into(),
-            bls_signature: payload.bls_signature.into(),
-            schnorr_vk: payload.schnorr_vk.into(),
-            schnorr_signature: payload.schnorr_signature.into(),
         }
     }
 }
@@ -306,13 +276,10 @@ impl TryFrom<NodeSignatureInput> for NodeSignatures {
     }
 }
 
-impl TryFrom<(NodeSignatureArgs, &EthereumWallet)> for NodeSignatureInput {
+impl TryFrom<(NodeSignatureArgs, Option<Address>)> for NodeSignatureInput {
     type Error = anyhow::Error;
 
-    fn try_from((args, wallet): (NodeSignatureArgs, &EthereumWallet)) -> anyhow::Result<Self> {
-        let wallet_address =
-            <EthereumWallet as NetworkWallet<Ethereum>>::default_signer_address(wallet);
-
+    fn try_from((args, address): (NodeSignatureArgs, Option<Address>)) -> anyhow::Result<Self> {
         if let Some(sig_path) = args.node_signatures {
             let source = NodeSignatureSource::parse(sig_path, args.format)?;
             Ok(Self::PreparedPayload(source))
@@ -323,9 +290,12 @@ impl TryFrom<(NodeSignatureArgs, &EthereumWallet)> for NodeSignatureInput {
             let Some(state_key) = args.state_private_key else {
                 bail!("state_private_key is required when not using node_signatures")
             };
+            let Some(address) = address else {
+                bail!("address is required when using direct keys")
+            };
 
             Ok(Self::Keys {
-                address: wallet_address,
+                address,
                 bls_key_pair: bls_key.into(),
                 schnorr_key_pair: StateKeyPair::from_sign_key(state_key),
             })

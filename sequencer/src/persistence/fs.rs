@@ -1843,10 +1843,6 @@ impl MembershipPersistence for Persistence {
         to_l1_block: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        if events.is_empty() {
-            return Ok(());
-        }
-
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
         let events_dir = dir_path.join("events");
@@ -2710,5 +2706,24 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_events_empty() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        assert_eq!(storage.load_events(0, 100).await.unwrap(), (None, vec![]));
+
+        // Storing an empty events list still updates the latest L1 block.
+        for i in 1..=2 {
+            tracing::info!(i, "update l1 height");
+            storage.store_events(i, vec![]).await.unwrap();
+            assert_eq!(
+                storage.load_events(0, 100).await.unwrap(),
+                (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
+            );
+        }
     }
 }
