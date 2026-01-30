@@ -70,3 +70,6 @@ pub mod stats;
 
 /// Task for storing blocks
 pub mod block_storer;
+
+/// Task for reconstructing blocks
+pub mod reconstruct;

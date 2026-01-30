@@ -20,6 +20,7 @@ use hotshot_task_impls::{
     quorum_proposal::QuorumProposalTaskState,
     quorum_proposal_recv::QuorumProposalRecvTaskState,
     quorum_vote::QuorumVoteTaskState,
+    reconstruct::ReconstructTaskState,
     request::NetworkRequestState,
     rewind::RewindTaskState,
     stats::StatsTaskState,
@@ -157,6 +158,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             private_key: handle.private_key().clone(),
             public_key: handle.public_key().clone(),
             membership_coordinator: handle.membership_coordinator.clone(),
+            consensus: OuterConsensus::new(handle.hotshot.consensus()),
+        }
+    }
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+    for ReconstructTaskState<TYPES>
+{
+    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+        Self {
+            event_stream: handle.internal_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
         }
     }

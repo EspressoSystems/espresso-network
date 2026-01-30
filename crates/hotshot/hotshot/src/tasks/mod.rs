@@ -26,6 +26,7 @@ use hotshot_task_impls::{
     block_storer::BlockStorerTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
+    reconstruct::ReconstructTaskState,
     request::NetworkRequestState,
     response::{run_response_task, NetworkResponseState},
     stats::StatsTaskState,
@@ -257,6 +258,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
     handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
     handle.add_task(BlockStorerTaskState::<TYPES, I>::create_from(handle).await);
+    handle.add_task(ReconstructTaskState::<TYPES>::create_from(handle).await);
     handle.add_task(BlockTaskState::<TYPES, V>::create_from(handle).await);
     // handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
 
