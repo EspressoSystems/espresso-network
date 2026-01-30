@@ -157,6 +157,7 @@ where
         ConsensusMetricsValue::default(),
         storage,
         StorageMetricsValue::default(),
+        None,
     )
     .await
     .expect("Could not init hotshot");

@@ -15,6 +15,7 @@ bincode = { workspace = true }
 bytemuck = { version = "1.19", features = ["derive"] }
 coarsetime = "0.1.34"
 committable = { workspace = true }
+csv = "1"
 derive_more = { workspace = true, features = ["deref", "deref_mut", "debug"] }
 futures = { workspace = true }
 hotshot = { workspace = true }
@@ -26,6 +27,7 @@ serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
 tide-disco = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -372,7 +372,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
     let validation_duration = now.elapsed();
-    tracing::debug!("Validation time: {validation_duration:?}");
+    tracing::error!("Validation time: {validation_duration:?}");
 
     let now = Instant::now();
     // Now that we've rounded everyone up, we need to update the shared state
@@ -469,7 +469,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     storage_metrics
         .append_vid_duration
         .add_point(append_vid_duration.as_secs_f64());
-    tracing::debug!("append_vid_general time: {append_vid_duration:?}");
+    tracing::warn!("append_vid_general time: {append_vid_duration:?}");
 
     // Make epoch root vote
 
@@ -540,7 +540,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .await;
     } else {
-        tracing::debug!(
+        tracing::info!(
             "sending vote to next quorum leader {:?}",
             vote.view_number() + 1
         );

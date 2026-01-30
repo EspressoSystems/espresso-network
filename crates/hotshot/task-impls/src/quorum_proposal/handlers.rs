@@ -14,6 +14,7 @@ use std::{
 };
 
 use async_broadcast::{Receiver, Sender};
+use collector_common::{send_trace, Trace};
 use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
@@ -546,6 +547,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 );
             }
         }
+        let now = Instant::now();
         let block_header = TYPES::BlockHeader::new(
             state.as_ref(),
             self.instance_state.as_ref(),
@@ -560,6 +562,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         .await
         .wrap()
         .context(warn!("Failed to construct block header"))?;
+        let block_header_duration = now.elapsed();
+        tracing::error!("Block header construction time: {block_header_duration:?}");
         let epoch = option_epoch_from_block_number::<TYPES>(
             version >= V::Epochs::VERSION,
             block_header.block_number(),
@@ -648,12 +652,17 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             signature,
             _pd: PhantomData,
         };
-        tracing::info!(
+        tracing::error!(
             "Sending proposal for view {}, height {}, justify_qc view: {}",
             proposed_leaf.view_number(),
             proposed_leaf.height(),
             proposed_leaf.justify_qc().view_number()
         );
+
+        // Send the trace when we generate the proposal event
+        let _ = send_trace(&Trace::ProposalSendEventGenerated(
+            *(proposed_leaf.view_number()),
+        ));
 
         broadcast_event(
             Arc::new(HotShotEvent::QuorumProposalSend(

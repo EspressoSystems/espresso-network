@@ -259,7 +259,7 @@ where
         let (payload, common) = match (payload, common) {
             (Some(payload), Some(common)) => (payload, common),
             _ => {
-                tracing::info!(%req_hash, "falling back to legacy payload deserialization");
+                tracing::error!(%req_hash, "falling back to legacy payload deserialization");
 
                 // fallback deserialization
                 return self

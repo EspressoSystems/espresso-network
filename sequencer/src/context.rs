@@ -108,6 +108,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         event_consumer: impl PersistenceEventConsumer + 'static,
         _: V,
         proposal_fetcher_cfg: ProposalFetcherConfig,
+        orchestrator_url: Option<Url>,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -152,6 +153,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             ConsensusMetricsValue::new(metrics),
             Arc::clone(&persistence),
             StorageMetricsValue::new(metrics),
+            orchestrator_url,
         )
         .await?
         .0;

@@ -4,14 +4,14 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidDisperse, VidDisperseAndDuration},
+    data::{PackedBundle, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
@@ -22,6 +22,8 @@ use hotshot_types::{
         BlockPayload,
     },
     utils::{is_epoch_transition, option_epoch_from_block_number},
+    vid::avidm_gf2::AvidmGf2Scheme,
+    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::Result;
 use tracing::{debug, error, info, instrument};
@@ -83,6 +85,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 } = packed_bundle;
                 let payload =
                     <TYPES as NodeType>::BlockPayload::from_bytes(encoded_transactions, metadata);
+                broadcast_event(
+                    Arc::new(HotShotEvent::BlockSend(
+                        PayloadWithMetadata {
+                            payload: payload.clone(),
+                            metadata: metadata.clone(),
+                        },
+                        *view_number,
+                    )),
+                    &event_stream,
+                )
+                .await;
                 let builder_commitment = payload.builder_commitment(metadata);
                 let epoch = self.cur_epoch;
                 if self
@@ -126,15 +139,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     .metrics
                     .vid_disperse_duration
                     .add_point(disperse_duration.as_secs_f64());
+                tracing::error!("Calculated VID disperse in {disperse_duration:?}");
                 // Make sure we save the payload; we might need it to send the next epoch VID shares.
-                if let Err(e) =
-                    consensus_writer.update_saved_payloads(*view_number, payload_with_metadata)
+                if let Err(e) = consensus_writer
+                    .update_saved_payloads(*view_number, payload_with_metadata.clone())
                 {
                     tracing::debug!(error=?e);
                 }
                 for share in vid_disperse.clone().to_shares() {
                     if let Some(share) = share.to_proposal(&self.private_key) {
-                        consensus_writer.update_vid_shares(*view_number, share);
+                        // update VID share it it's not our own, we can receive that one in the quorum vote task
+                        if *share.data.recipient_key() != self.public_key {
+                            consensus_writer.update_vid_shares(*view_number, share);
+                        }
                     }
                 }
                 drop(consensus_writer);
@@ -147,6 +164,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                         metadata.clone(),
                         *view_number,
                         sequencing_fees.clone(),
+                    )),
+                    &event_stream,
+                )
+                .await;
+                broadcast_event(
+                    Arc::new(HotShotEvent::BlockReady(
+                        payload_with_metadata,
+                        payload_commitment,
+                        *view_number,
                     )),
                     &event_stream,
                 )
