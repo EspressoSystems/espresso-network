@@ -22,7 +22,7 @@ hotshot-query-service = { path = "../hotshot-query-service" }
 light-client = { path = "../light-client", features = ["clap"] }
 log-panics = { workspace = true }
 semver = { workspace = true }
-sequencer = { path = "../sequencer" }
+sequencer = { path = "../sequencer", default-features = false }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
