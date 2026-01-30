@@ -1318,14 +1318,23 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 self.persist_tree(height, serialization).await?;
             }
 
+            // it's imperative that we do not block the state update loop from this point on.
+            // ultimately, we would retry in the next iteration anyway;
+            // all the information already exists.
             if height.is_multiple_of(30) {
-                let finalized_hotshot_height = node_state.finalized_hotshot_height().await?;
+                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
+                else {
+                    return Ok(());
+                };
 
                 // check to see whether we have proofs at that height already stored
                 if !self.proof_exists(finalized_hotshot_height).await {
-                    let tree = self
+                    let Ok(tree) = self
                         .load_reward_merkle_tree_v2(finalized_hotshot_height)
-                        .await?;
+                        .await
+                    else {
+                        return Ok(());
+                    };
 
                     // we try to be careful to avoid allocating for all the proofs immediately,
                     // but note that there are no guarantees here (if e.g. the database is slow)
@@ -1345,9 +1354,11 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                                 Some((serialized_account, serialized_proof))
                             });
 
-                    self.persist_proofs(finalized_hotshot_height, iter).await?;
+                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
+                        return Ok(());
+                    };
 
-                    self.garbage_collect(finalized_hotshot_height).await?;
+                    let _ = self.garbage_collect(finalized_hotshot_height).await;
                 }
             }
 
