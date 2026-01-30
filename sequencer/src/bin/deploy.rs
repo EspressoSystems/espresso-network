@@ -1,4 +1,10 @@
-use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
+use std::{
+    fs::File,
+    io::{stderr, stdout},
+    path::PathBuf,
+    thread::sleep,
+    time::Duration,
+};
 
 use alloy::{
     primitives::{
@@ -721,69 +727,83 @@ async fn main() -> anyhow::Result<()> {
     // then deploy specified contracts
     let args = args_builder.build()?;
 
-    // Deploy timelocks first so they can be used as owners for other contracts
-    if opt.deploy_ops_timelock {
-        args.deploy(&mut contracts, Contract::OpsTimelock).await?;
-    }
-    if opt.deploy_safe_exit_timelock {
-        args.deploy(&mut contracts, Contract::SafeExitTimelock)
-            .await?;
-    }
+    // Deploy contracts, outputting deployed addresses on failure for recovery
+    let deploy_result: anyhow::Result<()> = async {
+        // Deploy timelocks first so they can be used as owners for other contracts
+        if opt.deploy_ops_timelock {
+            args.deploy(&mut contracts, Contract::OpsTimelock).await?;
+        }
+        if opt.deploy_safe_exit_timelock {
+            args.deploy(&mut contracts, Contract::SafeExitTimelock)
+                .await?;
+        }
 
-    // Then deploy other contracts
-    if opt.deploy_fee || opt.deploy_fee_v1 {
-        args.deploy(&mut contracts, Contract::FeeContractProxy)
-            .await?;
-    }
-    if opt.deploy_esp_token || opt.deploy_esp_token_v1 {
-        args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
-    }
-    if opt.deploy_light_client_v1 {
-        args.deploy(&mut contracts, Contract::LightClientProxy)
-            .await?;
-    }
-    if opt.upgrade_light_client_v2 {
-        args.deploy(&mut contracts, Contract::LightClientV2).await?;
-    }
-    if opt.upgrade_light_client_v3 {
-        args.deploy(&mut contracts, Contract::LightClientV3).await?;
-    }
-    // Deploy RewardClaimProxy before upgrading EspTokenV2, as the upgrade requires it
-    if opt.deploy_reward_claim_v1 {
-        args.deploy(&mut contracts, Contract::RewardClaimProxy)
-            .await?;
-    }
-    if opt.upgrade_esp_token_v2 {
-        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
-    }
-    if opt.deploy_stake_table || opt.deploy_stake_table_v1 {
-        args.deploy(&mut contracts, Contract::StakeTableProxy)
-            .await?;
-    }
-    if opt.upgrade_stake_table_v2 {
-        args.deploy(&mut contracts, Contract::StakeTableV2).await?;
-    }
+        // Then deploy other contracts
+        if opt.deploy_fee || opt.deploy_fee_v1 {
+            args.deploy(&mut contracts, Contract::FeeContractProxy)
+                .await?;
+        }
+        if opt.deploy_esp_token || opt.deploy_esp_token_v1 {
+            args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
+        }
+        if opt.deploy_light_client_v1 {
+            args.deploy(&mut contracts, Contract::LightClientProxy)
+                .await?;
+        }
+        if opt.upgrade_light_client_v2 {
+            args.deploy(&mut contracts, Contract::LightClientV2).await?;
+        }
+        if opt.upgrade_light_client_v3 {
+            args.deploy(&mut contracts, Contract::LightClientV3).await?;
+        }
+        // Deploy RewardClaimProxy before upgrading EspTokenV2, as the upgrade requires it
+        if opt.deploy_reward_claim_v1 {
+            args.deploy(&mut contracts, Contract::RewardClaimProxy)
+                .await?;
+        }
+        if opt.upgrade_esp_token_v2 {
+            args.deploy(&mut contracts, Contract::EspTokenV2).await?;
+        }
+        if opt.deploy_stake_table || opt.deploy_stake_table_v1 {
+            args.deploy(&mut contracts, Contract::StakeTableProxy)
+                .await?;
+        }
+        if opt.upgrade_stake_table_v2 {
+            args.deploy(&mut contracts, Contract::StakeTableV2).await?;
+        }
 
-    // then perform the timelock operation if any
-    if opt.perform_timelock_operation {
-        args.perform_timelock_operation_on_contract(&mut contracts)
-            .await?;
-    }
+        // then perform the timelock operation if any
+        if opt.perform_timelock_operation {
+            args.perform_timelock_operation_on_contract(&mut contracts)
+                .await?;
+        }
 
-    // Execute ownership transfer proposal if requested
-    if opt.propose_transfer_ownership_to_timelock {
-        args.propose_transfer_ownership_to_timelock(&mut contracts)
-            .await?;
-    }
+        // Execute ownership transfer proposal if requested
+        if opt.propose_transfer_ownership_to_timelock {
+            args.propose_transfer_ownership_to_timelock(&mut contracts)
+                .await?;
+        }
 
-    // Execute ownership transfer when the admin is an EOA
-    if opt.transfer_ownership_from_eoa {
-        args.transfer_ownership_from_eoa(&mut contracts).await?;
-    }
+        // Execute ownership transfer when the admin is an EOA
+        if opt.transfer_ownership_from_eoa {
+            args.transfer_ownership_from_eoa(&mut contracts).await?;
+        }
 
-    if opt.upgrade_fee_v1 {
-        args.deploy(&mut contracts, Contract::FeeContractProxy)
-            .await?;
+        if opt.upgrade_fee_v1 {
+            args.deploy(&mut contracts, Contract::FeeContractProxy)
+                .await?;
+        }
+
+        Ok(())
+    }
+    .await;
+
+    // On failure, output deployed contracts to stderr for recovery
+    if let Err(e) = deploy_result {
+        eprintln!("\n# Deployment failed: {e}");
+        eprintln!("# Deployed contracts (use these env vars to resume):");
+        let _ = contracts.write(stderr());
+        return Err(e);
     }
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
