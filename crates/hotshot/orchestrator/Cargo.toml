@@ -13,6 +13,7 @@ clap = { workspace = true }
 csv = "1"
 futures = { workspace = true }
 hotshot-types = { workspace = true }
+itertools = { workspace = true }
 libp2p-identity = { workspace = true }
 multiaddr = { workspace = true }
 serde = { workspace = true }
