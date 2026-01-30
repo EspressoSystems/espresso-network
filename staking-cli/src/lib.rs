@@ -7,7 +7,6 @@ use alloy::{
 use anyhow::{bail, Result};
 use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
-use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
 pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
@@ -20,6 +19,7 @@ use url::Url;
 
 pub(crate) mod claim;
 mod cli;
+pub(crate) mod concurrent;
 pub(crate) mod delegation;
 /// Used by sequencer, espresso-dev-node, staking-ui-service tests.
 pub mod demo;
@@ -27,19 +27,33 @@ pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
 pub(crate) mod output;
-pub(crate) mod parse;
+/// Used by staking-cli tests (Commission).
+pub mod parse;
 pub(crate) mod receipt;
 /// Used by sequencer tests (fetch_commission, update_commission).
 pub mod registration;
 /// Used by staking-cli integration tests (NodeSignatures).
 pub mod signature;
-pub(crate) mod transaction;
+/// Used by staking-cli tests (Transaction).
+pub mod transaction;
+/// Used by staking-cli tests.
+pub mod tx_log;
 
 /// Used by staking-cli integration tests.
 #[cfg(feature = "testing")]
 pub mod deploy;
 
 pub use cli::run;
+
+pub fn default_tx_log_path() -> std::path::PathBuf {
+    let project_dir = directories::ProjectDirs::from("", "espresso", "espresso-staking-cli");
+    if let Some(project_dir) = project_dir {
+        project_dir.data_dir().join("tx_log.json")
+    } else {
+        tracing::warn!("Unable to find data directory, using current directory");
+        std::path::PathBuf::from("tx_log.json")
+    }
+}
 
 /// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -48,6 +62,9 @@ pub const DEV_MNEMONIC: &str = "test test test test test test test test test tes
 /// Used by staking-cli integration tests.
 pub const DEV_PRIVATE_KEY: &str =
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+/// Mnemonic account index where demo validators start (indices 0-19 reserved for other uses).
+pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
 
 /// CLI to interact with the Espresso stake table contract.
 ///
@@ -393,23 +410,25 @@ pub enum Commands {
         #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
-    /// Register the validators and delegates for the local demo.
+    /// Demo commands for testing and development
+    Demo(demo::Demo),
+    /// [DEPRECATED] Use `demo stake` instead. Register validators and create delegators for demo.
+    #[clap(hide = true)]
     StakeForDemo {
         /// The number of validators to register.
-        ///
-        /// The default (5) works for the local native and docker demos.
         #[clap(long, default_value_t = 5)]
         num_validators: u16,
 
         /// The number of delegators to create per validator.
-        ///
-        /// If not specified, a random number (2-5) of delegators is created per validator.
-        /// Must be <= 100,000.
         #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
         num_delegators_per_validator: Option<u64>,
 
-        #[arg(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = DelegationConfig::default())]
-        delegation_config: DelegationConfig,
+        #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = demo::DelegationConfig::default())]
+        delegation_config: demo::DelegationConfig,
+
+        /// Number of concurrent transaction submissions
+        #[clap(long, default_value_t = tx_log::DEFAULT_CONCURRENCY)]
+        concurrency: usize,
     },
     /// Export validator node signatures for address validation.
     ExportNodeSignatures {

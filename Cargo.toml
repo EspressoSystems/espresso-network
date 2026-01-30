@@ -95,6 +95,7 @@ edition = "2021"
 
 [workspace.dependencies]
 alloy = { version = "1.0", features = [
+    "eips",
     "provider-ws",
     "json-rpc",
     "signer-mnemonic",
