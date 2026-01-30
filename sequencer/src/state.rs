@@ -273,6 +273,17 @@ where
     )
     .await?;
 
+    if parent_chain_config != state.chain_config {
+        let cf = state
+            .chain_config
+            .resolve()
+            .context("failed to resolve to chain config")?;
+
+        tx.insert_chain_config(cf).await?;
+    }
+
+    tx.commit().await?;
+
     if proposed_leaf.header().version() > EpochVersion::version() {
         storage
             .save_reward_merkle_tree_v2(
@@ -284,16 +295,6 @@ where
             .context("failed to store reward merkle nodes")?;
     }
 
-    if parent_chain_config != state.chain_config {
-        let cf = state
-            .chain_config
-            .resolve()
-            .context("failed to resolve to chain config")?;
-
-        tx.insert_chain_config(cf).await?;
-    }
-
-    tx.commit().await?;
 
     Ok(state)
 }
