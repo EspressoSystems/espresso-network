@@ -121,44 +121,24 @@ where
     api.get("get_latest_reward_balance", move |req, state| {
         async move {
             let address = req.string_param("address")?;
-            let height = state.get_last_state_height().await?;
-            let snapshot = Snapshot::Index(height as u64);
-            let key = address
+            let account = address
                 .parse()
                 .map_err(|_| merklized_state::Error::Custom {
-                    message: "failed to parse reward address".to_string(),
+                    message: format!("invalid reward address: {address}"),
                     status: StatusCode::BAD_REQUEST,
                 })?;
-            let path = state.get_path(snapshot, key).await?;
-            Ok(path.elem().copied())
-        }
-        .boxed()
-    })?
-    .get("get_reward_balance", move |req, state| {
-        async move {
-            let address = req.string_param("address")?;
-            let height: usize = req.integer_param("height")?;
-            let snapshot = Snapshot::Index(height as u64);
-            let key = address
-                .parse()
-                .map_err(|_| merklized_state::Error::Custom {
-                    message: "failed to parse reward address".to_string(),
-                    status: StatusCode::BAD_REQUEST,
-                })?;
-            let path = state.get_path(snapshot, key).await?;
 
-            let last_height = state.get_last_state_height().await?;
-
-            if height > last_height {
-                return Err(merklized_state::Error::Custom {
+            state
+                .load_latest_reward_account_proof_v2(account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
                     message: format!(
-                        "requested height {height} is greater than last known height {last_height}"
+                        "failed to load latest reward account proof from storage for account \
+                         {account}: {err}"
                     ),
-                    status: StatusCode::BAD_REQUEST,
-                });
-            }
-
-            Ok(path.elem().copied())
+                    status: StatusCode::NOT_FOUND,
+                })
+                .map(|proof| proof.balance)
         }
         .boxed()
     })?
@@ -182,6 +162,30 @@ where
                     ),
                     status: StatusCode::NOT_FOUND,
                 })
+        }
+        .boxed()
+    })?
+    .get("get_reward_balance", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let height = req.integer_param("height")?;
+            let account = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: format!("invalid reward address: {address}"),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+
+            state
+                .load_reward_account_proof_v2(height, account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load v2 reward account {address} at height {height}: {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
+                .map(|proof| proof.balance)
         }
         .boxed()
     })?
