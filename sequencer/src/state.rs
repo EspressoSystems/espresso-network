@@ -295,7 +295,6 @@ where
             .context("failed to store reward merkle nodes")?;
     }
 
-
     Ok(state)
 }
 

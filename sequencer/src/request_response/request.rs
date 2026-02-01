@@ -37,6 +37,8 @@ pub enum Request {
     VidShare(Height, RequestId),
     /// A request for the state certificate at a given epoch
     StateCert(u64),
+    /// A request for data to reconstruct the reward merkle tree at a given height
+    RewardMerkleTreeV2(u64),
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -59,6 +61,8 @@ pub enum Response {
     VidShare(VidShare),
     /// A response for a state certificate at a given epoch
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
+    /// A response with data to reconstruct the reward merkle tree at a given height
+    RewardMerkleTreeV2(Vec<u8>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response

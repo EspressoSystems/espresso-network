@@ -1251,7 +1251,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 /// Representations of the RewardMerkleTreeV2 that can be used to reconstruct it.
 pub(crate) enum RewardMerkleTreeV2Data {
     // The raw RewardMerkleTreeV2, used as a fallback

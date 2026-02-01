@@ -38,7 +38,7 @@ use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
 use crate::{
-    api::BlocksFrontier,
+    api::{BlocksFrontier, RewardMerkleTreeDataSource},
     catchup::{
         add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state, CatchupStorage,
@@ -351,6 +351,22 @@ impl<
                     Some(cert) => Ok(Response::StateCert(cert)),
                     None => bail!("State certificate for epoch {epoch} not found"),
                 }
+            },
+            Request::RewardMerkleTreeV2(height) => {
+                // Try to get the reward accounts from memory first, then fall back to storage
+                // Fall back to storage
+                let merkle_tree_bytes = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .load_tree(*height)
+                        .await
+                        .with_context(|| "failed to get reward merkle tree from sql storage")?,
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for reward merkle tree catchup")
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes))
             },
         }
     }
