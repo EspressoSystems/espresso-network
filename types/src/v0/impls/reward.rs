@@ -928,20 +928,20 @@ pub async fn get_leader_and_fetch_missing_rewards(
         .context("validator not found")?;
     drop(membership);
 
-    let mut reward_accounts = HashSet::new();
-    reward_accounts.insert(validator.account.into());
-    let delegators = validator
-        .delegators
-        .keys()
-        .cloned()
-        .map(|a| a.into())
-        .collect::<Vec<RewardAccountV2>>();
-
-    reward_accounts.extend(delegators.clone());
-
     let parent_header = parent_leaf.block_header();
 
     if parent_header.version() <= EpochVersion::version() {
+        let mut reward_accounts = HashSet::new();
+        reward_accounts.insert(validator.account.into());
+        let delegators = validator
+            .delegators
+            .keys()
+            .cloned()
+            .map(|a| a.into())
+            .collect::<Vec<RewardAccountV2>>();
+
+        reward_accounts.extend(delegators.clone());
+
         let accts: HashSet<_> = reward_accounts
             .into_iter()
             .map(RewardAccountV1::from)
@@ -974,38 +974,22 @@ pub async fn get_leader_and_fetch_missing_rewards(
             }
         }
     } else {
-        let missing_reward_accts = validated_state.forgotten_reward_accounts_v2(reward_accounts);
+        let reward_accounts = std::iter::once(validator.account.into())
+            .chain(validator.delegators.keys().cloned().map(Into::into));
+
         let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
-        if !missing_reward_accts.is_empty() {
+        if validated_state.has_forgotten_any(reward_accounts) {
             tracing::warn!(
                 parent_height,
                 ?parent_view,
-                ?missing_reward_accts,
                 %reward_merkle_tree_root,
-                "fetching missing reward accounts from peers"
+                "fetching reward merkle tree from peers"
             );
 
             validated_state.reward_merkle_tree_v2 = instance_state
                 .state_catchup
                 .fetch_reward_merkle_tree_v2(parent_height, parent_view, reward_merkle_tree_root)
                 .await?;
-
-            //            let missing_account_proofs = instance_state
-            //                .state_catchup
-            //                .fetch_reward_accounts_v2(
-            //                    instance_state,
-            //                    parent_height,
-            //                    parent_view,
-            //                    reward_merkle_tree_root,
-            //                    missing_reward_accts,
-            //                )
-            //                .await?;
-            //
-            //            for proof in missing_account_proofs.iter() {
-            //                proof
-            //                    .remember(&mut validated_state.reward_merkle_tree_v2)
-            //                    .expect("proof previously verified");
-            //            }
         }
     }
 
