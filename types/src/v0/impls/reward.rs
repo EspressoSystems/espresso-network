@@ -1172,6 +1172,23 @@ impl EpochRewardsCalculator {
                 header.version()
             );
 
+            // Validate the reward merkle tree against the header commitment.
+            // If they don't match, use an empty tree so the rebuild logic
+            // will fetch all accounts from peers.
+            // This should never happen though because we are passing parent reward merkle tree
+            // which is only changed once per epoch
+            let expected_root = header.reward_merkle_tree_root().right();
+            let actual_root = reward_tree.commitment();
+            if expected_root != Some(actual_root) {
+                tracing::warn!(
+                    %epoch,
+                    ?expected_root,
+                    ?actual_root,
+                    "reward merkle tree root mismatch, using empty tree"
+                );
+                reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            }
+
             *header
                 .leader_counts()
                 .expect("V6+ header must have leader_counts")
