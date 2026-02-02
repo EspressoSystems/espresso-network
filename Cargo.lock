@@ -2543,9 +2543,9 @@ dependencies = [
 
 [[package]]
 name = "capnp"
-version = "0.20.6"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053b81915c2ce1629b8fb964f578b18cb39b23ef9d5b24120d0dfc959569a1d9"
+checksum = "fe8af2e2d255489928e31504fa51d86a41d040179098a8ad6828e0d11c54dcd6"
 dependencies = [
  "embedded-io",
 ]
@@ -2587,7 +2587,7 @@ dependencies = [
 [[package]]
 name = "cdn-broker"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
 dependencies = [
  "cdn-proto",
  "clap 4.5.53",
@@ -2609,7 +2609,7 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.6.2"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
 dependencies = [
  "cdn-proto",
  "clap 4.5.53",
@@ -2625,7 +2625,7 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
 dependencies = [
  "cdn-proto",
  "clap 4.5.53",
@@ -2638,7 +2638,7 @@ dependencies = [
 [[package]]
 name = "cdn-proto"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch1#8c59163bfdc564ad4d4e9203444b15d9b4d0f672"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
 dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
@@ -4059,9 +4059,9 @@ dependencies = [
 
 [[package]]
 name = "embedded-io"
-version = "0.6.1"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
 
 [[package]]
 name = "encode_unicode"
