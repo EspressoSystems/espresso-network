@@ -4928,7 +4928,13 @@ mod test {
                 .send()
                 .await
                 .expect("failed to get validators");
-            let validator_addresses: Vec<Address> = validators.keys().copied().collect();
+            let mut validator_entries: Vec<_> = validators
+                .iter()
+                .map(|(addr, v)| (*addr, v.stake_table_key))
+                .collect();
+            validator_entries.sort_by(|a, b| a.1.cmp(&b.1));
+            let validator_addresses: Vec<Address> =
+                validator_entries.iter().map(|(addr, _)| *addr).collect();
 
             let mut header_counts: HashMap<Address, u16> = HashMap::new();
             for (index, &count) in header_leader_counts.iter().enumerate() {
