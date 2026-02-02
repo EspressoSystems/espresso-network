@@ -45,7 +45,7 @@ use crate::{
     },
     v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2},
     v0_5,
-    v0_6::{self, LeaderCounts, MAX_VALIDATORS},
+    v0_6::{self, LeaderCounts, RewardMerkleTreeV2, MAX_VALIDATORS, REWARD_MERKLE_TREE_V2_HEIGHT},
     BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion,
     FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2,
     NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
@@ -903,10 +903,25 @@ impl Header {
                 );
 
                 if !reward_calculator.is_calculating(prev_epoch) {
+                    let expected_root = prev_epoch_header.reward_merkle_tree_root().right();
+                    let actual_root = validated_state.reward_merkle_tree_v2.commitment();
+                    let reward_tree = if expected_root == Some(actual_root) {
+                        validated_state.reward_merkle_tree_v2.clone()
+                    } else {
+                        tracing::warn!(
+                            %epoch,
+                            %prev_epoch,
+                            ?expected_root,
+                            ?actual_root,
+                            "reward merkle tree root mismatch, using empty tree for catchup"
+                        );
+                        RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT)
+                    };
+
                     reward_calculator.spawn_background_task(
                         prev_epoch,
                         epoch_height,
-                        validated_state.reward_merkle_tree_v2.clone(),
+                        reward_tree,
                         instance_state.clone(),
                         coordinator.clone(),
                         prev_epoch_header.leader_counts().copied(),
