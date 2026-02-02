@@ -4,14 +4,14 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{marker::PhantomData, sync::Arc, time::Instant};
+use std::{marker::PhantomData, sync::Arc};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare},
+    data::{PackedBundle, VidDisperse, VidDisperseAndDuration},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
@@ -22,8 +22,6 @@ use hotshot_types::{
         BlockPayload,
     },
     utils::{is_epoch_transition, option_epoch_from_block_number},
-    vid::avidm_gf2::AvidmGf2Scheme,
-    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::Result;
 use tracing::{debug, error, info, instrument};
@@ -170,13 +168,50 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 .await;
                 broadcast_event(
                     Arc::new(HotShotEvent::BlockReady(
-                        payload_with_metadata,
+                        payload_with_metadata.clone(),
                         payload_commitment,
                         *view_number,
                     )),
                     &event_stream,
                 )
                 .await;
+
+                // Send block directly to next leader (fast path for reducing duplicate transactions)
+                let next_view = *view_number + 1;
+                if !is_epoch_transition(
+                    self.consensus.read().await.highest_block,
+                    self.epoch_height,
+                ) {
+                    let next_leader_result = async {
+                        self.membership_coordinator
+                            .membership_for_epoch(epoch)
+                            .await?
+                            .leader(next_view)
+                            .await
+                    }
+                    .await;
+                    match next_leader_result {
+                        Ok(next_leader) if next_leader != self.public_key => {
+                            tracing::debug!(
+                                "Sending block directly to next leader for view {next_view}"
+                            );
+                            broadcast_event(
+                                Arc::new(HotShotEvent::BlockDirectlyRecv(
+                                    (*payload_with_metadata).clone(),
+                                    *view_number,
+                                )),
+                                &event_stream,
+                            )
+                            .await;
+                        },
+                        Ok(_) => {
+                            tracing::debug!("Next leader is self, skipping direct send");
+                        },
+                        Err(e) => {
+                            tracing::warn!("Failed to determine next leader: {e}");
+                        },
+                    }
+                }
 
                 let view_number = *view_number;
                 let Ok(signature) = TYPES::SignatureKey::sign(

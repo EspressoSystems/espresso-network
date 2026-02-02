@@ -21,6 +21,7 @@ use hotshot_testing::{
     serial,
 };
 use hotshot_types::{
+    consensus::PayloadWithMetadata,
     data::{null_block, DaProposal, PackedBundle, VidDisperse, ViewNumber},
     message::UpgradeLock,
     traits::{
@@ -115,10 +116,8 @@ async fn test_vid_task() {
                 vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                     num_storage_nodes,
                     <TestVersions as Versions>::Base::VERSION,
-                   
                 )
                 .unwrap()],
-                
             )),
         ],
     ];
@@ -126,6 +125,14 @@ async fn test_vid_task() {
     let expectations = vec![
         Expectations::from_outputs(vec![]),
         Expectations::from_outputs(vec![
+            // BlockSend is emitted first when BlockRecv is processed
+            exact(BlockSend(
+                PayloadWithMetadata {
+                    payload: payload.clone(),
+                    metadata: metadata.clone(),
+                },
+                ViewNumber::new(2),
+            )),
             exact(SendPayloadCommitmentAndMetadata(
                 payload_commitment,
                 builder_commitment,
@@ -136,10 +143,26 @@ async fn test_vid_task() {
                 vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                     num_storage_nodes,
                     <TestVersions as Versions>::Base::VERSION,
-                    
                 )
                 .unwrap()],
-                 
+            )),
+            // BlockReady is emitted after VID calculation
+            exact(BlockReady(
+                Arc::new(PayloadWithMetadata {
+                    payload: payload.clone(),
+                    metadata: metadata.clone(),
+                }),
+                payload_commitment,
+                ViewNumber::new(2),
+            )),
+            // BlockDirectlyRecv is sent to next leader (node 2 is leader for view 2,
+            // next leader for view 3 is node 3, which is different, so direct send occurs)
+            exact(BlockDirectlyRecv(
+                PayloadWithMetadata {
+                    payload: payload.clone(),
+                    metadata: metadata.clone(),
+                },
+                ViewNumber::new(2),
             )),
             exact(VidDisperseSend(vid_proposal.clone(), pub_key)),
         ]),
