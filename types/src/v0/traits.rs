@@ -191,6 +191,7 @@ pub trait StateCatchup: Send + Sync {
         &self,
         retry: usize,
         height: u64,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2>;
 
@@ -232,13 +233,19 @@ pub trait StateCatchup: Send + Sync {
     async fn fetch_reward_merkle_tree_v2(
         &self,
         height: u64,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         self.backoff()
             .retry(self, |provider, retry| {
                 async move {
                     provider
-                        .try_fetch_reward_merkle_tree_v2(retry, height, reward_merkle_tree_root)
+                        .try_fetch_reward_merkle_tree_v2(
+                            retry,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                        )
                         .await
                         .map_err(|err| {
                             err.context(format!("fetching reward merkle tree for height {height}"))
@@ -450,10 +457,11 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         &self,
         retry: usize,
         height: u64,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         (**self)
-            .try_fetch_reward_merkle_tree_v2(retry, height, reward_merkle_tree_root)
+            .try_fetch_reward_merkle_tree_v2(retry, height, view, reward_merkle_tree_root)
             .await
     }
 
@@ -473,10 +481,11 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn fetch_reward_merkle_tree_v2(
         &self,
         height: u64,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         (**self)
-            .fetch_reward_merkle_tree_v2(height, reward_merkle_tree_root)
+            .fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root)
             .await
     }
 

@@ -651,6 +651,7 @@ pub mod mock {
             &self,
             _retry: usize,
             _height: u64,
+            _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitmentV2,
         ) -> anyhow::Result<RewardMerkleTreeV2> {
             anyhow::bail!("unimplemented")

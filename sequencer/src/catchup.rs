@@ -430,6 +430,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         &self,
         retry: usize,
         height: u64,
+        _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         let result = self
@@ -862,6 +863,7 @@ where
         &self,
         _retry: usize,
         height: u64,
+        _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         let merkle_tree: RewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
@@ -1016,6 +1018,7 @@ impl StateCatchup for NullStateCatchup {
         &self,
         _retry: usize,
         _height: u64,
+        _view: ViewNumber,
         _reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         bail!("state catchup is disabled");
@@ -1396,6 +1399,7 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         retry: usize,
         height: u64,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         let local_result = self
@@ -1405,6 +1409,7 @@ impl StateCatchup for ParallelStateCatchup {
                         .try_fetch_reward_merkle_tree_v2(
                             retry,
                             height,
+                            view,
                             reward_merkle_tree_root,
                         )
                         .await
@@ -1424,6 +1429,7 @@ impl StateCatchup for ParallelStateCatchup {
                 .try_fetch_reward_merkle_tree_v2(
                     retry,
                     height,
+                    view,
                     reward_merkle_tree_root,
                 ).await
             }}

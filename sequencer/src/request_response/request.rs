@@ -38,7 +38,7 @@ pub enum Request {
     /// A request for the state certificate at a given epoch
     StateCert(u64),
     /// A request for data to reconstruct the reward merkle tree at a given height
-    RewardMerkleTreeV2(u64),
+    RewardMerkleTreeV2(u64, ViewNumber),
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the

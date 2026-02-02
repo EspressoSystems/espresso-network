@@ -149,6 +149,7 @@ impl<
         &self,
         _retry: usize,
         height: u64,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         // Timeout after a few batches
@@ -157,7 +158,7 @@ impl<
         // Fetch the reward accounts
         timeout(
             timeout_duration,
-            self.fetch_reward_merkle_tree_v2(height, reward_merkle_tree_root),
+            self.fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root),
         )
         .await
         .with_context(|| "timed out while fetching reward accounts")?
@@ -415,6 +416,7 @@ impl<
     async fn fetch_reward_merkle_tree_v2(
         &self,
         height: u64,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         tracing::info!("Fetching RewardMerkleTreeV2 for height: {height}");
@@ -445,14 +447,14 @@ impl<
         // Wait for the protocol to send us the reward accounts
         let response = self
             .request_indefinitely(
-                Request::RewardMerkleTreeV2(height),
+                Request::RewardMerkleTreeV2(height, *view),
                 RequestType::Batched,
                 response_validation_fn,
             )
             .await
             .with_context(|| "failed to request reward accounts")?;
 
-        tracing::info!("Fetched reward accounts for height: {height}");
+        tracing::info!("Fetched RewardMerkleTreeV2 for height: {height}");
 
         Ok(response)
     }

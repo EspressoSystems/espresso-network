@@ -38,7 +38,7 @@ use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
 use crate::{
-    api::{BlocksFrontier, RewardMerkleTreeDataSource},
+    api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{
         add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state, CatchupStorage,
@@ -352,7 +352,17 @@ impl<
                     None => bail!("State certificate for epoch {epoch} not found"),
                 }
             },
-            Request::RewardMerkleTreeV2(height) => {
+            Request::RewardMerkleTreeV2(height, view) => {
+                // Try to get the reward merkle tree from memory first, then fall back to storage
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
+                    let merkle_tree_bytes = bincode::serialize(
+                        &Into::<RewardMerkleTreeV2Data>::into(&state.reward_merkle_tree_v2),
+                    )
+                    .context("Merkle tree serialization failed; this should never happen.")?;
+
+                    return Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes));
+                }
+
                 // Try to get the reward accounts from memory first, then fall back to storage
                 // Fall back to storage
                 let merkle_tree_bytes = match &self.storage {
