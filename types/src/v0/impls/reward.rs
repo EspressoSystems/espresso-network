@@ -1230,12 +1230,6 @@ impl EpochRewardsCalculator {
                 "missing accounts detected, fetching all reward accounts from peers"
             );
 
-            // catchup height is the last block of the epoch
-            // because the validated state delta is delayed by an epoch
-            // e.g epoch N-1 reward changed accounts
-            // are stored at epoch N last block
-            let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
-
             tracing::info!(
                 %epoch,
                 epoch_last_block_height,
