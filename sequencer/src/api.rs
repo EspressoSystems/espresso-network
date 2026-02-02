@@ -4830,6 +4830,139 @@ mod test {
         Ok(())
     }
 
+    /// Verifies that the `leader_counts` array in V6 headers is correct.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_leader_counts() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const NUM_EPOCHS: u64 = 6;
+        type V6 = SequencerVersions<StaticVersion<0, 6>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V6>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V6::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let node_state = network.server.node_state();
+        let coordinator = node_state.coordinator;
+
+        // Track expected leader counts by address
+        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+            let epoch_number = EpochNumber::new(epoch);
+
+            if epoch <= 2 {
+                continue;
+            }
+
+            let header_leader_counts = header
+                .leader_counts()
+                .expect("V6 header must have leader_counts");
+
+            // Reset counts at the start of a new epoch
+            let is_epoch_start = (height - 1) % EPOCH_HEIGHT == 0;
+            if is_epoch_start {
+                expected_counts.clear();
+            }
+
+            // Determine the leader for this block and track by address
+            let view_number = leaf.leaf().view_number();
+            let membership = coordinator.membership().read().await;
+            let leader = membership
+                .leader(view_number, Some(epoch_number))
+                .expect("leader should exist");
+            let leader_address = membership
+                .address(&epoch_number, leader)
+                .expect("leader should have an address");
+            drop(membership);
+
+            *expected_counts.entry(leader_address).or_insert(0) += 1;
+
+            // Convert the header's leader_counts array to a HashMap<Address, u16>
+            // using the stake table to map index -> address
+            let validators = client
+                .get::<ValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("failed to get validators");
+            let validator_addresses: Vec<Address> = validators.keys().copied().collect();
+
+            let mut header_counts: HashMap<Address, u16> = HashMap::new();
+            for (index, &count) in header_leader_counts.iter().enumerate() {
+                if count == 0 {
+                    continue;
+                }
+                let address = validator_addresses
+                    .get(index)
+                    .expect("leader_counts index should map to a validator");
+                header_counts.insert(*address, count);
+            }
+
+            assert_eq!(
+                header_counts, expected_counts,
+                "leader_counts mismatch at height {height} (epoch {epoch})"
+            );
+
+            if height % EPOCH_HEIGHT == 0 {
+                let total: u16 = expected_counts.values().sum();
+                assert_eq!(
+                    total, EPOCH_HEIGHT as u16,
+                    "total leader_counts at epoch boundary should equal EPOCH_HEIGHT at height \
+                     {height}"
+                );
+            }
+
+            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     #[rstest]
     #[case(PosVersionV3::new())]
     #[case(PosVersionV4::new())]
