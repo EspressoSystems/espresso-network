@@ -17,10 +17,10 @@ const ESP_TOKEN_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRES
 const LIGHT_CLIENT_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS";
 const FEE_CONTRACT_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS";
 const REWARD_CLAIM_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS";
-const MULTISIG_ADDRESS: &str = "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS";
-const OPS_TIMELOCK_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_OPS_TIMELOCK_PROXY_ADDRESS";
-const SAFE_EXIT_TIMELOCK_PROXY_ADDRESS: &str =
-    "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_PROXY_ADDRESS";
+const MULTISIG_PREFIX: &str = "ESPRESSO_SEQUENCER_MULTISIG_";
+const MULTISIG_SUFFIX: &str = "_ADDRESS";
+const OPS_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS";
+const SAFE_EXIT_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS";
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DeploymentAddresses {
@@ -29,7 +29,7 @@ pub struct DeploymentAddresses {
     pub light_client_proxy: Option<Address>,
     pub fee_contract_proxy: Option<Address>,
     pub reward_claim_proxy: Option<Address>,
-    pub multisig: Option<Address>,
+    pub multisigs: HashMap<String, Address>,
     pub ops_timelock: Option<Address>,
     pub safe_exit_timelock: Option<Address>,
 }
@@ -67,7 +67,7 @@ pub enum TimelockDeployment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeploymentInfo {
     pub network: String,
-    pub multisig: MultisigDeployment,
+    pub multisigs: HashMap<String, MultisigDeployment>,
     pub ops_timelock: TimelockDeployment,
     pub safe_exit_timelock: TimelockDeployment,
     pub stake_table_proxy: ContractDeployment,
@@ -107,15 +107,32 @@ pub fn load_addresses_from_env_file(path: Option<&Path>) -> Result<DeploymentAdd
         })
     }
 
+    let mut multisigs = HashMap::new();
+    for (key, value) in &env_map {
+        if key.starts_with(MULTISIG_PREFIX) && key.ends_with(MULTISIG_SUFFIX) {
+            let name = &key[MULTISIG_PREFIX.len()..key.len() - MULTISIG_SUFFIX.len()];
+            let name = name.to_lowercase();
+            if let Some(addr) = parse_address(&env_map, key) {
+                multisigs.insert(name, addr);
+            } else {
+                tracing::warn!(
+                    "Multisig key {} found but value '{}' is not a valid address",
+                    key,
+                    value
+                );
+            }
+        }
+    }
+
     Ok(DeploymentAddresses {
         stake_table_proxy: parse_address(&env_map, STAKE_TABLE_PROXY_ADDRESS),
         esp_token_proxy: parse_address(&env_map, ESP_TOKEN_PROXY_ADDRESS),
         light_client_proxy: parse_address(&env_map, LIGHT_CLIENT_PROXY_ADDRESS),
         fee_contract_proxy: parse_address(&env_map, FEE_CONTRACT_PROXY_ADDRESS),
         reward_claim_proxy: parse_address(&env_map, REWARD_CLAIM_PROXY_ADDRESS),
-        multisig: parse_address(&env_map, MULTISIG_ADDRESS),
-        ops_timelock: parse_address(&env_map, OPS_TIMELOCK_PROXY_ADDRESS),
-        safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_PROXY_ADDRESS),
+        multisigs,
+        ops_timelock: parse_address(&env_map, OPS_TIMELOCK_ADDRESS),
+        safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_ADDRESS),
     })
 }
 
@@ -226,15 +243,12 @@ async fn get_multisig_info<P: Provider>(provider: &P, addr: Address) -> Result<M
 
 async fn collect_multisig_info<P: Provider>(
     provider: &P,
-    addr: Option<Address>,
+    name: &str,
+    addr: Address,
 ) -> Result<MultisigDeployment> {
-    let Some(addr) = addr else {
-        return Ok(MultisigDeployment::NotYetDeployed);
-    };
-
     get_multisig_info(provider, addr)
         .await
-        .with_context(|| format!("Failed to query multisig at {}", addr))
+        .with_context(|| format!("Failed to query multisig '{}' at {}", name, addr))
 }
 
 async fn get_timelock_info<P: Provider>(
@@ -286,9 +300,15 @@ pub async fn collect_deployment_info(
 ) -> Result<DeploymentInfo> {
     let provider = ProviderBuilder::new().connect_http(rpc_url);
 
+    let mut multisigs = HashMap::new();
+    for (name, addr) in &addresses.multisigs {
+        let info = collect_multisig_info(&provider, name, *addr).await?;
+        multisigs.insert(name.clone(), info);
+    }
+
     Ok(DeploymentInfo {
         network,
-        multisig: collect_multisig_info(&provider, addresses.multisig).await?,
+        multisigs,
         ops_timelock: collect_timelock_info(&provider, addresses.ops_timelock, "OpsTimelock", true)
             .await?,
         safe_exit_timelock: collect_timelock_info(
@@ -433,7 +453,7 @@ mod tests {
             light_client_proxy: Some(light_client_addr),
             fee_contract_proxy: Some(fee_contract_addr),
             reward_claim_proxy: Some(reward_claim_addr),
-            multisig: None,
+            multisigs: HashMap::new(),
             ops_timelock: Some(ops_timelock_addr),
             safe_exit_timelock: Some(safe_exit_timelock_addr),
         };
@@ -446,7 +466,7 @@ mod tests {
             ContractDeployment::Deployed {
                 proxy_address: stake_table_addr,
                 owner: deployer_address,
-                version: "2.0.0".to_string(),
+                version: "3.0.0".to_string(),
             }
         );
         assert_eq!(
@@ -454,7 +474,7 @@ mod tests {
             ContractDeployment::Deployed {
                 proxy_address: esp_token_addr,
                 owner: deployer_address,
-                version: "2.0.0".to_string(),
+                version: "3.0.0".to_string(),
             }
         );
         assert_eq!(
@@ -495,7 +515,7 @@ mod tests {
                 min_delay: 200
             }
         );
-        assert_eq!(info.multisig, MultisigDeployment::NotYetDeployed);
+        assert!(info.multisigs.is_empty());
 
         Ok(())
     }
