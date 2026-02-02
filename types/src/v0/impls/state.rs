@@ -287,20 +287,6 @@ impl ValidatedState {
             .collect()
     }
 
-    /// Return `true` if any of the given accounts have been forgotten in the `ValidatedState` reward_merkle_tree_v2
-    pub fn has_forgotten_any(
-        &self,
-        accounts: impl IntoIterator<Item = RewardAccountV2>,
-    ) -> bool {
-      for account in accounts {
-        if self.reward_merkle_tree_v2.lookup(account).expect_not_in_memory().is_ok() {
-          return true;
-        }
-      }
-
-      false
-    }
-
     pub fn forgotten_reward_accounts_v1(
         &self,
         accounts: impl IntoIterator<Item = RewardAccountV1>,

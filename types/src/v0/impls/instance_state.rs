@@ -653,6 +653,7 @@ pub mod mock {
             _height: u64,
             _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+            _accounts: Arc<Vec<RewardAccountV2>>,
         ) -> anyhow::Result<RewardMerkleTreeV2> {
             anyhow::bail!("unimplemented")
         }

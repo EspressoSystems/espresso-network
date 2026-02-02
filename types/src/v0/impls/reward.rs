@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
+use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr, sync::Arc};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
@@ -29,8 +29,8 @@ use vbs::version::StaticVersionType;
 use super::{
     v0_3::{RewardAmount, Validator, COMMISSION_BASIS_POINTS},
     v0_4::{
-        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
-        RewardMerkleProofV2, RewardMerkleTreeV2,
+        forgotten_accounts_include, RewardAccountProofV2, RewardAccountQueryDataV2,
+        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2,
     },
     Leaf2, NodeState, ValidatedState,
 };
@@ -974,11 +974,14 @@ pub async fn get_leader_and_fetch_missing_rewards(
             }
         }
     } else {
-        let reward_accounts = std::iter::once(validator.account.into())
-            .chain(validator.delegators.keys().cloned().map(Into::into));
+        let reward_accounts = Arc::new(
+            std::iter::once(validator.account.into())
+                .chain(validator.delegators.keys().cloned().map(Into::into))
+                .collect::<Vec<_>>(),
+        );
 
         let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
-        if validated_state.has_forgotten_any(reward_accounts) {
+        if forgotten_accounts_include(&validated_state.reward_merkle_tree_v2, &reward_accounts) {
             tracing::warn!(
                 parent_height,
                 ?parent_view,
@@ -988,7 +991,12 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
             validated_state.reward_merkle_tree_v2 = instance_state
                 .state_catchup
-                .fetch_reward_merkle_tree_v2(parent_height, parent_view, reward_merkle_tree_root)
+                .fetch_reward_merkle_tree_v2(
+                    parent_height,
+                    parent_view,
+                    reward_merkle_tree_root,
+                    reward_accounts,
+                )
                 .await?;
         }
     }

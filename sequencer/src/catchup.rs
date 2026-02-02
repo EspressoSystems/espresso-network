@@ -19,7 +19,10 @@ use espresso_types::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
     },
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
+    v0_4::{
+        forgotten_accounts_include, RewardAccountProofV2, RewardAccountV2,
+        RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+    },
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
 };
@@ -432,6 +435,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         height: u64,
         _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         let result = self
             .fetch(retry, |client| async move {
@@ -451,11 +455,13 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
 
         let tree: RewardMerkleTreeV2 = tree_data.try_into()?;
 
-        if tree.commitment() == reward_merkle_tree_root {
-            Ok(tree)
-        } else {
-            bail!("RewardMerkleTreeV2 from peer failed validation");
-        }
+        ensure!(
+            tree.commitment() == reward_merkle_tree_root,
+            "RewardMerkleTreeV2 from peer failed commitment check."
+        );
+        ensure!(!forgotten_accounts_include(&tree, &accounts));
+
+        Ok(tree)
     }
 
     #[tracing::instrument(skip(self, _instance))]
@@ -865,12 +871,14 @@ where
         height: u64,
         _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let merkle_tree: RewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
+        let tree: RewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
 
-        ensure!(merkle_tree.commitment() == reward_merkle_tree_root);
+        ensure!(tree.commitment() == reward_merkle_tree_root);
+        ensure!(!forgotten_accounts_include(&tree, &accounts));
 
-        Ok(merkle_tree)
+        Ok(tree)
     }
 
     #[tracing::instrument(skip(self, _retry, instance))]
@@ -1020,6 +1028,7 @@ impl StateCatchup for NullStateCatchup {
         _height: u64,
         _view: ViewNumber,
         _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        _accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         bail!("state catchup is disabled");
     }
@@ -1401,16 +1410,18 @@ impl StateCatchup for ParallelStateCatchup {
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         let local_result = self
-            .on_local_providers(clone! {() move |provider| {
-                clone! {() async move {
+            .on_local_providers(clone! {(accounts) move |provider| {
+                clone! {(accounts) async move {
                     provider
                         .try_fetch_reward_merkle_tree_v2(
                             retry,
                             height,
                             view,
                             reward_merkle_tree_root,
+                            accounts,
                         )
                         .await
                 }}
@@ -1423,14 +1434,15 @@ impl StateCatchup for ParallelStateCatchup {
         }
 
         // If that fails, try the remote ones
-        self.on_remote_providers(clone! {() move |provider| {
-            clone!{() async move {
+        self.on_remote_providers(clone! {(accounts) move |provider| {
+            clone!{(accounts) async move {
                 provider
                 .try_fetch_reward_merkle_tree_v2(
                     retry,
                     height,
                     view,
                     reward_merkle_tree_root,
+                    accounts
                 ).await
             }}
         }})
