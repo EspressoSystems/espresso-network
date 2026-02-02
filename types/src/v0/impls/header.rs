@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt};
 
 use alloy::primitives::{Keccak256, B256};
-use anyhow::{ensure, Context};
+use anyhow::{bail, ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
@@ -822,6 +822,7 @@ impl Header {
         leader_counts: &LeaderCounts,
         instance_state: &NodeState,
         validated_state: &mut ValidatedState,
+        header_root: Option<RewardMerkleCommitmentV2>,
     ) -> anyhow::Result<(RewardAmount, HashSet<RewardAccountV2>)> {
         let epoch_height = instance_state
             .epoch_height
@@ -950,6 +951,17 @@ impl Header {
                 (RewardAmount::default(), HashSet::new())
             }
         };
+
+        let calculated_root = validated_state.reward_merkle_tree_v2.commitment();
+
+        if let Some(header_root) = header_root {
+            if calculated_root != header_root {
+                bail!(
+                    "reward merkle tree root mismatch, using new merkle tree. Header root: \
+                     {header_root}, Calculated root: {calculated_root}"
+                );
+            }
+        }
 
         // Start calculation for current epoch
         reward_calculator.spawn_background_task(
@@ -1398,6 +1410,7 @@ impl BlockHeader<SeqTypes> for Header {
                 &leader_counts,
                 instance_state,
                 &mut validated_state,
+                None,
             )
             .await?;
 
