@@ -269,7 +269,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             }
         }
 
-        // Request a block from the builder unless we are between versions.
+        // Build a block unless we are between versions
         let upgrade = self
             .upgrade_lock
             .decided_upgrade_certificate
@@ -281,7 +281,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             if upgrade {
                 None
             } else {
-                self.wait_for_block(block_view).await
+                self.wait_for_block(block_view, receiver).await
             }
         };
 
@@ -329,24 +329,32 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
-        // receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
-        // let now = Instant::now();
-        // let (previous_block, metadata) = timeout(
-        //     Duration::from_secs(1),
-        //     self.wait_for_previous_block(block_view - 1, receiver),
-        // )
-        // .await
-        // .ok()?
-        // .ok()?;
-        // let elapsed = now.elapsed();
-        // tracing::error!("Waited for previous block in {elapsed:?}");
+        let now = Instant::now();
+        match timeout(
+            Duration::from_secs(1),
+            self.wait_for_previous_block(block_view - 1, receiver),
+        )
+        .await
+        {
+            Ok(Ok((previous_block, metadata))) => {
+                let elapsed = now.elapsed();
+                tracing::debug!("Waited for previous block in {elapsed:?}");
+                self.handle_block(block_view - 1, previous_block, metadata)
+                    .await;
+            },
+            Ok(Err(e)) => {
+                tracing::warn!("Failed to get previous block: {e}");
+            },
+            Err(_) => {
+                tracing::warn!(
+                    "Timeout waiting for previous block (view {}), proceeding without it",
+                    block_view - 1
+                );
+            },
+        }
 
-        // let now = Instant::now();
-        // self.handle_block(block_view - 1, previous_block, metadata)
-        //     .await;
-        // let elapsed = now.elapsed();
-        // tracing::error!("Handled previous block in {elapsed:?}");
         let now = Instant::now();
         let PayloadWithMetadata { payload, metadata } = self.build_block(block_view).await?;
         let elapsed = now.elapsed();
@@ -452,11 +460,27 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         }
         // TODO: Handle the case where the block is received before this call
         while let Ok(event) = receiver.recv_direct().await {
-            if let HotShotEvent::BlockReconstructed(block, metadata, _, view) = event.as_ref() {
-                if *view == parent_view {
-                    tracing::error!("Received block for parent view {parent_view}, building block");
+            match event.as_ref() {
+                HotShotEvent::BlockDirectlyRecv(payload_with_metadata, view)
+                    if *view == parent_view =>
+                {
+                    tracing::debug!(
+                        "Received block directly for parent view {parent_view}, building block"
+                    );
+                    return Ok((
+                        payload_with_metadata.payload.clone(),
+                        payload_with_metadata.metadata.clone(),
+                    ));
+                },
+                HotShotEvent::BlockReconstructed(block, metadata, _, view)
+                    if *view == parent_view =>
+                {
+                    tracing::debug!(
+                        "Reconstructed block for parent view {parent_view}, building block"
+                    );
                     return Ok((block.clone(), metadata.clone()));
-                }
+                },
+                _ => continue,
             }
         }
         Err(hotshot_utils::anytrace::error!("No block received"))
@@ -585,6 +609,15 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             HotShotEvent::BlockReconstructed(block, metadata, _, view) => {
                 self.handle_block(*view, block.clone(), metadata.clone())
                     .await;
+            },
+            HotShotEvent::BlockDirectlyRecv(payload_with_metadata, view) => {
+                tracing::info!("Received block directly from leader for view {view}");
+                self.handle_block(
+                    *view,
+                    payload_with_metadata.payload.clone(),
+                    payload_with_metadata.metadata.clone(),
+                )
+                .await;
             },
             HotShotEvent::QuorumProposalValidated(proposal, _leaf) => {
                 let view_number = proposal.data.view_number();
