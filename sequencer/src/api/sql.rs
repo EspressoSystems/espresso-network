@@ -163,11 +163,24 @@ impl RewardAccountProofDataSource for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            let (tree, _) = load_v2_reward_accounts(self, height, &[account])
+            let header = tx
+                .get_header(BlockId::<SeqTypes>::from(height as usize))
                 .await
-                .with_context(|| {
-                    format!("failed to load v2 reward account {account:?} at height {height}")
-                })?;
+                .context(format!("header {height} not available"))?;
+
+            let tree = if header.version() >= EpochRewardVersion::version() {
+                // For V6+, merkle tree nodes are not persisted to the
+                // reward_merkle_tree_v2 SQL table. Reconstruct the full tree
+                // from the reward_state table instead.
+                reconstruct_reward_tree(self, height, &header).await?
+            } else {
+                load_v2_reward_accounts(self, height, &[account])
+                    .await
+                    .with_context(|| {
+                        format!("failed to load v2 reward account {account:?} at height {height}")
+                    })?
+                    .0
+            };
 
             let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
                 .with_context(|| {
@@ -183,6 +196,44 @@ impl RewardAccountProofDataSource for SqlStorage {
         }
     }
 }
+/// Reconstructs the full reward merkle tree from the `reward_state` table for V6+ headers
+/// where merkle tree nodes are not persisted to the `reward_merkle_tree_v2` SQL table.
+async fn reconstruct_reward_tree(
+    db: &SqlStorage,
+    height: u64,
+    header: &Header,
+) -> anyhow::Result<RewardMerkleTreeV2> {
+    let mut all_accounts = Vec::new();
+    let limit: u64 = 1000;
+    let mut offset: u64 = 0;
+
+    loop {
+        let batch = db.get_all_reward_accounts(height, offset, limit).await?;
+        let count = batch.len() as u64;
+        all_accounts.extend(batch);
+        if count < limit {
+            break;
+        }
+        offset += limit;
+    }
+
+    let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, all_accounts)
+        .context("failed to rebuild reward merkle tree from accounts")?;
+
+    let expected_root = header
+        .reward_merkle_tree_root()
+        .right()
+        .context("commitment not present")?;
+    let actual_root = tree.commitment();
+    ensure!(
+        actual_root == expected_root,
+        "reconstructed reward tree root does not match header commitment at height {height}: \
+         actual={actual_root}, expected={expected_root}"
+    );
+
+    Ok(tree)
+}
+
 impl CatchupStorage for SqlStorage {
     async fn get_reward_accounts_v1(
         &self,
