@@ -1178,7 +1178,7 @@ impl EpochRewardsCalculator {
         };
 
         // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.stake_table_for_epoch(Some(epoch)).await {
+        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
                 .wait_for_catchup(epoch)
@@ -1188,13 +1188,8 @@ impl EpochRewardsCalculator {
 
         let membership = coordinator.membership().read().await;
         let validators: Vec<_> = membership
-            .stake_table(Some(epoch))
-            .iter()
-            .filter_map(|entry| {
-                membership
-                    .get_validator_config(&epoch, entry.stake_table_entry.stake_key)
-                    .ok()
-            })
+            .active_validators(&epoch)?
+            .into_values()
             .collect();
         let block_reward = membership
             .epoch_block_reward(epoch)
@@ -1235,8 +1230,11 @@ impl EpochRewardsCalculator {
                 "missing accounts detected, fetching all reward accounts from peers"
             );
 
-            // Fetch all reward accounts at the height just before this epoch
-            // This fetches from the reward_state table which stores all account balances
+            // catchup height is the last block of the epoch
+            // because the validated state delta is delayed by an epoch
+            // e.g epoch N-1 reward changed accounts
+            // are stored at epoch N last block
+            let catchup_height = epoch_last_block_height.saturating_sub(epoch_height);
 
             tracing::info!(
                 %epoch,
