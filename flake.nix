@@ -223,6 +223,7 @@
             cargo-audit
             cargo-edit
             cargo-hack
+            cargo-mutants
             cargo-nextest
             cargo-sort
             typos
