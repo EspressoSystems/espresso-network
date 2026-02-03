@@ -1,10 +1,14 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use alloy::{
     primitives::Address,
     providers::{Provider, ProviderBuilder},
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use clap::{Parser, ValueEnum};
 use hotshot_contract_adapter::sol_types::{
     EspTokenV2, FeeContract, ISafe, IVersioned, LightClient, OpsTimelock, SafeExitTimelock,
     StakeTable,
@@ -22,23 +26,85 @@ const MULTISIG_SUFFIX: &str = "_ADDRESS";
 const OPS_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS";
 const SAFE_EXIT_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS";
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Network {
+    Decaf,
+    Hoodi,
+    Mainnet,
+}
+
+const ALL_NETWORKS: [Network; 3] = [Network::Decaf, Network::Hoodi, Network::Mainnet];
+
+impl Network {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Network::Decaf => "decaf",
+            Network::Hoodi => "hoodi",
+            Network::Mainnet => "mainnet",
+        }
+    }
+
+    fn default_rpc_url(&self) -> Url {
+        match self {
+            Network::Decaf => "https://ethereum-sepolia-rpc.publicnode.com",
+            Network::Hoodi => "https://ethereum-hoodi-rpc.publicnode.com",
+            Network::Mainnet => "https://ethereum-rpc.publicnode.com",
+        }
+        .parse()
+        .expect("hardcoded URL is valid")
+    }
+}
+
+#[derive(Debug, Parser)]
+#[clap(
+    name = "deployment-info",
+    about = "Collect and output deployment information for Espresso Network contracts"
+)]
+struct Args {
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
+        help = "RPC URL for L1 provider. Defaults to publicnode when --network is specified."
+    )]
+    rpc_url: Option<Url>,
+
+    #[clap(
+        long,
+        value_enum,
+        help = "Known network. If not specified, all networks are processed."
+    )]
+    network: Option<Network>,
+
+    #[clap(long, help = "Path to input .env file. Only valid with --network.")]
+    env_file: Option<PathBuf>,
+
+    #[clap(long, help = "Output file path. Only valid with --network.")]
+    output: Option<PathBuf>,
+
+    #[clap(
+        long,
+        help = "Print to stdout instead of writing to a file. Only valid with --network."
+    )]
+    stdout: bool,
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct DeploymentAddresses {
-    pub stake_table_proxy: Option<Address>,
-    pub esp_token_proxy: Option<Address>,
-    pub light_client_proxy: Option<Address>,
-    pub fee_contract_proxy: Option<Address>,
-    pub reward_claim_proxy: Option<Address>,
-    pub multisigs: HashMap<String, Address>,
-    pub ops_timelock: Option<Address>,
-    pub safe_exit_timelock: Option<Address>,
+struct DeploymentAddresses {
+    stake_table: Option<Address>,
+    esp_token: Option<Address>,
+    light_client: Option<Address>,
+    fee_contract: Option<Address>,
+    reward_claim: Option<Address>,
+    multisigs: HashMap<String, Address>,
+    ops_timelock: Option<Address>,
+    safe_exit_timelock: Option<Address>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
-pub enum ContractDeployment {
+enum ContractDeployment {
     Deployed {
-        proxy_address: Address,
+        address: Address,
         owner: Address,
         version: String,
     },
@@ -47,7 +113,7 @@ pub enum ContractDeployment {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
-pub enum MultisigDeployment {
+enum MultisigDeployment {
     Deployed {
         address: Address,
         version: String,
@@ -59,36 +125,33 @@ pub enum MultisigDeployment {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
-pub enum TimelockDeployment {
+enum TimelockDeployment {
     Deployed { address: Address, min_delay: u64 },
     NotYetDeployed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DeploymentInfo {
-    pub network: String,
-    pub multisigs: HashMap<String, MultisigDeployment>,
-    pub ops_timelock: TimelockDeployment,
-    pub safe_exit_timelock: TimelockDeployment,
-    pub stake_table_proxy: ContractDeployment,
-    pub esp_token_proxy: ContractDeployment,
-    pub light_client_proxy: ContractDeployment,
-    pub fee_contract_proxy: ContractDeployment,
-    pub reward_claim_proxy: ContractDeployment,
+struct DeploymentInfo {
+    network: String,
+    multisigs: HashMap<String, MultisigDeployment>,
+    ops_timelock: TimelockDeployment,
+    safe_exit_timelock: TimelockDeployment,
+    stake_table: ContractDeployment,
+    esp_token: ContractDeployment,
+    light_client: ContractDeployment,
+    fee_contract: ContractDeployment,
+    reward_claim: ContractDeployment,
 }
 
-pub fn load_addresses_from_env_file(path: Option<&Path>) -> Result<DeploymentAddresses> {
-    let env_map: HashMap<String, String> = if let Some(p) = path {
-        dotenvy::from_path_iter(p)
-            .with_context(|| format!("Failed to read env file: {:?}", p))?
-            .filter_map(|item| item.ok())
-            .collect()
-    } else {
-        dotenvy::dotenv_iter()
-            .ok()
-            .map(|iter| iter.filter_map(|item| item.ok()).collect())
-            .unwrap_or_default()
-    };
+fn get_crate_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn load_addresses_from_env_file(path: &Path) -> Result<DeploymentAddresses> {
+    let env_map: HashMap<String, String> = dotenvy::from_path_iter(path)
+        .with_context(|| format!("Failed to read env file: {:?}", path))?
+        .filter_map(|item| item.ok())
+        .collect();
 
     fn parse_address(env_map: &HashMap<String, String>, key: &str) -> Option<Address> {
         env_map.get(key).and_then(|val| {
@@ -125,11 +188,11 @@ pub fn load_addresses_from_env_file(path: Option<&Path>) -> Result<DeploymentAdd
     }
 
     Ok(DeploymentAddresses {
-        stake_table_proxy: parse_address(&env_map, STAKE_TABLE_PROXY_ADDRESS),
-        esp_token_proxy: parse_address(&env_map, ESP_TOKEN_PROXY_ADDRESS),
-        light_client_proxy: parse_address(&env_map, LIGHT_CLIENT_PROXY_ADDRESS),
-        fee_contract_proxy: parse_address(&env_map, FEE_CONTRACT_PROXY_ADDRESS),
-        reward_claim_proxy: parse_address(&env_map, REWARD_CLAIM_PROXY_ADDRESS),
+        stake_table: parse_address(&env_map, STAKE_TABLE_PROXY_ADDRESS),
+        esp_token: parse_address(&env_map, ESP_TOKEN_PROXY_ADDRESS),
+        light_client: parse_address(&env_map, LIGHT_CLIENT_PROXY_ADDRESS),
+        fee_contract: parse_address(&env_map, FEE_CONTRACT_PROXY_ADDRESS),
+        reward_claim: parse_address(&env_map, REWARD_CLAIM_PROXY_ADDRESS),
         multisigs,
         ops_timelock: parse_address(&env_map, OPS_TIMELOCK_ADDRESS),
         safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_ADDRESS),
@@ -183,14 +246,14 @@ async fn get_version<P: Provider>(
 
 async fn get_contract_info<P: Provider>(
     provider: &P,
-    proxy_addr: Address,
+    addr: Address,
     contract_type: ContractType,
 ) -> Result<ContractDeployment> {
-    let owner = get_owner(provider, proxy_addr, contract_type).await?;
-    let version = get_version(provider, proxy_addr, contract_type).await?;
+    let owner = get_owner(provider, addr, contract_type).await?;
+    let version = get_version(provider, addr, contract_type).await?;
 
     Ok(ContractDeployment::Deployed {
-        proxy_address: proxy_addr,
+        address: addr,
         owner,
         version,
     })
@@ -293,7 +356,7 @@ async fn collect_timelock_info<P: Provider>(
         .with_context(|| format!("Failed to query {} at {}", name, addr))
 }
 
-pub async fn collect_deployment_info(
+async fn collect_deployment_info(
     rpc_url: Url,
     network: String,
     addresses: DeploymentAddresses,
@@ -318,37 +381,37 @@ pub async fn collect_deployment_info(
             false,
         )
         .await?,
-        stake_table_proxy: collect_contract_info(
+        stake_table: collect_contract_info(
             &provider,
-            addresses.stake_table_proxy,
+            addresses.stake_table,
             ContractType::StakeTable,
             "StakeTable",
         )
         .await?,
-        esp_token_proxy: collect_contract_info(
+        esp_token: collect_contract_info(
             &provider,
-            addresses.esp_token_proxy,
+            addresses.esp_token,
             ContractType::EspToken,
             "EspToken",
         )
         .await?,
-        light_client_proxy: collect_contract_info(
+        light_client: collect_contract_info(
             &provider,
-            addresses.light_client_proxy,
+            addresses.light_client,
             ContractType::LightClient,
             "LightClient",
         )
         .await?,
-        fee_contract_proxy: collect_contract_info(
+        fee_contract: collect_contract_info(
             &provider,
-            addresses.fee_contract_proxy,
+            addresses.fee_contract,
             ContractType::FeeContract,
             "FeeContract",
         )
         .await?,
-        reward_claim_proxy: collect_contract_info(
+        reward_claim: collect_contract_info(
             &provider,
-            addresses.reward_claim_proxy,
+            addresses.reward_claim,
             ContractType::RewardClaim,
             "RewardClaim",
         )
@@ -356,14 +419,93 @@ pub async fn collect_deployment_info(
     })
 }
 
-pub fn write_deployment_info(info: &DeploymentInfo, output_path: &std::path::Path) -> Result<()> {
+fn write_deployment_info(info: &DeploymentInfo, output_path: &Path) -> Result<()> {
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create output directory")?;
     }
 
-    let json = serde_json::to_string_pretty(info).context("Failed to serialize deployment info")?;
+    let yaml = serde_yaml::to_string(info).context("Failed to serialize deployment info")?;
 
-    std::fs::write(output_path, json).context("Failed to write deployment info")?;
+    std::fs::write(output_path, yaml).context("Failed to write deployment info")?;
+
+    Ok(())
+}
+
+async fn process_network(
+    network: Network,
+    rpc_url: Option<&Url>,
+    env_file: Option<&PathBuf>,
+    output: Option<&PathBuf>,
+    stdout: bool,
+) -> Result<()> {
+    let crate_dir = get_crate_dir();
+
+    let env_file = match env_file {
+        Some(path) => path.clone(),
+        None => crate_dir.join(format!("addresses/{}.env", network.as_str())),
+    };
+
+    let addresses = load_addresses_from_env_file(&env_file)
+        .context("Failed to load addresses from env file")?;
+
+    let rpc_url = match rpc_url {
+        Some(url) => url.clone(),
+        None => network.default_rpc_url(),
+    };
+
+    let network_name = network.as_str().to_string();
+
+    tracing::info!("Collecting deployment info for network: {}", network_name);
+
+    let info = collect_deployment_info(rpc_url, network_name, addresses)
+        .await
+        .context("Failed to collect deployment info")?;
+
+    if stdout {
+        let yaml =
+            serde_yaml::to_string(&info).context("Failed to serialize deployment info to YAML")?;
+        println!("{}", yaml);
+    } else {
+        let output_path = match output {
+            Some(path) => path.clone(),
+            None => crate_dir.join(format!("deployments/{}.yaml", network.as_str())),
+        };
+
+        write_deployment_info(&info, &output_path)
+            .context("Failed to write deployment info to file")?;
+        tracing::info!("Wrote: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+pub async fn run() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let args = Args::parse();
+    if let Some(network) = args.network {
+        process_network(
+            network,
+            args.rpc_url.as_ref(),
+            args.env_file.as_ref(),
+            args.output.as_ref(),
+            args.stdout,
+        )
+        .await?;
+    } else {
+        if args.env_file.is_some() || args.output.is_some() || args.stdout {
+            bail!("--env-file, --output, and --stdout are only valid with --network");
+        }
+
+        for network in ALL_NETWORKS {
+            process_network(network, args.rpc_url.as_ref(), None, None, false).await?;
+        }
+    }
 
     Ok(())
 }
@@ -448,11 +590,11 @@ mod tests {
             .expect("SafeExitTimelock deployed");
 
         let addresses = DeploymentAddresses {
-            stake_table_proxy: Some(stake_table_addr),
-            esp_token_proxy: Some(esp_token_addr),
-            light_client_proxy: Some(light_client_addr),
-            fee_contract_proxy: Some(fee_contract_addr),
-            reward_claim_proxy: Some(reward_claim_addr),
+            stake_table: Some(stake_table_addr),
+            esp_token: Some(esp_token_addr),
+            light_client: Some(light_client_addr),
+            fee_contract: Some(fee_contract_addr),
+            reward_claim: Some(reward_claim_addr),
             multisigs: HashMap::new(),
             ops_timelock: Some(ops_timelock_addr),
             safe_exit_timelock: Some(safe_exit_timelock_addr),
@@ -462,41 +604,41 @@ mod tests {
 
         assert_eq!(info.network, "test-network");
         assert_eq!(
-            info.stake_table_proxy,
+            info.stake_table,
             ContractDeployment::Deployed {
-                proxy_address: stake_table_addr,
+                address: stake_table_addr,
                 owner: deployer_address,
                 version: "3.0.0".to_string(),
             }
         );
         assert_eq!(
-            info.esp_token_proxy,
+            info.esp_token,
             ContractDeployment::Deployed {
-                proxy_address: esp_token_addr,
+                address: esp_token_addr,
                 owner: deployer_address,
                 version: "3.0.0".to_string(),
             }
         );
         assert_eq!(
-            info.light_client_proxy,
+            info.light_client,
             ContractDeployment::Deployed {
-                proxy_address: light_client_addr,
+                address: light_client_addr,
                 owner: deployer_address,
                 version: "3.0.0".to_string(),
             }
         );
         assert_eq!(
-            info.fee_contract_proxy,
+            info.fee_contract,
             ContractDeployment::Deployed {
-                proxy_address: fee_contract_addr,
+                address: fee_contract_addr,
                 owner: deployer_address,
                 version: "1.0.0".to_string(),
             }
         );
         assert_eq!(
-            info.reward_claim_proxy,
+            info.reward_claim,
             ContractDeployment::Deployed {
-                proxy_address: reward_claim_addr,
+                address: reward_claim_addr,
                 owner: Address::ZERO,
                 version: "1.0.0".to_string(),
             }

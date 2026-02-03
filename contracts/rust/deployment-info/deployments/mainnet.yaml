@@ -1,0 +1,66 @@
+network: mainnet
+multisigs:
+  serviceco:
+    status: deployed
+    address: 0x5e37b8038615ef3d75cf28b5982c4cbf065401fb
+    version: 1.4.1
+    owners:
+    - 0x22dfbdf674e6bd4112a332388e36940650ef5608
+    - 0x702bbbb423fb969f90031a866a9ecef013e4734d
+    - 0x5af3cda1bcb6105c3f714fd1746490e25a171490
+    - 0x1584f9d22ba5c56ac0bb6496c447a95a721eb709
+    - 0x745948f86c228f11f970d11e8e281c68837dcc55
+    threshold: 3
+  tokenco:
+    status: deployed
+    address: 0x3f7536c93b79685b7833c867109d803dfe68523e
+    version: 1.4.1
+    owners:
+    - 0x031be2aac7364d34b49468db3d1626ac787fdeca
+    - 0x702bbbb423fb969f90031a866a9ecef013e4734d
+    - 0x5af3cda1bcb6105c3f714fd1746490e25a171490
+    - 0x1584f9d22ba5c56ac0bb6496c447a95a721eb709
+    - 0x745948f86c228f11f970d11e8e281c68837dcc55
+    threshold: 3
+  espresso_labs:
+    status: deployed
+    address: 0x34f5af5158171ffd2475d21db5fc3b311f221982
+    version: 1.4.1
+    owners:
+    - 0x389b5c80a1dbe24f96beb50002cb5fbe2536e1cc
+    - 0xf4b7676d9ec86d2011ab87855424219a97deb40c
+    - 0x84ef523696eee7bc7fe102eccc8508895cd2c37e
+    threshold: 2
+ops_timelock:
+  status: deployed
+  address: 0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700
+  min_delay: 172800
+safe_exit_timelock:
+  status: deployed
+  address: 0x6e7941fe8f9c751363b5c156419a0c8912dea6b2
+  min_delay: 1209600
+stake_table:
+  status: deployed
+  address: 0xcef474d372b5b09defe2af187bf17338dc704451
+  owner: 0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700
+  version: 2.0.0
+esp_token:
+  status: deployed
+  address: 0x031de51f3e8016514bd0963d0b2ab825a591db9a
+  owner: 0x6e7941fe8f9c751363b5c156419a0c8912dea6b2
+  version: 2.0.0
+light_client:
+  status: deployed
+  address: 0x95ca91cea73239b15e5d2e5a74d02d6b5e0ae458
+  owner: 0x34f5af5158171ffd2475d21db5fc3b311f221982
+  version: 1.0.0
+fee_contract:
+  status: deployed
+  address: 0x9fce21c3f7600aa63392a5f5713986b39bb98884
+  owner: 0x34f5af5158171ffd2475d21db5fc3b311f221982
+  version: 1.0.0
+reward_claim:
+  status: deployed
+  address: 0x67c966a0ecdd5c33608be7810414e5b54da878d8
+  owner: '0x0000000000000000000000000000000000000000'
+  version: 1.0.0
