@@ -29,6 +29,13 @@ pub mod demo;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
+
+// Re-exported for integration tests (test_real_mainnet_node_metadata)
+pub use metadata::fetch_metadata;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod metadata_types;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod openmetrics;
 pub(crate) mod output;
 pub(crate) mod parse;
 pub(crate) mod receipt;
@@ -215,24 +222,178 @@ impl ValidSignerConfig {
 #[derive(ClapArgs, Debug, Clone)]
 #[group(required = true, multiple = false)]
 pub struct MetadataUriArgs {
+    /// URL where validator metadata JSON is hosted.
     #[clap(long, env = "METADATA_URI")]
-    metadata_uri: Option<String>,
+    pub metadata_uri: Option<String>,
 
+    /// URL of the node's API. Metadata will be fetched from /status/metrics.
+    #[clap(long, env = "NODE_URL")]
+    pub node_url: Option<String>,
+
+    /// Register without a metadata URI.
     #[clap(long, env = "NO_METADATA_URI")]
-    no_metadata_uri: bool,
+    pub no_metadata_uri: bool,
+}
+
+/// Represents the source of validator metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetadataSource {
+    /// Metadata is served from a direct URI (JSON or OpenMetrics format).
+    Uri(Url),
+    /// Metadata is served from a node's /status/metrics endpoint.
+    NodeUrl(Url),
+    /// No metadata is provided.
+    None,
+}
+
+impl TryFrom<MetadataUriArgs> for MetadataSource {
+    type Error = anyhow::Error;
+
+    fn try_from(args: MetadataUriArgs) -> Result<Self> {
+        if args.no_metadata_uri {
+            Ok(MetadataSource::None)
+        } else if let Some(uri_str) = args.metadata_uri {
+            let url = Url::parse(&uri_str)?;
+            Ok(MetadataSource::Uri(url))
+        } else if let Some(node_url_str) = args.node_url {
+            let url = Url::parse(&node_url_str)?;
+            Ok(MetadataSource::NodeUrl(url))
+        } else {
+            bail!("Either --metadata-uri, --node-url, or --no-metadata-uri must be provided")
+        }
+    }
+}
+
+impl MetadataSource {
+    /// Returns the URL that will be stored in the contract as the metadata URI.
+    pub fn metadata_uri(&self) -> Result<MetadataUri> {
+        match self {
+            MetadataSource::Uri(url) => MetadataUri::try_from(url.clone()),
+            MetadataSource::NodeUrl(url) => {
+                let metrics_url = url.join("status/metrics")?;
+                MetadataUri::try_from(metrics_url)
+            },
+            MetadataSource::None => Ok(MetadataUri::empty()),
+        }
+    }
+
+    /// Returns the URL to fetch metadata from for validation.
+    pub fn fetch_url(&self) -> Option<Url> {
+        match self {
+            MetadataSource::Uri(url) => Some(url.clone()),
+            MetadataSource::NodeUrl(url) => match url.join("status/metrics") {
+                Ok(metrics_url) => Some(metrics_url),
+                Err(e) => {
+                    tracing::warn!("failed to construct metrics URL from {url}: {e}");
+                    None
+                },
+            },
+            MetadataSource::None => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod metadata_source_tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_source_uri() {
+        let url = Url::parse("https://example.com/metadata.json").unwrap();
+        let source = MetadataSource::Uri(url.clone());
+
+        assert_eq!(source.fetch_url(), Some(url.clone()));
+        assert_eq!(
+            source.metadata_uri().unwrap().url().map(|u| u.as_str()),
+            Some("https://example.com/metadata.json")
+        );
+    }
+
+    #[test]
+    fn test_metadata_source_node_url() {
+        let url = Url::parse("https://example.com").unwrap();
+        let source = MetadataSource::NodeUrl(url);
+
+        assert_eq!(
+            source.fetch_url().map(|u| u.to_string()),
+            Some("https://example.com/status/metrics".to_string())
+        );
+        assert_eq!(
+            source.metadata_uri().unwrap().url().map(|u| u.as_str()),
+            Some("https://example.com/status/metrics")
+        );
+    }
+
+    #[test]
+    fn test_metadata_source_node_url_with_trailing_slash() {
+        let url = Url::parse("https://example.com/").unwrap();
+        let source = MetadataSource::NodeUrl(url);
+
+        assert_eq!(
+            source.fetch_url().map(|u| u.to_string()),
+            Some("https://example.com/status/metrics".to_string())
+        );
+    }
+
+    #[test]
+    fn test_metadata_source_node_url_with_path() {
+        let url = Url::parse("https://example.com/api/").unwrap();
+        let source = MetadataSource::NodeUrl(url);
+
+        assert_eq!(
+            source.fetch_url().map(|u| u.to_string()),
+            Some("https://example.com/api/status/metrics".to_string())
+        );
+    }
+
+    #[test]
+    fn test_metadata_source_none() {
+        let source = MetadataSource::None;
+
+        assert_eq!(source.fetch_url(), None);
+        assert!(source.metadata_uri().unwrap().url().is_none());
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_source_metadata_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: Some("https://example.com/metadata.json".to_string()),
+            node_url: None,
+            no_metadata_uri: false,
+        };
+        let source = MetadataSource::try_from(args).unwrap();
+        assert!(matches!(source, MetadataSource::Uri(_)));
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_source_node_url() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            node_url: Some("https://example.com".to_string()),
+            no_metadata_uri: false,
+        };
+        let source = MetadataSource::try_from(args).unwrap();
+        assert!(matches!(source, MetadataSource::NodeUrl(_)));
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_source_none() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            node_url: None,
+            no_metadata_uri: true,
+        };
+        let source = MetadataSource::try_from(args).unwrap();
+        assert!(matches!(source, MetadataSource::None));
+    }
 }
 
 impl TryFrom<MetadataUriArgs> for MetadataUri {
     type Error = anyhow::Error;
 
     fn try_from(args: MetadataUriArgs) -> Result<Self> {
-        if args.no_metadata_uri {
-            Ok(MetadataUri::empty())
-        } else if let Some(uri_str) = args.metadata_uri {
-            uri_str.parse()
-        } else {
-            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
-        }
+        let source = MetadataSource::try_from(args)?;
+        source.metadata_uri()
     }
 }
 
