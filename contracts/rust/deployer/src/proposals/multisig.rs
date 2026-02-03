@@ -29,6 +29,10 @@ pub struct TransferOwnershipParams {
     pub dry_run: bool,
 }
 
+const TRANSFER_OWNERSHIP_SCRIPT: &str = "transferOwnership.ts";
+const UPGRADE_PROXY_SCRIPT: &str = "upgradeProxy.ts";
+const PROPOSE_TRANSACTION_GENERIC_SCRIPT: &str = "proposeTransactionGeneric.ts";
+
 /// Call the transfer ownership script to transfer ownership of a contract to a new owner
 ///
 /// Parameters:
@@ -41,7 +45,7 @@ pub async fn call_transfer_ownership_script(
 ) -> Result<Output, anyhow::Error> {
     let script_path = find_script_path()?;
     let output = Command::new(script_path)
-        .arg("transferOwnership.ts")
+        .arg(TRANSFER_OWNERSHIP_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -176,7 +180,7 @@ pub async fn call_upgrade_proxy_script(
     let script_path = find_script_path()?;
 
     let output = Command::new(script_path)
-        .arg("upgradeProxy.ts")
+        .arg(UPGRADE_PROXY_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -530,9 +534,10 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 
     if !dry_run {
         tracing::info!("Checking if owner is a contract");
-        assert!(
+        anyhow::ensure!(
             crate::is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
+            "Owner {:#x} is not a contract so not a multisig wallet",
+            owner_addr
         );
     }
 
@@ -654,6 +659,65 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     Ok(())
 }
 
+/// Call the generic proposal script to create a Safe multisig proposal
+#[allow(clippy::too_many_arguments)]
+pub async fn call_propose_transaction_generic_script(
+    target: Address,
+    function_signature: String,
+    function_args: Vec<String>,
+    rpc_url: String,
+    safe_address: Address,
+    use_hardware_wallet: bool,
+    value: Option<String>,
+    dry_run: bool,
+) -> Result<Output> {
+    let script_path = find_script_path()?;
+
+    let mut cmd = Command::new(script_path);
+    cmd.arg(PROPOSE_TRANSACTION_GENERIC_SCRIPT)
+        .arg("--from-rust")
+        .arg("--target")
+        .arg(target.to_string())
+        .arg("--function-signature")
+        .arg(&function_signature)
+        .arg("--function-args");
+
+    for arg in &function_args {
+        cmd.arg(arg);
+    }
+
+    cmd.arg("--value")
+        .arg(value.unwrap_or_else(|| "0".to_string()))
+        .arg("--rpc-url")
+        .arg(&rpc_url)
+        .arg("--safe-address")
+        .arg(safe_address.to_string())
+        .arg("--use-hardware-wallet")
+        .arg(use_hardware_wallet.to_string())
+        .arg("--dry-run")
+        .arg(dry_run.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd.output().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to execute {PROPOSE_TRANSACTION_GENERIC_SCRIPT} script: {}",
+            e
+        )
+    })?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "{PROPOSE_TRANSACTION_GENERIC_SCRIPT} script failed:\nSTDOUT: {}\nSTDERR: {}",
+            stdout,
+            stderr
+        );
+    }
+
+    Ok(output)
+}
 /// Upgrade the FeeContract proxy to a new implementation (patch upgrade).
 /// Internally, first detect existence of proxy, then deploy new FeeContract implementation, then upgrade.
 /// Assumes:
