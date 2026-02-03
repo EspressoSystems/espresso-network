@@ -356,7 +356,7 @@ impl<
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
                     let merkle_tree_bytes = bincode::serialize(
-                        &Into::<RewardMerkleTreeV2Data>::into(&state.reward_merkle_tree_v2),
+                        &TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)?,
                     )
                     .context("Merkle tree serialization failed; this should never happen.")?;
 

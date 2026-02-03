@@ -167,7 +167,7 @@ impl<
             self.fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root, accounts),
         )
         .await
-        .with_context(|| "timed out while fetching reward accounts")?
+        .with_context(|| "timed out while fetching reward merkle tree v2")?
     }
 
     async fn try_fetch_reward_accounts_v1(

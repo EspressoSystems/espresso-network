@@ -1254,15 +1254,16 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Representations of the RewardMerkleTreeV2 that can be used to reconstruct it.
 pub(crate) enum RewardMerkleTreeV2Data {
-    // The raw RewardMerkleTreeV2, used as a fallback
-    Tree(RewardMerkleTreeV2),
+    // Previously, the raw RewardMerkleTreeV2, used as a fallback
+    NotInUse,
     // The full set of reward accounts and balances, which can be used to rebuild the tree
     Balances(Vec<(RewardAccountV2, RewardAmount)>),
 }
 
-impl Into<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
+impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
+    type Error = anyhow::Error;
     // Required method
-    fn into(self) -> RewardMerkleTreeV2Data {
+    fn try_into(self) -> anyhow::Result<RewardMerkleTreeV2Data> {
         let num_leaves = self.num_leaves();
 
         let balances: Vec<_> = self
@@ -1271,14 +1272,16 @@ impl Into<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
             .collect();
 
         if balances.len() as u64 == num_leaves {
-            RewardMerkleTreeV2Data::Balances(balances)
+            Ok(RewardMerkleTreeV2Data::Balances(balances))
         } else {
             tracing::error!(
-                "Attempted to serialize an incomplete RewardMerkleTreeV2 in the state storage \
-                 loop. This is not a fatal error, but it should never happen and indicates that \
-                 something may be seriously wrong."
+                "Attempted to serialize an incomplete RewardMerkleTreeV2. This is not a fatal \
+                 error, but it should never happen and indicates that something may be seriously \
+                 wrong."
             );
-            RewardMerkleTreeV2Data::Tree(self.clone())
+            bail!(
+                "Failed to convert RewardMerkleTreeV2 into key-value pairs. Some accounts are missing."
+            );
         }
     }
 }
@@ -1292,7 +1295,7 @@ impl TryInto<RewardMerkleTreeV2> for RewardMerkleTreeV2Data {
                 RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
                     .context("Failed to rebuild reward merkle tree from balances")
             },
-            RewardMerkleTreeV2Data::Tree(tree) => Ok(tree),
+            RewardMerkleTreeV2Data::NotInUse => bail!("Deserializing a deleted variant of RewardMerkleTreeV2Data"),
         }
     }
 }
@@ -1313,7 +1316,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         async move {
             {
                 let serialization =
-                    bincode::serialize(&Into::<RewardMerkleTreeV2Data>::into(merkle_tree))
+                    bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
                         .context("Merkle tree serialization failed; this should never happen.")?;
                 self.persist_tree(height, serialization).await?;
             }
