@@ -11,6 +11,7 @@ use staking_ui_service::{
         espresso::{
             self,
             client::{QueryServiceClient, QueryServiceOptions},
+            null_client::NullEspressoClient,
         },
         l1::{
             self, RpcCatchup, RpcStream, Snapshot, metadata::HttpMetadataFetcher,
@@ -68,6 +69,10 @@ struct Options {
     /// Formatting options for tracing.
     #[clap(long, env = "RUST_LOG_FORMAT")]
     log_format: Option<LogFormat>,
+
+    /// Run in L1-only mode, disabling Espresso data source.
+    #[clap(long, env = "ESPRESSO_STAKING_SERVICE_L1_ONLY")]
+    l1_only: bool,
 }
 
 impl Options {
@@ -115,43 +120,38 @@ impl Options {
             .await
             .map_err(|err| err.context("opening L1 RPC stream"))?;
 
-        // Connect to Espresso.
-        let espresso_input = QueryServiceClient::new(self.espresso_options, initial_token_supply)
-            .await
-            .map_err(|err| err.context("connecting to Espresso query service"))?;
-
         let metrics = PrometheusMetrics::new();
         metrics.register_version_info().context(Error::internal)?;
 
-        // Create server state.
-        let l1 = Arc::new(RwLock::new(
-            l1::State::new(
-                storage.clone(),
-                HttpMetadataFetcher::default(),
+        // Connect to Espresso (or use null client in L1-only mode).
+        if self.l1_only {
+            tracing::info!("Running in L1-only mode, Espresso data source disabled");
+            run_with_espresso_input(
+                NullEspressoClient,
+                storage,
+                l1_catchup,
+                l1_input,
                 genesis,
-                &l1_catchup,
-                metrics.clone(),
+                metrics,
+                self.port,
             )
             .await
-            .map_err(|err| err.context("initializing L1 state"))?,
-        ));
-        let espresso = Arc::new(RwLock::new(
-            espresso::State::new(storage, espresso_input, metrics.clone())
-                .await
-                .map_err(|err| err.context("initializing Espresso state"))?,
-        ));
-        let app = app::State::new(l1.clone(), espresso.clone(), metrics);
-
-        // Create tasks that will run in parallel.
-        let l1_task = l1::State::subscribe(l1, l1_input);
-        let espresso_task = espresso::State::update_task(espresso);
-        let http_task = app.serve(self.port);
-
-        // Run all tasks. Terminate if any background task fails (they should all run forever, but
-        // if one does fail it is better to loudly crash than to continue running in some weird
-        // state).
-        try_join_all([l1_task.boxed(), espresso_task.boxed(), http_task.boxed()]).await?;
-        Ok(())
+        } else {
+            let espresso_input =
+                QueryServiceClient::new(self.espresso_options, initial_token_supply)
+                    .await
+                    .map_err(|err| err.context("connecting to Espresso query service"))?;
+            run_with_espresso_input(
+                espresso_input,
+                storage,
+                l1_catchup,
+                l1_input,
+                genesis,
+                metrics,
+                self.port,
+            )
+            .await
+        }
     }
 
     fn init_logging(&self) {
@@ -188,6 +188,46 @@ impl Options {
     }
 }
 
+async fn run_with_espresso_input<E: espresso::EspressoClient + 'static>(
+    espresso_input: E,
+    storage: sql::Persistence,
+    l1_catchup: RpcCatchup,
+    l1_input: RpcStream,
+    genesis: Snapshot,
+    metrics: PrometheusMetrics,
+    port: u16,
+) -> Result<()> {
+    // Create server state.
+    let l1 = Arc::new(RwLock::new(
+        l1::State::new(
+            storage.clone(),
+            HttpMetadataFetcher::default(),
+            genesis,
+            &l1_catchup,
+            metrics.clone(),
+        )
+        .await
+        .map_err(|err| err.context("initializing L1 state"))?,
+    ));
+    let espresso = Arc::new(RwLock::new(
+        espresso::State::new(storage, espresso_input, metrics.clone())
+            .await
+            .map_err(|err| err.context("initializing Espresso state"))?,
+    ));
+    let app = app::State::new(l1.clone(), espresso.clone(), metrics);
+
+    // Create tasks that will run in parallel.
+    let l1_task = l1::State::subscribe(l1, l1_input);
+    let espresso_task = espresso::State::update_task(espresso);
+    let http_task = app.serve(port);
+
+    // Run all tasks. Terminate if any background task fails (they should all run forever, but
+    // if one does fail it is better to loudly crash than to continue running in some weird
+    // state).
+    try_join_all([l1_task.boxed(), espresso_task.boxed(), http_task.boxed()]).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let opt = Options::parse();
@@ -211,7 +251,7 @@ mod test {
     use sequencer::api::test_helpers::{TestNetwork, TestNetworkConfigBuilder};
     use sequencer::testing::TestConfigBuilder;
     use staking_ui_service::input::espresso::testing::start_pos_network;
-    use staking_ui_service::types::common::L1BlockId;
+    use staking_ui_service::types::common::{ESPTokenAmount, L1BlockId};
     use staking_ui_service::types::global::{ActiveNodeSetSnapshot, FullNodeSetSnapshot};
     use staking_ui_service::{Error, input::l1::testing::ContractDeployment};
 
@@ -258,6 +298,7 @@ mod test {
                 max_connections: 5,
             },
             log_format: Some(LogFormat::Json),
+            l1_only: false,
         };
 
         let task = spawn(async move {
@@ -384,6 +425,7 @@ mod test {
                 max_connections: 5,
             },
             log_format: Some(LogFormat::Json),
+            l1_only: false,
         };
 
         let task = spawn(async move {
@@ -450,6 +492,7 @@ mod test {
                 max_connections: 5,
             },
             log_format: Some(LogFormat::Json),
+            l1_only: false,
         };
 
         let task = spawn(async move {
@@ -517,6 +560,90 @@ mod test {
         assert_eq!(active_node_set.espresso_block.epoch, metrics_current_epoch);
         assert_eq!(metrics_active_validators, active_node_set.nodes.len());
         assert_eq!(metrics_unique_wallets, 3);
+
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_l1_only_mode() {
+        // Start L1 and deploy contracts.
+        let anvil = Anvil::new()
+            .block_time(1)
+            .args(["--slots-in-an-epoch", "0"])
+            .spawn();
+        let rpc_url = anvil.endpoint_url();
+        let deployment = ContractDeployment::deploy(rpc_url.clone())
+            .await
+            .expect("Failed to deploy contracts");
+
+        // Start staking service in L1-only mode (no Espresso URL provided).
+        let port = pick_unused_port().unwrap();
+        let tmp = tempdir().unwrap();
+        let opt = Options {
+            l1_options: L1ClientOptions {
+                http_providers: vec![deployment.rpc_url],
+                l1_ws_provider: None,
+                stake_table_address: deployment.stake_table_addr,
+                reward_contract_address: deployment.reward_claim_addr,
+                ..Default::default()
+            },
+            espresso_options: QueryServiceOptions {
+                url: None,
+                stream_timeout: Duration::from_secs(60),
+            },
+            port,
+            persistence: sql::PersistenceOptions {
+                path: tmp.path().join("temp.db"),
+                max_connections: 5,
+            },
+            log_format: Some(LogFormat::Json),
+            l1_only: true,
+        };
+
+        let task = spawn(async move {
+            opt.run().await.unwrap();
+        });
+
+        let client: Client<Error, StaticVersion<0, 1>> = Client::new(
+            format!("http://localhost:{port}/v0/staking/")
+                .parse()
+                .unwrap(),
+        );
+        sleep(Duration::from_secs(1)).await;
+        client.connect(None).await;
+
+        // L1 endpoints should work normally.
+        let l1_block: L1BlockId = client.get("l1/block/latest").send().await.unwrap();
+        tracing::info!(?l1_block, "got L1 block in L1-only mode");
+
+        // Full node set endpoint should work.
+        let full_node_set: FullNodeSetSnapshot = client
+            .get(&format!("nodes/all/{}", l1_block.hash))
+            .send()
+            .await
+            .unwrap();
+        tracing::info!(?full_node_set, "got full node set in L1-only mode");
+        assert_eq!(full_node_set.l1_block.hash, l1_block.hash);
+
+        // Espresso endpoints should return SERVICE_UNAVAILABLE.
+        let err = client
+            .get::<ActiveNodeSetSnapshot>("nodes/active")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
+        tracing::info!("Espresso active node endpoint correctly returns SERVICE_UNAVAILABLE");
+
+        // Wallet rewards endpoint should also return SERVICE_UNAVAILABLE.
+        let test_address = alloy::primitives::Address::random();
+        let err = client
+            .get::<ESPTokenAmount>(&format!("wallet/{test_address}/rewards/1"))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
+        tracing::info!("Espresso rewards endpoint correctly returns SERVICE_UNAVAILABLE");
 
         task.abort();
         let _ = task.await;

@@ -39,7 +39,7 @@ pub struct QueryServiceOptions {
 
     /// URL for an Espresso query service.
     #[clap(long = "espresso-url", env = "ESPRESSO_STAKING_SERVICE_ESPRESSO_URL")]
-    pub url: Url,
+    pub url: Option<Url>,
 }
 
 impl QueryServiceOptions {
@@ -64,7 +64,10 @@ impl QueryServiceClient {
         opt: QueryServiceOptions,
         initial_token_supply: ESPTokenAmount,
     ) -> Result<Self> {
-        let inner = Client::new(opt.url);
+        let url = opt.url.ok_or_else(|| {
+            Error::internal().context("Espresso URL must be provided when not in L1-only mode")
+        })?;
+        let inner = Client::new(url);
 
         // Get the epoch height. We need this for multiple endpoints, and it never changes, so we
         // fetch it now and cache it.
@@ -485,7 +488,7 @@ mod test {
         let mut network = TestNetwork::new(config, V::new()).await;
 
         let opt = QueryServiceOptions {
-            url: format!("http://localhost:{port}").parse().unwrap(),
+            url: Some(format!("http://localhost:{port}").parse().unwrap()),
             // Have a fast timeout since this test is going to intentionally disrupt the connection,
             // and we want it to recover and finish quickly.
             stream_timeout: Duration::from_secs(1),

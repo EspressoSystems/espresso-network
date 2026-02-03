@@ -65,7 +65,12 @@
           '';
         })
       ];
-      pkgs = import nixpkgs { inherit system overlays; };
+      pkgs = import nixpkgs {
+        inherit system overlays;
+        config = {
+          allowUnfree = true;
+        };
+      };
       myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
@@ -160,6 +165,9 @@
             entr
             nodePackages.prettier
             foundry-bin
+
+            # Claude Code
+            claude-code
           ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ++ pre-commit.enabledPackages;
           shellHook = ''

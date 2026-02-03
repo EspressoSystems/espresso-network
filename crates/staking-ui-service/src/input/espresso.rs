@@ -35,6 +35,7 @@ use crate::{
 };
 
 pub mod client;
+pub mod null_client;
 pub mod testing;
 
 #[derive(Clone, Debug)]
