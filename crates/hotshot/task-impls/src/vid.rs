@@ -146,6 +146,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                         builder_commitment,
                         metadata.clone(),
                         *view_number,
+                        epoch,
                         sequencing_fees.clone(),
                     )),
                     &event_stream,

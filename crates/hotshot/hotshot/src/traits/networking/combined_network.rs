@@ -20,7 +20,7 @@ use std::{
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{join, select, FutureExt};
+use futures::join;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
@@ -452,12 +452,20 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
     async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
         loop {
             // Receive from both networks
-            let mut primary_fut = self.primary().recv_message().fuse();
-            let mut secondary_fut = self.secondary().recv_message().fuse();
+            let primary_fut = async move {
+                loop {
+                    let p = self.primary().recv_message().await?;
+                    if !p.is_empty() {
+                        return Ok::<_, NetworkError>(p);
+                    }
+                    tracing::warn!("Received empty message from primary network");
+                }
+            };
+            let secondary_fut = self.secondary().recv_message();
 
             // Wait for one to return a message
-            let (message, from_primary) = select! {
-                p = primary_fut => (p?, true),
+            let (message, from_primary) = tokio::select! {
+                Ok(p) = primary_fut => (p, true),
                 s = secondary_fut => (s?, false),
             };
 

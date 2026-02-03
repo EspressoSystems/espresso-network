@@ -195,6 +195,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
         BuilderCommitment,
         <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         TYPES::View,
+        Option<TYPES::Epoch>,
         Vec1<BuilderFee<TYPES>>,
     ),
     /// Event when the transactions task has sequenced transactions. Contains the encoded transactions, the metadata, and the view number
