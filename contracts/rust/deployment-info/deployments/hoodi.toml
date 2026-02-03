@@ -1,0 +1,53 @@
+network = "hoodi"
+
+[multisigs.espresso_labs]
+status = "deployed"
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+version = "1.4.1"
+owners = [
+    "0x811caa1c5c96bfe0ab12b2eeb542994b0c368627",
+    "0x647e90723669b6bb163a46e8bfebcb95beb94849",
+    "0x53d5385d897872bb8199309be70810fc09e58ce5",
+    "0xf4b7676d9ec86d2011ab87855424219a97deb40c",
+]
+threshold = 2
+
+[ops_timelock]
+status = "deployed"
+address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+min_delay = 300
+
+[safe_exit_timelock]
+status = "deployed"
+address = "0xe34cdddf2271492809728c83eb347b36ba001438"
+min_delay = 600
+
+[stake_table]
+status = "deployed"
+address = "0x6e9c2dce0cb780a06c811ca245b8d497ef6e96c5"
+owner = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+version = "2.0.0"
+
+[esp_token]
+status = "deployed"
+address = "0x7397063418df1ee7a6c49b5bbc664f8f2c82283a"
+owner = "0xe34cdddf2271492809728c83eb347b36ba001438"
+version = "2.0.0"
+
+[light_client]
+status = "deployed"
+address = "0x578767719287386043d3aaf2f5a68993c3a42cd5"
+owner = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+version = "3.0.0"
+
+[fee_contract]
+status = "deployed"
+address = "0xe6548625c4d5441872820e5af3e809f5b839d914"
+owner = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+version = "1.0.0"
+
+[reward_claim]
+status = "deployed"
+address = "0xf6fcfd30f1b22bf6e78ade09c54566594c703183"
+owner = "0x0000000000000000000000000000000000000000"
+version = "1.0.0"

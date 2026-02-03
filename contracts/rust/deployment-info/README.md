@@ -21,7 +21,7 @@ cargo run -p deployment-info -- --network mainnet --rpc-url https://eth.llamarpc
 ## Directory Structure
 
 - **Input**: [addresses/](addresses/) - contract addresses per network
-- **Output**: [deployments/](deployments/) - deployment info per network (YAML)
+- **Output**: [deployments/](deployments/) - deployment info per network (TOML)
 
 ## Contract Information Collected
 

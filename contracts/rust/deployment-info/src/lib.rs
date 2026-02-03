@@ -150,7 +150,10 @@ fn get_crate_dir() -> PathBuf {
 fn load_addresses_from_env_file(path: &Path) -> Result<DeploymentAddresses> {
     let env_map: HashMap<String, String> = dotenvy::from_path_iter(path)
         .with_context(|| format!("Failed to read env file: {:?}", path))?
-        .filter_map(|item| item.ok())
+        .filter_map(|item| {
+            item.map_err(|e| tracing::warn!("Invalid line in env file {:?}: {}", path, e))
+                .ok()
+        })
         .collect();
 
     fn parse_address(env_map: &HashMap<String, String>, key: &str) -> Option<Address> {
@@ -171,18 +174,12 @@ fn load_addresses_from_env_file(path: &Path) -> Result<DeploymentAddresses> {
     }
 
     let mut multisigs = HashMap::new();
-    for (key, value) in &env_map {
+    for key in env_map.keys() {
         if key.starts_with(MULTISIG_PREFIX) && key.ends_with(MULTISIG_SUFFIX) {
             let name = &key[MULTISIG_PREFIX.len()..key.len() - MULTISIG_SUFFIX.len()];
             let name = name.to_lowercase();
             if let Some(addr) = parse_address(&env_map, key) {
                 multisigs.insert(name, addr);
-            } else {
-                tracing::warn!(
-                    "Multisig key {} found but value '{}' is not a valid address",
-                    key,
-                    value
-                );
             }
         }
     }
@@ -234,11 +231,7 @@ async fn get_owner<P: Provider>(
     }
 }
 
-async fn get_version<P: Provider>(
-    provider: &P,
-    addr: Address,
-    _contract_type: ContractType,
-) -> Result<String> {
+async fn get_version<P: Provider>(provider: &P, addr: Address) -> Result<String> {
     let contract = IVersioned::new(addr, provider);
     let v = contract.getVersion().call().await?;
     Ok(format!("{}.{}.{}", v._0, v._1, v._2))
@@ -250,7 +243,7 @@ async fn get_contract_info<P: Provider>(
     contract_type: ContractType,
 ) -> Result<ContractDeployment> {
     let owner = get_owner(provider, addr, contract_type).await?;
-    let version = get_version(provider, addr, contract_type).await?;
+    let version = get_version(provider, addr).await?;
 
     Ok(ContractDeployment::Deployed {
         address: addr,
@@ -424,9 +417,10 @@ fn write_deployment_info(info: &DeploymentInfo, output_path: &Path) -> Result<()
         std::fs::create_dir_all(parent).context("Failed to create output directory")?;
     }
 
-    let yaml = serde_yaml::to_string(info).context("Failed to serialize deployment info")?;
+    let toml_output =
+        toml::to_string_pretty(info).context("Failed to serialize deployment info")?;
 
-    std::fs::write(output_path, yaml).context("Failed to write deployment info")?;
+    std::fs::write(output_path, toml_output).context("Failed to write deployment info")?;
 
     Ok(())
 }
@@ -462,13 +456,13 @@ async fn process_network(
         .context("Failed to collect deployment info")?;
 
     if stdout {
-        let yaml =
-            serde_yaml::to_string(&info).context("Failed to serialize deployment info to YAML")?;
-        println!("{}", yaml);
+        let toml_output =
+            toml::to_string_pretty(&info).context("Failed to serialize deployment info")?;
+        println!("{}", toml_output);
     } else {
         let output_path = match output {
             Some(path) => path.clone(),
-            None => crate_dir.join(format!("deployments/{}.yaml", network.as_str())),
+            None => crate_dir.join(format!("deployments/{}.toml", network.as_str())),
         };
 
         write_deployment_info(&info, &output_path)
