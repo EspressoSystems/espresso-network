@@ -11,9 +11,13 @@ multisigs:
     - 0xf4b7676d9ec86d2011ab87855424219a97deb40c
     threshold: 2
 ops_timelock:
-  status: not-yet-deployed
+  status: deployed
+  address: 0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118
+  min_delay: 300
 safe_exit_timelock:
-  status: not-yet-deployed
+  status: deployed
+  address: 0xe34cdddf2271492809728c83eb347b36ba001438
+  min_delay: 600
 stake_table:
   status: deployed
   address: 0x6e9c2dce0cb780a06c811ca245b8d497ef6e96c5
@@ -30,7 +34,10 @@ light_client:
   owner: 0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118
   version: 3.0.0
 fee_contract:
-  status: not-yet-deployed
+  status: deployed
+  address: 0xe6548625c4d5441872820e5af3e809f5b839d914
+  owner: 0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118
+  version: 1.0.0
 reward_claim:
   status: deployed
   address: 0xf6fcfd30f1b22bf6e78ade09c54566594c703183

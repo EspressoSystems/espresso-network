@@ -9,36 +9,37 @@ on:
     - cron: "0 6 * * *" # daily at 6am UTC
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   update-deployment-info:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          shared-key: deployment-info
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
+      # No rust cache, we have limited capacity on github
+      
       - name: Run deployment-info
         run: cargo run -p deployment-info
 
       - name: Check for changes
         id: changes
         run: |
-          if git diff --quiet contracts/rust/deployment-info/deployments/; then
+          DIFF=$(git diff contracts/rust/deployment-info/deployments/)
+          if [ -z "$DIFF" ]; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "### Deployment info changes" >> $GITHUB_STEP_SUMMARY
             echo '```diff' >> $GITHUB_STEP_SUMMARY
-            git diff contracts/rust/deployment-info/deployments/ >> $GITHUB_STEP_SUMMARY
+            echo "$DIFF" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
@@ -59,4 +60,6 @@ jobs:
 
             This PR was created by the deployment-info workflow.
           branch: auto/update-deployment-info
+          base: main
           delete-branch: true
+          labels: automated

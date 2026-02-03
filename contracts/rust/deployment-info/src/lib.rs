@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -133,7 +133,7 @@ enum TimelockDeployment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct DeploymentInfo {
     network: String,
-    multisigs: HashMap<String, MultisigDeployment>,
+    multisigs: BTreeMap<String, MultisigDeployment>,
     ops_timelock: TimelockDeployment,
     safe_exit_timelock: TimelockDeployment,
     stake_table: ContractDeployment,
@@ -363,7 +363,7 @@ async fn collect_deployment_info(
 ) -> Result<DeploymentInfo> {
     let provider = ProviderBuilder::new().connect_http(rpc_url);
 
-    let mut multisigs = HashMap::new();
+    let mut multisigs = BTreeMap::new();
     for (name, addr) in &addresses.multisigs {
         let info = collect_multisig_info(&provider, name, *addr).await?;
         multisigs.insert(name.clone(), info);

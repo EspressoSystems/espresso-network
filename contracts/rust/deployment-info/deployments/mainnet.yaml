@@ -1,5 +1,14 @@
 network: mainnet
 multisigs:
+  espresso_labs:
+    status: deployed
+    address: 0x34f5af5158171ffd2475d21db5fc3b311f221982
+    version: 1.4.1
+    owners:
+    - 0x389b5c80a1dbe24f96beb50002cb5fbe2536e1cc
+    - 0xf4b7676d9ec86d2011ab87855424219a97deb40c
+    - 0x84ef523696eee7bc7fe102eccc8508895cd2c37e
+    threshold: 2
   serviceco:
     status: deployed
     address: 0x5e37b8038615ef3d75cf28b5982c4cbf065401fb
@@ -22,15 +31,6 @@ multisigs:
     - 0x1584f9d22ba5c56ac0bb6496c447a95a721eb709
     - 0x745948f86c228f11f970d11e8e281c68837dcc55
     threshold: 3
-  espresso_labs:
-    status: deployed
-    address: 0x34f5af5158171ffd2475d21db5fc3b311f221982
-    version: 1.4.1
-    owners:
-    - 0x389b5c80a1dbe24f96beb50002cb5fbe2536e1cc
-    - 0xf4b7676d9ec86d2011ab87855424219a97deb40c
-    - 0x84ef523696eee7bc7fe102eccc8508895cd2c37e
-    threshold: 2
 ops_timelock:
   status: deployed
   address: 0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700
