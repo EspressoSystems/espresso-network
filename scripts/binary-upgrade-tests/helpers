@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+# currently running on mainnet
+base_tag=20250228-patch4
+target_tag=${UPGRADE_DOCKER_TAG:-testing}
+#compose_file="docker-compose.binary-upgrade-test.$base_tag.yaml"
+compose_file="docker-compose.yaml"
+
+# fix the environment to start properly on the mainnet version
+export DOCKER_TAG_STAKE_FOR_DEMO=main
+export ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT=22001
+export RUST_BACKTRACE=1
+export ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS=10
+export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
+export ESPRESSO_SEQUENCER_PERMISSIONED_PROVER=0x14dc79964da2c08b23698b3d3cc7ca32193d9955
+export ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS=0x8ce361602b935680e8dec218b820ff5056beb7af
+export ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS=0xa15bb66138824a1c7167f5e85b957d04dd34e468
+export ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=0xed1db453c3156ff3155a97ad217b3087d5dc5f6e
+export ESPRESSO_SUBMIT_TRANSACTIONS_SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
+
+cleanup_docker_compose() {
+    # do some cleanup
+    just down -v || true
+    docker stop $(docker ps -aq) || true
+    docker rm $(docker ps -aq) || true
+}
+
+smoke_test() {
+    ESPRESSO_SCRIPT_SKIP_DOTENV=1 scripts/smoke-test-demo
+}
+
+startup_environment() {
+    # TODO: don't do || true; figure out why this is failing. It claims stake-for-demo exited (0) but then dies?
+    env DOCKER_TAG=$base_tag just demo-file "$compose_file" --wait -d || true
+
+    # run smoke test to ensure environment is healthy
+    smoke_test
+}
+
+# Stops an existing container and starts it with the new version
+upgrade_container() {
+    container_name=$1
+    shift
+
+    docker compose -f "$compose_file" stop "$container_name" || true
+
+    # TODO: don't do || true
+    env DOCKER_TAG=$target_tag docker compose -f "$compose_file" up --no-deps "$container_name" --force-recreate --wait || true
+    env DOCKER_TAG=$target_tag docker compose -f "$compose_file" logs "$container_name"
+}
+
+# Starts an exited container from the old version
+start_old_container() {
+    container_name=$1
+    shift
+
+    env DOCKER_TAG=$base_tag docker compose -f "$compose_file" up --no-deps "$container_name" --wait || true
+    env DOCKER_TAG=$base_tag docker compose -f "$compose_file" logs "$container_name"
+}
+
+# Set up environment
+cleanup_docker_compose
