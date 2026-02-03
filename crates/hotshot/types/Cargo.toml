@@ -29,12 +29,14 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
 blake3 = { workspace = true }
+bs58 = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true, features = ["debug"] }
 digest = { workspace = true, features = ["rand_core"] }
 displaydoc = { version = "0.2.5", default-features = false }
 dyn-clone = "1.0.17"
+ed25519-compact = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 generic-array = "1"

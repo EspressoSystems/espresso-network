@@ -1,19 +1,26 @@
-use std::{cmp::Ordering, fmt};
+use std::{cmp::Ordering, fmt, ops::Deref};
 
 use ed25519_compact::x25519;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde_bytes::ByteArray;
+use tagged_base64::{TaggedBase64, Tb64Error};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Keypair {
     pair: x25519::KeyPair,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct PublicKey {
+    #[serde(serialize_with = "serialize", deserialize_with = "deserialize_x25519_pk")]
     key: x25519::PublicKey,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SecretKey {
+    #[serde(serialize_with = "serialize", deserialize_with = "deserialize_x25519_sk")]
     key: x25519::SecretKey,
 }
 
@@ -162,6 +169,19 @@ impl TryFrom<&str> for SecretKey {
     }
 }
 
+const X25519_SECRET_KEY: &str = "X25519_SK";
+
+impl TryFrom<TaggedBase64> for SecretKey {
+    type Error = Tb64Error;
+
+    fn try_from(tb: TaggedBase64) -> Result<Self, Self::Error> {
+        if tb.tag() != X25519_SECRET_KEY {
+            return Err(Tb64Error::InvalidTag);
+        }
+        Self::try_from(tb.as_ref()).map_err(|_| Tb64Error::InvalidData)
+    }
+}
+
 impl From<[u8; 32]> for SecretKey {
     fn from(bytes: [u8; 32]) -> Self {
         SecretKey {
@@ -181,3 +201,46 @@ pub struct InvalidSecretKey(());
 #[derive(Debug, thiserror::Error)]
 #[error("invalid public key")]
 pub struct InvalidPublicKey(());
+
+fn serialize<S, T, const N: usize>(d: &T, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    T: Deref<Target = [u8; N]>,
+{
+    if s.is_human_readable() {
+        bs58::encode(**d).into_string().serialize(s)
+    } else {
+        ByteArray::new(**d).serialize(s)
+    }
+}
+
+fn deserialize_x25519_pk<'de, D>(d: D) -> Result<x25519::PublicKey, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    if d.is_human_readable() {
+        let s = String::deserialize(d)?;
+        let mut a = [0; 32];
+        let n = bs58::decode(&s).onto(&mut a).map_err(de::Error::custom)?;
+        x25519::PublicKey::from_slice(&a[..n]).map_err(de::Error::custom)
+    } else {
+        let a = ByteArray::<32>::deserialize(d)?;
+        x25519::PublicKey::from_slice(&a[..]).map_err(de::Error::custom)
+    }
+}
+
+fn deserialize_x25519_sk<'de, D>(d: D) -> Result<x25519::SecretKey, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    if d.is_human_readable() {
+        let s = String::deserialize(d)?;
+        let mut a = [0; 32];
+        let n = bs58::decode(&s).onto(&mut a).map_err(de::Error::custom)?;
+        x25519::SecretKey::from_slice(&a[..n]).map_err(de::Error::custom)
+    } else {
+        let a = ByteArray::<32>::deserialize(d)?;
+        x25519::SecretKey::from_slice(&a[..]).map_err(de::Error::custom)
+    }
+}
+

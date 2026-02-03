@@ -1,7 +1,10 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::Bytes;
-use cliquenet::{Address, Keypair, NetConf, Retry};
+use cliquenet::{NetConf, Retry};
+use hotshot_types::addr::Address;
+use hotshot_types::x25519::Keypair;
+
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;
 use rand::RngCore;

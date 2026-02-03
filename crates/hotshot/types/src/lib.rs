@@ -22,7 +22,9 @@ use url::Url;
 use vbs::version::Version;
 use vec1::Vec1;
 
-use crate::utils::bincode_opts;
+use crate::{addr::Address, utils::bincode_opts};
+
+pub mod addr;
 pub mod bundle;
 pub mod consensus;
 pub mod constants;
@@ -54,6 +56,7 @@ pub mod upgrade_config;
 pub mod utils;
 pub mod vid;
 pub mod vote;
+pub mod x25519;
 
 /// Pinned future that is Send and Sync
 pub type BoxSyncFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
@@ -88,6 +91,8 @@ pub struct ValidatorConfig<TYPES: NodeType> {
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
     /// Whether or not this validator is DA
     pub is_da: bool,
+    pub x25519_keypair: Option<x25519::Keypair>,
+    pub p2p_addr: Option<Address>
 }
 
 impl<TYPES: NodeType> ValidatorConfig<TYPES> {
@@ -110,6 +115,8 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
             state_public_key,
             state_private_key,
             is_da,
+            p2p_addr: None,
+            x25519_keypair: None
         }
     }
 
@@ -243,7 +250,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub stop_voting_time: u64,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
-    /// Epoch start block   
+    /// Epoch start block
     #[serde(default = "default_epoch_start_block")]
     pub epoch_start_block: u64,
     /// Stake table capacity for light client use

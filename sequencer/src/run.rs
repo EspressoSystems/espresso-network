@@ -207,7 +207,7 @@ where
     S: DataSourceOptions,
     V: Versions,
 {
-    let (private_staking_key, private_state_key) = opt.private_keys()?;
+    let (private_staking_key, private_state_key, x25519_sk) = opt.private_keys()?;
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: opt.l1_options,
@@ -215,6 +215,8 @@ where
 
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
+        p2p_bind_address: opt.p2p_bind_address,
+        x25519_secret_key: x25519_sk,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,
         libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,

@@ -1,6 +1,8 @@
 use std::{collections::HashMap, io, net::Ipv4Addr, sync::LazyLock, time::Duration};
 
-use cliquenet::{Address, Keypair, MAX_MESSAGE_SIZE, NetConf, NetworkError, PublicKey, Retry};
+use cliquenet::{MAX_MESSAGE_SIZE, NetConf, NetworkError, Retry};
+use hotshot_types::addr::Address;
+use hotshot_types::x25519::{Keypair, PublicKey};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;

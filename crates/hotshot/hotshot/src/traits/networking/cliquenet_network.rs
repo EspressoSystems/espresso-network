@@ -4,13 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cliquenet::{Address, Keypair, NetConf, PublicKey, Retry, SecretKey};
+use cliquenet::{NetConf, Retry};
+
 use futures::future::ready;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
+    addr::Address,
     boxed_sync,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -20,6 +22,7 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
+    x25519::{Keypair, PublicKey, SecretKey},
     BoxSyncFuture,
 };
 
@@ -154,8 +157,6 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
         let mut parties = Vec::new();
         for i in 0..expected_node_count {
             use std::net::Ipv4Addr;
-
-            use cliquenet::Address;
 
             let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
             let public = T::SignatureKey::from_private(&secret);

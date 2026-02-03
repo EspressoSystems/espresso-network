@@ -224,6 +224,8 @@ pub mod testing {
                     state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None
                 }
             } else {
                 ValidatorConfig {
@@ -235,6 +237,8 @@ pub mod testing {
                     state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None
                 }
             }
         }

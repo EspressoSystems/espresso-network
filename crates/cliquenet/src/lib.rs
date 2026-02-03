@@ -1,11 +1,9 @@
-mod addr;
 mod chan;
 mod error;
 mod frame;
 mod id;
 mod net;
 mod time;
-mod x25519;
 
 #[cfg(feature = "metrics")]
 mod metrics;
@@ -14,18 +12,17 @@ pub mod retry;
 
 use std::sync::Arc;
 
-pub use addr::{Address, InvalidAddress};
-use bon::Builder;
-pub use error::NetworkError;
+use hotshot_types::x25519::{Keypair, PublicKey};
+use hotshot_types::addr::Address;
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::Metrics;
+use bon::Builder;
+use tokio::sync::Semaphore;
+
+pub use error::NetworkError;
 pub use id::Id;
 pub use net::Network;
 pub use retry::Retry;
-use tokio::sync::Semaphore;
-pub use x25519::{
-    InvalidKeypair, InvalidPublicKey, InvalidSecretKey, Keypair, PublicKey, SecretKey,
-};
 
 /// Max. number of bytes for a message (potentially consisting of several frames).
 pub const MAX_MESSAGE_SIZE: usize = 8 * 1024 * 1024;

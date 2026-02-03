@@ -329,6 +329,8 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
+                    x25519_key: None,
+                    p2p_addr: None
                 });
             },
 
@@ -384,6 +386,8 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
+                    x25519_key: None,
+                    p2p_addr: None
                 });
             },
 
@@ -1419,7 +1423,7 @@ where
                         r#"
                     Failed to complete operation `{operation_name}` after `{}`.
                     error: {err}
-                    
+
 
                     This might be caused by:
                     - The current block range being too large for your RPC provider.
@@ -2725,6 +2729,8 @@ pub mod testing {
                 stake: validator_stake,
                 commission: val.commission,
                 delegators,
+                x25519_key: None,
+                p2p_addr: None
             }
         }
     }

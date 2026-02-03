@@ -126,18 +126,21 @@ bitvec = { version = "1", features = ["serde"] }
 blake3 = "1.5"
 bytes = { version = "1.11.0", features = ["serde"] }
 bon = "3.8.2"
+bs58 = "0.5.1"
 cbor4ii = { version = "1.0", features = ["serde1"] }
 chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
 cliquenet = { path = "crates/cliquenet" }
+criterion = "0.8.1"
 dashmap = "6"
 derive_builder = "0.20"
 derive_more = { version = "2.0", features = ["full"] }
 diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
 digest = "0.10"
 dotenvy = "0.15"
+ed25519-compact = "2.2.0"
 either = "1"
 es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
@@ -158,13 +161,9 @@ semver = "1"
 serde-inline-default = "0.2"
 serde_bytes = { version = "0.11" }
 sha2 = "0.10"
-tokio = { version = "1", default-features = false, features = [
-    "rt-multi-thread",
-    "macros",
-    "parking_lot",
-    "sync",
-] }
-tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+snow = { version = "0.10.0", features = ["ring-accelerated"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 tower-service = { version = "0.3", default-features = false }
 tracing-subscriber = "0.3"
 tracing-test = "0.2"
