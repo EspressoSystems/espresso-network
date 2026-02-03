@@ -168,15 +168,15 @@ impl MetadataUri {
 }
 
 #[cfg(test)]
-mod test {
+fn generate_bls_pub_key() -> BLSPubKey {
     use jf_signature::bls_over_bn254::KeyPair;
+    let keypair = KeyPair::generate(&mut rand::thread_rng());
+    BLSPubKey::from(keypair.ver_key())
+}
 
+#[cfg(test)]
+mod test {
     use super::*;
-
-    fn generate_bls_pub_key() -> BLSPubKey {
-        let keypair = KeyPair::generate(&mut rand::thread_rng());
-        BLSPubKey::from(keypair.ver_key())
-    }
 
     #[test]
     fn test_empty_metadata_uri() {
@@ -323,15 +323,9 @@ mod test {
 
 #[cfg(all(test, feature = "testing"))]
 mod validation_tests {
-    use jf_signature::bls_over_bn254::KeyPair;
     use warp::Filter;
 
     use super::*;
-
-    fn generate_bls_pub_key() -> BLSPubKey {
-        let keypair = KeyPair::generate(&mut rand::thread_rng());
-        BLSPubKey::from(keypair.ver_key())
-    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_validate_metadata_correct_pub_key() {
