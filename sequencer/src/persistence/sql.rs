@@ -1082,8 +1082,43 @@ impl Persistence {
 
         tx.commit().await
     }
+}
 
-    pub async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
+const PRUNE_TABLES: &[&str] = &[
+    "anchor_leaf2",
+    "vid_share2",
+    "da_proposal2",
+    "quorum_proposals2",
+    "quorum_certificate2",
+];
+
+async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
+    if view == 0 {
+        // Nothing to prune, the entire chain is younger than the retention period.
+        return Ok(());
+    }
+    tracing::debug!(view, "pruning consensus storage");
+
+    for table in PRUNE_TABLES {
+        let res = query(&format!("DELETE FROM {table} WHERE view < $1"))
+            .bind(view as i64)
+            .execute(tx.as_mut())
+            .await
+            .context(format!("pruning {table}"))?;
+        if res.rows_affected() > 0 {
+            tracing::info!(
+                "garbage collected {} rows from {table}",
+                res.rows_affected()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[async_trait]
+impl SequencerPersistence for Persistence {
+    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
         let max_height: Option<i64> = {
             let mut tx = self.db.read().await?;
             query_as::<(i64,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
@@ -1194,42 +1229,7 @@ impl Persistence {
 
         Ok(())
     }
-}
 
-const PRUNE_TABLES: &[&str] = &[
-    "anchor_leaf2",
-    "vid_share2",
-    "da_proposal2",
-    "quorum_proposals2",
-    "quorum_certificate2",
-];
-
-async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
-    if view == 0 {
-        // Nothing to prune, the entire chain is younger than the retention period.
-        return Ok(());
-    }
-    tracing::debug!(view, "pruning consensus storage");
-
-    for table in PRUNE_TABLES {
-        let res = query(&format!("DELETE FROM {table} WHERE view < $1"))
-            .bind(view as i64)
-            .execute(tx.as_mut())
-            .await
-            .context(format!("pruning {table}"))?;
-        if res.rows_affected() > 0 {
-            tracing::info!(
-                "garbage collected {} rows from {table}",
-                res.rows_affected()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-#[async_trait]
-impl SequencerPersistence for Persistence {
     fn into_catchup_provider(
         self,
         backoff: BackoffParams,
