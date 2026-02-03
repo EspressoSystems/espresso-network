@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NetworkError"],"mod":["combined_network","libp2p_network","memory_network","push_cdn_network"],"trait":["NetworkReliability"]};
+window.SIDEBAR_ITEMS = {"enum":["NetworkError"],"mod":["cliquenet_network","combined_network","libp2p_network","memory_network","push_cdn_network"],"trait":["NetworkReliability"]};

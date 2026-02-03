@@ -8,7 +8,7 @@
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>hotshot_types::{
 <a href=#9 id=9 data-nosnippet>9</a>    message::MessageKind,
 <a href=#10 id=10 data-nosnippet>10</a>    traits::{
-<a href=#11 id=11 data-nosnippet>11</a>        network::{BroadcastDelay, ConnectedNetwork, Topic},
+<a href=#11 id=11 data-nosnippet>11</a>        network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
 <a href=#12 id=12 data-nosnippet>12</a>        node_implementation::Versions,
 <a href=#13 id=13 data-nosnippet>13</a>    },
 <a href=#14 id=14 data-nosnippet>14</a>};
@@ -95,55 +95,57 @@
 <a href=#95 id=95 data-nosnippet>95</a>            <span class="comment">// Match the message type
 <a href=#96 id=96 data-nosnippet>96</a>            </span><span class="kw">match </span>message {
 <a href=#97 id=97 data-nosnippet>97</a>                OutboundMessage::Direct(message, recipient) =&gt; {
-<a href=#98 id=98 data-nosnippet>98</a>                    <span class="comment">// Wrap it in the real message type
-<a href=#99 id=99 data-nosnippet>99</a>                    </span><span class="kw">let </span>message_inner = Message {
-<a href=#100 id=100 data-nosnippet>100</a>                        sender: public_key,
-<a href=#101 id=101 data-nosnippet>101</a>                        kind: message,
-<a href=#102 id=102 data-nosnippet>102</a>                    };
-<a href=#103 id=103 data-nosnippet>103</a>
-<a href=#104 id=104 data-nosnippet>104</a>                    <span class="comment">// Serialize it
-<a href=#105 id=105 data-nosnippet>105</a>                    </span><span class="kw">let </span>message_bytes =
-<a href=#106 id=106 data-nosnippet>106</a>                        <span class="kw">match </span>BincodeSerializer::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">0</span>&gt;&gt;::serialize(<span class="kw-2">&amp;</span>message_inner) {
-<a href=#107 id=107 data-nosnippet>107</a>                            <span class="prelude-val">Ok</span>(message_bytes) =&gt; message_bytes,
-<a href=#108 id=108 data-nosnippet>108</a>                            <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#109 id=109 data-nosnippet>109</a>                                <span class="macro">tracing::warn!</span>(<span class="string">"Failed to serialize direct message: {}"</span>, err);
-<a href=#110 id=110 data-nosnippet>110</a>                                <span class="kw">continue</span>;
-<a href=#111 id=111 data-nosnippet>111</a>                            },
-<a href=#112 id=112 data-nosnippet>112</a>                        };
-<a href=#113 id=113 data-nosnippet>113</a>
-<a href=#114 id=114 data-nosnippet>114</a>                    <span class="comment">// Send the message to the recipient
-<a href=#115 id=115 data-nosnippet>115</a>                    </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = network.direct_message(message_bytes, recipient).<span class="kw">await </span>{
-<a href=#116 id=116 data-nosnippet>116</a>                        <span class="macro">tracing::warn!</span>(<span class="string">"Failed to send message: {:?}"</span>, err);
-<a href=#117 id=117 data-nosnippet>117</a>                    };
-<a href=#118 id=118 data-nosnippet>118</a>                },
-<a href=#119 id=119 data-nosnippet>119</a>
-<a href=#120 id=120 data-nosnippet>120</a>                OutboundMessage::Broadcast(message) =&gt; {
-<a href=#121 id=121 data-nosnippet>121</a>                    <span class="comment">// Wrap it in the real message type
-<a href=#122 id=122 data-nosnippet>122</a>                    </span><span class="kw">let </span>message_inner = Message {
-<a href=#123 id=123 data-nosnippet>123</a>                        sender: public_key,
-<a href=#124 id=124 data-nosnippet>124</a>                        kind: message,
-<a href=#125 id=125 data-nosnippet>125</a>                    };
-<a href=#126 id=126 data-nosnippet>126</a>
-<a href=#127 id=127 data-nosnippet>127</a>                    <span class="comment">// Serialize it
-<a href=#128 id=128 data-nosnippet>128</a>                    </span><span class="kw">let </span>message_bytes =
-<a href=#129 id=129 data-nosnippet>129</a>                        <span class="kw">match </span>BincodeSerializer::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">0</span>&gt;&gt;::serialize(<span class="kw-2">&amp;</span>message_inner) {
-<a href=#130 id=130 data-nosnippet>130</a>                            <span class="prelude-val">Ok</span>(message_bytes) =&gt; message_bytes,
-<a href=#131 id=131 data-nosnippet>131</a>                            <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#132 id=132 data-nosnippet>132</a>                                <span class="macro">tracing::warn!</span>(<span class="string">"Failed to serialize broadcast message: {}"</span>, err);
-<a href=#133 id=133 data-nosnippet>133</a>                                <span class="kw">continue</span>;
-<a href=#134 id=134 data-nosnippet>134</a>                            },
-<a href=#135 id=135 data-nosnippet>135</a>                        };
-<a href=#136 id=136 data-nosnippet>136</a>
-<a href=#137 id=137 data-nosnippet>137</a>                    <span class="comment">// Broadcast the message to the global topic
-<a href=#138 id=138 data-nosnippet>138</a>                    </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = network
-<a href=#139 id=139 data-nosnippet>139</a>                        .broadcast_message(message_bytes, Topic::Global, BroadcastDelay::None)
-<a href=#140 id=140 data-nosnippet>140</a>                        .<span class="kw">await
-<a href=#141 id=141 data-nosnippet>141</a>                    </span>{
-<a href=#142 id=142 data-nosnippet>142</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to broadcast message: {:?}"</span>, err);
-<a href=#143 id=143 data-nosnippet>143</a>                    };
-<a href=#144 id=144 data-nosnippet>144</a>                },
-<a href=#145 id=145 data-nosnippet>145</a>            }
-<a href=#146 id=146 data-nosnippet>146</a>        }
-<a href=#147 id=147 data-nosnippet>147</a>    }
-<a href=#148 id=148 data-nosnippet>148</a>}
+<a href=#98 id=98 data-nosnippet>98</a>                    <span class="kw">let </span>view = message.view_number();
+<a href=#99 id=99 data-nosnippet>99</a>                    <span class="comment">// Wrap it in the real message type
+<a href=#100 id=100 data-nosnippet>100</a>                    </span><span class="kw">let </span>message_inner = Message {
+<a href=#101 id=101 data-nosnippet>101</a>                        sender: public_key,
+<a href=#102 id=102 data-nosnippet>102</a>                        kind: message,
+<a href=#103 id=103 data-nosnippet>103</a>                    };
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>                    <span class="comment">// Serialize it
+<a href=#106 id=106 data-nosnippet>106</a>                    </span><span class="kw">let </span>message_bytes =
+<a href=#107 id=107 data-nosnippet>107</a>                        <span class="kw">match </span>BincodeSerializer::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">0</span>&gt;&gt;::serialize(<span class="kw-2">&amp;</span>message_inner) {
+<a href=#108 id=108 data-nosnippet>108</a>                            <span class="prelude-val">Ok</span>(message_bytes) =&gt; message_bytes,
+<a href=#109 id=109 data-nosnippet>109</a>                            <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#110 id=110 data-nosnippet>110</a>                                <span class="macro">tracing::warn!</span>(<span class="string">"Failed to serialize direct message: {}"</span>, err);
+<a href=#111 id=111 data-nosnippet>111</a>                                <span class="kw">continue</span>;
+<a href=#112 id=112 data-nosnippet>112</a>                            },
+<a href=#113 id=113 data-nosnippet>113</a>                        };
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a>                    <span class="comment">// Send the message to the recipient
+<a href=#116 id=116 data-nosnippet>116</a>                    </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = network.direct_message(view, message_bytes, recipient).<span class="kw">await </span>{
+<a href=#117 id=117 data-nosnippet>117</a>                        <span class="macro">tracing::warn!</span>(<span class="string">"Failed to send message: {:?}"</span>, err);
+<a href=#118 id=118 data-nosnippet>118</a>                    };
+<a href=#119 id=119 data-nosnippet>119</a>                },
+<a href=#120 id=120 data-nosnippet>120</a>
+<a href=#121 id=121 data-nosnippet>121</a>                OutboundMessage::Broadcast(message) =&gt; {
+<a href=#122 id=122 data-nosnippet>122</a>                    <span class="kw">let </span>view = message.view_number();
+<a href=#123 id=123 data-nosnippet>123</a>                    <span class="comment">// Wrap it in the real message type
+<a href=#124 id=124 data-nosnippet>124</a>                    </span><span class="kw">let </span>message_inner = Message {
+<a href=#125 id=125 data-nosnippet>125</a>                        sender: public_key,
+<a href=#126 id=126 data-nosnippet>126</a>                        kind: message,
+<a href=#127 id=127 data-nosnippet>127</a>                    };
+<a href=#128 id=128 data-nosnippet>128</a>
+<a href=#129 id=129 data-nosnippet>129</a>                    <span class="comment">// Serialize it
+<a href=#130 id=130 data-nosnippet>130</a>                    </span><span class="kw">let </span>message_bytes =
+<a href=#131 id=131 data-nosnippet>131</a>                        <span class="kw">match </span>BincodeSerializer::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">0</span>&gt;&gt;::serialize(<span class="kw-2">&amp;</span>message_inner) {
+<a href=#132 id=132 data-nosnippet>132</a>                            <span class="prelude-val">Ok</span>(message_bytes) =&gt; message_bytes,
+<a href=#133 id=133 data-nosnippet>133</a>                            <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#134 id=134 data-nosnippet>134</a>                                <span class="macro">tracing::warn!</span>(<span class="string">"Failed to serialize broadcast message: {}"</span>, err);
+<a href=#135 id=135 data-nosnippet>135</a>                                <span class="kw">continue</span>;
+<a href=#136 id=136 data-nosnippet>136</a>                            },
+<a href=#137 id=137 data-nosnippet>137</a>                        };
+<a href=#138 id=138 data-nosnippet>138</a>
+<a href=#139 id=139 data-nosnippet>139</a>                    <span class="comment">// Broadcast the message to the global topic
+<a href=#140 id=140 data-nosnippet>140</a>                    </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = network
+<a href=#141 id=141 data-nosnippet>141</a>                        .broadcast_message(view, message_bytes, Topic::Global, BroadcastDelay::None)
+<a href=#142 id=142 data-nosnippet>142</a>                        .<span class="kw">await
+<a href=#143 id=143 data-nosnippet>143</a>                    </span>{
+<a href=#144 id=144 data-nosnippet>144</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to broadcast message: {:?}"</span>, err);
+<a href=#145 id=145 data-nosnippet>145</a>                    };
+<a href=#146 id=146 data-nosnippet>146</a>                },
+<a href=#147 id=147 data-nosnippet>147</a>            }
+<a href=#148 id=148 data-nosnippet>148</a>        }
+<a href=#149 id=149 data-nosnippet>149</a>    }
+<a href=#150 id=150 data-nosnippet>150</a>}
 </code></pre></div></section></main></body></html>

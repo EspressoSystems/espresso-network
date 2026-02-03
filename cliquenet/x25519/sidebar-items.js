@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["InvalidKeypair","InvalidPublicKey","InvalidSecretKey","Keypair","PublicKey","SecretKey"]};
