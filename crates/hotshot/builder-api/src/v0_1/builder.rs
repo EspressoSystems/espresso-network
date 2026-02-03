@@ -289,3 +289,27 @@ where
         })?;
     Ok(api)
 }
+
+/// Defines the status API for the builder
+pub fn status_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
+    options: &Options,
+) -> Result<Api<State, Error, Ver>, ApiError>
+where
+    State: 'static + Send + Sync + ReadState,
+    <State as ReadState>::State: Send + Sync + AcceptsTxnSubmits<Types>,
+{
+    // Load the API from the config file
+    let mut api = load_api::<State, Error, Ver>(
+        options.api_path.as_ref(),
+        include_str!("../../api/v0_1/status.toml"),
+        options.extensions.clone(),
+    )?;
+
+    // Define our routes
+    api.with_version("0.0.1".parse().unwrap())
+        .get("ping", |_req: RequestParams, _state| {
+            async { Ok("pong") }.boxed()
+        })?;
+
+    Ok(api)
+}
