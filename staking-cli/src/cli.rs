@@ -278,6 +278,11 @@ pub async fn run() -> Result<()> {
             return Ok(());
         },
         Commands::Config => {
+            if !config_path.exists() {
+                println!("No config file found at {}", config_path.display());
+                println!("Run `staking-cli init --network <network>` to create one.");
+                return Ok(());
+            }
             println!("Config file at {}\n", config_path.display());
             let mut config = config;
             config.signer.mnemonic = config.signer.mnemonic.map(|_| "***".to_string());
