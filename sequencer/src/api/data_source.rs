@@ -42,7 +42,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion};
+use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion, U256};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -116,6 +116,11 @@ pub(crate) trait StateSignatureDataSource<N: ConnectedNetwork<PubKey>> {
 
 pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
+}
+
+pub(crate) trait TokenDataSource<T: NodeType> {
+    /// Get the stake table for a given epoch
+    fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
 }
 
 #[derive(Serialize, Deserialize)]

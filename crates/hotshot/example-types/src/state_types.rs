@@ -34,7 +34,11 @@ pub struct TestInstanceState {
     pub delay_config: DelayConfig,
 }
 
-impl InstanceState for TestInstanceState {}
+impl InstanceState for TestInstanceState {
+    fn max_block_size(&self) -> u64 {
+        1 * 1024 * 1024 // 1MB
+    }
+}
 
 impl TestInstanceState {
     pub fn new(delay_config: DelayConfig) -> Self {

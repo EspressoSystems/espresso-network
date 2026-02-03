@@ -25,7 +25,9 @@ use crate::{
 };
 
 /// Instance-level state, which allows us to fetch missing validated state.
-pub trait InstanceState: Debug + Clone + Send + Sync {}
+pub trait InstanceState: Debug + Clone + Send + Sync {
+    fn max_block_size(&self) -> u64;
+}
 
 /// Application-specific state delta, which will be used to store a list of merkle tree entries.
 pub trait StateDelta:
