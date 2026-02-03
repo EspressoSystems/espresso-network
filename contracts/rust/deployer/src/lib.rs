@@ -21,7 +21,7 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use clap::{builder::OsStr, Parser, ValueEnum};
-use derive_more::{derive::Deref, Display};
+use derive_more::Display;
 use espresso_types::{v0_1::L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::sol_types::*;
 
@@ -274,8 +274,22 @@ impl From<Contract> for OsStr {
 }
 
 /// Cache of contracts predeployed or deployed during this current run.
-#[derive(Deref, Debug, Clone, Default)]
-pub struct Contracts(HashMap<Contract, Address>);
+#[derive(Debug, Clone)]
+pub struct Contracts {
+    addresses: HashMap<Contract, Address>,
+    // TODO: having the cooldown field here is a bit hacky but we postpone a better solution to
+    // avoid a large refactor.
+    deploy_cooldown: Duration,
+}
+
+impl Default for Contracts {
+    fn default() -> Self {
+        Self {
+            addresses: HashMap::new(),
+            deploy_cooldown: Duration::ZERO,
+        }
+    }
+}
 
 impl From<DeployedContracts> for Contracts {
     fn from(deployed: DeployedContracts) -> Self {
@@ -337,17 +351,35 @@ impl From<DeployedContracts> for Contracts {
         if let Some(addr) = deployed.reward_claim_proxy {
             m.insert(Contract::RewardClaimProxy, addr);
         }
-        Self(m)
+        Self {
+            addresses: m,
+            deploy_cooldown: Duration::ZERO,
+        }
     }
 }
 
 impl Contracts {
     pub fn new() -> Self {
-        Contracts(HashMap::new())
+        Self::default()
+    }
+
+    pub fn with_cooldown(cooldown: Duration) -> Self {
+        Self {
+            addresses: HashMap::new(),
+            deploy_cooldown: cooldown,
+        }
+    }
+
+    pub fn set_cooldown(&mut self, cooldown: Duration) {
+        self.deploy_cooldown = cooldown;
     }
 
     pub fn address(&self, contract: Contract) -> Option<Address> {
-        self.0.get(&contract).copied()
+        self.addresses.get(&contract).copied()
+    }
+
+    pub fn remove(&mut self, contract: &Contract) -> Option<Address> {
+        self.addresses.remove(contract)
     }
 
     /// Deploy a contract (with logging and cached deployments)
@@ -358,7 +390,7 @@ impl Contracts {
     where
         P: Provider,
     {
-        if let Some(addr) = self.0.get(&name) {
+        if let Some(addr) = self.addresses.get(&name) {
             tracing::info!("skipping deployment of {name}, already deployed at {addr:#x}");
             return Ok(*addr);
         }
@@ -377,18 +409,18 @@ impl Contracts {
 
         tracing::info!("deployed {name} at {addr:#x}");
 
-        // Cooldown after deployment to avoid rate limiting on public RPC nodes
-        // This helps when deploying multiple contracts in sequence
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-        tracing::info!("cooldown 1000ms after deployment");
+        if !self.deploy_cooldown.is_zero() {
+            tokio::time::sleep(self.deploy_cooldown).await;
+            tracing::info!("cooldown {:?} after deployment", self.deploy_cooldown);
+        }
 
-        self.0.insert(name, addr);
+        self.addresses.insert(name, addr);
         Ok(addr)
     }
 
     /// Write a .env file.
     pub fn write(&self, mut w: impl Write) -> Result<()> {
-        for (contract, address) in &self.0 {
+        for (contract, address) in &self.addresses {
             writeln!(w, "{contract}={address:#x}")?;
         }
         Ok(())
@@ -2316,7 +2348,7 @@ mod tests {
 
     impl Contracts {
         fn insert(&mut self, name: Contract, address: Address) -> Option<Address> {
-            self.0.insert(name, address)
+            self.addresses.insert(name, address)
         }
     }
 
@@ -4486,7 +4518,7 @@ mod tests {
         let cached_impl_addr = contracts.address(Contract::FeeContract);
 
         // For patch upgrades, we need to clear the cache to allow redeployment
-        contracts.0.remove(&Contract::FeeContract);
+        contracts.remove(&Contract::FeeContract);
 
         // Test the upgrade function directly
         let receipt = upgrade_fee_v1(&provider, &mut contracts).await?;
@@ -4566,7 +4598,7 @@ mod tests {
 
         // Second upgrade to V2 (re-applying same version)
         // For patch upgrades, we need to clear the cache to allow redeployment
-        contracts.0.remove(&Contract::LightClientV2);
+        contracts.remove(&Contract::LightClientV2);
 
         // Second upgrade to V2 (re-applying same version)
         upgrade_light_client_v2(

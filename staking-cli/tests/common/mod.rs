@@ -1,5 +1,6 @@
 use anyhow::Result;
 use assert_cmd::Command;
+use hotshot_types::signature_key::BLSPubKey;
 use staking_cli::{deploy::TestSystem, DEV_MNEMONIC, DEV_PRIVATE_KEY};
 
 // rstest macro usage isn't detected
@@ -12,6 +13,7 @@ pub enum Signer {
     PrivateKey,
 }
 
+// Methods that aren't used by *all* test binaries lead to warnings.
 pub trait TestSystemExt {
     /// Create a base staking-cli command configured for this test system
     fn cmd(&self, signer: Signer) -> Command;
@@ -26,6 +28,9 @@ pub trait TestSystemExt {
     fn export_node_signatures_cmd(&self) -> Result<Command>;
 
     fn bls_private_key_str(&self) -> Result<String>;
+
+    #[allow(dead_code)]
+    fn bls_public_key_str(&self) -> String;
 
     fn state_private_key_str(&self) -> Result<String>;
 }
@@ -89,6 +94,10 @@ impl TestSystemExt for TestSystem {
             .sign_key_ref()
             .to_tagged_base64()?
             .to_string())
+    }
+
+    fn bls_public_key_str(&self) -> String {
+        BLSPubKey::from(self.bls_key_pair.ver_key()).to_string()
     }
 
     fn state_private_key_str(&self) -> Result<String> {

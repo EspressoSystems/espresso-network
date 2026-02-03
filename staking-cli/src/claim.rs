@@ -207,7 +207,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_claim_reward() -> Result<()> {
         let system = TestSystem::deploy().await?;
         let reward_balance = U256::from(1000000);
@@ -240,7 +240,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_unclaimed_rewards_not_found() -> Result<()> {
         let system = TestSystem::deploy().await?;
 

@@ -1,4 +1,4 @@
-#![doc = include_str!("../../README.md")]
+#![doc = include_str!("../README.md")]
 use std::path::PathBuf;
 
 use alloy::{
@@ -31,6 +31,7 @@ use crate::{
         display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
         StakeTableContractVersion,
     },
+    metadata::{validate_metadata_uri, MetadataUri},
     output::{
         format_esp, output_calldata, output_error, output_success, output_warn, CalldataInfo,
     },
@@ -224,8 +225,14 @@ pub async fn run() -> Result<()> {
             private_key,
             account_index,
             ledger,
+            network,
         } => {
-            let mut config = toml::from_str::<Config>(include_str!("../config.decaf.toml"))?;
+            let config_template = match network {
+                crate::Network::Mainnet => include_str!("../config.mainnet.toml"),
+                crate::Network::Decaf => include_str!("../config.decaf.toml"),
+                crate::Network::Local => include_str!("../config.demo-native.toml"),
+            };
+            let mut config = toml::from_str::<Config>(config_template)?;
             config.signer.mnemonic = mnemonic;
             config.signer.private_key = private_key;
             config.signer.account_index = Some(account_index);
@@ -455,7 +462,17 @@ pub async fn run() -> Result<()> {
                 wallet.as_ref(),
                 config.sender_address,
             )?;
-            let metadata_uri = metadata_uri_args.clone().try_into()?;
+            let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
+
+            // Validate metadata URI if present and validation not skipped
+            if let Some(url) = metadata_uri.url() {
+                if !config.skip_metadata_validation {
+                    validate_metadata_uri(url, &payload.bls_vk)
+                        .await
+                        .context("use --skip-metadata-validation to skip")?;
+                }
+            }
+
             Transaction::RegisterValidator {
                 stake_table: stake_table_addr,
                 commission: *commission,
@@ -495,8 +512,27 @@ pub async fn run() -> Result<()> {
             stake_table: stake_table_addr,
             new_commission: *new_commission,
         },
-        Commands::UpdateMetadataUri { metadata_uri_args } => {
-            let metadata_uri = metadata_uri_args.clone().try_into()?;
+        Commands::UpdateMetadataUri {
+            metadata_uri_args,
+            consensus_public_key,
+        } => {
+            let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
+
+            // Validate metadata URI if present and validation not skipped
+            if let Some(url) = metadata_uri.url() {
+                if !config.skip_metadata_validation {
+                    let bls_vk = consensus_public_key.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--consensus-public-key is required for metadata validation (use \
+                             --skip-metadata-validation to skip)"
+                        )
+                    })?;
+                    validate_metadata_uri(url, &bls_vk)
+                        .await
+                        .context("use --skip-metadata-validation to skip")?;
+                }
+            }
+
             Transaction::UpdateMetadataUri {
                 stake_table: stake_table_addr,
                 metadata_uri,
