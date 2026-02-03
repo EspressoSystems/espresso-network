@@ -73,6 +73,30 @@ fn test_cli_version() -> Result<()> {
     Ok(())
 }
 
+#[test_log::test(tokio::test)]
+async fn test_cli_missing_signer_error() -> Result<()> {
+    let system = deploy::TestSystem::deploy().await?;
+
+    // Run a command that requires signing without providing any signer
+    base_cmd()
+        .arg("--rpc-url")
+        .arg(system.rpc_url.to_string())
+        .arg("--stake-table-address")
+        .arg(system.stake_table.to_string())
+        .arg("--account-index")
+        .arg("0")
+        .arg("delegate")
+        .arg("--validator-address")
+        .arg("0x1111111111111111111111111111111111111111")
+        .arg("--amount")
+        .arg("100")
+        .assert()
+        .failure()
+        .stderr(str::contains("Signer configuration required"));
+
+    Ok(())
+}
+
 #[test_log::test]
 fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
     let tmpdir = tempfile::tempdir()?;
