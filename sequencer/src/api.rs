@@ -923,6 +923,20 @@ impl<
         self.inner().get_chain_config(commitment).await
     }
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        let decided_height = self
+            .as_ref()
+            .consensus()
+            .await
+            .read()
+            .await
+            .decided_leaf()
+            .await
+            .height();
+
+        ensure!(
+            decided_height >= height,
+            "Requested leaf chain at height {height} but decided height is {decided_height}"
+        );
         // Check if we have the desired state in memory.
         match self.as_ref().get_leaf_chain(height).await {
             Ok(cf) => return Ok(cf),
