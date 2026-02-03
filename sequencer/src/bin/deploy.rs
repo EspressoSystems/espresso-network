@@ -405,6 +405,16 @@ struct Options {
     #[clap(flatten)]
     logging: logging::Config,
 
+    /// Cooldown after each contract deployment to avoid outdated state during post deployment
+    /// verification steps.
+    #[clap(
+        long,
+        env = "ESPRESSO_POST_DEPLOYMENT_COOLDOWN",
+        default_value = "1s",
+        value_parser = parse_duration,
+    )]
+    post_deployment_cooldown: Duration,
+
     /// Command to run
     ///
     /// For backwards compatibility, the default is to deploy contracts, if no
@@ -432,6 +442,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut contracts = Contracts::from(opt.contracts);
+    contracts.set_cooldown(opt.post_deployment_cooldown);
+
     let provider = if opt.ledger {
         let signer = connect_ledger(opt.account_index as usize).await?;
         tracing::info!("Using ledger for signing, watch ledger device for prompts.");

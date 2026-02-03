@@ -9,7 +9,10 @@ use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
-pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+pub(crate) use hotshot_types::{
+    light_client::StateSignKey,
+    signature_key::{BLSPrivKey, BLSPubKey},
+};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUri;
 use parse::Commission;
@@ -40,6 +43,13 @@ pub(crate) mod transaction;
 pub mod deploy;
 
 pub use cli::run;
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum Network {
+    Mainnet,
+    Decaf,
+    Local,
+}
 
 /// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -75,6 +85,7 @@ pub struct Config {
     pub espresso_url: Option<Url>,
 
     #[clap(flatten)]
+    #[serde(default)]
     pub signer: SignerConfig,
 
     /// Export calldata for multisig wallets instead of sending transaction.
@@ -96,6 +107,11 @@ pub struct Config {
     #[clap(long, env = "SKIP_SIMULATION", action = ArgAction::SetTrue, requires = "export_calldata")]
     #[serde(skip)]
     pub skip_simulation: bool,
+
+    /// Skip metadata URI validation (fetch and schema check).
+    #[clap(long, env = "SKIP_METADATA_VALIDATION", action = ArgAction::SetTrue)]
+    #[serde(skip)]
+    pub skip_metadata_validation: bool,
 
     #[clap(flatten)]
     #[serde(skip)]
@@ -281,6 +297,10 @@ pub enum Commands {
         /// Use a ledger hardware wallet.
         #[clap(long, env = "LEDGER_INDEX", required_unless_present_any = ["mnemonic", "private_key"])]
         ledger: bool,
+
+        /// Network to configure (mainnet, decaf, or local).
+        #[clap(long, value_enum, env = "NETWORK")]
+        network: Network,
     },
     /// Remove the config file.
     Purge {
@@ -331,6 +351,12 @@ pub enum Commands {
     UpdateMetadataUri {
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
+
+        /// The consensus public key for metadata validation.
+        ///
+        /// Required for metadata validation unless --skip-metadata-validation is set.
+        #[clap(long, value_parser = parse::parse_bls_pub_key, env = "CONSENSUS_PUBLIC_KEY")]
+        consensus_public_key: Option<BLSPubKey>,
     },
     /// Approve stake table contract to move tokens
     Approve {
