@@ -196,9 +196,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                                 "Sending block directly to next leader for view {next_view}"
                             );
                             broadcast_event(
-                                Arc::new(HotShotEvent::BlockDirectlyRecv(
+                                Arc::new(HotShotEvent::BlockDirectSend(
                                     (*payload_with_metadata).clone(),
                                     *view_number,
+                                    self.public_key.clone(),
+                                    next_leader,
                                 )),
                                 &event_stream,
                             )

@@ -155,14 +155,22 @@ async fn test_vid_task() {
                 payload_commitment,
                 ViewNumber::new(2),
             )),
-            // BlockDirectlyRecv is sent to next leader (node 2 is leader for view 2,
+            // BlockDirectSend is sent to next leader (node 2 is leader for view 2,
             // next leader for view 3 is node 3, which is different, so direct send occurs)
-            exact(BlockDirectlyRecv(
+            exact(BlockDirectSend(
                 PayloadWithMetadata {
                     payload: payload.clone(),
                     metadata: metadata.clone(),
                 },
                 ViewNumber::new(2),
+                pub_key,
+                membership
+                    .membership_for_epoch(None)
+                    .await
+                    .unwrap()
+                    .leader(ViewNumber::new(3))
+                    .await
+                    .unwrap(),
             )),
             exact(VidDisperseSend(vid_proposal.clone(), pub_key)),
         ]),
