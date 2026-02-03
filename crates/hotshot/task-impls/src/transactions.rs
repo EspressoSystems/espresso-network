@@ -39,19 +39,6 @@ use crate::{
     helpers::broadcast_event,
 };
 
-// Parameters for builder querying algorithm
-
-/// Proportion of builders queried in first batch, dividend
-const BUILDER_MAIN_BATCH_THRESHOLD_DIVIDEND: usize = 2;
-/// Proportion of builders queried in the first batch, divisor
-const BUILDER_MAIN_BATCH_THRESHOLD_DIVISOR: usize = 3;
-/// Time the first batch of builders has to respond
-const BUILDER_MAIN_BATCH_CUTOFF: Duration = Duration::from_millis(700);
-/// Multiplier for extra time to give to the second batch of builders
-const BUILDER_ADDITIONAL_TIME_MULTIPLIER: f32 = 0.2;
-/// Minimum amount of time allotted to both batches, cannot be cut shorter if the first batch
-/// responds extremely fast.
-const BUILDER_MINIMUM_QUERY_TIME: Duration = Duration::from_millis(300);
 /// Delay between re-tries on unsuccessful calls
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 
@@ -553,7 +540,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         view_number: TYPES::View,
         parent_comm_sig: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Vec<(AvailableBlockInfo<TYPES>, usize)> {
-        let tasks = self
+        let mut tasks = self
             .builder_clients
             .iter()
             .enumerate()
@@ -573,33 +560,16 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     })
             })
             .collect::<FuturesUnordered<_>>();
-        let mut results = Vec::with_capacity(self.builder_clients.len());
-        let query_start = Instant::now();
-        let threshold = (self.builder_clients.len() * BUILDER_MAIN_BATCH_THRESHOLD_DIVIDEND)
-            .div_ceil(BUILDER_MAIN_BATCH_THRESHOLD_DIVISOR);
-        let mut tasks = tasks.take(threshold);
         while let Some(result) = tasks.next().await {
-            results.push(result);
-            if query_start.elapsed() > BUILDER_MAIN_BATCH_CUTOFF {
-                break;
+            match result {
+                Ok(block_info) => return block_info.collect(),
+                Err(err) => {
+                    tracing::warn!("Failed to get available blocks: {err:#}");
+                    continue;
+                },
             }
         }
-        let timeout = sleep(std::cmp::max(
-            query_start
-                .elapsed()
-                .mul_f32(BUILDER_ADDITIONAL_TIME_MULTIPLIER),
-            BUILDER_MINIMUM_QUERY_TIME.saturating_sub(query_start.elapsed()),
-        ));
-        futures::pin_mut!(timeout);
-        let mut tasks = tasks.into_inner().take_until(timeout);
-        while let Some(result) = tasks.next().await {
-            results.push(result);
-        }
-        results
-            .into_iter()
-            .filter_map(|result| result.ok())
-            .flatten()
-            .collect::<Vec<_>>()
+        Vec::new()
     }
 
     /// Get a block from builder.
