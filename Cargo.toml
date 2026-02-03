@@ -314,13 +314,15 @@ debug = "full"
 [profile.test]
 opt-level = 1
 
+# dependencies are usually cached, optimize more
+[profile.test.package."*"]
+opt-level = 3
+
 [profile.test.package.sequencer]
 opt-level = 0
 [profile.test.package.hotshot-testing]
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
-opt-level = 3
-[profile.test.package.jf-merkle-tree]
 opt-level = 3
 
 # Geared towards building our docker images for local development
