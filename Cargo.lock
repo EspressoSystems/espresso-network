@@ -3814,6 +3814,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "deployment-info"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap 4.5.53",
+ "dotenvy",
+ "espresso-contract-deployer",
+ "espresso-types",
+ "hotshot-contract-adapter",
+ "hotshot-state-prover",
+ "serde",
+ "test-log",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+ "tracing-test",
+ "url",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
