@@ -438,8 +438,34 @@ endpoint isn’t ready yet):</p>
 <div class="example-wrap"><pre class="language-bash"><code>staking-cli --skip-metadata-validation register-validator --metadata-uri https://example.com/metadata.json ...
 staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https://example.com/metadata.json</code></pre></div>
 <p>Or via environment variable: <code>SKIP_METADATA_VALIDATION=true</code></p>
-<p>The staking UI service also supports Prometheus metrics format as an alternative to JSON (useful if you want to serve
-metadata from your node’s metrics endpoint). See the staking-ui-service documentation for details.</p>
+<h5 id="using-your-nodes-metrics-endpoint-recommended"><a class="doc-anchor" href="#using-your-nodes-metrics-endpoint-recommended">§</a>Using Your Node’s Metrics Endpoint (Recommended)</h5>
+<p>The easiest way to provide metadata is to use your espresso node’s <code>/status/metrics</code> endpoint. Your node already exposes
+this endpoint with your validator’s public key and identity information. Use <code>--node-url</code>:</p>
+<div class="example-wrap"><pre class="language-bash"><code># Register using your node&#39;s metrics endpoint
+staking-cli register-validator --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt; \
+    --commission 4.99 --node-url https://my-validator.example.com
+
+# Update metadata URI to use your node&#39;s metrics
+staking-cli update-metadata-uri --node-url https://my-validator.example.com --consensus-public-key BLS_VER_KEY~...</code></pre></div>
+<p>When using <code>--node-url</code>, the CLI will:</p>
+<ol>
+<li>Append <code>/status/metrics</code> to the provided URL</li>
+<li>Fetch and validate the OpenMetrics data</li>
+<li>Store the full metrics URL (e.g., <code>https://my-validator.example.com/status/metrics</code>) as the metadata URI</li>
+</ol>
+<p>The metrics endpoint extracts metadata from these Prometheus metrics:</p>
+<ul>
+<li><code>consensus_node{key="BLS_VER_KEY~..."}</code> - Your validator’s public key (required)</li>
+<li><code>consensus_node_identity_general{name, description, company_name, company_website}</code> - Identity fields</li>
+<li><code>consensus_version{desc}</code> - Client version</li>
+<li><code>consensus_node_identity_icon{small_1x, small_2x, ...}</code> - Icon URLs</li>
+</ul>
+<h5 id="using-a-custom-json-file-alternative"><a class="doc-anchor" href="#using-a-custom-json-file-alternative">§</a>Using a Custom JSON File (Alternative)</h5>
+<p>If you need more control over your metadata or want to host it separately from your node, use <code>--metadata-uri</code> to point
+to a JSON file (see <a href="#metadata-url-schema">Metadata URL Schema</a> above):</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator ... --metadata-uri https://example.com/metadata.json
+staking-cli update-metadata-uri --metadata-uri https://example.com/metadata.json --consensus-public-key BLS_VER_KEY~...</code></pre></div>
+<p>Note: <code>--node-url</code> and <code>--metadata-uri</code> are mutually exclusive.</p>
 <h4 id="de-registering-your-validator"><a class="doc-anchor" href="#de-registering-your-validator">§</a>De-registering your validator</h4>
 <p>WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to
 it.</p>
