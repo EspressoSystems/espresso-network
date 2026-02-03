@@ -651,14 +651,60 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             },
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 let view_number = proposal.data.view_number();
+
                 // All nodes get the latest proposed view as a proxy of `cur_view` of old.
                 if !self.update_latest_proposed_view(view_number).await {
                     tracing::trace!("Failed to update latest proposed view");
                 }
 
+                // Use the epoch from the proposal's justify_qc rather than self.cur_epoch.
+                // This avoids a race condition where we receive a proposal for the first view
+                // of a new epoch before ViewChange has updated our cur_epoch.
+                // If the QC is for the last block of an epoch (EQC), the next view is in epoch + 1.
+                let justify_qc = proposal.data.justify_qc();
+                let qc_epoch = justify_qc.data.epoch;
+                let is_eqc = justify_qc
+                    .data
+                    .block_number
+                    .is_some_and(|bn| is_last_block(bn, self.epoch_height));
+                let target_epoch = if is_eqc {
+                    qc_epoch.map(|e| e + 1)
+                } else {
+                    qc_epoch
+                };
+
+                // If the justify_qc is an EQC, verify and store the extended QC
+                if is_eqc {
+                    let next_epoch_qc = proposal.data.next_epoch_justify_qc().as_ref();
+                    ensure!(
+                        next_epoch_qc.is_some(),
+                        "Proposal has EQC but no next_epoch_justify_qc present"
+                    );
+                    let next_epoch_qc = next_epoch_qc.unwrap();
+                    ensure!(
+                        justify_qc.data.leaf_commit == next_epoch_qc.data.leaf_commit,
+                        "Proposal has EQC but leaf commits don't match: justify_qc={:?}, \
+                         next_epoch_qc={:?}",
+                        justify_qc.data.leaf_commit,
+                        next_epoch_qc.data.leaf_commit
+                    );
+                    self.formed_quorum_certificates
+                        .insert(justify_qc.view_number(), justify_qc.clone());
+                    self.formed_next_epoch_quorum_certificates
+                        .insert(next_epoch_qc.view_number(), next_epoch_qc.clone());
+                    handle_eqc_formed(
+                        justify_qc.view_number(),
+                        justify_qc.data.leaf_commit,
+                        justify_qc.data.block_number,
+                        self,
+                        &event_sender,
+                    )
+                    .await;
+                }
+
                 self.create_dependency_task_if_new(
                     view_number + 1,
-                    epoch_number,
+                    target_epoch,
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
