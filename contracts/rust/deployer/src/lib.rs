@@ -378,6 +378,14 @@ impl Contracts {
         self.addresses.get(&contract).copied()
     }
 
+    pub fn get(&self, contract: &Contract) -> Option<&Address> {
+        self.addresses.get(contract)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Contract, &Address)> {
+        self.addresses.iter()
+    }
+
     pub fn remove(&mut self, contract: &Contract) -> Option<Address> {
         self.addresses.remove(contract)
     }
