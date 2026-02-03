@@ -732,6 +732,8 @@ async fn load_v2_reward_accounts(
     height: u64,
     accounts: &[RewardAccountV2],
 ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+    let num_accounts = accounts.len();
+
     // Open a new read transaction to get the leaf
     let mut tx = db
         .read()
@@ -756,6 +758,9 @@ async fn load_v2_reward_accounts(
     // Get the merkle root from the header and create a snapshot from it
     let merkle_root = header.reward_merkle_tree_root().unwrap_right();
     let mut snapshot = RewardMerkleTreeV2::from_commitment(merkle_root);
+
+    // Time the database fetch operations
+    let fetch_start = std::time::Instant::now();
 
     // Create a bounded join set with 10 concurrent tasks
     let mut join_set = BoundedJoinSet::new(10);
@@ -832,6 +837,12 @@ async fn load_v2_reward_accounts(
         }
     }
 
+    tracing::info!(
+        duration_ms = fetch_start.elapsed().as_millis() as u64,
+        count = num_accounts,
+        height,
+        "fetched v2 reward accounts from db"
+    );
     Ok((snapshot, leaf.leaf().clone()))
 }
 
