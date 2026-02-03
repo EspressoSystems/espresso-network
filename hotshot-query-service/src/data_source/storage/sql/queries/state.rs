@@ -698,35 +698,31 @@ fn build_get_path_query<'q>(
 
     // We iterate through the path vector skipping the first element after each iteration
     let len = traversal_path.len();
-    let mut sub_queries = Vec::new();
+    let mut paths = Vec::new();
 
     query.bind(created)?;
 
     for _ in 0..=len {
         let path = traversal_path.clone().rev().collect::<Vec<_>>();
         let path: serde_json::Value = path.into();
-        let node_path = query.bind(path)?;
-
-        let sub_query = format!(
-            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
-             ORDER BY created DESC LIMIT 1)",
-        );
-
-        sub_queries.push(sub_query);
+        paths.push(query.bind(path)?);
         traversal_path.next();
     }
 
-    let mut sql: String = sub_queries.join(" UNION ");
+    let in_clause = paths.join(", ");
 
-    sql = format!("SELECT * FROM ({sql}) as t ");
-
-    // PostgreSQL already orders JSON arrays by length, so no additional function is needed
-    // For SQLite, `length()` is used to sort by length.
-    if cfg!(feature = "embedded-db") {
-        sql.push_str("ORDER BY length(t.path) DESC");
-    } else {
-        sql.push_str("ORDER BY t.path DESC");
-    }
+    let sql = format!(
+        "WITH ranked_nodes AS (
+            SELECT *,
+                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rn
+            FROM {table}
+            WHERE path IN ({in_clause}) AND created <= $1
+        )
+        SELECT path, created, hash_id, children, children_bitvec, idx, entry
+        FROM ranked_nodes
+        WHERE rn = 1
+        ORDER BY json_array_length(path) DESC"
+    );
 
     Ok((query, sql))
 }
