@@ -252,11 +252,13 @@ where
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
-    let persistence = storage_opt.create().await?;
+    let mut persistence = storage_opt.create().await?;
     persistence
         .migrate_storage()
         .await
         .context("failed to migrate consensus data")?;
+
+    persistence.migrate_reward_merkle_tree_v2().await.context("failed to migrate reward merkle tree v2")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
