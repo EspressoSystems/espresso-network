@@ -1,165 +1,517 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Espresso Network"><title>staking_cli::cli - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cli</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../staking_cli/index.html">staking_<wbr>cli</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cli</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#espresso-network" title="Espresso Network">Espresso Network</a><ul><li><a href="#architecture" title="Architecture">Architecture</a></li></ul></li><li><a href="#running-the-demo" title="Running the demo">Running the demo</a></li><li><a href="#development" title="Development">Development</a><ul><li><a href="#documentation" title="Documentation">Documentation</a></li><li><a href="#run-the-tests" title="Run the tests">Run the tests</a></li><li><a href="#building-figures" title="Building figures">Building figures</a></li><li><a href="#building-and-running" title="Building and running">Building and running</a></li></ul></li><li><a href="#license" title="License">License</a><ul><li><a href="#copyright" title="Copyright">Copyright</a></li></ul></li><li><a href="#disclaimer" title="Disclaimer">Disclaimer</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate staking_<wbr>cli</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">staking_cli</a></div><h1>Module <span>cli</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/staking_cli/cli.rs.html#1-634">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="espresso-network"><a class="doc-anchor" href="#espresso-network">§</a>Espresso Network</h2>
-<p><a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml/badge.svg" alt="Build" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml/badge.svg" alt="Test" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml/badge.svg" alt="Docs" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml/badge.svg" alt="Contracts" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml/badge.svg" alt="Lint" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml/badge.svg" alt="Audit" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml/badge.svg" alt="Ubuntu" /></a>
-<a href="https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml"><img src="https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml/badge.svg" alt="Build without lockfile" /></a>
-<a href="https://coveralls.io/github/EspressoSystems/espresso-network?branch=main"><img src="https://coveralls.io/repos/github/EspressoSystems/espresso-network/badge.svg?branch=main" alt="Coverage Status" /></a></p>
-<p>The Espresso Network is the global confirmation layer for rollups in the Ethereum ecosystem. Espresso’s
-<a href="https://docs.espressosys.com/network">global confirmation layer(GCL)</a> provides agreement on inputs to a collection of
-composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
-confirmations in return.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Espresso staking CLI"><title>staking_cli::cli - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cli</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../staking_cli/index.html">staking_<wbr>cli</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cli</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#espresso-staking-cli" title="Espresso staking CLI">Espresso staking CLI</a><ul><li><a href="#getting-started" title="Getting Started">Getting Started</a></li><li><a href="#calldata-export-for-multisig-wallets" title="Calldata Export (for Multisig Wallets)">Calldata Export (for Multisig Wallets)</a></li><li><a href="#delegators-or-stakers" title="Delegators (or stakers)">Delegators (or stakers)</a></li><li><a href="#node-operators" title="Node operators">Node operators</a></li></ul></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate staking_<wbr>cli</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">staking_cli</a></div><h1>Module <span>cli</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/staking_cli/cli.rs.html#1-675">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="espresso-staking-cli"><a class="doc-anchor" href="#espresso-staking-cli">§</a>Espresso staking CLI</h2>
+<p>WARNING: This CLI is intended for testing as well as validator registrations purposes only. Stakers should use the
+staking UI:</p>
 <ul>
-<li><a href="https://docs.espressosys.com/network/">Official Documentation</a></li>
-<li><a href="https://sequencer.docs.espressosys.com/sequencer/">Rust Documentation</a></li>
-<li><a href="https://sequencer.docs.espressosys.com/contracts/">Smart Contract Documentation</a></li>
+<li>decaf testnet staking UI: https://staking.decaf.testnet.espresso.network/</li>
+<li>mainnet staking UI: not yet available</li>
 </ul>
-<h4 id="architecture"><a class="doc-anchor" href="#architecture">§</a>Architecture</h4>
-<p>The diagram below shows how the Espresso Confirmation Layer fits into the rollup centric Ethereum ecosystem. See
-<a href="./doc/architecture.md">Architecture</a> for details.</p>
-<p><img src="./doc/espresso-overview.svg" alt="Architecture" /></p>
-<h5 id="zk-rollups-integration"><a class="doc-anchor" href="#zk-rollups-integration">§</a>ZK rollups integration</h5>
-<p>In order for ZK rollups to rely on blocks produced by Espresso as a source of transactions, it is required to adjust the
-circuit that encodes the state update logic. See <a href="doc/zk-integration.md">zk-rollups integration</a> for more details.</p>
-<h2 id="running-the-demo"><a class="doc-anchor" href="#running-the-demo">§</a>Running the demo</h2>
-<p>Refer to <a href="https://github.com/EspressoSystems/sequencer-example-l2">sequencer-example-l2</a> for instructions on how to run
-a dockerized Espresso Sequencer network with an example Layer 2 rollup application.</p>
-<h2 id="development"><a class="doc-anchor" href="#development">§</a>Development</h2>
+<p>This CLI helps users interact with the Espresso staking contract, either as a delegator or a node operator.</p>
+<p>Contracts:</p>
 <ul>
-<li>Obtain code: <code>git clone git@github.com:EspressoSystems/espresso-network</code>.</li>
-<li>Make sure <a href="https://nixos.org/download.html">nix</a> is installed.</li>
-<li>Activate the environment with <code>nix-shell</code>, or <code>nix develop</code>, or <code>direnv allow</code> if using <a href="https://direnv.net/">direnv</a>.</li>
-<li>For installation without nix please see <a href="./doc/ubuntu.md">ubuntu.md</a>.</li>
+<li>Decaf stake table (on Sepolia):
+<a href="https://sepolia.etherscan.io/address/0x40304fbe94d5e7d1492dd90c53a2d63e8506a037">0x40304fbe94d5e7d1492dd90c53a2d63e8506a037</a></li>
+<li>Mainnet stake table:
+<a href="https://etherscan.io/address/0xcef474d372b5b09defe2af187bf17338dc704451">0xCeF474D372B5b09dEfe2aF187bf17338Dc704451</a></li>
 </ul>
-<h3 id="documentation"><a class="doc-anchor" href="#documentation">§</a>Documentation</h3>
-<p>The rust code documentation can be found at <a href="https://sequencer.docs.espressosys.com">sequencer.docs.espressosys.com</a>.
-Please note the disclaimer about API stability at the end of the readme.</p>
-<p>To generate the documentation locally and view it in the browser, run</p>
-
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code>just doc --open</code></pre></div><h3 id="run-the-tests"><a class="doc-anchor" href="#run-the-tests">§</a>Run the tests</h3>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code>just pull # to pull docker images
-just test</code></pre></div><h3 id="building-figures"><a class="doc-anchor" href="#building-figures">§</a>Building figures</h3>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code>make doc</code></pre></div><h3 id="building-and-running"><a class="doc-anchor" href="#building-and-running">§</a>Building and running</h3>
-<p>Docker images and the <a href="docker-compose-demo.yaml">docker-compose-demo.yaml</a> file are provided for convenience. The
-Docker-based demo fetches the images from the <code>ghcr</code> repository, where they are updated with every push to <code>main</code> on
-GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.</p>
-<p>Build all executables with <code>cargo build --release</code>. You may then start an Espresso network. First, start an
-orchestrator. Choose a port <code>$PORT</code> to run it on and decide how many Espresso nodes <code>$N</code> you will use, then run
-<code>target/release/orchestrator -p $PORT -n $N</code>.</p>
-<p>The Espresso Network will distribute a HotShot configuration to all the nodes which connect to it, which specifies
-consensus parameters like view timers. There is a default config, but you can override any parameters you want by
-passing additional options to the <code>orchestrator</code> executable. Run <code>target/release/orchestrator --help</code> to see a list of
-available options.</p>
-<p>Next, you must launch a <code>cdn</code> instance, which is necessary to facilitate consensus.</p>
-<div class="example-wrap"><pre class="language-bash"><code>just dev-cdn -- -p 1738</code></pre></div>
-<p>In this case, we run it on port 1738.</p>
-<p>Once you have started the orchestrator and the CDN, you must connect <code>$N</code> Espresso nodes to them, after which the
-network will start up automatically. To start one node, run</p>
-<div class="example-wrap"><pre class="language-bash"><code>target/release/sequencer \
-    --orchestrator-url http://localhost:$PORT \
-    --cdn-endpoint &quot;127.0.0.1:1738&quot;  \
-    -- http --port 8083 -- query --storage-path storage -- submit</code></pre></div>
-<p>A useful Bash snippet for running <code>$N</code> nodes simultaneously in the background of your shell is:</p>
-<div class="example-wrap"><pre class="language-bash"><code>for i in `seq $N`; do
-    target/release/sequencer \
-        --orchestrator-url http://localhost:$PORT \
-        --cdn-endpoint &quot;127.0.0.1:1738&quot;  \
-done</code></pre></div>
-<p>For running a full demo natively run <code>just demo-native</code>.</p>
-<h4 id="contracts"><a class="doc-anchor" href="#contracts">§</a>Contracts</h4><h5 id="development-1"><a class="doc-anchor" href="#development-1">§</a>Development</h5>
-<p>A foundry project for the contracts specific to HotShot can be found in the directory <code>contracts</code>.</p>
-<p>To compile</p>
-<div class="example-wrap"><pre class="language-shell"><code>forge build</code></pre></div>
-<p>To run the tests</p>
-<div class="example-wrap"><pre class="language-shell"><code>just sol-test</code></pre></div>
-<p>In order to avoid constant warnings about checksum mismatches with <a href="https://github.com/roynalnaruto/svm-rs">svm-rs</a>
-managed <code>solc</code> we set <code>FOUNDRY_SRC</code> to solc installed via flake.nix.</p>
+<!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
+<p><strong>Table of Contents</strong></p>
 <ul>
-<li>To use the contracts from rust generate the rust contracts bindings: <code>just gen-bindings</code>.</li>
-<li>Bindings are only generated for contracts in the <code>contracts/src</code> folder</li>
-</ul>
-<p>To generate documentation in <code>./docs</code> for solidity code run</p>
-<div class="example-wrap"><pre class="language-shell"><code>forge doc</code></pre></div><h5 id="deployment-via-foundry"><a class="doc-anchor" href="#deployment-via-foundry">§</a>Deployment via Foundry</h5>
-<p>To deploy the contracts to a local testnet, first run a dev chain (e.g. <code>anvil</code>), then run</p>
-
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code>forge script DeployHotShot --broadcast --rpc-url local</code></pre></div>
-<p>To deploy to sepolia set <code>SEPOLIA_RPC_URL</code> and <code>MNEMONIC</code> env vars and run</p>
-
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code>forge script DeployHotShot --broadcast --rpc-url sepolia</code></pre></div>
-<p>To additionally verify the contract on etherscan set the <code>ETHERSCAN_API_KEY</code> env var and run</p>
-
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code>forge script DeployHotShot --broadcast --rpc-url sepolia --verify</code></pre></div>
-<p>Running the script will save a file with details about the deployment in <code>contracts/broadcast/$CHAIN_ID</code>.</p>
-<h5 id="deployment-via-rust"><a class="doc-anchor" href="#deployment-via-rust">§</a>Deployment via Rust</h5>
-<p><strong>Build and Run</strong></p>
-<div class="example-wrap"><pre class="language-bash"><code>cargo run --bin deploy -- [FLAGS/OPTIONS]</code></pre></div>
-<p>Or, for help</p>
-<div class="example-wrap"><pre class="language-bash"><code>cargo run --bin deploy -- --help</code></pre></div>
-<p><strong>Configuration</strong></p>
-<p>You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
-variables (see the code for the full list <code>sequencer/src/bin/deploy.rs</code>). Common environment variables:</p>
+<li><a href="#espresso-staking-cli">Espresso staking CLI</a>
 <ul>
-<li><code>ESPRESSO_SEQUENCER_L1_PROVIDER</code> — L1 JSON-RPC endpoint</li>
-<li><code>ESPRESSO_SEQUENCER_ETH_MNEMONIC</code> — Mnemonic for the deployer wallet</li>
-<li><code>ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS</code> — Multisig admin address</li>
-<li><code>ESPRESSO_DEPLOYER_ACCOUNT_INDEX</code> — Account index in the wallet</li>
-<li><code>ESPRESSO_SEQUENCER_URL</code> — Sequencer node URL for HotShot config</li>
-</ul>
-<p>You can use a <code>.env</code> file and load it with:</p>
-<div class="example-wrap"><pre class="language-bash"><code>set -a
-source .env
-set +a</code></pre></div><h5 id="deployment-via-docker"><a class="doc-anchor" href="#deployment-via-docker">§</a>Deployment via Docker</h5>
-<p>You can run the deployer in a container but you need to stand up all services via docker compose</p>
-<div class="example-wrap"><pre class="language-bash"><code>just pull
-just demo deploy-prover-contracts</code></pre></div>
-<p>If making dev changes locally run, <code>./scripts/build-docker-images-native --image $IMAGE_TO_BE_REBUILT</code> instead of
-<code>just pull</code>.</p>
-<h5 id="dry-run-upgrades-via-docker"><a class="doc-anchor" href="#dry-run-upgrades-via-docker">§</a>Dry run upgrades via Docker</h5>
-<p>You can only run a dry run for multisig upgrades but you need to stand up all services via docker compose Example:</p>
-<div class="example-wrap"><pre class="language-bash"><code>just pull
-just demo
-docker compose run --rm upgrade-prover-contracts-v2 /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig</code></pre></div>
-<p>If making dev changes locally run, <code>./scripts/build-docker-images-native</code> instead of <code>just pull</code>.</p>
-<p>For AWS ECS, ensure all required environment variables and secrets are set in your task definition.</p>
-<h4 id="logging"><a class="doc-anchor" href="#logging">§</a>Logging</h4>
-<p>You can control the log level using the <code>RUST_LOG</code> environment variable. For example:</p>
-<div class="example-wrap"><pre class="language-bash"><code>RUST_LOG=info cargo run --bin deploy -- [FLAGS]
-RUST_LOG=debug cargo run --bin deploy -- [FLAGS]</code></pre></div>
-<p>For Docker:</p>
-<div class="example-wrap"><pre class="language-bash"><code>docker run --env-file .env.docker -e RUST_LOG=debug ...</code></pre></div>
-<p>(see .env.docker.example for the vars required for .env.docker)</p>
-<h4 id="folder-structure-rationale"><a class="doc-anchor" href="#folder-structure-rationale">§</a>Folder Structure Rationale</h4>
+<li><a href="#getting-started">Getting Started</a>
 <ul>
-<li>code for demo purposes goes into the <code>contracts/demo</code> folder</li>
-<li>code that eventually ends up in production goes into the <code>contracts/src</code> folder</li>
+<li><a href="#getting-help">Getting Help</a></li>
+<li><a href="#choose-your-type-of-wallet-mnemonic-private-key-or-ledger">Choose your type of wallet (mnemonic, private key, or Ledger)</a></li>
+<li><a href="#initialize-the-configuration-file">Initialize the configuration file</a></li>
+<li><a href="#managing-multiple-network-configurations">Managing multiple network configurations</a></li>
+<li><a href="#inspect-the-configuration">Inspect the configuration</a></li>
+<li><a href="#view-the-stake-table">View the stake table</a></li>
 </ul>
-<h4 id="benchmarking-and-profiling"><a class="doc-anchor" href="#benchmarking-and-profiling">§</a>Benchmarking and profiling</h4>
-<p>The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
-by running:</p>
+</li>
+<li><a href="#calldata-export-for-multisig-wallets">Calldata Export (for Multisig Wallets)</a></li>
+<li><a href="#delegators-or-stakers">Delegators (or stakers)</a>
+<ul>
+<li><a href="#delegating">Delegating</a></li>
+<li><a href="#undelegating">Undelegating</a></li>
+<li><a href="#recovering-funds-after-a-validator-exit">Recovering funds after a validator exit</a></li>
+<li><a href="#claiming-staking-rewards">Claiming staking rewards</a></li>
+</ul>
+</li>
+<li><a href="#node-operators">Node operators</a>
+<ul>
+<li><a href="#registering-a-validator">Registering a validator</a></li>
+<li><a href="#updating-your-commission">Updating your commission</a></li>
+<li><a href="#updating-your-metadata-url">Updating your metadata URL</a></li>
+<li><a href="#de-registering-your-validator">De-registering your validator</a></li>
+<li><a href="#rotating-your-consensus-keys">Rotating your consensus keys</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<!-- markdown-toc end -->
+<p>To run the staking-cli using Docker:</p>
+<div class="example-wrap"><pre class="language-bash"><code>docker run -it ghcr.io/espressosystems/espresso-sequencer/staking-cli:main staking-cli --help</code></pre></div>
+<p>To build and run from source:</p>
+<div class="example-wrap"><pre class="language-bash"><code>cargo run --bin staking-cli -p staking-cli -- --help</code></pre></div>
+<p>For brevity what follows assumes the <code>staking-cli</code> binary is in the <code>PATH</code> (or aliased to the Docker command).</p>
+<p>To show help for a command run <code>staking-cli COMMAND --help</code>, for example <code>staking-cli delegate --help</code>.</p>
+<p>If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network.</p>
+<p>To build tools that interact with the stake table contract the ABI can be found at
+<a href="../contracts/artifacts/abi/StakeTable.json">../contracts/artifacts/abi/StakeTable.json</a>.</p>
+<h3 id="getting-started"><a class="doc-anchor" href="#getting-started">§</a>Getting Started</h3><h4 id="overview"><a class="doc-anchor" href="#overview">§</a>Overview</h4>
+<p>You can get help for the CLI by running:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli --help</code></pre></div>
+<p>Which will show all the available commands and options shared by commands:</p>
+<div class="example-wrap"><pre class="language-text"><code>A CLI to interact with the Espresso stake table contract
 
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code>&gt; just gas-benchmarks
-&gt; cat gas-benchmarks.txt
-[PASS] test_verify_succeeds() (gas: <span class="number">507774</span>)
-[PASS] testCorrectUpdateBench() (gas: <span class="number">594533</span>)</code></pre></div>
-<p>In order to profile the gas consumption of the light client contract do the following:</p>
+Usage: staking-cli [OPTIONS] [COMMAND]
+
+Commands:
+  version                 Display version information of the staking-cli
+  config                  Display the current configuration
+  init                    Initialize the config file with deployment and wallet info
+  purge                   Remove the config file
+  stake-table             Show the stake table in the Espresso stake table contract
+  account                 Print the signer account address
+  register-validator      Register to become a validator
+  update-consensus-keys   Update a validators Espresso consensus signing keys
+  deregister-validator    Deregister a validator
+  update-commission       Update validator commission rate
+  update-metadata-uri     Update validator metadata URL
+  approve                 Approve stake table contract to move tokens
+  delegate                Delegate funds to a validator
+  undelegate              Initiate a withdrawal of delegated funds from a validator
+  claim-withdrawal        Claim withdrawal after an undelegation
+  claim-validator-exit    Claim withdrawal after validator exit
+  claim-rewards           Claim staking rewards
+  unclaimed-rewards       Check unclaimed staking rewards
+  token-balance           Check ESP token balance
+  token-allowance         Check ESP token allowance of stake table contract
+  transfer                Transfer ESP tokens
+  stake-for-demo          Register the validators and delegates for the local demo
+  export-node-signatures  Export validator node signatures for address validation
+  help                    Print this message or the help of the given subcommand(s)
+
+Options:
+  -c, --config &lt;CONFIG_PATH&gt;
+          Config file
+
+      --rpc-url &lt;RPC_URL&gt;
+          L1 Ethereum RPC
+
+          [env: L1_PROVIDER=]
+
+      --stake-table-address &lt;STAKE_TABLE_ADDRESS&gt;
+          Deployed stake table contract address
+
+          [env: STAKE_TABLE_ADDRESS=]
+
+      --espresso-url [&lt;ESPRESSO_URL&gt;]
+          Espresso sequencer API URL for reward claims
+
+          [env: ESPRESSO_URL=]
+
+      --mnemonic &lt;MNEMONIC&gt;
+          The mnemonic to use when deriving the key
+
+          [env: MNEMONIC=]
+
+      --private-key &lt;PRIVATE_KEY&gt;
+          Raw private key (hex-encoded with or without 0x prefix)
+
+          [env: PRIVATE_KEY=]
+
+      --account-index &lt;ACCOUNT_INDEX&gt;
+          The mnemonic account index to use when deriving the key
+
+          [env: ACCOUNT_INDEX=]
+
+      --ledger
+          Use a ledger device to sign transactions.
+
+          NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app settings.
+
+          [env: USE_LEDGER=]
+
+      --export-calldata
+          Export calldata for multisig wallets instead of sending transaction
+
+          [env: EXPORT_CALLDATA=]
+
+      --sender-address [&lt;SENDER_ADDRESS&gt;]
+          Sender address for calldata export (required for simulation)
+
+          [env: SENDER_ADDRESS=]
+
+      --skip-simulation
+          Skip eth_call validation when exporting calldata
+
+          [env: SKIP_SIMULATION=]
+
+      --skip-metadata-validation
+          Skip metadata URI validation (fetch and schema check)
+
+          [env: SKIP_METADATA_VALIDATION=]
+
+      --output &lt;OUTPUT&gt;
+          Output file path. If not specified, outputs to stdout
+
+      --format &lt;FORMAT&gt;
+          Output format
+
+          [possible values: json, toml]
+
+  -h, --help
+          Print help (see a summary with &#39;-h&#39;)</code></pre></div>
+<p>or by passing <code>--help</code> to a command, for example <code>delegate</code>:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli delegate --help</code></pre></div>
+<p>which will show the options specific to the command:</p>
+<div class="example-wrap"><pre class="language-text"><code>Delegate funds to a validator
+
+Usage: staking-cli delegate --validator-address &lt;VALIDATOR_ADDRESS&gt; --amount &lt;AMOUNT&gt;
+
+Options:
+    --validator-address &lt;VALIDATOR_ADDRESS&gt;
+    --amount &lt;AMOUNT&gt;
+-h, --help                                   Print help</code></pre></div><h4 id="choose-your-type-of-wallet-mnemonic-private-key-or-ledger"><a class="doc-anchor" href="#choose-your-type-of-wallet-mnemonic-private-key-or-ledger">§</a>Choose your type of wallet (mnemonic, private key, or Ledger)</h4>
+<p><strong>Security</strong> Utmost care must be taken to avoid leaking the Ethereum private key used for staking or registering
+validators. There is currently no built-in key rotation feature for Ethereum keys.</p>
+<p>First, determine which signing method you would like to use:</p>
 <ol>
-<li>Set the environment variables <code>SEPOLIA_RPC_URL</code>, <code>MNEMONIC</code> and <code>ETHERSCAN_API_KEY</code>.</li>
-<li><code>just lc-contract-profiling-sepolia</code></li>
-<li>Create an account on <a href="https://app.sentio.xyz/">sentio.xyz</a>.</li>
-<li>Use the hash of the transaction generated in step two when calling the function <code>newFinalizedState</code> in order to
-obtain the gas profile.</li>
+<li><strong>Ledger hardware wallet</strong> - (recommended) sign transactions with a Ledger device</li>
+<li><strong>Mnemonic phrase</strong> - derive keys from a BIP-39 mnemonic with account index</li>
+<li><strong>Private key</strong> - use a raw hex-encoded private key directly</li>
 </ol>
-<h2 id="license"><a class="doc-anchor" href="#license">§</a>License</h2><h3 id="copyright"><a class="doc-anchor" href="#copyright">§</a>Copyright</h3>
-<p><strong>(c) 2022 Espresso Systems</strong> <code>espresso-sequencer</code> was developed by Espresso Systems. While we plan to adopt an open
-source license, we have not yet selected one. As such, all rights are reserved for the time being. Please reach out to
-us if you have thoughts on licensing.</p>
-<h2 id="disclaimer"><a class="doc-anchor" href="#disclaimer">§</a>Disclaimer</h2>
-<p><strong>DISCLAIMER:</strong> This software is provided “as is” and its security has not been externally audited. Use at your own
-risk.</p>
-<p><strong>DISCLAIMER:</strong> The Rust library crates provided in this repository are intended primarily for use by the binary targets
-in this repository. We make no guarantees of public API stability. If you are building on these crates, reach out by
-opening an issue to discuss the APIs you need.</p>
-</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Args.html" title="struct staking_cli::cli::Args">Args</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.AddressExt.html" title="trait staking_cli::cli::AddressExt">Address<wbr>Ext</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.decode_and_display_logs.html" title="fn staking_cli::cli::decode_and_display_logs">decode_<wbr>and_<wbr>display_<wbr>logs</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit.html" title="fn staking_cli::cli::exit">exit</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit_err.html" title="fn staking_cli::cli::exit_err">exit_<wbr>err</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.resolve_node_signatures.html" title="fn staking_cli::cli::resolve_node_signatures">resolve_<wbr>node_<wbr>signatures</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.run.html" title="fn staking_cli::cli::run">run</a></dt></dl></section></div></main></body></html>
+<p><strong>Security recommendations:</strong> For managing significant funds on mainnet, we recommend using a hardware wallet (Ledger)
+for extra security. Hardware wallets keep your private keys isolated from your computer, offering some protection
+against malware and phishing attacks. If you need support for other hardware signers, please open an issue at
+https://github.com/EspressoSystems/espresso-network.</p>
+<p>For mnemonics and private keys, to avoid passing secrets on the command line, use environment variables:</p>
+<ul>
+<li><code>MNEMONIC</code> for mnemonic phrase</li>
+<li><code>PRIVATE_KEY</code> for raw private key</li>
+</ul>
+<p>If using a ledger or mnemonic and you don’t know which account index to use, you can find it by running:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli --mnemonic MNEMONIC --account-index 0 account
+staking-cli --mnemonic MNEMONIC --account-index 1 account
+# etc, or
+staking-cli --ledger --account-index 0 account
+staking-cli --ledger --account-index 1 account
+# etc</code></pre></div>
+<p>Repeat with different indices until you find the address you want to use.</p>
+<p>If using a private key, ensure PRIVATE_KEY env var is set</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli account</code></pre></div>
+<p>Note that for ledger signing to work</p>
+<ol>
+<li>the ledger needs to be unlocked,</li>
+<li>the Ethereum app needs to be open,</li>
+<li>blind signing needs to be enabled in the Ethereum app settings on the ledger.</li>
+</ol>
+<h4 id="initialize-the-configuration-file-optional"><a class="doc-anchor" href="#initialize-the-configuration-file-optional">§</a>Initialize the configuration file (optional)</h4>
+<p>Once you’ve identified your desired account index (here 2), initialize a configuration file:</p>
+<div class="example-wrap"><pre class="language-bash"><code># For mainnet
+staking-cli init --network mainnet --mnemonic MNEMONIC --account-index 2
+# For decaf testnet
+staking-cli init --network decaf --mnemonic MNEMONIC --account-index 2
+# For local development
+staking-cli init --network local --mnemonic MNEMONIC --account-index 2
+
+# With ledger
+staking-cli init --network mainnet --ledger --account-index 2
+# With private key
+staking-cli init --network mainnet --private-key 0x1234...abcd</code></pre></div>
+<p>The <code>--network</code> parameter is <strong>required</strong> and accepts:</p>
+<ul>
+<li><code>mainnet</code> - Espresso mainnet on Ethereum mainnet</li>
+<li><code>decaf</code> - Decaf testnet on Sepolia</li>
+<li><code>local</code> - Local development (localhost RPC)</li>
+</ul>
+<p>This creates a TOML config file with the appropriate contract addresses and RPC endpoints. With the config file you
+don’t need to provide the configuration values every time you run the CLI. If no config file exists, all values must be
+provided via command-line arguments or environment variables.</p>
+<p>You can also set the network via environment variable: <code>NETWORK=mainnet staking-cli init --mnemonic MNEMONIC</code></p>
+<p>NOTE: For this <code>init</code> command, wallet flags are specified <em>after</em> the command. The <code>-c</code> flag (config path) goes before.</p>
+<h4 id="managing-multiple-network-configurations"><a class="doc-anchor" href="#managing-multiple-network-configurations">§</a>Managing multiple network configurations</h4>
+<p>To work with multiple networks (e.g., both mainnet and decaf), use the <code>-c</code> flag to specify different config files:</p>
+<div class="example-wrap"><pre class="language-bash"><code># Create mainnet config with mnemonic from env var
+MNEMONIC=&#39;your mnemonic&#39; staking-cli -c mainnet.toml init --network mainnet --account-index 0
+
+# Create decaf config with ledger
+staking-cli -c decaf.toml init --network decaf --ledger --account-index 0
+
+# Use specific config for commands
+staking-cli -c mainnet.toml stake-table
+staking-cli -c decaf.toml delegate --validator-address 0x... --amount 100</code></pre></div>
+<p>When no <code>-c</code> flag is provided, the CLI uses a platform-specific default path (e.g.,
+<code>~/.config/espresso/espresso-staking-cli/config.toml</code> on Linux).</p>
+<h4 id="inspect-the-configuration"><a class="doc-anchor" href="#inspect-the-configuration">§</a>Inspect the configuration</h4>
+<p>You can inspect the configuration file by running:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli config</code></pre></div><h4 id="view-the-stake-table"><a class="doc-anchor" href="#view-the-stake-table">§</a>View the stake table</h4>
+<p>You can use the following command to display the current L1 stake table:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli stake-table</code></pre></div><h3 id="calldata-export-for-multisig-wallets"><a class="doc-anchor" href="#calldata-export-for-multisig-wallets">§</a>Calldata Export (for Multisig Wallets)</h3>
+<p>If you’re using a multisig wallet (e.g., Safe, Gnosis Safe) or other smart contract wallet, you can export the
+transaction calldata instead of signing and sending the transaction directly. This allows you to propose the transaction
+through your multisig’s interface.</p>
+<p>To export calldata for any command, add the <code>--export-calldata</code> flag:</p>
+<div class="example-wrap"><pre class="language-bash"><code># Export delegate calldata as JSON (default)
+staking-cli --export-calldata delegate --validator-address 0x12...34 --amount 100
+
+# Export as TOML
+staking-cli --export-calldata --format toml delegate --validator-address 0x12...34 --amount 100
+
+# Save to file
+staking-cli --export-calldata --format json --output delegate.json delegate --validator-address 0x12...34 --amount 100</code></pre></div>
+<p>The output includes the target contract address and the encoded calldata:</p>
+<div class="example-wrap"><pre class="language-json"><code>{
+  &quot;to&quot;: &quot;0x...&quot;,
+  &quot;data&quot;: &quot;0x...&quot;
+}</code></pre></div>
+<p>This works with all state-changing commands: <code>approve</code>, <code>delegate</code>, <code>undelegate</code>, <code>claim-withdrawal</code>,
+<code>claim-validator-exit</code>, <code>claim-rewards</code>, <code>register-validator</code>, <code>update-commission</code>, <code>update-metadata-uri</code>,
+<code>update-consensus-keys</code>, <code>deregister-validator</code>, and <code>transfer</code>.</p>
+<p>Note: When using <code>--export-calldata</code>, no wallet/signer is required since the transaction is not sent.</p>
+<h4 id="calldata-simulation"><a class="doc-anchor" href="#calldata-simulation">§</a>Calldata Simulation</h4>
+<p>By default, the CLI simulates exported calldata via <code>eth_call</code> to catch errors before you submit the transaction through
+your multisig. Provide <code>--sender-address</code> (your multisig address) for accurate simulation:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli --export-calldata --sender-address 0xYourSafe... delegate --validator-address 0x12...34 --amount 100</code></pre></div>
+<p>To skip simulation (e.g., for batch exports):</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli --export-calldata --skip-simulation delegate --validator-address 0x12...34 --amount 100</code></pre></div>
+<p>Note: The <code>claim-rewards</code> command always requires <code>--sender-address</code> (even with <code>--skip-simulation</code>) because the address
+is needed to fetch the reward proof from the Espresso node:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli --export-calldata --sender-address 0xYourSafe... --espresso-url https://... claim-rewards</code></pre></div><h3 id="delegators-or-stakers"><a class="doc-anchor" href="#delegators-or-stakers">§</a>Delegators (or stakers)</h3>
+<p>This section covers commands for stakers/delegators.</p>
+<h4 id="delegating"><a class="doc-anchor" href="#delegating">§</a>Delegating</h4>
+<ol>
+<li>
+<p>Obtain ESP tokens for staking.</p>
+</li>
+<li>
+<p>Find the Ethereum address of a validator to delegate to.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli stake-table</code></pre></div></li>
+<li>
+<p>Use the <code>approve</code> command to allow the stake table to spend your tokens.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli approve --amount 123</code></pre></div></li>
+<li>
+<p>Use the <code>delegate</code> command to delegate your tokens to a validator.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli delegate --validator-address 0x12...34 --amount 123</code></pre></div></li>
+</ol>
+<h4 id="undelegating"><a class="doc-anchor" href="#undelegating">§</a>Undelegating</h4>
+<ol>
+<li>
+<p>If you would like to undelegate your tokens, use the <code>undelegate</code> command.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli undelegate --validator-address 0x12...34 --amount 123</code></pre></div></li>
+<li>
+<p>Wait for the exit escrow period to end (currently 1 week), then withdraw to your wallet.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli claim-withdrawal --validator-address 0x12...34</code></pre></div></li>
+</ol>
+<h4 id="recovering-funds-after-a-validator-exit"><a class="doc-anchor" href="#recovering-funds-after-a-validator-exit">§</a>Recovering funds after a validator exit</h4>
+<ol>
+<li>
+<p>Wait for the exit escrow period to elapse after the validator deregistered itself (currently 1 week), then withdraw
+to your wallet by running</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli claim-validator-exit --validator-address 0x12...34</code></pre></div></li>
+</ol>
+<h4 id="claiming-staking-rewards"><a class="doc-anchor" href="#claiming-staking-rewards">§</a>Claiming staking rewards</h4>
+<p>Delegators and validators can earn staking rewards. To check and claim your rewards:</p>
+<ol>
+<li>
+<p>Check your unclaimed rewards:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli unclaimed-rewards</code></pre></div>
+<p>This will display the amount of unclaimed rewards in ESP tokens.</p>
+</li>
+<li>
+<p>Claim your rewards:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli claim-rewards</code></pre></div>
+<p>This will transfer your unclaimed rewards to your wallet.</p>
+</li>
+</ol>
+<p>Note: You need to set the <code>espresso_url</code> in your config file or pass <code>--espresso-url</code> flag to use these commands.</p>
+<h3 id="node-operators"><a class="doc-anchor" href="#node-operators">§</a>Node operators</h3>
+<p>This section covers commands for node operators.</p>
+<h4 id="registering-a-validator"><a class="doc-anchor" href="#registering-a-validator">§</a>Registering a validator</h4>
+<ol>
+<li>
+<p>Obtain your validator’s BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare
+a metadata URL.</p>
+</li>
+<li>
+<p>Use the <code>register-validator</code> command to register your validator.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt; --commission 4.99 --metadata-uri https://example.com/validator-metadata.json</code></pre></div>
+<p>To avoid specifying the the keys on the command line they can be set via env vars</p>
+<div class="example-wrap"><pre class="language-text"><code>CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
+STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
+METADATA_URL=https://example.com/validator-metadata.json</code></pre></div>
+<p>Alternatively, you can use pre-signed signatures:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --node-signatures signatures.json --commission 4.99 --metadata-uri https://example.com/validator-metadata.json</code></pre></div>
+<p>You can specify the format for parsing node signatures from stdin or files:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99 --metadata-uri https://example.com/validator-metadata.json</code></pre></div>
+<p>To register without a metadata URL (leaving it empty):</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt; --commission 4.99 --no-metadata-uri</code></pre></div></li>
+</ol>
+<ul>
+<li>Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
+register transaction consumes about 300k gas.</li>
+<li>Each BLS (Espresso) and key can be registered only once.</li>
+<li>The commission can be updated later using the <code>update-commission</code> command, subject to rate limits.</li>
+<li>The metadata URL can be updated at any time using the <code>update-metadata-uri</code> command.</li>
+<li>The metadata URL must be a valid URL (unless using –no-metadata-uri flag) and cannot exceed 2048 bytes.</li>
+<li>Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
+different account indices (or mnemonics) must be used.</li>
+</ul>
+<h4 id="updating-your-commission"><a class="doc-anchor" href="#updating-your-commission">§</a>Updating your commission</h4>
+<p>Validators can update their commission rate, subject to the following rate limits:</p>
+<ul>
+<li>Commission updates are limited to once per week (7 days by default)</li>
+<li>Commission increases are capped at 5% per update (e.g., from 10% to 15%)</li>
+<li>Commission decreases have no limit</li>
+</ul>
+<p>To update your commission:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-commission --new-commission 7.5</code></pre></div>
+<p>The commission value is in percent with up to 2 decimal points: from 0.00 to 100.00.</p>
+<p>Note: The minimum time interval and maximum increase are contract parameters that may be adjusted by governance.</p>
+<h4 id="updating-your-metadata-url"><a class="doc-anchor" href="#updating-your-metadata-url">§</a>Updating your metadata URL</h4>
+<p>Validators can update their metadata URL at any time. The metadata URL is used to provide additional information about
+your validator that is displayed in the staking UI.</p>
+<p>To update your metadata URL with validation:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --metadata-uri https://example.com/updated-metadata.json --consensus-public-key BLS_VER_KEY~...</code></pre></div>
+<p>The <code>--consensus-public-key</code> is required for metadata validation (to verify the <code>pub_key</code> field in the metadata matches
+your validator). To skip validation:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https://example.com/updated-metadata.json</code></pre></div>
+<p>To clear your metadata URL (set it to empty):</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --no-metadata-uri</code></pre></div>
+<p>The metadata URL:</p>
+<ul>
+<li>Must be a valid URL (e.g., starting with <code>https://</code>) unless using –no-metadata-uri flag</li>
+<li>Can be empty when using –no-metadata-uri flag</li>
+<li>Cannot exceed 2048 bytes</li>
+</ul>
+<p>Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by listening to registration
+and update events.</p>
+<h5 id="metadata-url-schema"><a class="doc-anchor" href="#metadata-url-schema">§</a>Metadata URL Schema</h5>
+<p>The metadata endpoint must return JSON with <code>Content-Type: application/json</code>. The schema is:</p>
+<div class="example-wrap"><pre class="language-json"><code>{
+  &quot;pub_key&quot;: &quot;BLS_VER_KEY~...&quot;,
+  &quot;name&quot;: &quot;My Validator&quot;,
+  &quot;description&quot;: &quot;A longer description of the validator&quot;,
+  &quot;company_name&quot;: &quot;Acme Inc.&quot;,
+  &quot;company_website&quot;: &quot;https://acme.com/&quot;,
+  &quot;client_version&quot;: &quot;v1.0.0&quot;,
+  &quot;icon&quot;: {
+    &quot;14x14&quot;: {
+      &quot;@1x&quot;: &quot;https://acme.com/icon-14x14@1x.png&quot;,
+      &quot;@2x&quot;: &quot;https://acme.com/icon-14x14@2x.png&quot;,
+      &quot;@3x&quot;: &quot;https://acme.com/icon-14x14@3x.png&quot;
+    },
+    &quot;24x24&quot;: {
+      &quot;@1x&quot;: &quot;https://acme.com/icon-24x24@1x.png&quot;,
+      &quot;@2x&quot;: &quot;https://acme.com/icon-24x24@2x.png&quot;,
+      &quot;@3x&quot;: &quot;https://acme.com/icon-24x24@3x.png&quot;
+    }
+  }
+}</code></pre></div><div><table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>pub_key</code></td><td>Yes</td><td>BLS public key of your validator (tagged base64). Must match the registered key.</td></tr>
+<tr><td><code>name</code></td><td>No</td><td>Human-readable name for the validator</td></tr>
+<tr><td><code>description</code></td><td>No</td><td>Longer description of the validator</td></tr>
+<tr><td><code>company_name</code></td><td>No</td><td>Company or individual operating the validator</td></tr>
+<tr><td><code>company_website</code></td><td>No</td><td>Website URL for the company</td></tr>
+<tr><td><code>client_version</code></td><td>No</td><td>Version of the consensus client running</td></tr>
+<tr><td><code>icon</code></td><td>No</td><td>Icon images at different resolutions (14x14 small, 24x24 large) and pixel ratios (@1x, @2x, @3x)</td></tr>
+</tbody></table>
+</div>
+<p>The <code>pub_key</code> field is required for authentication. If it doesn’t match the validator’s registered BLS key, the metadata
+is treated as invalid. This prevents impersonation attacks where a malicious operator points their metadata URI to
+another validator’s metadata page.</p>
+<h5 id="metadata-validation"><a class="doc-anchor" href="#metadata-validation">§</a>Metadata Validation</h5>
+<p>When registering a validator or updating metadata with <code>--metadata-uri</code>, the CLI fetches and validates the metadata
+before submitting the transaction:</p>
+<ol>
+<li>Fetches the JSON from the provided URL (5 second timeout)</li>
+<li>Parses the JSON according to the schema above</li>
+<li>Verifies the <code>pub_key</code> in the metadata matches your validator’s BLS key</li>
+</ol>
+<p>For <code>register-validator</code>, the BLS key is derived from the <code>--consensus-private-key</code> or <code>--node-signatures</code> argument.</p>
+<p>For <code>update-metadata-uri</code>, you must provide <code>--consensus-public-key</code> for validation:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --metadata-uri https://example.com/metadata.json --consensus-public-key BLS_VER_KEY~...</code></pre></div>
+<p>If validation fails, the command is aborted with an error message. To skip this validation (e.g., if your metadata
+endpoint isn’t ready yet):</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli --skip-metadata-validation register-validator --metadata-uri https://example.com/metadata.json ...
+staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https://example.com/metadata.json</code></pre></div>
+<p>Or via environment variable: <code>SKIP_METADATA_VALIDATION=true</code></p>
+<p>The staking UI service also supports Prometheus metrics format as an alternative to JSON (useful if you want to serve
+metadata from your node’s metrics endpoint). See the staking-ui-service documentation for details.</p>
+<h4 id="de-registering-your-validator"><a class="doc-anchor" href="#de-registering-your-validator">§</a>De-registering your validator</h4>
+<p>WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to
+it.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli deregister-validator</code></pre></div><h4 id="rotating-your-consensus-keys"><a class="doc-anchor" href="#rotating-your-consensus-keys">§</a>Rotating your consensus keys</h4>
+<ol>
+<li>
+<p>Obtain your validator’s new BLS and state private keys.</p>
+</li>
+<li>
+<p>Run</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-consensus-keys --consensus-private-key BLS_KEY --state-private-key STATE_KEY</code></pre></div>
+<p>The new keys will become active in the 3rd epoch after the command is run.</p>
+<p>To avoid specifying the the keys on the command line they can be set via env vars</p>
+<div class="example-wrap"><pre class="language-text"><code>CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
+STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...</code></pre></div>
+<p>Alternatively, you can use pre-signed signatures:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-consensus-keys --node-signatures signatures.json
+staking-cli update-consensus-keys --node-signatures signatures.toml --format toml</code></pre></div></li>
+</ol>
+<h4 id="exporting-node-signatures"><a class="doc-anchor" href="#exporting-node-signatures">§</a>Exporting Node Signatures</h4>
+<p>To avoid mixing Espresso and Ethereum keys on a single host we can pre-sign the validator address for registration and
+key updates. The exported payload can later be used to build the Ethereum transaction on another host.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli export-node-signatures --address 0x12...34 \
+    --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt;</code></pre></div>
+<p>Output formats:</p>
+<ul>
+<li>JSON to stdout (default):
+<code>staking-cli export-node-signatures --address 0x12...34 --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt;</code></li>
+<li>JSON to file: <code>--output signatures.json</code></li>
+<li>TOML to file: <code>--output signatures.toml</code></li>
+<li>Explicit format override: <code>--output signatures.json --format toml</code> (saves TOML content to .json file)</li>
+</ul>
+<p>The command will generate a signature payload file that doesn’t contain any secrets:</p>
+<div class="example-wrap"><pre class="language-toml"><code>address = &quot;0x...&quot;
+bls_vk = &quot;BLS_VER_KEY~...&quot;
+bls_signature = &quot;BLS_SIG~...&quot;
+schnorr_vk = &quot;SCHNORR_VER_KEY~...&quot;
+schnorr_signature = &quot;SCHNORR_SIG~...&quot;</code></pre></div>
+<p>The exported signatures can then be used in validator operations:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --node-signatures signatures.json --commission 4.99
+staking-cli update-consensus-keys --node-signatures signatures.json</code></pre></div>
+<p>Format handling:</p>
+<ul>
+<li>File extension auto-detection: <code>.json</code> and <code>.toml</code> files are automatically parsed in the correct format</li>
+<li>Stdin defaults to JSON: <code>cat signatures.json | staking-cli register-validator --node-signatures - --commission 4.99</code></li>
+<li>Explicit format for stdin:
+<code>cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99</code></li>
+</ul>
+<h4 id="native-demo-staking"><a class="doc-anchor" href="#native-demo-staking">§</a>Native Demo Staking</h4>
+<p>The <code>stake-for-demo</code> command is used to set up validators and delegators for testing purposes.</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli stake-for-demo --num-validators 5</code></pre></div>
+<p>Configuration options:</p>
+<ul>
+<li><code>--num-validators</code>: Number of validators to register (default: 5)</li>
+<li><code>--num-delegators-per-validator</code>: Number of delegators per validator (default: random 2-5, max: 100,000)</li>
+<li><code>--delegation-config</code>: Delegation configuration mode (default: variable-amounts)
+<ul>
+<li><code>equal-amounts</code>: All validators have equal delegation amounts</li>
+<li><code>variable-amounts</code>: Variable delegation amounts per validator</li>
+<li><code>multiple-delegators</code>: Multiple delegators per validator</li>
+<li><code>no-self-delegation</code>: Validators do not self-delegate</li>
+</ul>
+</li>
+</ul>
+<p>Environment variables:</p>
+<ul>
+<li><code>NUM_DELEGATORS_PER_VALIDATOR</code>: Set the number of delegators per validator</li>
+<li><code>DELEGATION_CONFIG</code>: Set the delegation configuration mode</li>
+</ul>
+<p>Example usage:</p>
+<div class="example-wrap"><pre class="language-bash"><code># Create 10 validators with 50 delegators each
+staking-cli stake-for-demo --num-validators 10 --num-delegators-per-validator 50
+
+# Using environment variables with native demo
+env NUM_DELEGATORS_PER_VALIDATOR=1000 DELEGATION_CONFIG=no-self-delegation just demo-native-drb-header</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Args.html" title="struct staking_cli::cli::Args">Args</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.AddressExt.html" title="trait staking_cli::cli::AddressExt">Address<wbr>Ext</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.decode_and_display_logs.html" title="fn staking_cli::cli::decode_and_display_logs">decode_<wbr>and_<wbr>display_<wbr>logs</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit.html" title="fn staking_cli::cli::exit">exit</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.exit_err.html" title="fn staking_cli::cli::exit_err">exit_<wbr>err</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.resolve_node_signatures.html" title="fn staking_cli::cli::resolve_node_signatures">resolve_<wbr>node_<wbr>signatures</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.run.html" title="fn staking_cli::cli::run">run</a></dt></dl></section></div></main></body></html>

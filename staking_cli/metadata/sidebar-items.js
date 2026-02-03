@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["MetadataUri"]};
+window.SIDEBAR_ITEMS = {"fn":["validate_metadata_uri"],"struct":["ImageSet","MetadataUri","NodeMetadataContent","RatioSet"]};

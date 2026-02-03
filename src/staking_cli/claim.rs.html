@@ -207,7 +207,7 @@
 <a href=#207 id=207 data-nosnippet>207</a>        <span class="prelude-val">Ok</span>(())
 <a href=#208 id=208 data-nosnippet>208</a>    }
 <a href=#209 id=209 data-nosnippet>209</a>
-<a href=#210 id=210 data-nosnippet>210</a>    <span class="attr">#[tokio::test]
+<a href=#210 id=210 data-nosnippet>210</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
 <a href=#211 id=211 data-nosnippet>211</a>    </span><span class="kw">async fn </span>test_claim_reward() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#212 id=212 data-nosnippet>212</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#213 id=213 data-nosnippet>213</a>        <span class="kw">let </span>reward_balance = U256::from(<span class="number">1000000</span>);
@@ -240,7 +240,7 @@
 <a href=#240 id=240 data-nosnippet>240</a>        <span class="prelude-val">Ok</span>(())
 <a href=#241 id=241 data-nosnippet>241</a>    }
 <a href=#242 id=242 data-nosnippet>242</a>
-<a href=#243 id=243 data-nosnippet>243</a>    <span class="attr">#[tokio::test]
+<a href=#243 id=243 data-nosnippet>243</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
 <a href=#244 id=244 data-nosnippet>244</a>    </span><span class="kw">async fn </span>test_unclaimed_rewards_not_found() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>system = TestSystem::deploy().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#246 id=246 data-nosnippet>246</a>
