@@ -719,3 +719,43 @@ async fn test_reward_proof_endpoint_serialization() {
         insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);
     });
 }
+
+/// Snapshot test for stake table event signatures.
+///
+/// These signatures are consensus-critical: changing event names or types will change
+/// their signatures, which breaks consensus because older versions of the rust code
+/// filter events using these signatures. This test ensures any changes are caught.
+///
+/// See: https://github.com/EspressoSystems/espresso-network/issues/3769
+#[test]
+fn test_stake_table_event_signatures() {
+    use alloy::sol_types::SolEvent;
+    use hotshot_contract_adapter::sol_types::StakeTableV2::{
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+        UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
+    };
+
+    // These signatures are consensus-critical. If this test fails, you are making
+    // a breaking change that will cause consensus failures between different versions.
+    let signatures = vec![
+        ("ValidatorRegistered", ValidatorRegistered::SIGNATURE),
+        ("ValidatorRegisteredV2", ValidatorRegisteredV2::SIGNATURE),
+        ("ValidatorExit", ValidatorExit::SIGNATURE),
+        ("ValidatorExitV2", ValidatorExitV2::SIGNATURE),
+        ("Delegated", Delegated::SIGNATURE),
+        ("Undelegated", Undelegated::SIGNATURE),
+        ("UndelegatedV2", UndelegatedV2::SIGNATURE),
+        ("ConsensusKeysUpdated", ConsensusKeysUpdated::SIGNATURE),
+        ("ConsensusKeysUpdatedV2", ConsensusKeysUpdatedV2::SIGNATURE),
+        ("CommissionUpdated", CommissionUpdated::SIGNATURE),
+    ];
+
+    let mut settings = insta::Settings::clone_current();
+    let data_dir =
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../data/insta_snapshots");
+    settings.set_snapshot_path(data_dir);
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("stake_table_event_signatures", signatures);
+    });
+}
