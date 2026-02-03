@@ -468,7 +468,8 @@ pub struct Consensus<TYPES: NodeType> {
 }
 
 /// This struct holds a payload and its metadata
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(bound(deserialize = "", serialize = ""))]
 pub struct PayloadWithMetadata<TYPES: NodeType> {
     pub payload: TYPES::BlockPayload,
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,

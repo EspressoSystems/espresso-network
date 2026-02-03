@@ -100,8 +100,8 @@ async fn test_block_directly_recv_saves_payload() {
     // Create a broadcast channel pair for the task
     let (sender, receiver) = async_broadcast::broadcast(128);
 
-    // Send BlockDirectlyRecv event
-    let event = Arc::new(HotShotEvent::BlockDirectlyRecv(
+    // Send BlockDirectRecv event
+    let event = Arc::new(HotShotEvent::BlockDirectRecv(
         PayloadWithMetadata {
             payload: payload.clone(),
             metadata,
@@ -161,7 +161,7 @@ async fn test_wait_for_previous_block_via_direct_recv() {
     let (sender, receiver) = async_broadcast::broadcast(128);
 
     // Step 1: Receive block directly from previous leader for view 3
-    let direct_recv_event = Arc::new(HotShotEvent::BlockDirectlyRecv(
+    let direct_recv_event = Arc::new(HotShotEvent::BlockDirectRecv(
         PayloadWithMetadata {
             payload: prev_payload.clone(),
             metadata: prev_metadata.clone(),
@@ -171,7 +171,7 @@ async fn test_wait_for_previous_block_via_direct_recv() {
     block_state
         .handle(direct_recv_event, sender.clone(), receiver.clone())
         .await
-        .expect("handle BlockDirectlyRecv should not error");
+        .expect("handle BlockDirectRecv should not error");
 
     // Verify the previous block is saved
     let saved_before = block_state
@@ -324,7 +324,7 @@ async fn test_wait_for_previous_block_different_leader_direct_recv() {
     let (sender, receiver) = async_broadcast::broadcast(128);
 
     // Step 1: Receive block from previous leader (node 3) for view 3
-    let direct_recv_event = Arc::new(HotShotEvent::BlockDirectlyRecv(
+    let direct_recv_event = Arc::new(HotShotEvent::BlockDirectRecv(
         PayloadWithMetadata {
             payload: prev_payload.clone(),
             metadata: prev_metadata.clone(),
@@ -334,7 +334,7 @@ async fn test_wait_for_previous_block_different_leader_direct_recv() {
     block_state
         .handle(direct_recv_event, sender.clone(), receiver.clone())
         .await
-        .expect("handle BlockDirectlyRecv should not error");
+        .expect("handle BlockDirectRecv should not error");
 
     // Step 2: ViewChange for view 4
     let view_change_event = Arc::new(HotShotEvent::ViewChange(
@@ -439,4 +439,234 @@ async fn test_wait_for_previous_block_different_leader_reconstruction() {
         .cloned();
     assert!(saved.is_some(), "Reconstructed block should be saved");
     assert_eq!(saved.unwrap().payload, prev_payload);
+}
+
+/// End-to-end test: VidTask emits BlockDirectSend → Network → BlockTask receives BlockDirectRecv.
+/// Verifies:
+/// 1. VidTask emits BlockDirectSend when processing BlockRecv (current leader sends to next leader)
+/// 2. Network transmits the message to the next leader
+/// 3. BlockTask receives BlockDirectRecv and saves payload to consensus
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_direct_block_end_to_end_vid_to_block_task() {
+    use std::{collections::BTreeMap, time::Duration};
+
+    use hotshot::traits::implementations::MemoryNetwork;
+    use hotshot_task::task::{ConsensusTaskRegistry, Task};
+    use hotshot_task_impls::{network::NetworkEventTaskState, vid::VidTaskState};
+    use hotshot_testing::{
+        test_builder::TestDescription, test_task::add_network_message_test_task,
+    };
+    use hotshot_types::{
+        data::PackedBundle,
+        epoch_membership::EpochMembershipCoordinator,
+        message::UpgradeLock,
+        traits::{election::Membership, BlockPayload, EncodeBytes},
+    };
+    use tokio::time::timeout;
+    use vbs::version::StaticVersionType;
+
+    // === Setup: Two nodes - current leader (node 2) and next leader (node 3) ===
+    let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+        TestDescription::default_multiple_rounds();
+    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let launcher = builder.gen_launcher();
+
+    // Current leader (node 2) - will send block directly to next leader
+    let current_leader_id = 2u64;
+    let current_leader_handle =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(current_leader_id)
+            .await
+            .0;
+    let current_leader_key = current_leader_handle.public_key();
+    let current_leader_network =
+        (launcher.resource_generators.channel_generator)(current_leader_id).await;
+    let current_leader_storage = (launcher.resource_generators.storage)(current_leader_id);
+    let config = (launcher.resource_generators.hotshot_config)(current_leader_id);
+    let all_nodes = config.known_nodes_with_stake.clone();
+
+    // Next leader (node 3) - will receive block directly
+    let next_leader_id = 3u64;
+    let next_leader_handle =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(next_leader_id)
+            .await
+            .0;
+    let next_leader_key = next_leader_handle.public_key();
+    let next_leader_network =
+        (launcher.resource_generators.channel_generator)(next_leader_id).await;
+
+    // === Setup current leader's VidTask and NetworkEventTask ===
+    let current_leader_membership = std::sync::Arc::new(async_lock::RwLock::new(
+        <TestTypes as hotshot_types::traits::node_implementation::NodeType>::Membership::new::<
+            MemoryImpl,
+        >(
+            all_nodes.clone(),
+            all_nodes.clone(),
+            current_leader_storage.clone(),
+            current_leader_network.clone(),
+            current_leader_key,
+            config.epoch_height,
+        ),
+    ));
+    let current_leader_coordinator = EpochMembershipCoordinator::new(
+        current_leader_membership,
+        config.epoch_height,
+        &current_leader_storage,
+    );
+
+    let current_leader_consensus =
+        hotshot_types::consensus::OuterConsensus::new(current_leader_handle.hotshot.consensus());
+
+    // NetworkEventTask for current leader (to send messages)
+    let current_leader_network_state: NetworkEventTaskState<
+        TestTypes,
+        TestVersions,
+        MemoryNetwork<_>,
+        _,
+    > = NetworkEventTaskState {
+        id: current_leader_id,
+        network: current_leader_network.clone(),
+        view: ViewNumber::new(0),
+        epoch: None,
+        membership_coordinator: current_leader_coordinator.clone(),
+        upgrade_lock: upgrade_lock.clone(),
+        storage: current_leader_storage.clone(),
+        storage_metrics: current_leader_handle.storage_metrics(),
+        consensus: current_leader_consensus.clone(),
+        transmit_tasks: BTreeMap::new(),
+        epoch_height: 0u64,
+    };
+
+    let (current_leader_tx, current_leader_rx) = async_broadcast::broadcast(10);
+    let mut task_reg = ConsensusTaskRegistry::new();
+    let network_task = Task::new(
+        current_leader_network_state,
+        current_leader_tx.clone(),
+        current_leader_rx.clone(),
+    );
+    task_reg.run_task(network_task);
+
+    // VidTask for current leader
+    let mut vid_state =
+        VidTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&current_leader_handle)
+            .await;
+
+    // === Setup next leader's BlockTask and NetworkMessageTask ===
+    let mut block_state =
+        BlockTaskState::<TestTypes, TestVersions>::create_from(&next_leader_handle).await;
+
+    // NetworkMessageTask for next leader (to receive messages)
+    let (next_leader_internal_tx, mut next_leader_internal_rx) = async_broadcast::broadcast(10);
+    let (next_leader_external_tx, _) = async_broadcast::broadcast(10);
+    add_network_message_test_task(
+        next_leader_internal_tx.clone(),
+        next_leader_external_tx,
+        upgrade_lock,
+        next_leader_network,
+        next_leader_key,
+        next_leader_id,
+    )
+    .await;
+
+    // === Create test payload with transactions ===
+    let transactions = vec![
+        TestTransaction::new(vec![1, 2, 3]),
+        TestTransaction::new(vec![4, 5, 6]),
+        TestTransaction::new(vec![7, 8, 9]),
+    ];
+    let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
+        transactions.clone(),
+        &TestValidatedState::default(),
+        &TestInstanceState::default(),
+    )
+    .await
+    .unwrap();
+
+    // View 2: current leader (node 2) is leader, next leader (node 3) is leader for view 3
+    let view = ViewNumber::new(2);
+
+    // === Step 1: VidTask processes BlockRecv and should emit BlockDirectSend ===
+    let packed_bundle = PackedBundle::new(
+        payload.encode(),
+        metadata.clone(),
+        view,
+        None, // epoch_number
+        vec1::vec1![hotshot_types::data::null_block::builder_fee::<TestTypes, TestVersions>(
+            7,
+            <TestVersions as hotshot_types::traits::node_implementation::Versions>::Base::VERSION,
+        )
+        .unwrap()],
+    );
+
+    // Send BlockRecv to VidTask - this should trigger BlockDirectSend emission
+    vid_state
+        .handle(
+            std::sync::Arc::new(HotShotEvent::BlockRecv(packed_bundle)),
+            current_leader_tx.clone(),
+        )
+        .await;
+
+    // Wait briefly for network transmission
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // === Step 2: Verify next leader receives BlockDirectRecv ===
+    let received_event = timeout(
+        Duration::from_millis(500),
+        next_leader_internal_rx.recv_direct(),
+    )
+    .await
+    .expect("timed out waiting for BlockDirectRecv")
+    .expect("channel closed");
+
+    let (received_payload, received_view) = match received_event.as_ref() {
+        HotShotEvent::BlockDirectRecv(payload, view) => (payload.clone(), *view),
+        other => panic!(
+            "Expected BlockDirectRecv, got {:?}",
+            std::mem::discriminant(other)
+        ),
+    };
+
+    assert_eq!(received_view, view, "View should match");
+    assert_eq!(
+        received_payload.payload, payload,
+        "Payload should match sent payload"
+    );
+    assert_eq!(
+        received_payload.metadata, metadata,
+        "Metadata should match sent metadata"
+    );
+
+    // === Step 3: BlockTask processes BlockDirectRecv ===
+    let (block_sender, block_receiver) = async_broadcast::broadcast(128);
+    block_state
+        .handle(received_event, block_sender.clone(), block_receiver.clone())
+        .await
+        .expect("BlockTask handle should not error");
+
+    // === Step 4: Verify payload is saved to consensus ===
+    let saved_payload = block_state
+        .consensus
+        .read()
+        .await
+        .saved_payloads()
+        .get(&view)
+        .cloned();
+
+    assert!(
+        saved_payload.is_some(),
+        "Payload should be saved to consensus after BlockDirectRecv"
+    );
+    let saved = saved_payload.unwrap();
+    assert_eq!(
+        saved.payload, payload,
+        "Saved payload should match the directly received block"
+    );
+    assert_eq!(
+        saved.metadata, metadata,
+        "Saved metadata should match the directly received block"
+    );
+
+    tracing::info!(
+        "End-to-end test passed: VidTask -> Network -> BlockTask with {} transactions",
+        transactions.len()
+    );
 }

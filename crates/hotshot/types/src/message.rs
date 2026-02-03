@@ -28,6 +28,7 @@ use vbs::{
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
+    consensus::PayloadWithMetadata,
     data::{
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
@@ -292,6 +293,9 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// Message with an epoch root quorum vote.
     EpochRootQuorumVote2(EpochRootQuorumVote2<TYPES>),
+
+    /// Block sent directly from the current leader to the next leader.
+    BlockDirect(PayloadWithMetadata<TYPES>, TYPES::View),
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -413,6 +417,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.view_number(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.view_number(),
                     GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.view_number(),
+                    GeneralConsensusMessage::BlockDirect(_, view) => *view,
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -497,6 +502,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.epoch(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.epoch(),
                     GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.epoch(),
+                    GeneralConsensusMessage::BlockDirect(..) => None,
                 }
             },
             SequencingMessage::Da(da_message) => {

@@ -413,7 +413,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .prev_block_received
                     .get_or_insert(now);
             },
-            HotShotEvent::BlockDirectlyRecv(_, view) => {
+            HotShotEvent::BlockDirectRecv(_, view) => {
                 self.replica_entry(*view)
                     .block_reconstructed
                     .get_or_insert(now);

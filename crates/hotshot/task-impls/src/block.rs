@@ -461,7 +461,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         // TODO: Handle the case where the block is received before this call
         while let Ok(event) = receiver.recv_direct().await {
             match event.as_ref() {
-                HotShotEvent::BlockDirectlyRecv(payload_with_metadata, view)
+                HotShotEvent::BlockDirectRecv(payload_with_metadata, view)
                     if *view == parent_view =>
                 {
                     tracing::debug!(
@@ -610,8 +610,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                 self.handle_block(*view, block.clone(), metadata.clone())
                     .await;
             },
-            HotShotEvent::BlockDirectlyRecv(payload_with_metadata, view) => {
-                tracing::info!("Received block directly from leader for view {view}");
+            HotShotEvent::BlockDirectRecv(payload_with_metadata, view) => {
                 self.handle_block(
                     *view,
                     payload_with_metadata.payload.clone(),
