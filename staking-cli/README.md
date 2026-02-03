@@ -24,6 +24,7 @@ Contracts:
     - [Getting Help](#getting-help)
     - [Choose your type of wallet (mnemonic, private key, or Ledger)](#choose-your-type-of-wallet-mnemonic-private-key-or-ledger)
     - [Initialize the configuration file](#initialize-the-configuration-file)
+    - [Managing multiple network configurations](#managing-multiple-network-configurations)
     - [Inspect the configuration](#inspect-the-configuration)
     - [View the stake table](#view-the-stake-table)
   - [Calldata Export (for Multisig Wallets)](#calldata-export-for-multisig-wallets)
@@ -268,11 +269,31 @@ The `--network` parameter is **required** and accepts:
 - `local` - Local development (localhost RPC)
 
 This creates a TOML config file with the appropriate contract addresses and RPC endpoints. With the config file you
-don't need to provide the configuration values every time you run the CLI.
+don't need to provide the configuration values every time you run the CLI. If no config file exists, all values must be
+provided via command-line arguments or environment variables.
 
 You can also set the network via environment variable: `NETWORK=mainnet staking-cli init --mnemonic MNEMONIC`
 
-NOTE: only for this `init` command the wallet flags are specified _after_ the command.
+NOTE: For this `init` command, wallet flags are specified _after_ the command. The `-c` flag (config path) goes before.
+
+### Managing multiple network configurations
+
+To work with multiple networks (e.g., both mainnet and decaf), use the `-c` flag to specify different config files:
+
+```bash
+# Create mainnet config with mnemonic from env var
+MNEMONIC='your mnemonic' staking-cli -c mainnet.toml init --network mainnet --account-index 0
+
+# Create decaf config with ledger
+staking-cli -c decaf.toml init --network decaf --ledger --account-index 0
+
+# Use specific config for commands
+staking-cli -c mainnet.toml stake-table
+staking-cli -c decaf.toml delegate --validator-address 0x... --amount 100
+```
+
+When no `-c` flag is provided, the CLI uses a platform-specific default path (e.g.,
+`~/.config/espresso/espresso-staking-cli/config.toml` on Linux).
 
 ### Inspect the configuration
 
