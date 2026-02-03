@@ -173,11 +173,11 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
         match storage.store_drb_input(drb_input.clone()).await {
             Ok(()) => (),
             Err(e) if attempt < 5 => {
-                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
                 tokio::time::sleep(Duration::from_millis(300)).await;
             },
             Err(e) => {
-                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
                 return Err(e);
             },
         }
@@ -220,13 +220,13 @@ async fn store_drb_result_impl<TYPES: NodeType>(
             Ok(()) => (),
             Err(e) if attempt < 5 => {
                 tracing::warn!(
-                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/5): {e}"
                 );
                 tokio::time::sleep(Duration::from_millis(300)).await;
             },
             Err(e) => {
                 tracing::warn!(
-                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/5): {e}"
                 );
                 return Err(e);
             },
