@@ -124,8 +124,8 @@ bimap = "0.6.3"
 bincode = "1.3.3"
 bitvec = { version = "1", features = ["serde"] }
 blake3 = "1.5"
-bytes = { version = "1.11.0", features = ["serde"] }
 bon = "3.8.2"
+bytes = { version = "1.11.0", features = ["serde"] }
 cbor4ii = { version = "1.0", features = ["serde1"] }
 chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"

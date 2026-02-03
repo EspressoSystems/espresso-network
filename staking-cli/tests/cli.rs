@@ -16,8 +16,9 @@ use rand::{rngs::StdRng, SeedableRng as _};
 use staking_cli::{
     demo::DelegationConfig,
     deploy::{self},
-    Config,
+    fetch_metadata, Config,
 };
+use url::Url;
 use warp::Filter as _;
 
 fn random_mnemonic() -> String {
@@ -47,10 +48,7 @@ async fn start_metadata_server(pub_key: &BLSPubKey) -> MetadataMockServer {
         warp::reply::with_header(json_body.clone(), "content-type", "application/json")
     });
 
-    let port = portpicker::pick_unused_port().unwrap();
-    tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
+    let port = deploy::serve_on_random_port(route).await;
     MetadataMockServer { port }
 }
 
@@ -308,61 +306,177 @@ async fn test_cli_register_validator_metadata_uri_validation(
     Ok(())
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_register_validator_metadata_validation_success() -> Result<()> {
+// Metadata format for parametrized tests
+#[derive(Clone, Copy, Debug)]
+enum MetadataFormat {
+    Json,
+    OpenMetrics,
+}
+
+struct MetadataServer {
+    port: u16,
+    format: MetadataFormat,
+}
+
+impl MetadataServer {
+    fn cli_args(&self) -> Vec<String> {
+        match self.format {
+            MetadataFormat::Json => {
+                vec![
+                    "--metadata-uri".to_string(),
+                    format!("http://127.0.0.1:{}/metadata", self.port),
+                ]
+            },
+            MetadataFormat::OpenMetrics => {
+                vec![
+                    "--node-url".to_string(),
+                    format!("http://127.0.0.1:{}", self.port),
+                ]
+            },
+        }
+    }
+}
+
+async fn start_metadata_server_format(
+    pub_key: &BLSPubKey,
+    format: MetadataFormat,
+) -> MetadataServer {
+    let port = match format {
+        MetadataFormat::Json => {
+            let metadata_json = serde_json::json!({
+                "pub_key": pub_key.to_string(),
+                "name": "Test Validator"
+            });
+            let json_body = serde_json::to_string(&metadata_json).unwrap();
+
+            let route = warp::path("metadata").map(move || {
+                warp::reply::with_header(json_body.clone(), "content-type", "application/json")
+            });
+
+            deploy::serve_on_random_port(route).await
+        },
+        MetadataFormat::OpenMetrics => {
+            let metrics_body = format!(
+                r#"# HELP consensus_node node
+# TYPE consensus_node gauge
+consensus_node{{key="{}"}} 1
+# HELP consensus_node_identity_general node_identity_general
+# TYPE consensus_node_identity_general gauge
+consensus_node_identity_general{{name="Test Validator",company_name="Test Corp"}} 1
+"#,
+                pub_key
+            );
+
+            let route = warp::path!("status" / "metrics").map(move || {
+                warp::reply::with_header(
+                    metrics_body.clone(),
+                    "content-type",
+                    "text/plain; charset=utf-8",
+                )
+            });
+
+            deploy::serve_on_random_port(route).await
+        },
+    };
+
+    MetadataServer { port, format }
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_register_validator_metadata_validation_success(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
     let system = TestSystem::deploy().await?;
     let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
-    let server = start_metadata_server(&bls_vk).await;
+    let server = start_metadata_server_format(&bls_vk, format).await;
 
     let bls_key = system.bls_private_key_str()?;
     let state_key = system.state_private_key_str()?;
-    let metadata_uri = server.url();
 
-    system
-        .cmd(Signer::Mnemonic)
-        .arg("register-validator")
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("register-validator")
         .arg("--consensus-private-key")
         .arg(&bls_key)
         .arg("--state-private-key")
         .arg(&state_key)
         .arg("--commission")
-        .arg("5.00")
-        .arg("--metadata-uri")
-        .arg(&metadata_uri)
-        .assert()
+        .arg("5.00");
+    for arg in server.cli_args() {
+        cmd.arg(arg);
+    }
+    cmd.assert()
         .success()
         .stdout(str::contains("ValidatorRegistered"));
 
     Ok(())
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_register_validator_metadata_validation_wrong_pub_key() -> Result<()> {
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_register_validator_metadata_validation_wrong_pub_key(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     let mut rng = StdRng::from_seed([99u8; 32]);
     let (_, different_bls, _) = TestSystem::gen_keys(&mut rng);
     let different_bls_vk = BLSPubKey::from(different_bls.ver_key());
-    let server = start_metadata_server(&different_bls_vk).await;
+    let server = start_metadata_server_format(&different_bls_vk, format).await;
 
     let bls_key = system.bls_private_key_str()?;
     let state_key = system.state_private_key_str()?;
-    let metadata_uri = server.url();
 
-    system
-        .cmd(Signer::Mnemonic)
-        .arg("register-validator")
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("register-validator")
         .arg("--consensus-private-key")
         .arg(&bls_key)
         .arg("--state-private-key")
         .arg(&state_key)
         .arg("--commission")
-        .arg("5.00")
-        .arg("--metadata-uri")
-        .arg(&metadata_uri)
-        .assert()
+        .arg("5.00");
+    for arg in server.cli_args() {
+        cmd.arg(arg);
+    }
+    cmd.assert()
         .failure()
         .stderr(str::contains("pub_key mismatch"));
+
+    Ok(())
+}
+
+/// Integration test against real mainnet node.
+/// Ignored by default since it requires network access.
+/// Run with: cargo test -p staking-cli --features testing test_real_mainnet_node_metadata -- --ignored
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore]
+async fn test_real_mainnet_node_metadata() -> Result<()> {
+    let node_url = "https://query-0.main.net.espresso.network";
+    let metrics_url = Url::parse(&format!("{node_url}/status/metrics"))?;
+
+    // Fetch and parse the metrics to get the pub_key
+    let metadata = fetch_metadata(&metrics_url).await?;
+    let pub_key = metadata.pub_key.to_string();
+
+    // Now test that update-metadata-uri validation works with this real endpoint
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    // Validation should succeed: the pub_key from the metrics matches what we provide
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--node-url")
+        .arg(node_url)
+        .arg("--consensus-public-key")
+        .arg(&pub_key)
+        .assert()
+        .success()
+        .stdout(str::contains("MetadataUriUpdated"));
 
     Ok(())
 }
@@ -747,7 +861,7 @@ async fn test_cli_claim_rewards(#[case] reward_balance: Option<U256>) -> Result<
 
     let espresso_url = match reward_balance {
         Some(balance) => system.setup_reward_claim_mock(balance).await?,
-        None => system.setup_reward_claim_not_found_mock(),
+        None => system.setup_reward_claim_not_found_mock().await,
     };
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -787,7 +901,7 @@ async fn test_cli_unclaimed_rewards(
 
     let espresso_url = match reward_balance {
         Some(balance) => system.setup_reward_claim_mock(balance).await?,
-        None => system.setup_reward_claim_not_found_mock(),
+        None => system.setup_reward_claim_not_found_mock().await,
     };
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1003,50 +1117,56 @@ async fn test_cli_update_metadata_uri_with_no_metadata_uri() -> Result<()> {
     Ok(())
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_update_metadata_uri_validation_success() -> Result<()> {
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_update_metadata_uri_validation_success(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
     let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
-    let server = start_metadata_server(&bls_vk).await;
-    let metadata_uri = server.url();
+    let server = start_metadata_server_format(&bls_vk, format).await;
     let bls_pub_key = system.bls_public_key_str();
 
-    system
-        .cmd(Signer::Mnemonic)
-        .arg("update-metadata-uri")
-        .arg("--metadata-uri")
-        .arg(&metadata_uri)
-        .arg("--consensus-public-key")
-        .arg(&bls_pub_key)
-        .assert()
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("update-metadata-uri");
+    for arg in server.cli_args() {
+        cmd.arg(arg);
+    }
+    cmd.arg("--consensus-public-key").arg(&bls_pub_key);
+    cmd.assert()
         .success()
         .stdout(str::contains("MetadataUriUpdated"));
 
     Ok(())
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_cli_update_metadata_uri_validation_wrong_pub_key() -> Result<()> {
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_update_metadata_uri_validation_wrong_pub_key(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
     let mut rng = StdRng::from_seed([99u8; 32]);
     let (_, different_bls, _) = TestSystem::gen_keys(&mut rng);
     let different_bls_vk = BLSPubKey::from(different_bls.ver_key());
-    let server = start_metadata_server(&different_bls_vk).await;
-    let metadata_uri = server.url();
+    let server = start_metadata_server_format(&different_bls_vk, format).await;
     let bls_pub_key = system.bls_public_key_str();
 
-    system
-        .cmd(Signer::Mnemonic)
-        .arg("update-metadata-uri")
-        .arg("--metadata-uri")
-        .arg(&metadata_uri)
-        .arg("--consensus-public-key")
-        .arg(&bls_pub_key)
-        .assert()
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("update-metadata-uri");
+    for arg in server.cli_args() {
+        cmd.arg(arg);
+    }
+    cmd.arg("--consensus-public-key").arg(&bls_pub_key);
+    cmd.assert()
         .failure()
         .stderr(str::contains("pub_key mismatch"))
         .stderr(str::contains("--skip-metadata-validation"));

@@ -38,6 +38,7 @@ use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
+use tokio::net::TcpListener;
 use url::Url;
 use warp::{http::StatusCode, Filter};
 
@@ -45,6 +46,20 @@ use crate::{
     parse::Commission, receipt::ReceiptExt as _, registration::fetch_commission,
     signature::NodeSignatures, transaction::Transaction, BLSKeyPair, DEV_MNEMONIC,
 };
+
+/// Spawn a warp server on a random available port and return the port number.
+/// Uses TcpListener::bind with port 0 to atomically acquire a free port,
+/// avoiding race conditions with portpicker.
+pub async fn serve_on_random_port(
+    filter: impl Filter<Extract = impl warp::Reply> + Clone + Send + Sync + 'static,
+) -> u16 {
+    let listener = TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0u16)))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(warp::serve(filter).incoming(listener).run());
+    port
+}
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
@@ -380,25 +395,19 @@ impl TestSystem {
         let claim_input = query_data.to_reward_claim_input()?;
         let claim_input = std::sync::Arc::new(claim_input);
 
-        let port = portpicker::pick_unused_port().expect("No ports available");
-
         let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String).map(
             move |_block_height: u64, _address: String| warp::reply::json(&*claim_input.clone()),
         );
 
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-
+        let port = serve_on_random_port(route).await;
         Ok(format!("http://localhost:{}/", port).parse()?)
     }
 
-    pub fn setup_reward_claim_not_found_mock(&self) -> Url {
-        let port = portpicker::pick_unused_port().expect("No ports available");
-
+    pub async fn setup_reward_claim_not_found_mock(&self) -> Url {
         let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String)
             .map(|_, _| warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND));
 
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-
+        let port = serve_on_random_port(route).await;
         format!("http://localhost:{}/", port).parse().unwrap()
     }
 }

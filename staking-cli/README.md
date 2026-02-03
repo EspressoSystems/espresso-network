@@ -605,8 +605,44 @@ staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https:
 
 Or via environment variable: `SKIP_METADATA_VALIDATION=true`
 
-The staking UI service also supports Prometheus metrics format as an alternative to JSON (useful if you want to serve
-metadata from your node's metrics endpoint). See the staking-ui-service documentation for details.
+#### Using Your Node's Metrics Endpoint (Recommended)
+
+The easiest way to provide metadata is to use your espresso node's `/status/metrics` endpoint. Your node already exposes
+this endpoint with your validator's public key and identity information. Use `--node-url`:
+
+```bash
+# Register using your node's metrics endpoint
+staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> \
+    --commission 4.99 --node-url https://my-validator.example.com
+
+# Update metadata URI to use your node's metrics
+staking-cli update-metadata-uri --node-url https://my-validator.example.com --consensus-public-key BLS_VER_KEY~...
+```
+
+When using `--node-url`, the CLI will:
+
+1. Append `/status/metrics` to the provided URL
+2. Fetch and validate the OpenMetrics data
+3. Store the full metrics URL (e.g., `https://my-validator.example.com/status/metrics`) as the metadata URI
+
+The metrics endpoint extracts metadata from these Prometheus metrics:
+
+- `consensus_node{key="BLS_VER_KEY~..."}` - Your validator's public key (required)
+- `consensus_node_identity_general{name, description, company_name, company_website}` - Identity fields
+- `consensus_version{desc}` - Client version
+- `consensus_node_identity_icon{small_1x, small_2x, ...}` - Icon URLs
+
+#### Using a Custom JSON File (Alternative)
+
+If you need more control over your metadata or want to host it separately from your node, use `--metadata-uri` to point
+to a JSON file (see [Metadata URL Schema](#metadata-url-schema) above):
+
+```bash
+staking-cli register-validator ... --metadata-uri https://example.com/metadata.json
+staking-cli update-metadata-uri --metadata-uri https://example.com/metadata.json --consensus-public-key BLS_VER_KEY~...
+```
+
+Note: `--node-url` and `--metadata-uri` are mutually exclusive.
 
 ### De-registering your validator
 

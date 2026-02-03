@@ -1,91 +1,55 @@
+//! Metadata fetching and validation for validator nodes.
+
 use std::{fmt, str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use hotshot_types::signature_key::BLSPubKey;
-use serde::{Deserialize, Serialize};
 use url::Url;
 
-// Schema types copied from:
-// https://github.com/EspressoSystems/staking-ui-service/blob/main/src/types/common.rs#L194-L273
+// Re-export types from submodules for convenience
+pub use crate::metadata_types::NodeMetadataContent;
+pub use crate::openmetrics::parse_openmetrics;
 
-/// Optional descriptive information about a node.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub struct NodeMetadataContent {
-    /// The public key of the node this metadata belongs to.
-    ///
-    /// This is the only required field of the [`NodeMetadataContent`]. It is included in the
-    /// metadata content for authentication purposes. If this does not match the public key of the
-    /// node whose metadata is being fetched, then the metadata is treated as invalid. This feature
-    /// applies in two scenarios:
-    ///
-    /// 1. The operator of the node has innocently but erroneously pointed the node's metadata URI
-    ///    to the metadata page for a different node (this is an easy mistake to make when running
-    ///    multiple nodes). In this case we will detect the error and display no metadata for the
-    ///    misconfigured node, which is better for users than displaying incorrect metadata, and is
-    ///    a clear sign to the operator that something is wrong.
-    ///
-    /// 2. A malicious operator attempts to impersonate a trusted party by setting the metadata URI
-    ///    for the malicious node to the metadata URI of some existing trusted node (e.g.
-    ///    `https://trusted-operator.com/metadata`). Users of the UI see that the malicious node is
-    ///    associated with a `trusted-operator.com` domain name and thus believe it to be more
-    ///    trustworthy than it perhaps is. We would detect this, since the malicious operator and
-    ///    the trusted operator must have nodes with different public keys, and we would display
-    ///    no metadata for the malicious operator.
-    ///
-    /// Note that the mere presence of a matching public key in a metadata dump does not in itself
-    /// guarantee that this metadata was intended for this node. The metadata must also have been
-    /// sourced from the URI that was registered for that node in the contract. Specifically:
-    /// * A metadata dump having the expected public key ensures that the operator of the web site
-    ///   which served the metadata intended it for that particular node.
-    /// * A node having a certain metadata URI in the contract ensures that the operator of the
-    ///   _node_ intended its metadata to be sourced from that particular web site.
-    pub pub_key: BLSPubKey,
+/// Fetch metadata from a URI, auto-detecting JSON vs OpenMetrics format.
+///
+/// Format detection:
+/// - If Content-Type header contains "application/json", parse as JSON
+/// - Otherwise, parse as OpenMetrics/Prometheus format
+pub async fn fetch_metadata(url: &Url) -> Result<NodeMetadataContent> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .context("failed to build HTTP client")?;
 
-    /// Human-readable name for the node.
-    pub name: Option<String>,
+    let response = client
+        .get(url.as_str())
+        .send()
+        .await
+        .with_context(|| format!("failed to fetch metadata from {url}"))?
+        .error_for_status()
+        .context("metadata URI returned error status")?;
 
-    /// Longer description of the node.
-    pub description: Option<String>,
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
 
-    /// Company or individual operating the node.
-    pub company_name: Option<String>,
+    let is_json = content_type.contains("application/json");
 
-    /// Website for `company_name`.
-    pub company_website: Option<Url>,
-
-    /// Consensus client the node is running.
-    pub client_version: Option<String>,
-
-    /// Icon for the node (at different resolutions and pixel aspect ratios).
-    pub icon: Option<ImageSet>,
-}
-
-/// Different versions of the same image, at different resolutions and pixel aspect ratios.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ImageSet {
-    /// 14x14 icons at different pixel ratios.
-    #[serde(rename = "14x14")]
-    pub small: RatioSet,
-
-    /// 24x24 icons at different pixel ratios.
-    #[serde(rename = "24x24")]
-    pub large: RatioSet,
-}
-
-/// Different versions of the same image, at different pixel aspect ratios.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct RatioSet {
-    /// Image source for 1:1 pixel aspect ratio
-    #[serde(rename = "@1x")]
-    pub ratio1: Option<Url>,
-
-    /// Image source for 2:1 pixel aspect ratio
-    #[serde(rename = "@2x")]
-    pub ratio2: Option<Url>,
-
-    /// Image source for 3:1 pixel aspect ratio
-    #[serde(rename = "@3x")]
-    pub ratio3: Option<Url>,
+    if is_json {
+        response
+            .json()
+            .await
+            .context("failed to parse metadata as JSON")
+    } else {
+        let text = response
+            .text()
+            .await
+            .context("failed to read response body")?;
+        parse_openmetrics(&text)
+    }
 }
 
 /// Fetch and validate metadata from a URI, ensuring the pub_key matches.
@@ -93,23 +57,7 @@ pub async fn validate_metadata_uri(
     uri: &Url,
     expected_pub_key: &BLSPubKey,
 ) -> Result<NodeMetadataContent> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("failed to build HTTP client")?;
-
-    let response = client
-        .get(uri.as_str())
-        .send()
-        .await
-        .with_context(|| format!("failed to fetch metadata from {uri}"))?
-        .error_for_status()
-        .context("metadata URI returned error status")?;
-
-    let content: NodeMetadataContent = response
-        .json()
-        .await
-        .context("failed to parse metadata as JSON")?;
+    let content = fetch_metadata(uri).await?;
 
     if &content.pub_key != expected_pub_key {
         bail!(
@@ -128,6 +76,11 @@ pub struct MetadataUri(Option<Url>);
 impl MetadataUri {
     pub fn empty() -> Self {
         Self(None)
+    }
+
+    /// Returns the inner URL if present.
+    pub fn url(&self) -> Option<&Url> {
+        self.0.as_ref()
     }
 }
 
@@ -157,13 +110,6 @@ impl fmt::Display for MetadataUri {
             Some(url) => write!(f, "{}", url),
             None => Ok(()),
         }
-    }
-}
-
-impl MetadataUri {
-    /// Returns the inner URL if present.
-    pub fn url(&self) -> Option<&Url> {
-        self.0.as_ref()
     }
 }
 
@@ -326,6 +272,7 @@ mod validation_tests {
     use warp::Filter;
 
     use super::*;
+    use crate::deploy::serve_on_random_port;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_validate_metadata_correct_pub_key() {
@@ -345,10 +292,7 @@ mod validation_tests {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
-        let port = portpicker::pick_unused_port().unwrap();
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
+        let port = serve_on_random_port(route).await;
         let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_ok());
@@ -377,10 +321,7 @@ mod validation_tests {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
-        let port = portpicker::pick_unused_port().unwrap();
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
+        let port = serve_on_random_port(route).await;
         let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_err());
@@ -388,22 +329,22 @@ mod validation_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_validate_metadata_not_json() {
+    async fn test_validate_metadata_not_json_parses_as_openmetrics() {
+        // When content-type is not JSON, we try to parse as OpenMetrics
+        // HTML content will fail OpenMetrics parsing
         let route = warp::path("metadata")
             .map(|| warp::reply::with_header("<html>Not JSON</html>", "content-type", "text/html"));
 
-        let port = portpicker::pick_unused_port().unwrap();
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
+        let port = serve_on_random_port(route).await;
         let bls_vk = generate_bls_pub_key();
         let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_err());
+        // Now it fails on OpenMetrics parsing (missing consensus_node metric)
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("failed to parse metadata as JSON"));
+            .contains("missing required consensus_node metric"));
     }
 
     #[tokio::test]
@@ -417,5 +358,104 @@ mod validation_tests {
             .unwrap_err()
             .to_string()
             .contains("failed to fetch metadata from"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fetch_metadata_json_content_type() {
+        let bls_vk = generate_bls_pub_key();
+        let metadata = NodeMetadataContent {
+            pub_key: bls_vk,
+            name: Some("JSON Validator".to_string()),
+            description: None,
+            company_name: None,
+            company_website: None,
+            client_version: None,
+            icon: None,
+        };
+        let json_body = serde_json::to_string(&metadata).unwrap();
+
+        let route = warp::path("metadata").map(move || {
+            warp::reply::with_header(json_body.clone(), "content-type", "application/json")
+        });
+
+        let port = serve_on_random_port(route).await;
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let content = fetch_metadata(&uri).await.unwrap();
+        assert_eq!(content.pub_key, bls_vk);
+        assert_eq!(content.name, Some("JSON Validator".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fetch_metadata_openmetrics() {
+        let bls_vk = generate_bls_pub_key();
+        let metrics_body = format!(
+            r#"# HELP consensus_node node
+# TYPE consensus_node gauge
+consensus_node{{key="{}"}} 1
+# HELP consensus_node_identity_general node_identity_general
+# TYPE consensus_node_identity_general gauge
+consensus_node_identity_general{{name="OpenMetrics Validator",company_name="Test Corp"}} 1
+"#,
+            bls_vk
+        );
+
+        let route = warp::path("metrics").map(move || {
+            warp::reply::with_header(
+                metrics_body.clone(),
+                "content-type",
+                "text/plain; charset=utf-8",
+            )
+        });
+
+        let port = serve_on_random_port(route).await;
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/metrics", port)).unwrap();
+        let content = fetch_metadata(&uri).await.unwrap();
+        assert_eq!(content.pub_key, bls_vk);
+        assert_eq!(content.name, Some("OpenMetrics Validator".to_string()));
+        assert_eq!(content.company_name, Some("Test Corp".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fetch_metadata_follows_redirect() {
+        let bls_vk = generate_bls_pub_key();
+        let metadata = NodeMetadataContent {
+            pub_key: bls_vk,
+            name: Some("Redirected Validator".to_string()),
+            description: None,
+            company_name: None,
+            company_website: None,
+            client_version: None,
+            icon: None,
+        };
+        let json_body = serde_json::to_string(&metadata).unwrap();
+
+        // We need the port before creating the redirect route, so bind listener first
+        let listener =
+            tokio::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0u16)))
+                .await
+                .unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Final destination
+        let final_route = warp::path("final").map(move || {
+            warp::reply::with_header(json_body.clone(), "content-type", "application/json")
+        });
+
+        // Redirect route - now we know the port
+        let redirect_route = warp::path("redirect").map(move || {
+            warp::reply::with_header(
+                warp::reply::with_status("", warp::http::StatusCode::TEMPORARY_REDIRECT),
+                "location",
+                format!("http://127.0.0.1:{}/final", port),
+            )
+        });
+
+        let routes = redirect_route.or(final_route);
+        tokio::spawn(warp::serve(routes).incoming(listener).run());
+
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/redirect", port)).unwrap();
+        let content = fetch_metadata(&uri).await.unwrap();
+        assert_eq!(content.pub_key, bls_vk);
+        assert_eq!(content.name, Some("Redirected Validator".to_string()));
     }
 }
