@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Espresso staking CLI"><title>staking_cli::cli - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cli</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../staking_cli/index.html">staking_<wbr>cli</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cli</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#espresso-staking-cli" title="Espresso staking CLI">Espresso staking CLI</a><ul><li><a href="#getting-started" title="Getting Started">Getting Started</a></li><li><a href="#calldata-export-for-multisig-wallets" title="Calldata Export (for Multisig Wallets)">Calldata Export (for Multisig Wallets)</a></li><li><a href="#delegators-or-stakers" title="Delegators (or stakers)">Delegators (or stakers)</a></li><li><a href="#node-operators" title="Node operators">Node operators</a></li></ul></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate staking_<wbr>cli</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">staking_cli</a></div><h1>Module <span>cli</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/staking_cli/cli.rs.html#1-675">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="espresso-staking-cli"><a class="doc-anchor" href="#espresso-staking-cli">§</a>Espresso staking CLI</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Espresso staking CLI"><title>staking_cli::cli - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cli</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../staking_cli/index.html">staking_<wbr>cli</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cli</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#espresso-staking-cli" title="Espresso staking CLI">Espresso staking CLI</a><ul><li><a href="#getting-started" title="Getting Started">Getting Started</a></li><li><a href="#calldata-export-for-multisig-wallets" title="Calldata Export (for Multisig Wallets)">Calldata Export (for Multisig Wallets)</a></li><li><a href="#delegators-or-stakers" title="Delegators (or stakers)">Delegators (or stakers)</a></li><li><a href="#node-operators" title="Node operators">Node operators</a></li></ul></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate staking_<wbr>cli</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">staking_cli</a></div><h1>Module <span>cli</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/staking_cli/cli.rs.html#1-683">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="espresso-staking-cli"><a class="doc-anchor" href="#espresso-staking-cli">§</a>Espresso staking CLI</h2>
 <p>WARNING: This CLI is intended for testing as well as validator registrations purposes only. Stakers should use the
 staking UI:</p>
 <ul>
@@ -20,15 +20,19 @@ staking UI:</p>
 <ul>
 <li><a href="#getting-started">Getting Started</a>
 <ul>
-<li><a href="#getting-help">Getting Help</a></li>
+<li><a href="#overview">Overview</a></li>
 <li><a href="#choose-your-type-of-wallet-mnemonic-private-key-or-ledger">Choose your type of wallet (mnemonic, private key, or Ledger)</a></li>
-<li><a href="#initialize-the-configuration-file">Initialize the configuration file</a></li>
+<li><a href="#initialize-the-configuration-file-optional">Initialize the configuration file (optional)</a></li>
 <li><a href="#managing-multiple-network-configurations">Managing multiple network configurations</a></li>
 <li><a href="#inspect-the-configuration">Inspect the configuration</a></li>
 <li><a href="#view-the-stake-table">View the stake table</a></li>
 </ul>
 </li>
-<li><a href="#calldata-export-for-multisig-wallets">Calldata Export (for Multisig Wallets)</a></li>
+<li><a href="#calldata-export-for-multisig-wallets">Calldata Export (for Multisig Wallets)</a>
+<ul>
+<li><a href="#calldata-simulation">Calldata Simulation</a></li>
+</ul>
+</li>
 <li><a href="#delegators-or-stakers">Delegators (or stakers)</a>
 <ul>
 <li><a href="#delegating">Delegating</a></li>
@@ -39,11 +43,22 @@ staking UI:</p>
 </li>
 <li><a href="#node-operators">Node operators</a>
 <ul>
-<li><a href="#registering-a-validator">Registering a validator</a></li>
+<li><a href="#registering-a-validator">Registering a validator</a>
+<ul>
+<li><a href="#validator-metadata">Validator Metadata</a></li>
+<li><a href="#registration-command">Registration Command</a></li>
+</ul>
+</li>
 <li><a href="#updating-your-commission">Updating your commission</a></li>
-<li><a href="#updating-your-metadata-url">Updating your metadata URL</a></li>
+<li><a href="#updating-your-metadata-url">Updating your metadata URL</a>
+<ul>
+<li><a href="#metadata-json-schema-for-custom-hosting">Metadata JSON Schema (for custom hosting)</a></li>
+</ul>
+</li>
 <li><a href="#de-registering-your-validator">De-registering your validator</a></li>
 <li><a href="#rotating-your-consensus-keys">Rotating your consensus keys</a></li>
+<li><a href="#exporting-node-signatures">Exporting Node Signatures</a></li>
+<li><a href="#native-demo-staking">Native Demo Staking</a></li>
 </ul>
 </li>
 </ul>
@@ -91,6 +106,7 @@ Commands:
   transfer                Transfer ESP tokens
   stake-for-demo          Register the validators and delegates for the local demo
   export-node-signatures  Export validator node signatures for address validation
+  preview-metadata        Preview metadata from a URL without registering
   help                    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -329,35 +345,44 @@ to your wallet by running</p>
 <p>Note: You need to set the <code>espresso_url</code> in your config file or pass <code>--espresso-url</code> flag to use these commands.</p>
 <h3 id="node-operators"><a class="doc-anchor" href="#node-operators">§</a>Node operators</h3>
 <p>This section covers commands for node operators.</p>
-<h4 id="registering-a-validator"><a class="doc-anchor" href="#registering-a-validator">§</a>Registering a validator</h4>
+<h4 id="registering-a-validator"><a class="doc-anchor" href="#registering-a-validator">§</a>Registering a validator</h4><h5 id="validator-metadata"><a class="doc-anchor" href="#validator-metadata">§</a>Validator Metadata</h5>
+<p>Metadata is optional and provides information displayed in the staking UI (name, description, icon, etc.).</p>
+<p>Options for <code>--metadata-uri</code>:</p>
 <ol>
-<li>
-<p>Obtain your validator’s BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare
-a metadata URL.</p>
-</li>
-<li>
-<p>Use the <code>register-validator</code> command to register your validator.</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt; --commission 4.99 --metadata-uri https://example.com/validator-metadata.json</code></pre></div>
-<p>To avoid specifying the the keys on the command line they can be set via env vars</p>
-<div class="example-wrap"><pre class="language-text"><code>CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
-STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
-METADATA_URL=https://example.com/validator-metadata.json</code></pre></div>
-<p>Alternatively, you can use pre-signed signatures:</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --node-signatures signatures.json --commission 4.99 --metadata-uri https://example.com/validator-metadata.json</code></pre></div>
-<p>You can specify the format for parsing node signatures from stdin or files:</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99 --metadata-uri https://example.com/validator-metadata.json</code></pre></div>
-<p>To register without a metadata URL (leaving it empty):</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt; --commission 4.99 --no-metadata-uri</code></pre></div></li>
+<li><strong>Node <code>/status/metrics</code> endpoint (recommended):</strong></li>
 </ol>
 <ul>
-<li>Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
-register transaction consumes about 300k gas.</li>
-<li>Each BLS (Espresso) and key can be registered only once.</li>
-<li>The commission can be updated later using the <code>update-commission</code> command, subject to rate limits.</li>
-<li>The metadata URL can be updated at any time using the <code>update-metadata-uri</code> command.</li>
-<li>The metadata URL must be a valid URL (unless using –no-metadata-uri flag) and cannot exceed 2048 bytes.</li>
-<li>Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
-different account indices (or mnemonics) must be used.</li>
+<li><code>--metadata-uri https://my-validator.example.com/status/metrics</code></li>
+<li>Existing nodes already expose this.</li>
+</ul>
+<ol start="2">
+<li><strong>Custom JSON file:</strong></li>
+</ol>
+<ul>
+<li><code>--metadata-uri https://example.com/metadata.json</code></li>
+<li>See <a href="#metadata-json-schema-for-custom-hosting">JSON schema</a>.</li>
+</ul>
+<ol start="3">
+<li><strong>No metadata:</strong> <code>--no-metadata-uri</code></li>
+</ol>
+<p>Use <code>--skip-metadata-validation</code> if your endpoint isn’t ready yet. URL cannot exceed 2048 bytes.</p>
+<p>Preview what will be extracted before registering:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli preview-metadata --metadata-uri https://my-validator.example.com/status/metrics</code></pre></div><h5 id="registration-command"><a class="doc-anchor" href="#registration-command">§</a>Registration Command</h5><div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator \
+    --consensus-private-key BLS_SIGNING_KEY~... \
+    --state-private-key SCHNORR_SIGNING_KEY~... \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics</code></pre></div>
+<p>To avoid keys on the command line, use env vars (<code>CONSENSUS_PRIVATE_KEY</code>, <code>STATE_PRIVATE_KEY</code>) or pre-signed signatures
+(see <a href="#exporting-node-signatures">Exporting Node Signatures</a>):</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator --node-signatures signatures.json --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics</code></pre></div>
+<p>Notes:</p>
+<ul>
+<li>Each Ethereum account needs gas funds (~300k gas for registration)</li>
+<li>Each BLS key can only be registered once</li>
+<li>Each Ethereum account can only register one validator</li>
+<li>Commission can be updated later via <code>update-commission</code> (subject to rate limits)</li>
+<li>Metadata URL can be updated anytime via <code>update-metadata-uri</code></li>
 </ul>
 <h4 id="updating-your-commission"><a class="doc-anchor" href="#updating-your-commission">§</a>Updating your commission</h4>
 <p>Validators can update their commission rate, subject to the following rate limits:</p>
@@ -370,102 +395,24 @@ different account indices (or mnemonics) must be used.</li>
 <div class="example-wrap"><pre class="language-bash"><code>staking-cli update-commission --new-commission 7.5</code></pre></div>
 <p>The commission value is in percent with up to 2 decimal points: from 0.00 to 100.00.</p>
 <p>Note: The minimum time interval and maximum increase are contract parameters that may be adjusted by governance.</p>
-<h4 id="updating-your-metadata-url"><a class="doc-anchor" href="#updating-your-metadata-url">§</a>Updating your metadata URL</h4>
-<p>Validators can update their metadata URL at any time. The metadata URL is used to provide additional information about
-your validator that is displayed in the staking UI.</p>
-<p>To update your metadata URL with validation:</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --metadata-uri https://example.com/updated-metadata.json --consensus-public-key BLS_VER_KEY~...</code></pre></div>
-<p>The <code>--consensus-public-key</code> is required for metadata validation (to verify the <code>pub_key</code> field in the metadata matches
-your validator). To skip validation:</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https://example.com/updated-metadata.json</code></pre></div>
-<p>To clear your metadata URL (set it to empty):</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --no-metadata-uri</code></pre></div>
-<p>The metadata URL:</p>
-<ul>
-<li>Must be a valid URL (e.g., starting with <code>https://</code>) unless using –no-metadata-uri flag</li>
-<li>Can be empty when using –no-metadata-uri flag</li>
-<li>Cannot exceed 2048 bytes</li>
-</ul>
-<p>Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by listening to registration
-and update events.</p>
-<h5 id="metadata-url-schema"><a class="doc-anchor" href="#metadata-url-schema">§</a>Metadata URL Schema</h5>
-<p>The metadata endpoint must return JSON with <code>Content-Type: application/json</code>. The schema is:</p>
+<h4 id="updating-your-metadata-url"><a class="doc-anchor" href="#updating-your-metadata-url">§</a>Updating your metadata URL</h4><div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
+    --consensus-public-key BLS_VER_KEY~...</code></pre></div>
+<p>See <a href="#validator-metadata">Validator Metadata</a> for format options. Use <code>--no-metadata-uri</code> to clear.</p>
+<h5 id="metadata-json-schema-for-custom-hosting"><a class="doc-anchor" href="#metadata-json-schema-for-custom-hosting">§</a>Metadata JSON Schema (for custom hosting)</h5>
+<p>If hosting a custom JSON file instead of using your node’s metrics endpoint:</p>
 <div class="example-wrap"><pre class="language-json"><code>{
   &quot;pub_key&quot;: &quot;BLS_VER_KEY~...&quot;,
   &quot;name&quot;: &quot;My Validator&quot;,
-  &quot;description&quot;: &quot;A longer description of the validator&quot;,
+  &quot;description&quot;: &quot;Description&quot;,
   &quot;company_name&quot;: &quot;Acme Inc.&quot;,
   &quot;company_website&quot;: &quot;https://acme.com/&quot;,
   &quot;client_version&quot;: &quot;v1.0.0&quot;,
   &quot;icon&quot;: {
-    &quot;14x14&quot;: {
-      &quot;@1x&quot;: &quot;https://acme.com/icon-14x14@1x.png&quot;,
-      &quot;@2x&quot;: &quot;https://acme.com/icon-14x14@2x.png&quot;,
-      &quot;@3x&quot;: &quot;https://acme.com/icon-14x14@3x.png&quot;
-    },
-    &quot;24x24&quot;: {
-      &quot;@1x&quot;: &quot;https://acme.com/icon-24x24@1x.png&quot;,
-      &quot;@2x&quot;: &quot;https://acme.com/icon-24x24@2x.png&quot;,
-      &quot;@3x&quot;: &quot;https://acme.com/icon-24x24@3x.png&quot;
-    }
+    &quot;14x14&quot;: { &quot;@1x&quot;: &quot;https://example.com/icon-14.png&quot;, &quot;@2x&quot;: &quot;...&quot;, &quot;@3x&quot;: &quot;...&quot; },
+    &quot;24x24&quot;: { &quot;@1x&quot;: &quot;https://example.com/icon-24.png&quot;, &quot;@2x&quot;: &quot;...&quot;, &quot;@3x&quot;: &quot;...&quot; }
   }
-}</code></pre></div><div><table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody>
-<tr><td><code>pub_key</code></td><td>Yes</td><td>BLS public key of your validator (tagged base64). Must match the registered key.</td></tr>
-<tr><td><code>name</code></td><td>No</td><td>Human-readable name for the validator</td></tr>
-<tr><td><code>description</code></td><td>No</td><td>Longer description of the validator</td></tr>
-<tr><td><code>company_name</code></td><td>No</td><td>Company or individual operating the validator</td></tr>
-<tr><td><code>company_website</code></td><td>No</td><td>Website URL for the company</td></tr>
-<tr><td><code>client_version</code></td><td>No</td><td>Version of the consensus client running</td></tr>
-<tr><td><code>icon</code></td><td>No</td><td>Icon images at different resolutions (14x14 small, 24x24 large) and pixel ratios (@1x, @2x, @3x)</td></tr>
-</tbody></table>
-</div>
-<p>The <code>pub_key</code> field is required for authentication. If it doesn’t match the validator’s registered BLS key, the metadata
-is treated as invalid. This prevents impersonation attacks where a malicious operator points their metadata URI to
-another validator’s metadata page.</p>
-<h5 id="metadata-validation"><a class="doc-anchor" href="#metadata-validation">§</a>Metadata Validation</h5>
-<p>When registering a validator or updating metadata with <code>--metadata-uri</code>, the CLI fetches and validates the metadata
-before submitting the transaction:</p>
-<ol>
-<li>Fetches the JSON from the provided URL (5 second timeout)</li>
-<li>Parses the JSON according to the schema above</li>
-<li>Verifies the <code>pub_key</code> in the metadata matches your validator’s BLS key</li>
-</ol>
-<p>For <code>register-validator</code>, the BLS key is derived from the <code>--consensus-private-key</code> or <code>--node-signatures</code> argument.</p>
-<p>For <code>update-metadata-uri</code>, you must provide <code>--consensus-public-key</code> for validation:</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --metadata-uri https://example.com/metadata.json --consensus-public-key BLS_VER_KEY~...</code></pre></div>
-<p>If validation fails, the command is aborted with an error message. To skip this validation (e.g., if your metadata
-endpoint isn’t ready yet):</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli --skip-metadata-validation register-validator --metadata-uri https://example.com/metadata.json ...
-staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https://example.com/metadata.json</code></pre></div>
-<p>Or via environment variable: <code>SKIP_METADATA_VALIDATION=true</code></p>
-<h5 id="using-your-nodes-metrics-endpoint-recommended"><a class="doc-anchor" href="#using-your-nodes-metrics-endpoint-recommended">§</a>Using Your Node’s Metrics Endpoint (Recommended)</h5>
-<p>The easiest way to provide metadata is to use your espresso node’s <code>/status/metrics</code> endpoint. Your node already exposes
-this endpoint with your validator’s public key and identity information. Use <code>--node-url</code>:</p>
-<div class="example-wrap"><pre class="language-bash"><code># Register using your node&#39;s metrics endpoint
-staking-cli register-validator --consensus-private-key &lt;BLS_KEY&gt; --state-private-key &lt;STATE_KEY&gt; \
-    --commission 4.99 --node-url https://my-validator.example.com
-
-# Update metadata URI to use your node&#39;s metrics
-staking-cli update-metadata-uri --node-url https://my-validator.example.com --consensus-public-key BLS_VER_KEY~...</code></pre></div>
-<p>When using <code>--node-url</code>, the CLI will:</p>
-<ol>
-<li>Append <code>/status/metrics</code> to the provided URL</li>
-<li>Fetch and validate the OpenMetrics data</li>
-<li>Store the full metrics URL (e.g., <code>https://my-validator.example.com/status/metrics</code>) as the metadata URI</li>
-</ol>
-<p>The metrics endpoint extracts metadata from these Prometheus metrics:</p>
-<ul>
-<li><code>consensus_node{key="BLS_VER_KEY~..."}</code> - Your validator’s public key (required)</li>
-<li><code>consensus_node_identity_general{name, description, company_name, company_website}</code> - Identity fields</li>
-<li><code>consensus_version{desc}</code> - Client version</li>
-<li><code>consensus_node_identity_icon{small_1x, small_2x, ...}</code> - Icon URLs</li>
-</ul>
-<h5 id="using-a-custom-json-file-alternative"><a class="doc-anchor" href="#using-a-custom-json-file-alternative">§</a>Using a Custom JSON File (Alternative)</h5>
-<p>If you need more control over your metadata or want to host it separately from your node, use <code>--metadata-uri</code> to point
-to a JSON file (see <a href="#metadata-url-schema">Metadata URL Schema</a> above):</p>
-<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator ... --metadata-uri https://example.com/metadata.json
-staking-cli update-metadata-uri --metadata-uri https://example.com/metadata.json --consensus-public-key BLS_VER_KEY~...</code></pre></div>
-<p>Note: <code>--node-url</code> and <code>--metadata-uri</code> are mutually exclusive.</p>
+}</code></pre></div>
+<p>Only <code>pub_key</code> is required (must match your registered key to prevent impersonation). All other fields are optional.</p>
 <h4 id="de-registering-your-validator"><a class="doc-anchor" href="#de-registering-your-validator">§</a>De-registering your validator</h4>
 <p>WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to
 it.</p>
