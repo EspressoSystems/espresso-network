@@ -293,7 +293,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             .bind(account)
             .fetch_optional(tx.as_mut())
             .await?
-            .context(format!("Missing proofs"))?;
+            .context("Missing proofs")?;
 
             row.try_get::<Vec<u8>, _>("proof")
                 .context("Missing field proof from row; this should never happen")
