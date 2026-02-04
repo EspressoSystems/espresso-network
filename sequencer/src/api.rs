@@ -1265,7 +1265,7 @@ impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
 
         let balances: Vec<_> = self
             .iter()
-            .map(|(account, balance)| (account.clone(), balance.clone()))
+            .map(|(account, balance)| (*account, *balance))
             .collect();
 
         if balances.len() as u64 == num_leaves {
