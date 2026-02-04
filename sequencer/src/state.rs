@@ -379,7 +379,7 @@ where
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
 
-    if parent_leaf.header().version() > EpochVersion::version() {
+    if parent_leaf.header().version() > EpochVersion::version() && parent_leaf.height() > 0 {
         let reward_merkle_tree_v2 = storage
             .load_reward_merkle_tree_v2(parent_leaf.height())
             .await
