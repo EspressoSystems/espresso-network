@@ -29,15 +29,6 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        #[cfg(all(feature = "fee", feature = "da-upgrade"))]
-        (espresso_types::FeeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => run(
-            genesis,
-            modules,
-            opt,
-            SequencerVersions::<espresso_types::FeeVersion, espresso_types::DaUpgradeVersion>::new(
-            ),
-        )
-        .await,
         #[cfg(all(feature = "drb-and-header", feature = "da-upgrade"))]
         (
             espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
@@ -63,22 +54,6 @@ pub async fn main() -> anyhow::Result<()> {
                 SequencerVersions::<
                     espresso_types::DaUpgradeVersion,
                     espresso_types::DaUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(all(feature = "pos", feature = "drb-and-header"))]
-        (
-            espresso_types::EpochVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::EpochVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
                 >::new(),
             )
             .await
@@ -109,28 +84,6 @@ pub async fn main() -> anyhow::Result<()> {
                     espresso_types::DrbAndHeaderUpgradeVersion,
                     espresso_types::DrbAndHeaderUpgradeVersion,
                 >::new(),
-            )
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "pos"))]
-        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<espresso_types::FeeVersion, espresso_types::EpochVersion>::new(
-                ),
-            )
-            .await
-        },
-        #[cfg(feature = "pos")]
-        (espresso_types::EpochVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                // Specifying V0_0 disables upgrades
-                SequencerVersions::<espresso_types::EpochVersion, espresso_types::EpochVersion>::new(),
             )
             .await
         },
