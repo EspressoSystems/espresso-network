@@ -432,36 +432,72 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
-        _view: ViewNumber,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let result = self
-            .fetch(retry, |client| async move {
-                let tree_bytes = client
-                    .inner
-                    .get::<Vec<u8>>(&format!("reward-state-v2/reward-merkle-tree-v2/{height}",))
-                    .send()
+        let fetched_tree: anyhow::Result<RewardMerkleTreeV2> = {
+            let result = self
+                .fetch(retry, |client| async move {
+                    let tree_bytes = client
+                        .inner
+                        .get::<Vec<u8>>(&format!("reward-state-v2/reward-merkle-tree-v2/{height}",))
+                        .send()
+                        .await?;
+
+                    Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
+                })
+                .await
+                .context("Fetching from peer failed")?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
+                .context("Failed to deserialize merkle tree from catchup")?;
+
+            let tree: RewardMerkleTreeV2 = tree_data.try_into()?;
+
+            ensure!(
+                tree.commitment() == reward_merkle_tree_root,
+                "RewardMerkleTreeV2 from peer failed commitment check."
+            );
+            ensure!(!forgotten_accounts_include(&tree, &accounts));
+
+            Ok(tree)
+        };
+
+        match fetched_tree {
+            Ok(tree) => Ok(tree),
+            Err(e) => {
+                tracing::info!("Error fetching full tree; falling back to fetching accounts: {e}");
+
+                let fetched_accounts = self
+                    .try_fetch_reward_accounts_v2(
+                        retry,
+                        instance,
+                        height,
+                        view,
+                        reward_merkle_tree_root,
+                        &accounts,
+                    )
                     .await?;
 
-                Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
-            })
-            .await
-            .context("Fetching from peer failed")?;
+                let mut tree: RewardMerkleTreeV2 = current_tree.as_ref().clone();
 
-        let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
-            .context("Failed to deserialize merkle tree from catchup")?;
+                for proof in fetched_accounts {
+                    proof.remember(&mut tree)?;
+                }
 
-        let tree: RewardMerkleTreeV2 = tree_data.try_into()?;
+                ensure!(
+                    tree.commitment() == reward_merkle_tree_root,
+                    "RewardMerkleTreeV2 from peer failed commitment check."
+                );
+                ensure!(!forgotten_accounts_include(&tree, &accounts));
 
-        ensure!(
-            tree.commitment() == reward_merkle_tree_root,
-            "RewardMerkleTreeV2 from peer failed commitment check."
-        );
-        ensure!(!forgotten_accounts_include(&tree, &accounts));
-
-        Ok(tree)
+                Ok(tree)
+            },
+        }
     }
 
     #[tracing::instrument(skip(self, _instance))]
@@ -868,6 +904,8 @@ where
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         _retry: usize,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
@@ -1025,6 +1063,8 @@ impl StateCatchup for NullStateCatchup {
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         _retry: usize,
+        _instance: &NodeState,
+        _current_tree: Arc<RewardMerkleTreeV2>,
         _height: u64,
         _view: ViewNumber,
         _reward_merkle_tree_root: RewardMerkleCommitmentV2,
@@ -1407,17 +1447,21 @@ impl StateCatchup for ParallelStateCatchup {
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         let local_result = self
-            .on_local_providers(clone! {(accounts) move |provider| {
-                clone! {(accounts) async move {
+            .on_local_providers(clone! {(accounts, instance, current_tree) move |provider| {
+                clone! {(accounts, instance, current_tree) async move {
                     provider
                         .try_fetch_reward_merkle_tree_v2(
                             retry,
+                            &instance,
+                            current_tree,
                             height,
                             view,
                             reward_merkle_tree_root,
@@ -1434,11 +1478,13 @@ impl StateCatchup for ParallelStateCatchup {
         }
 
         // If that fails, try the remote ones
-        self.on_remote_providers(clone! {(accounts) move |provider| {
-            clone!{(accounts) async move {
+        self.on_remote_providers(clone! {(accounts, instance, current_tree) move |provider| {
+            clone!{(accounts, instance, current_tree) async move {
                 provider
                 .try_fetch_reward_merkle_tree_v2(
                     retry,
+                    &instance,
+                    current_tree,
                     height,
                     view,
                     reward_merkle_tree_root,

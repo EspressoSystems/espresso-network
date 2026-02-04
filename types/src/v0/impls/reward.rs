@@ -989,9 +989,13 @@ pub async fn get_leader_and_fetch_missing_rewards(
                 "fetching reward merkle tree from peers"
             );
 
+            let current_tree = Arc::new(validated_state.reward_merkle_tree_v2.clone());
+
             validated_state.reward_merkle_tree_v2 = instance_state
                 .state_catchup
                 .fetch_reward_merkle_tree_v2(
+                    instance_state,
+                    current_tree,
                     parent_height,
                     parent_view,
                     reward_merkle_tree_root,

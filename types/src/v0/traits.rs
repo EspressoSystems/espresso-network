@@ -190,6 +190,8 @@ pub trait StateCatchup: Send + Sync {
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
@@ -233,6 +235,8 @@ pub trait StateCatchup: Send + Sync {
 
     async fn fetch_reward_merkle_tree_v2(
         &self,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
@@ -241,10 +245,13 @@ pub trait StateCatchup: Send + Sync {
         self.backoff()
             .retry(self, |provider, retry| {
                 let accounts = accounts.clone();
+                let current_tree = current_tree.clone();
                 async move {
                     provider
                         .try_fetch_reward_merkle_tree_v2(
                             retry,
+                            instance,
+                            current_tree,
                             height,
                             view,
                             reward_merkle_tree_root,
@@ -460,13 +467,15 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         (**self)
-            .try_fetch_reward_merkle_tree_v2(retry, height, view, reward_merkle_tree_root, accounts)
+            .try_fetch_reward_merkle_tree_v2(retry, instance, current_tree, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 
@@ -485,13 +494,15 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 
     async fn fetch_reward_merkle_tree_v2(
         &self,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         (**self)
-            .fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root, accounts)
+            .fetch_reward_merkle_tree_v2(instance, current_tree, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 

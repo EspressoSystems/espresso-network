@@ -152,22 +152,69 @@ impl<
 
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
-        _retry: usize,
+        retry: usize,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        // Timeout after a few batches
-        let timeout_duration = self.config.request_batch_interval * 3;
+        let tree = current_tree.clone();
+        let reward_accounts = accounts.clone();
+        let fetched_tree = {
+            // Timeout after a few batches
+            let timeout_duration = self.config.request_batch_interval * 3;
 
-        // Fetch the reward accounts
-        timeout(
-            timeout_duration,
-            self.fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root, accounts),
-        )
-        .await
-        .with_context(|| "timed out while fetching reward merkle tree v2")?
+            // Fetch the reward accounts
+            timeout(
+                timeout_duration,
+                self.fetch_reward_merkle_tree_v2(
+                    instance,
+                    tree,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    reward_accounts,
+                ),
+            )
+            .await
+            .with_context(|| "timed out while fetching reward merkle tree v2")?
+        };
+
+        match fetched_tree {
+            Ok(tree) => Ok(tree),
+            Err(e) => {
+                tracing::info!("Error fetching full tree; falling back to fetching accounts: {e}");
+
+                let accounts = accounts.as_ref().clone();
+
+                let fetched_accounts = self
+                    .try_fetch_reward_accounts_v2(
+                        retry,
+                        instance,
+                        height,
+                        view,
+                        reward_merkle_tree_root,
+                        &accounts,
+                    )
+                    .await?;
+
+                let mut tree: RewardMerkleTreeV2 = current_tree.as_ref().clone();
+
+                for proof in fetched_accounts {
+                    proof.remember(&mut tree)?;
+                }
+
+                anyhow::ensure!(
+                    tree.commitment() == reward_merkle_tree_root,
+                    "RewardMerkleTreeV2 from peer failed commitment check."
+                );
+                anyhow::ensure!(!forgotten_accounts_include(&tree, &accounts));
+
+                Ok(tree)
+            },
+        }
     }
 
     async fn try_fetch_reward_accounts_v1(
@@ -421,6 +468,8 @@ impl<
 
     async fn fetch_reward_merkle_tree_v2(
         &self,
+        instance: &NodeState,
+        current_tree: Arc<RewardMerkleTreeV2>,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
@@ -454,14 +503,17 @@ impl<
         };
 
         // Wait for the protocol to send us the reward accounts
-        let response = self
+        let Ok(response) = self
             .request_indefinitely(
                 Request::RewardMerkleTreeV2(height, *view),
                 RequestType::Batched,
                 response_validation_fn,
             )
             .await
-            .with_context(|| "failed to request reward accounts")?;
+            .with_context(|| "failed to request reward accounts")
+        else {
+            todo!()
+        };
 
         tracing::info!("Fetched RewardMerkleTreeV2 for height: {height}");
 
