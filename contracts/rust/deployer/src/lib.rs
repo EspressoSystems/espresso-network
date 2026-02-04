@@ -21,7 +21,7 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use clap::{builder::OsStr, Parser, ValueEnum};
-use derive_more::{derive::Deref, Display};
+use derive_more::Display;
 use espresso_types::{v0_1::L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::sol_types::*;
 
@@ -112,6 +112,10 @@ const LIBRARY_PLACEHOLDER_ADDRESS: &str = "fffffffffffffffffffffffffffffffffffff
 pub const MAX_HISTORY_RETENTION_SECONDS: u32 = 864000;
 /// Default exit escrow period for stake table (2 days in seconds)
 pub const DEFAULT_EXIT_ESCROW_PERIOD_SECONDS: u64 = 172800;
+/// Maximum number of retries for state checks after transactions
+pub const MAX_RETRY_ATTEMPTS: u32 = 5;
+/// Initial delay in milliseconds for retry exponential backoff
+pub const RETRY_INITIAL_DELAY_MS: u64 = 500;
 
 /// Set of predeployed contracts.
 #[derive(Clone, Debug, Parser)]
@@ -270,8 +274,22 @@ impl From<Contract> for OsStr {
 }
 
 /// Cache of contracts predeployed or deployed during this current run.
-#[derive(Deref, Debug, Clone, Default)]
-pub struct Contracts(HashMap<Contract, Address>);
+#[derive(Debug, Clone)]
+pub struct Contracts {
+    addresses: HashMap<Contract, Address>,
+    // TODO: having the cooldown field here is a bit hacky but we postpone a better solution to
+    // avoid a large refactor.
+    deploy_cooldown: Duration,
+}
+
+impl Default for Contracts {
+    fn default() -> Self {
+        Self {
+            addresses: HashMap::new(),
+            deploy_cooldown: Duration::ZERO,
+        }
+    }
+}
 
 impl From<DeployedContracts> for Contracts {
     fn from(deployed: DeployedContracts) -> Self {
@@ -333,17 +351,43 @@ impl From<DeployedContracts> for Contracts {
         if let Some(addr) = deployed.reward_claim_proxy {
             m.insert(Contract::RewardClaimProxy, addr);
         }
-        Self(m)
+        Self {
+            addresses: m,
+            deploy_cooldown: Duration::ZERO,
+        }
     }
 }
 
 impl Contracts {
     pub fn new() -> Self {
-        Contracts(HashMap::new())
+        Self::default()
+    }
+
+    pub fn with_cooldown(cooldown: Duration) -> Self {
+        Self {
+            addresses: HashMap::new(),
+            deploy_cooldown: cooldown,
+        }
+    }
+
+    pub fn set_cooldown(&mut self, cooldown: Duration) {
+        self.deploy_cooldown = cooldown;
     }
 
     pub fn address(&self, contract: Contract) -> Option<Address> {
-        self.0.get(&contract).copied()
+        self.addresses.get(&contract).copied()
+    }
+
+    pub fn get(&self, contract: &Contract) -> Option<&Address> {
+        self.addresses.get(contract)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Contract, &Address)> {
+        self.addresses.iter()
+    }
+
+    pub fn remove(&mut self, contract: &Contract) -> Option<Address> {
+        self.addresses.remove(contract)
     }
 
     /// Deploy a contract (with logging and cached deployments)
@@ -354,7 +398,7 @@ impl Contracts {
     where
         P: Provider,
     {
-        if let Some(addr) = self.0.get(&name) {
+        if let Some(addr) = self.addresses.get(&name) {
             tracing::info!("skipping deployment of {name}, already deployed at {addr:#x}");
             return Ok(*addr);
         }
@@ -373,13 +417,18 @@ impl Contracts {
 
         tracing::info!("deployed {name} at {addr:#x}");
 
-        self.0.insert(name, addr);
+        if !self.deploy_cooldown.is_zero() {
+            tokio::time::sleep(self.deploy_cooldown).await;
+            tracing::info!("cooldown {:?} after deployment", self.deploy_cooldown);
+        }
+
+        self.addresses.insert(name, addr);
         Ok(addr)
     }
 
     /// Write a .env file.
     pub fn write(&self, mut w: impl Write) -> Result<()> {
-        for (contract, address) in &self.0 {
+        for (contract, address) in &self.addresses {
             writeln!(w, "{contract}={address:#x}")?;
         }
         Ok(())
@@ -657,10 +706,22 @@ pub async fn upgrade_light_client_v2(
                 .await?
                 .get_receipt()
                 .await?;
+            let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
+
             if receipt.inner.is_success() {
+                // check that the upgrade is complete (with retry for RPC timing)
+                let is_complete = retry_until_true("LightClientProxy V2 version check", || async {
+                    Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+                })
+                .await?;
+
+                if !is_complete {
+                    anyhow::bail!(
+                        "LightClientProxy version check failed after retries: expected V2"
+                    );
+                }
+
                 // post deploy verification checks
-                let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
-                assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
                 assert_eq!(proxy_as_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
                 assert_eq!(
                     proxy_as_v2.epochStartBlock().call().await?,
@@ -675,7 +736,7 @@ pub async fn upgrade_light_client_v2(
                     U256::from(provider.get_block_number().await?)
                 );
 
-                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ");
+                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgraded to V2");
                 tracing::info!(
                     "blocksPerEpoch: {}",
                     proxy_as_v2.blocksPerEpoch().call().await?
@@ -796,11 +857,24 @@ pub async fn upgrade_light_client_v3(
                 .await?
                 .get_receipt()
                 .await?;
+
+            let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
+
             if receipt.inner.is_success() {
-                // post deploy verification checks
-                let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
-                assert_eq!(proxy_as_v3.getVersion().call().await?.majorVersion, 3);
-                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgrade to: ")
+                // check that the upgrade is complete (with retry for RPC timing)
+                let version_is_v3 =
+                    retry_until_true("LightClientProxy V3 version check", || async {
+                        Ok(proxy_as_v3.getVersion().call().await?.majorVersion == 3)
+                    })
+                    .await?;
+
+                if !version_is_v3 {
+                    anyhow::bail!(
+                        "LightClientProxy version check failed after retries: expected V3"
+                    );
+                }
+
+                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgraded to V3");
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
             }
@@ -956,9 +1030,17 @@ pub async fn upgrade_esp_token_v2(
         .await?;
 
     if receipt.inner.is_success() {
+        // check that the upgrade is complete (with retry for RPC timing)
+        let version_is_v2 = retry_until_true("EspTokenProxy V2 version check", || async {
+            Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+        })
+        .await?;
+
+        if !version_is_v2 {
+            anyhow::bail!("EspTokenProxy version check failed after retries: expected V2");
+        }
+
         // post deploy verification checks
-        let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
-        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
         assert_eq!(proxy_as_v2.name().call().await?, "Espresso");
         assert_eq!(proxy_as_v2.rewardClaim().call().await?, reward_claim_addr);
         tracing::info!(%v2_addr, "EspToken successfully upgraded to");
@@ -1234,11 +1316,20 @@ pub async fn upgrade_stake_table_v2(
         .get_receipt()
         .await?;
 
-    if receipt.inner.is_success() {
-        // post deploy verification checks
-        let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
-        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+    let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
 
+    if receipt.inner.is_success() {
+        //TODO: check event emission instead as it's more reliable
+        // check that the upgrade is complete (with retry for RPC timing)
+        let version_is_v2 = retry_until_true("StakeTableProxy V2 version check", || async {
+            Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+        })
+        .await?;
+        if !version_is_v2 {
+            anyhow::bail!("StakeTableProxy version check failed after retries: expected V2");
+        }
+
+        // post deploy verification checks
         let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
         assert!(
             proxy_as_v2.hasRole(pauser_role, pauser).call().await?,
@@ -1446,8 +1537,33 @@ pub async fn read_proxy_impl(provider: impl Provider, addr: Address) -> Result<A
         "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
         16,
     )?;
+
+    // Use retry_until_true to verify storage is readable (non-zero address)
+    let is_readable = retry_until_true("Read proxy implementation", || async {
+        match provider.get_storage_at(addr, impl_slot).await {
+            Ok(_) => {
+                // storage is readable so return true
+                Ok(true)
+            },
+            Err(e) => {
+                tracing::debug!("Storage read failed (will retry): {}", e);
+                Ok(false)
+            },
+        }
+    })
+    .await?;
+
+    if !is_readable {
+        anyhow::bail!(
+            "Proxy implementation storage is not readable after retries at address {addr:#x}"
+        );
+    }
+
+    // Final read to get the actual address (we know it's readable now)
     let storage = provider.get_storage_at(addr, impl_slot).await?;
-    Ok(Address::from_slice(&storage.to_be_bytes_vec()[12..]))
+    let impl_addr = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
+
+    Ok(impl_addr)
 }
 
 pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bool> {
@@ -1649,6 +1765,49 @@ pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes>
     Ok(data)
 }
 
+/// retry helper for checking state after transactions
+/// Retries up to 5 times with exponential backoff (500ms, 1s, 2s, 4s, 8s)
+/// Parameters:
+/// - `check_name`: the name of the check
+/// - `check_fn`: the function to check, must return `Result<bool>`
+///
+/// Returns:
+/// - `Ok(true)` if the check passed, `Ok(false)`
+pub async fn retry_until_true<F, Fut>(check_name: &str, mut check_fn: F) -> Result<bool>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
+    for attempt in 0..MAX_RETRY_ATTEMPTS {
+        match check_fn().await {
+            Ok(true) => return Ok(true),
+            Ok(false) | Err(_) if attempt < MAX_RETRY_ATTEMPTS - 1 => {
+                let delay_ms = RETRY_INITIAL_DELAY_MS * (1 << attempt);
+                tracing::warn!("{} not ready, retrying in {}ms...", check_name, delay_ms);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            },
+            Ok(false) => {
+                tracing::error!(
+                    "{} not ready after {} attempts, returning false",
+                    check_name,
+                    MAX_RETRY_ATTEMPTS
+                );
+                return Ok(false);
+            },
+            Err(e) => {
+                tracing::error!(
+                    "{} not ready after {} attempts,  (treating as not ready): {e:#}",
+                    check_name,
+                    MAX_RETRY_ATTEMPTS
+                );
+                return Ok(false);
+            },
+        }
+    }
+    // should never reach here, but defensive fallback to return false
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1673,8 +1832,8 @@ mod tests {
                 StakeTableV2UpgradeParams, TransferOwnershipParams,
             },
             timelock::{
-                cancel_timelock_operation, derive_timelock_address_from_contract_type,
-                execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
+                derive_timelock_address_from_contract_type, perform_timelock_operation,
+                TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
             },
         },
         Contracts,
@@ -1723,7 +1882,8 @@ mod tests {
 
         let fee_contract = FeeContract::deploy(&provider).await?;
         let init_data = fee_contract.initialize(deployer).calldata().clone();
-        let proxy = ERC1967Proxy::deploy(&provider, *fee_contract.address(), init_data).await?;
+        let proxy =
+            ERC1967Proxy::deploy(&provider, *fee_contract.address(), init_data.clone()).await?;
 
         assert!(is_proxy_contract(&provider, *proxy.address()).await?);
         assert!(!is_proxy_contract(&provider, *fee_contract.address()).await?);
@@ -2196,7 +2356,7 @@ mod tests {
 
     impl Contracts {
         fn insert(&mut self, name: Contract, address: Address) -> Option<Address> {
-            self.0.insert(name, address)
+            self.addresses.insert(name, address)
         }
     }
 
@@ -3157,7 +3317,7 @@ mod tests {
             .to_owned();
 
         // propose a timelock operation
-        let mut operation = TimelockOperationData {
+        let mut operation = TimelockOperationPayload {
             target: fee_contract_proxy_addr,
             value: U256::ZERO,
             data: upgrade_data,
@@ -3165,9 +3325,14 @@ mod tests {
             salt: B256::ZERO,
             delay,
         };
-        let operation_id =
-            schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-                .await?;
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is scheduled
         let timelock = OpsTimelock::new(timelock_addr, &provider);
@@ -3177,8 +3342,14 @@ mod tests {
         assert!(timelock.getTimestamp(operation_id).call().await? > U256::ZERO);
 
         // execute the tx since the delay is 0
-        execute_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-            .await?;
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Execute,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is executed
         assert!(timelock.isOperationDone(operation_id).call().await?);
@@ -3198,13 +3369,26 @@ mod tests {
             .await?;
         assert!(tx_receipt.inner.is_success());
 
-        schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-            .await?;
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
-        cancel_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone()).await?;
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Cancel,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is cancelled
-        let next_operation_id = timelock
+        timelock
             .hashOperation(
                 operation.target,
                 operation.value,
@@ -3214,7 +3398,38 @@ mod tests {
             )
             .call()
             .await?;
-        assert!(timelock.getTimestamp(next_operation_id).call().await? == U256::ZERO);
+        assert!(timelock.getTimestamp(operation_id).call().await? == U256::ZERO);
+
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
+
+        // Test canceling with only the operation_id (operation payload not needed)
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            // Use a minimal/empty operation payload since operation_id is provided
+            TimelockOperationPayload {
+                target: fee_contract_proxy_addr, // Not used when operation_id is provided
+                value: U256::ZERO,
+                data: Bytes::new(),
+                predecessor: B256::ZERO,
+                salt: B256::ZERO,
+                delay: U256::ZERO,
+            },
+            TimelockOperationType::Cancel,
+            TimelockOperationParams {
+                operation_id: Some(operation_id), // Only operation_id is needed
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert!(timelock.getTimestamp(operation_id).call().await? == U256::ZERO);
         Ok(())
     }
 
@@ -3820,7 +4035,7 @@ mod tests {
         // Verify new_pauser doesn't have the role yet
         assert!(!reward_claim.hasRole(pauser_role, new_pauser).call().await?);
 
-        // Use DeployerArgsBuilder to test perform_timelock_operation_on_contract
+        // Use DeployerArgsBuilder to test propose_timelock_operation_for_contract
         use builder::DeployerArgsBuilder;
         use proposals::timelock::TimelockOperationType;
 
@@ -3844,7 +4059,7 @@ mod tests {
         let args = args_builder.build()?;
 
         // Schedule the operation using the high-level function
-        args.perform_timelock_operation_on_contract(&mut contracts)
+        args.propose_timelock_operation_for_contract(&mut contracts)
             .await?;
 
         // Now execute it
@@ -3866,7 +4081,7 @@ mod tests {
             .timelock_operation_delay(delay);
 
         let args = args_builder.build()?;
-        args.perform_timelock_operation_on_contract(&mut contracts)
+        args.propose_timelock_operation_for_contract(&mut contracts)
             .await?;
 
         // Verify the function was actually called
@@ -4265,6 +4480,105 @@ mod tests {
         Ok(())
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_perform_timelock_operation_unified() -> Result<()> {
+        use crate::proposals::timelock::{
+            perform_timelock_operation, TimelockOperationParams, TimelockOperationPayload,
+            TimelockOperationType,
+        };
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let another_wallet = provider.get_accounts().await?[1];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+
+        let timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+        let timelock = OpsTimelock::new(timelock_addr, &provider);
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, timelock_addr).await?;
+        let proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+
+        let transfer_ownership_data = proxy
+            .transferOwnership(another_wallet)
+            .calldata()
+            .to_owned();
+
+        assert_eq!(proxy.owner().call().await?, timelock_addr);
+
+        let operation = TimelockOperationPayload {
+            target: fee_contract_proxy_addr,
+            value: U256::ZERO,
+            data: transfer_ownership_data.clone(),
+            predecessor: B256::ZERO,
+            salt: B256::ZERO,
+            delay,
+        };
+
+        // Test Cancel via unified function (schedule and cancel a new operation)
+        let mut cancel_operation = operation.clone();
+        cancel_operation.value = U256::from(1);
+        let cancel_params = TimelockOperationParams::default();
+        let cancel_operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            cancel_operation.clone(),
+            TimelockOperationType::Schedule,
+            cancel_params.clone(),
+        )
+        .await?;
+
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            cancel_operation,
+            TimelockOperationType::Cancel,
+            cancel_params,
+        )
+        .await?;
+
+        assert!(timelock.getTimestamp(cancel_operation_id).call().await? == U256::ZERO);
+
+        // Test schedule transfer ownership operation
+        let params = TimelockOperationParams::default();
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            params,
+        )
+        .await?;
+
+        assert!(timelock.isOperationPending(operation_id).call().await?);
+
+        let params = TimelockOperationParams::default();
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Execute,
+            params,
+        )
+        .await?;
+
+        assert!(timelock.isOperationDone(operation_id).call().await?);
+
+        // confirm that the operation occurred on the fee contract
+        assert_eq!(proxy.owner().call().await?, another_wallet);
+        Ok(())
+    }
     // This test is used to test the upgrade of the FeeContractProxy via the multisig wallet
     // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
     // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
@@ -4366,7 +4680,7 @@ mod tests {
         let cached_impl_addr = contracts.address(Contract::FeeContract);
 
         // For patch upgrades, we need to clear the cache to allow redeployment
-        contracts.0.remove(&Contract::FeeContract);
+        contracts.remove(&Contract::FeeContract);
 
         // Test the upgrade function directly
         let receipt = upgrade_fee_v1(&provider, &mut contracts).await?;
@@ -4446,7 +4760,7 @@ mod tests {
 
         // Second upgrade to V2 (re-applying same version)
         // For patch upgrades, we need to clear the cache to allow redeployment
-        contracts.0.remove(&Contract::LightClientV2);
+        contracts.remove(&Contract::LightClientV2);
 
         // Second upgrade to V2 (re-applying same version)
         upgrade_light_client_v2(
@@ -4471,6 +4785,48 @@ mod tests {
             cached_impl_addr_after.expect("LightClientV2 should still be in cache"),
             "Second upgrade: proxy should point to cached implementation"
         );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_propose_multisig_transaction_dry_run() -> Result<()> {
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, provider_wallet).await?;
+        let new_owner = Address::random();
+
+        // Use DeployerArgsBuilder to test propose_multisig_transaction
+        use builder::DeployerArgsBuilder;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .multisig(provider_wallet)
+            .dry_run(true)
+            .multisig_transaction_target(fee_contract_proxy_addr)
+            .multisig_transaction_function_signature("transferOwnership(address)".to_string())
+            .multisig_transaction_function_args(vec![new_owner.to_string()])
+            .multisig_transaction_value("0".to_string());
+
+        let args = args_builder.build()?;
+
+        let result = args.propose_multisig_transaction().await;
+
+        match result {
+            Ok(_) => {
+                tracing::info!("Multisig transaction proposal succeeded in dry_run mode");
+                tracing::info!("Result: {:?}", result);
+            },
+            Err(e) => {
+                tracing::info!("Multisig transaction proposal failed: {}", e);
+            },
+        }
 
         Ok(())
     }

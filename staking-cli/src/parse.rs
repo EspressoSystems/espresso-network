@@ -1,12 +1,19 @@
 use std::{fmt::Display, str::FromStr as _};
 
 use derive_more::{Add, From};
-use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+use hotshot_types::{
+    light_client::StateSignKey,
+    signature_key::{BLSPrivKey, BLSPubKey},
+};
 use rust_decimal::{prelude::ToPrimitive as _, Decimal};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 
 pub fn parse_bls_priv_key(s: &str) -> Result<BLSPrivKey, Tb64Error> {
+    TaggedBase64::parse(s)?.try_into()
+}
+
+pub fn parse_bls_pub_key(s: &str) -> Result<BLSPubKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
 }
 

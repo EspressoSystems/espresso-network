@@ -628,6 +628,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 // constants in NodeType, but that seems to be unavailable in the current Rust.
                 api
                     .network.direct_message(
+                        view_number.u64().into(),
                         serialized_message,
                         leader,
                     ),

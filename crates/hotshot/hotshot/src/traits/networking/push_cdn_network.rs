@@ -146,6 +146,7 @@ impl<K: SignatureKey + 'static> RunDef for ProductionDef<K> {
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
+    type User2 = UserDefTcp<K>;
 }
 
 /// The user definition for the Push CDN.
@@ -185,6 +186,7 @@ impl<K: SignatureKey + 'static> RunDef for TestingDef<K> {
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;
+    type User2 = UserDefTcp<K>;
 }
 
 /// A communication channel to the Push CDN, which is a collection of brokers and a marshal
@@ -507,6 +509,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to send the broadcast message.
     async fn broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         topic: HotShotTopic,
         _broadcast_delay: BroadcastDelay,
@@ -532,6 +535,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to send the broadcast message.
     async fn da_broadcast_message(
         &self,
+        v: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<K>,
         _broadcast_delay: BroadcastDelay,
@@ -544,7 +548,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
 
         // Broadcast the message
         for recipient in recipients {
-            self.direct_message(message.clone(), recipient)
+            self.direct_message(v, message.clone(), recipient)
                 .await
                 .inspect_err(|_e| {
                     tracing::warn!("failed to send direct message");
@@ -557,7 +561,12 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     ///
     /// - If we fail to serialize the message
     /// - If we fail to send the direct message
-    async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError> {
+    async fn direct_message(
+        &self,
+        _: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError> {
         // If the message is to ourselves, just add it to the internal queue
         if recipient == self.public_key {
             self.internal_queue.lock().push_back(message);

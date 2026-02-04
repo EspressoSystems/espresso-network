@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use hotshot_types::{
     boxed_sync,
+    data::ViewNumber,
     traits::{
         network::{
             AsyncGenerator, BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation,
@@ -245,6 +246,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
     #[instrument(name = "MemoryNetwork::broadcast_message")]
     async fn broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         _broadcast_delay: BroadcastDelay,
@@ -295,6 +297,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
     #[instrument(name = "MemoryNetwork::da_broadcast_message")]
     async fn da_broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<K>,
         _broadcast_delay: BroadcastDelay,
@@ -347,7 +350,12 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
     }
 
     #[instrument(name = "MemoryNetwork::direct_message")]
-    async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError> {
+    async fn direct_message(
+        &self,
+        _: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError> {
         // debug!(?message, ?recipient, "Sending direct message");
         // Bincode the message
         trace!("Message bincoded, finding recipient");

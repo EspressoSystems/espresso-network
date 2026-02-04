@@ -5,14 +5,15 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypesRandomizedLeader,
+    CliquenetImpl, EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl,
+    TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
 
 cross_tests!(
     TestName: test_epoch_success,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [
         TestTypesRandomizedLeader,
     ],

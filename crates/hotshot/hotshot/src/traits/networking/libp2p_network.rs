@@ -51,7 +51,7 @@ use hotshot_types::traits::network::{
 use hotshot_types::{
     boxed_sync,
     constants::LOOK_AHEAD,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     network::NetworkConfig,
     traits::{
         metrics::{Counter, Gauge, Metrics, NoMetrics},
@@ -786,6 +786,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::broadcast_message", skip_all)]
     async fn broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         _broadcast_delay: BroadcastDelay,
@@ -843,6 +844,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::da_broadcast_message", skip_all)]
     async fn da_broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<T::SignatureKey>,
         _broadcast_delay: BroadcastDelay,
@@ -864,7 +866,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
 
         let future_results = recipients
             .into_iter()
-            .map(|r| self.direct_message(message.clone(), r));
+            .map(|r| self.direct_message(view, message.clone(), r));
         let results = join_all(future_results).await;
 
         let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
@@ -879,6 +881,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::direct_message", skip_all)]
     async fn direct_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), NetworkError> {
@@ -988,16 +991,16 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     /// So the logic with libp2p is to prefetch upcoming leaders libp2p address to
     /// save time when we later need to direct message the leader our vote. Hence the
     /// use of the future view and leader to queue the lookups.
-    async fn update_view<'a, TYPES>(
-        &'a self,
-        view: u64,
-        epoch: Option<u64>,
+    async fn update_view<TYPES>(
+        &self,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
     ) where
-        TYPES: NodeType<SignatureKey = T::SignatureKey> + 'a,
+        TYPES: NodeType<SignatureKey = T::SignatureKey>,
     {
-        let future_view = <TYPES as NodeType>::View::new(view) + LOOK_AHEAD;
-        let epoch = epoch.map(<TYPES as NodeType>::Epoch::new);
+        let future_view = <TYPES as NodeType>::View::new(*view) + LOOK_AHEAD;
+        let epoch = epoch.map(|e| <TYPES as NodeType>::Epoch::new(*e));
 
         let membership = match membership_coordinator.membership_for_epoch(epoch).await {
             Ok(m) => m,

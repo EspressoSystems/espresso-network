@@ -5,7 +5,8 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = []
+default = ["decaf"]
+decaf = []
 testing = [
     "espresso-types/testing",
     "bitvec",
@@ -35,6 +36,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 
+clap = { workspace = true, optional = true }
+
 # Testing dependencies
 bitvec = { workspace = true, optional = true }
 hotshot-contract-adapter = { path = "../contracts/rust/adapter", optional = true }
@@ -46,7 +49,7 @@ light-client = { path = ".", features = ["testing"] }
 
 portpicker = { workspace = true }
 pretty_assertions = { workspace = true }
-sequencer = { path = "../sequencer", features = ["testing"] }
+sequencer = { path = "../sequencer", default-features = false, features = ["testing"] }
 test-log = { workspace = true }
 
 [lints]

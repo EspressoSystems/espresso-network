@@ -100,6 +100,7 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 pub struct ProductionDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
     type User = UserDefTcp<TYPES>;
+    type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
@@ -149,6 +150,7 @@ impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
 pub struct TestingDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for TestingDef<TYPES> {
     type User = UserDefTcp<TYPES>;
+    type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;
