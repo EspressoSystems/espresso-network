@@ -6,12 +6,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context};
+use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
+use either::Either;
 use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
@@ -27,7 +28,7 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_query_service::{
-    availability::LeafQueryData,
+    availability::{BlockId, LeafQueryData},
     data_source::{
         storage::{
             pruning::PrunerCfg,
@@ -35,6 +36,7 @@ use hotshot_query_service::{
                 include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, Read, SqlStorage,
                 StorageConnectionType, Transaction, TransactionMode, Write,
             },
+            AvailabilityStorage,
         },
         Transaction as _, VersionedDataSource,
     },
@@ -64,6 +66,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
@@ -1146,6 +1149,30 @@ impl Persistence {
 
         let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
             .context("failed to rebuild RewardMerkleTreeV2 from balances")?;
+
+        let mut tx = self.db.read().await?;
+        let header = tx
+            .get_header(BlockId::<SeqTypes>::from(max_height as usize))
+            .await
+            .context(format!("header {max_height} not available"))?;
+        drop(tx);
+
+        match header.reward_merkle_tree_root() {
+            Either::Right(expected_root) => {
+                ensure!(
+                    tree.commitment() == expected_root,
+                    "rebuilt RewardMerkleTreeV2 commitment {} does not match header commitment {} \
+                     at height {max_height}",
+                    tree.commitment(),
+                    expected_root,
+                );
+            },
+            Either::Left(_) => {
+                bail!(
+                    "header at height {max_height} has a v1 reward merkle tree root, expected v2"
+                );
+            },
+        }
 
         let tree_data: RewardMerkleTreeV2Data = (&tree)
             .try_into()

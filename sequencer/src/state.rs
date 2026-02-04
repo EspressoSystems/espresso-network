@@ -258,24 +258,13 @@ where
         .await
         .context("opening transaction for state update")?;
 
-    store_state_update(
-        &mut tx,
-        block_number,
-        version,
-        &state,
-        delta,
-    )
-    .await?;
+    store_state_update(&mut tx, block_number, version, &state, delta).await?;
 
     tx.commit().await?;
 
     if version > EpochVersion::version() {
         storage
-            .save_reward_merkle_tree_v2(
-                instance,
-                block_number,
-                &state.reward_merkle_tree_v2,
-            )
+            .save_reward_merkle_tree_v2(instance, block_number, &state.reward_merkle_tree_v2)
             .await
             .context("failed to store reward merkle nodes")?;
     }
@@ -391,9 +380,15 @@ where
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
 
     if parent_leaf.header().version() > EpochVersion::version() {
-      let reward_merkle_tree_v2 = storage.load_reward_merkle_tree_v2(parent_leaf.height()).await.context("Error starting the state storage update loop: failed to load RewardMerkleTreeV2 for the previous height")?;
+        let reward_merkle_tree_v2 = storage
+            .load_reward_merkle_tree_v2(parent_leaf.height())
+            .await
+            .context(
+                "Error starting the state storage update loop: failed to load RewardMerkleTreeV2 \
+                 for the previous height",
+            )?;
 
-      parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2;
+        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2;
     }
 
     if last_height == 0 {
