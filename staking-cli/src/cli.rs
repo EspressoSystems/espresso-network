@@ -31,7 +31,7 @@ use crate::{
         display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
         StakeTableContractVersion,
     },
-    metadata::{validate_metadata_uri, MetadataUri},
+    metadata::{fetch_metadata, validate_metadata_uri, MetadataUri},
     output::{
         format_esp, output_calldata, output_error, output_success, output_warn, CalldataInfo,
     },
@@ -312,6 +312,13 @@ pub async fn run() -> Result<()> {
             );
 
             payload.handle_output(destination)?;
+            return Ok(());
+        },
+        Commands::PreviewMetadata { metadata_uri } => {
+            let url = url::Url::parse(&metadata_uri)
+                .with_context(|| format!("Invalid URL: {metadata_uri}"))?;
+            let metadata = fetch_metadata(&url).await?;
+            output_success(serde_json::to_string_pretty(&metadata)?);
             return Ok(());
         },
         _ => {}, // Other commands handled after shared setup.
@@ -611,6 +618,7 @@ pub async fn run() -> Result<()> {
         | Commands::TokenBalance { .. }
         | Commands::TokenAllowance { .. }
         | Commands::ExportNodeSignatures { .. }
+        | Commands::PreviewMetadata { .. }
         | Commands::StakeForDemo { .. } => {
             unreachable!("Non-state-change commands are handled earlier in the function")
         },

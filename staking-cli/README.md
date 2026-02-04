@@ -21,13 +21,14 @@ Contracts:
 
 - [Espresso staking CLI](#espresso-staking-cli)
   - [Getting Started](#getting-started)
-    - [Getting Help](#getting-help)
+    - [Overview](#overview)
     - [Choose your type of wallet (mnemonic, private key, or Ledger)](#choose-your-type-of-wallet-mnemonic-private-key-or-ledger)
-    - [Initialize the configuration file](#initialize-the-configuration-file)
+    - [Initialize the configuration file (optional)](#initialize-the-configuration-file-optional)
     - [Managing multiple network configurations](#managing-multiple-network-configurations)
     - [Inspect the configuration](#inspect-the-configuration)
     - [View the stake table](#view-the-stake-table)
   - [Calldata Export (for Multisig Wallets)](#calldata-export-for-multisig-wallets)
+    - [Calldata Simulation](#calldata-simulation)
   - [Delegators (or stakers)](#delegators-or-stakers)
     - [Delegating](#delegating)
     - [Undelegating](#undelegating)
@@ -35,10 +36,15 @@ Contracts:
     - [Claiming staking rewards](#claiming-staking-rewards)
   - [Node operators](#node-operators)
     - [Registering a validator](#registering-a-validator)
+      - [Validator Metadata](#validator-metadata)
+      - [Registration Command](#registration-command)
     - [Updating your commission](#updating-your-commission)
     - [Updating your metadata URL](#updating-your-metadata-url)
+      - [Metadata JSON Schema (for custom hosting)](#metadata-json-schema-for-custom-hosting)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
+    - [Exporting Node Signatures](#exporting-node-signatures)
+    - [Native Demo Staking](#native-demo-staking)
 
 <!-- markdown-toc end -->
 
@@ -104,6 +110,7 @@ Commands:
   transfer                Transfer ESP tokens
   stake-for-demo          Register the validators and delegates for the local demo
   export-node-signatures  Export validator node signatures for address validation
+  preview-metadata        Preview metadata from a URL without registering
   help                    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -443,48 +450,57 @@ This section covers commands for node operators.
 
 ### Registering a validator
 
-1.  Obtain your validator's BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare
-    a metadata URL.
-1.  Use the `register-validator` command to register your validator.
+#### Validator Metadata
 
-    ```bash
-    staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
-    ```
+Metadata is optional and provides information displayed in the staking UI (name, description, icon, etc.).
 
-    To avoid specifying the the keys on the command line they can be set via env vars
+Options for `--metadata-uri`:
 
-    ```text
-    CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
-    STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
-    METADATA_URL=https://example.com/validator-metadata.json
-    ```
+1. **Node `/status/metrics` endpoint (recommended):**
 
-    Alternatively, you can use pre-signed signatures:
+- `--metadata-uri https://my-validator.example.com/status/metrics`
+- Existing nodes already expose this.
 
-    ```bash
-    staking-cli register-validator --node-signatures signatures.json --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
-    ```
+2. **Custom JSON file:**
 
-    You can specify the format for parsing node signatures from stdin or files:
+- `--metadata-uri https://example.com/metadata.json`
+- See [JSON schema](#metadata-json-schema-for-custom-hosting).
 
-    ```bash
-    staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
-    ```
+3. **No metadata:** `--no-metadata-uri`
 
-    To register without a metadata URL (leaving it empty):
+Use `--skip-metadata-validation` if your endpoint isn't ready yet. URL cannot exceed 2048 bytes.
 
-    ```bash
-    staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --no-metadata-uri
-    ```
+Preview what will be extracted before registering:
 
-- Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
-  register transaction consumes about 300k gas.
-- Each BLS (Espresso) and key can be registered only once.
-- The commission can be updated later using the `update-commission` command, subject to rate limits.
-- The metadata URL can be updated at any time using the `update-metadata-uri` command.
-- The metadata URL must be a valid URL (unless using --no-metadata-uri flag) and cannot exceed 2048 bytes.
-- Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
-  different account indices (or mnemonics) must be used.
+```bash
+staking-cli preview-metadata --metadata-uri https://my-validator.example.com/status/metrics
+```
+
+#### Registration Command
+
+```bash
+staking-cli register-validator \
+    --consensus-private-key BLS_SIGNING_KEY~... \
+    --state-private-key SCHNORR_SIGNING_KEY~... \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics
+```
+
+To avoid keys on the command line, use env vars (`CONSENSUS_PRIVATE_KEY`, `STATE_PRIVATE_KEY`) or pre-signed signatures
+(see [Exporting Node Signatures](#exporting-node-signatures)):
+
+```bash
+staking-cli register-validator --node-signatures signatures.json --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics
+```
+
+Notes:
+
+- Each Ethereum account needs gas funds (~300k gas for registration)
+- Each BLS key can only be registered once
+- Each Ethereum account can only register one validator
+- Commission can be updated later via `update-commission` (subject to rate limits)
+- Metadata URL can be updated anytime via `update-metadata-uri`
 
 ### Updating your commission
 
@@ -506,143 +522,30 @@ Note: The minimum time interval and maximum increase are contract parameters tha
 
 ### Updating your metadata URL
 
-Validators can update their metadata URL at any time. The metadata URL is used to provide additional information about
-your validator that is displayed in the staking UI.
-
-To update your metadata URL with validation:
-
 ```bash
-staking-cli update-metadata-uri --metadata-uri https://example.com/updated-metadata.json --consensus-public-key BLS_VER_KEY~...
+staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
+    --consensus-public-key BLS_VER_KEY~...
 ```
 
-The `--consensus-public-key` is required for metadata validation (to verify the `pub_key` field in the metadata matches
-your validator). To skip validation:
+See [Validator Metadata](#validator-metadata) for format options. Use `--no-metadata-uri` to clear.
 
-```bash
-staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https://example.com/updated-metadata.json
-```
+#### Metadata JSON Schema (for custom hosting)
 
-To clear your metadata URL (set it to empty):
-
-```bash
-staking-cli update-metadata-uri --no-metadata-uri
-```
-
-The metadata URL:
-
-- Must be a valid URL (e.g., starting with `https://`) unless using --no-metadata-uri flag
-- Can be empty when using --no-metadata-uri flag
-- Cannot exceed 2048 bytes
-
-Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by listening to registration
-and update events.
-
-#### Metadata URL Schema
-
-The metadata endpoint must return JSON with `Content-Type: application/json`. The schema is:
+If hosting a custom JSON file instead of using your node's metrics endpoint:
 
 ```json
 {
   "pub_key": "BLS_VER_KEY~...",
   "name": "My Validator",
-  "description": "A longer description of the validator",
+  "description": "Description",
   "company_name": "Acme Inc.",
   "company_website": "https://acme.com/",
-  "client_version": "v1.0.0",
-  "icon": {
-    "14x14": {
-      "@1x": "https://acme.com/icon-14x14@1x.png",
-      "@2x": "https://acme.com/icon-14x14@2x.png",
-      "@3x": "https://acme.com/icon-14x14@3x.png"
-    },
-    "24x24": {
-      "@1x": "https://acme.com/icon-24x24@1x.png",
-      "@2x": "https://acme.com/icon-24x24@2x.png",
-      "@3x": "https://acme.com/icon-24x24@3x.png"
-    }
-  }
+  "client_version": "v1.0.0"
 }
 ```
 
-| Field             | Required | Description                                                                                      |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `pub_key`         | Yes      | BLS public key of your validator (tagged base64). Must match the registered key.                 |
-| `name`            | No       | Human-readable name for the validator                                                            |
-| `description`     | No       | Longer description of the validator                                                              |
-| `company_name`    | No       | Company or individual operating the validator                                                    |
-| `company_website` | No       | Website URL for the company                                                                      |
-| `client_version`  | No       | Version of the consensus client running                                                          |
-| `icon`            | No       | Icon images at different resolutions (14x14 small, 24x24 large) and pixel ratios (@1x, @2x, @3x) |
-
-The `pub_key` field is required for authentication. If it doesn't match the validator's registered BLS key, the metadata
-is treated as invalid. This prevents impersonation attacks where a malicious operator points their metadata URI to
-another validator's metadata page.
-
-#### Metadata Validation
-
-When registering a validator or updating metadata with `--metadata-uri`, the CLI fetches and validates the metadata
-before submitting the transaction:
-
-1. Fetches the JSON from the provided URL (5 second timeout)
-2. Parses the JSON according to the schema above
-3. Verifies the `pub_key` in the metadata matches your validator's BLS key
-
-For `register-validator`, the BLS key is derived from the `--consensus-private-key` or `--node-signatures` argument.
-
-For `update-metadata-uri`, you must provide `--consensus-public-key` for validation:
-
-```bash
-staking-cli update-metadata-uri --metadata-uri https://example.com/metadata.json --consensus-public-key BLS_VER_KEY~...
-```
-
-If validation fails, the command is aborted with an error message. To skip this validation (e.g., if your metadata
-endpoint isn't ready yet):
-
-```bash
-staking-cli --skip-metadata-validation register-validator --metadata-uri https://example.com/metadata.json ...
-staking-cli --skip-metadata-validation update-metadata-uri --metadata-uri https://example.com/metadata.json
-```
-
-Or via environment variable: `SKIP_METADATA_VALIDATION=true`
-
-#### Using Your Node's Metrics Endpoint (Recommended)
-
-The easiest way to provide metadata is to use your espresso node's `/status/metrics` endpoint. Your node already exposes
-this endpoint with your validator's public key and identity information. Use `--node-url`:
-
-```bash
-# Register using your node's metrics endpoint
-staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> \
-    --commission 4.99 --node-url https://my-validator.example.com
-
-# Update metadata URI to use your node's metrics
-staking-cli update-metadata-uri --node-url https://my-validator.example.com --consensus-public-key BLS_VER_KEY~...
-```
-
-When using `--node-url`, the CLI will:
-
-1. Append `/status/metrics` to the provided URL
-2. Fetch and validate the OpenMetrics data
-3. Store the full metrics URL (e.g., `https://my-validator.example.com/status/metrics`) as the metadata URI
-
-The metrics endpoint extracts metadata from these Prometheus metrics:
-
-- `consensus_node{key="BLS_VER_KEY~..."}` - Your validator's public key (required)
-- `consensus_node_identity_general{name, description, company_name, company_website}` - Identity fields
-- `consensus_version{desc}` - Client version
-- `consensus_node_identity_icon{small_1x, small_2x, ...}` - Icon URLs
-
-#### Using a Custom JSON File (Alternative)
-
-If you need more control over your metadata or want to host it separately from your node, use `--metadata-uri` to point
-to a JSON file (see [Metadata URL Schema](#metadata-url-schema) above):
-
-```bash
-staking-cli register-validator ... --metadata-uri https://example.com/metadata.json
-staking-cli update-metadata-uri --metadata-uri https://example.com/metadata.json --consensus-public-key BLS_VER_KEY~...
-```
-
-Note: `--node-url` and `--metadata-uri` are mutually exclusive.
+Only `pub_key` is required (must match your registered key to prevent impersonation). Optional fields: `name`,
+`description`, `company_name`, `company_website`, `client_version`, `icon`.
 
 ### De-registering your validator
 

@@ -329,8 +329,8 @@ impl MetadataServer {
             },
             MetadataFormat::OpenMetrics => {
                 vec![
-                    "--node-url".to_string(),
-                    format!("http://127.0.0.1:{}", self.port),
+                    "--metadata-uri".to_string(),
+                    format!("http://127.0.0.1:{}/status/metrics", self.port),
                 ]
             },
         }
@@ -455,11 +455,11 @@ async fn test_cli_register_validator_metadata_validation_wrong_pub_key(
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore]
 async fn test_real_mainnet_node_metadata() -> Result<()> {
-    let node_url = "https://query-0.main.net.espresso.network";
-    let metrics_url = Url::parse(&format!("{node_url}/status/metrics"))?;
+    let metrics_url = "https://query-0.main.net.espresso.network/status/metrics";
+    let parsed_url = Url::parse(metrics_url)?;
 
     // Fetch and parse the metrics to get the pub_key
-    let metadata = fetch_metadata(&metrics_url).await?;
+    let metadata = fetch_metadata(&parsed_url).await?;
     let pub_key = metadata.pub_key.to_string();
 
     // Now test that update-metadata-uri validation works with this real endpoint
@@ -470,8 +470,8 @@ async fn test_real_mainnet_node_metadata() -> Result<()> {
     system
         .cmd(Signer::Mnemonic)
         .arg("update-metadata-uri")
-        .arg("--node-url")
-        .arg(node_url)
+        .arg("--metadata-uri")
+        .arg(metrics_url)
         .arg("--consensus-public-key")
         .arg(&pub_key)
         .assert()
@@ -2215,6 +2215,59 @@ fn test_cli_init_network_env_var() -> anyhow::Result<()> {
         "0xcef474d372b5b09defe2af187bf17338dc704451"
     );
     assert_eq!(config.signer.mnemonic, Some(mnemonic));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_preview_metadata(#[case] format: MetadataFormat) -> Result<()> {
+    let mut rng = StdRng::from_seed([42u8; 32]);
+    let (_, bls_key, _) = TestSystem::gen_keys(&mut rng);
+    let bls_vk = BLSPubKey::from(bls_key.ver_key());
+
+    let server = start_metadata_server_format(&bls_vk, format).await;
+    let metadata_uri = match format {
+        MetadataFormat::Json => format!("http://127.0.0.1:{}/metadata", server.port),
+        MetadataFormat::OpenMetrics => format!("http://127.0.0.1:{}/status/metrics", server.port),
+    };
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&metadata_uri)
+        .assert()
+        .success()
+        .stdout(str::contains(format!("\"pub_key\": \"{}\"", bls_vk)))
+        .stdout(str::contains("\"name\": \"Test Validator\""));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_invalid_url() -> Result<()> {
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg("not-a-valid-url")
+        .assert()
+        .failure()
+        .stderr(str::contains("Invalid URL"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_connection_refused() -> Result<()> {
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg("http://127.0.0.1:59999/metadata")
+        .assert()
+        .failure()
+        .stderr(str::contains("failed to fetch metadata"));
 
     Ok(())
 }
