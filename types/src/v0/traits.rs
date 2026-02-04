@@ -628,8 +628,6 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
-  async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()>;
-
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
         self,

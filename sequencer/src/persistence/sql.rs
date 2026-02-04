@@ -67,8 +67,7 @@ use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
     catchup::SqlStateCatchup,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue,
-    },
+    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
     NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
 
@@ -1114,36 +1113,6 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
-  async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
-    let mut tx = self.db.read().await.context("opening transaction for state update")?;
-          todo!()
-//            let mut tx = self.db
-//                .read()
-//                .await
-//                .context("opening transaction for state update")?;
-//
-//            let row = sqlx::query(
-//                r#"
-//                SELECT
-//                    r.*,
-//                    h.value AS hash_value
-//                FROM reward_merkle_tree_v2 r
-//                JOIN hash h
-//                  ON h.id = r.hash_id
-//                WHERE r.path = '[]'::jsonb
-//                ORDER BY r.height DESC
-//                LIMIT 1;
-//                "#,
-//            )
-//            .fetch_optional(tx.as_mut())
-//            .await?
-//            .context(format!("Missing proofs"))?;
-//
-//            let hash = row.try_get::<Vec<u8>, _>("value")
-//                .context("Missing field value from row; this should never happen")?;
-
-  }
-
     fn into_catchup_provider(
         self,
         backoff: BackoffParams,

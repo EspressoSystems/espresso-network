@@ -640,10 +640,6 @@ impl Inner {
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         let inner = self.inner.read().await;
         let path = inner.config_path();
