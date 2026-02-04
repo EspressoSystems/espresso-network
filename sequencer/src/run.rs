@@ -258,10 +258,7 @@ where
         .await
         .context("failed to migrate consensus data")?;
 
-    persistence
-        .migrate_reward_merkle_tree_v2()
-        .await
-        .context("failed to migrate reward merkle tree v2")?;
+    persistence.migrate_reward_merkle_tree_v2().await.context("failed to migrate reward merkle tree v2")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize

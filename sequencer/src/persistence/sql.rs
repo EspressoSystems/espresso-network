@@ -1121,10 +1121,10 @@ impl SequencerPersistence for Persistence {
     async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
         let max_height: Option<i64> = {
             let mut tx = self.db.read().await?;
-            query_as::<(Option<i64>,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
-                .fetch_one(tx.as_mut())
+            query_as::<(i64,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
+                .fetch_optional(tx.as_mut())
                 .await?
-                .0
+                .map(|row| row.0)
         };
 
         let max_height = match max_height {
