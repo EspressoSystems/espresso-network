@@ -215,14 +215,6 @@ async fn store_state_update(
         .context("failed to store reward merkle nodes")?;
     }
 
-    tracing::debug!(block_number, "updating state height");
-    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
-        tx,
-        block_number as usize,
-    )
-    .await
-    .context("setting state height")?;
-
     Ok(())
 }
 
@@ -247,6 +239,8 @@ where
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
     let parent_chain_config = parent_state.chain_config;
+    let block_number = proposed_leaf.height();
+    let version = proposed_leaf.header().version();
 
     let (state, delta) = compute_state_update(
         parent_state,
@@ -266,12 +260,30 @@ where
 
     store_state_update(
         &mut tx,
-        proposed_leaf.height(),
-        proposed_leaf.header().version(),
+        block_number,
+        version,
         &state,
         delta,
     )
     .await?;
+
+    tx.commit().await?;
+
+    if version > EpochVersion::version() {
+        storage
+            .save_reward_merkle_tree_v2(
+                instance,
+                block_number,
+                &state.reward_merkle_tree_v2,
+            )
+            .await
+            .context("failed to store reward merkle nodes")?;
+    }
+
+    let mut tx = storage
+        .write()
+        .await
+        .context("opening transaction for state update")?;
 
     if parent_chain_config != state.chain_config {
         let cf = state
@@ -282,18 +294,15 @@ where
         tx.insert_chain_config(cf).await?;
     }
 
-    tx.commit().await?;
+    tracing::debug!(block_number, "updating state height");
+    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
+        &mut tx,
+        block_number as usize,
+    )
+    .await
+    .context("setting state height")?;
 
-    if proposed_leaf.header().version() > EpochVersion::version() {
-        storage
-            .save_reward_merkle_tree_v2(
-                instance,
-                proposed_leaf.height(),
-                &state.reward_merkle_tree_v2,
-            )
-            .await
-            .context("failed to store reward merkle nodes")?;
-    }
+    tx.commit().await?;
 
     Ok(state)
 }
