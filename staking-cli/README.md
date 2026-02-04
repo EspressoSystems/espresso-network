@@ -540,12 +540,15 @@ If hosting a custom JSON file instead of using your node's metrics endpoint:
   "description": "Description",
   "company_name": "Acme Inc.",
   "company_website": "https://acme.com/",
-  "client_version": "v1.0.0"
+  "client_version": "v1.0.0",
+  "icon": {
+    "14x14": { "@1x": "https://example.com/icon-14.png", "@2x": "...", "@3x": "..." },
+    "24x24": { "@1x": "https://example.com/icon-24.png", "@2x": "...", "@3x": "..." }
+  }
 }
 ```
 
-Only `pub_key` is required (must match your registered key to prevent impersonation). Optional fields: `name`,
-`description`, `company_name`, `company_website`, `client_version`, `icon`.
+Only `pub_key` is required (must match your registered key to prevent impersonation). All other fields are optional.
 
 ### De-registering your validator
 
