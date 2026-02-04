@@ -2,11 +2,12 @@ use std::time::Duration;
 
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
+    node_bindings::Anvil,
     primitives::{utils::parse_ether, Address, B256, U256},
     providers::{
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
-        layers::AnvilProvider,
+        layers::{AnvilLayer, AnvilProvider},
         utils::JoinedRecommendedFillers,
         Provider, ProviderBuilder, RootProvider, WalletProvider,
     },
@@ -93,26 +94,15 @@ impl TestSystem {
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
         let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
-        // Sporadically the provider builder fails with a timeout inside alloy.
-        // Retry a few times.
-        let mut attempts = 0;
-        let (port, provider) = loop {
-            let port = portpicker::pick_unused_port().unwrap();
-            match ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-                anvil.port(port).arg("--accounts").arg("20")
-            }) {
-                Ok(provider) => break (port, provider),
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= 5 {
-                        anyhow::bail!("Failed to spawn anvil after 5 attempts: {e}");
-                    }
-                    tracing::warn!("Anvil spawn failed, retrying: {e}");
-                },
-            }
-        };
 
-        let rpc_url: Url = format!("http://localhost:{port}").parse()?;
+        // The AnvilLayer keeps the anvil instance alive internally.
+        let anvil_layer = AnvilLayer::from(Anvil::new().arg("--accounts").arg("20"));
+        let rpc_url = anvil_layer.endpoint_url();
+        let provider = ProviderBuilder::new()
+            .layer(anvil_layer)
+            .wallet(EthereumWallet::from(build_signer(DEV_MNEMONIC, 0)))
+            .connect_http(rpc_url.clone());
+
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
         // mnemonic and the default signer is the first account.
