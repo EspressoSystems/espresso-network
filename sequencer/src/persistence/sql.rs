@@ -17,6 +17,7 @@ use espresso_types::{
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     StakeTableHash, ValidatorMap,
 };
@@ -66,6 +67,7 @@ use itertools::Itertools;
 use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
+    api::RewardMerkleTreeV2Data,
     catchup::SqlStateCatchup,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
     NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
@@ -1076,6 +1078,94 @@ impl Persistence {
         }
 
         tx.commit().await
+    }
+
+    pub async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
+        let max_height: Option<i64> = {
+            let mut tx = self.db.read().await?;
+            query_as::<(i64,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
+                .fetch_optional(tx.as_mut())
+                .await?
+                .map(|row| row.0)
+        };
+
+        let max_height = match max_height {
+            Some(h) => h,
+            None => {
+                tracing::info!("no reward data found in reward_merkle_tree_v2, skipping migration");
+                return Ok(());
+            },
+        };
+
+        tracing::warn!("migrating reward_merkle_tree_v2 to bincode at height {max_height}...");
+
+        let mut tx = self.db.read().await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        let query_str = "SELECT DISTINCT ON (idx) idx, entry
+               FROM reward_merkle_tree_v2
+              WHERE idx IS NOT NULL AND created <= $1
+              ORDER BY idx DESC, created DESC";
+
+        #[cfg(feature = "embedded-db")]
+        let query_str = "SELECT idx, entry FROM (
+                 SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
+                         rn
+                   FROM reward_merkle_tree_v2
+                  WHERE created <= $1 AND idx IS NOT NULL
+             ) sub
+             WHERE rn = 1";
+
+        let rows = query_as::<(serde_json::Value, serde_json::Value)>(query_str)
+            .bind(max_height)
+            .fetch_all(tx.as_mut())
+            .await
+            .context("loading reward accounts from reward_merkle_tree_v2")?;
+
+        drop(tx);
+
+        let mut balances = Vec::with_capacity(rows.len());
+        for (idx, entry) in rows {
+            let account: RewardAccountV2 =
+                serde_json::from_value(idx).context("deserializing reward account")?;
+            let balance: RewardAmount = serde_json::from_value(entry).context(format!(
+                "deserializing reward balance for account {account}"
+            ))?;
+            balances.push((account, balance));
+        }
+
+        if balances.is_empty() {
+            tracing::info!("no reward accounts found, skipping tree rebuild");
+            return Ok(());
+        }
+
+        tracing::info!(
+            "rebuilding RewardMerkleTreeV2 from {} accounts",
+            balances.len()
+        );
+
+        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
+            .context("failed to rebuild RewardMerkleTreeV2 from balances")?;
+
+        let tree_data: RewardMerkleTreeV2Data = (&tree)
+            .try_into()
+            .context("failed to convert RewardMerkleTreeV2 to RewardMerkleTreeV2Data")?;
+        let serialized =
+            bincode::serialize(&tree_data).context("failed to serialize RewardMerkleTreeV2Data")?;
+
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "reward_merkle_tree_v2_bincode",
+            ["height", "serialized_bytes"],
+            ["height"],
+            [(max_height, serialized)],
+        )
+        .await?;
+        tx.commit().await?;
+
+        tracing::warn!("migrated reward_merkle_tree_v2 to bincode at height {max_height}");
+
+        Ok(())
     }
 }
 
