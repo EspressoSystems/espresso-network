@@ -5,11 +5,12 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     sync::{atomic::AtomicBool, Arc},
     time::Instant,
 };
 
+use async_lock::RwLock;
 use async_trait::async_trait;
 use chrono::Utc;
 use hotshot_task_impls::{
@@ -171,6 +172,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
         Self {
             event_stream: handle.internal_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
+            calc_lock: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
