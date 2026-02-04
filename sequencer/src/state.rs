@@ -390,6 +390,12 @@ where
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
 
+    if parent_leaf.header().version() > EpochVersion::version() {
+      let reward_merkle_tree_v2 = storage.load_reward_merkle_tree_v2(parent_leaf.height()).await.context("Error starting the state storage update loop: failed to load RewardMerkleTreeV2 for the previous height")?;
+
+      parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2;
+    }
+
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
         // never the result of a state update and thus is not inserted in the loop below.
