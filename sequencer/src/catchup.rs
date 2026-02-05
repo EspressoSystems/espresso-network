@@ -439,8 +439,8 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let fetched_tree: anyhow::Result<RewardMerkleTreeV2> = {
-            let result = self
+        let fetched_tree: anyhow::Result<RewardMerkleTreeV2> = 'block: {
+            let maybe_result = self
                 .fetch(retry, |client| async move {
                     let tree_bytes = client
                         .inner
@@ -451,18 +451,24 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                     Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
                 })
                 .await
-                .context("Fetching from peer failed")?;
+                .context("Fetching from peer failed");
 
-            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
-                .context("Failed to deserialize merkle tree from catchup")?;
+            let result = match maybe_result {
+                Ok(result) => result,
+                Err(e) => break 'block Err(e),
+            };
 
-            let tree: RewardMerkleTreeV2 = tree_data.try_into()?;
+            let tree_data = match bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
+                .context("Failed to deserialize merkle tree from catchup")
+            {
+                Ok(tree_data) => tree_data,
+                Err(e) => break 'block Err(e),
+            };
 
-            ensure!(
-                tree.commitment() == reward_merkle_tree_root,
-                "RewardMerkleTreeV2 from peer failed commitment check."
-            );
-            ensure!(!forgotten_accounts_include(&tree, &accounts));
+            let tree: RewardMerkleTreeV2 = match tree_data.try_into() {
+                Ok(tree) => tree,
+                Err(e) => break 'block Err(e),
+            };
 
             Ok(tree)
         };

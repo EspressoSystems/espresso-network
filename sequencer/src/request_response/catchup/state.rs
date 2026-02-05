@@ -162,12 +162,12 @@ impl<
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         let tree = current_tree.clone();
         let reward_accounts = accounts.clone();
-        let fetched_tree = {
+        let fetched_tree = 'block: {
             // Timeout after a few batches
             let timeout_duration = self.config.request_batch_interval * 3;
 
             // Fetch the reward accounts
-            timeout(
+            match timeout(
                 timeout_duration,
                 self.fetch_reward_merkle_tree_v2(
                     instance,
@@ -179,7 +179,11 @@ impl<
                 ),
             )
             .await
-            .with_context(|| "timed out while fetching reward merkle tree v2")?
+            .with_context(|| "timed out while fetching reward merkle tree v2")
+            {
+                Ok(tree) => tree,
+                Err(e) => break 'block Err(e),
+            }
         };
 
         match fetched_tree {

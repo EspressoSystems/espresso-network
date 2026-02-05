@@ -475,7 +475,15 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         (**self)
-            .try_fetch_reward_merkle_tree_v2(retry, instance, current_tree, height, view, reward_merkle_tree_root, accounts)
+            .try_fetch_reward_merkle_tree_v2(
+                retry,
+                instance,
+                current_tree,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
             .await
     }
 
@@ -502,7 +510,14 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<RewardMerkleTreeV2> {
         (**self)
-            .fetch_reward_merkle_tree_v2(instance, current_tree, height, view, reward_merkle_tree_root, accounts)
+            .fetch_reward_merkle_tree_v2(
+                instance,
+                current_tree,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
             .await
     }
 
