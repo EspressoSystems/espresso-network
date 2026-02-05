@@ -1149,7 +1149,7 @@ pub mod testing {
     };
 
     use refinery::Migration;
-    use test_utils::bind_tcp_port;
+    use test_utils::reserve_tcp_port;
     use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
@@ -1207,8 +1207,7 @@ pub mod testing {
             // "free" port on that system.
             // We *might* be able to get away with this as any remote docker
             // host should hopefully be pretty open with it's port space.
-            let bound_port = bind_tcp_port().unwrap();
-            let port = bound_port.port();
+            let port = reserve_tcp_port().unwrap();
             let host = docker_hostname.unwrap_or("localhost".to_string());
 
             let mut cmd = Command::new("docker");
@@ -1234,7 +1233,7 @@ pub mod testing {
             tracing::info!("launched postgres docker {container_id}");
             let db = Self {
                 host,
-                port: *port,
+                port,
                 container_id: container_id.clone(),
                 persistent,
             };

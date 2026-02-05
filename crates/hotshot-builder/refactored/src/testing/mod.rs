@@ -73,8 +73,7 @@ impl TestServiceWrapper {
         global_state: Arc<GlobalState<TestTypes>>,
         event_stream_sender: Sender<Event<TestTypes>>,
     ) -> Self {
-        let bound_port = test_utils::bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = test_utils::reserve_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
         let app = Arc::clone(&global_state).into_app().unwrap();
         spawn(app.serve(url.clone(), StaticVersion::<0, 1> {}));

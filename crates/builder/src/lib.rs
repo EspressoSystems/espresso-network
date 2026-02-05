@@ -97,7 +97,6 @@ pub mod testing {
         staking_nodes_state_key_pairs: Vec<StateKeyPair>,
         non_staking_nodes_state_key_pairs: Vec<StateKeyPair>,
         anvil: Arc<AnvilInstance>,
-        _bound_builder_port: Arc<test_utils::BoundPort>,
     }
 
     impl Default for HotShotTestConfig {
@@ -115,7 +114,7 @@ pub mod testing {
                 _known_nodes_without_stake,
             ) = generate_stake_table_entries(num_nodes_without_stake as u64, 0);
 
-            let (bound_builder_port, builder_url) = hotshot_builder_url();
+            let builder_url = hotshot_builder_url();
 
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 num_nodes_with_stake: NonZeroUsize::new(num_nodes_with_stake).unwrap(),
@@ -156,7 +155,6 @@ pub mod testing {
                 staking_nodes_state_key_pairs,
                 non_staking_nodes_state_key_pairs,
                 anvil: Arc::new(Anvil::new().spawn()),
-                _bound_builder_port: Arc::new(bound_builder_port),
             }
         }
     }
@@ -392,16 +390,11 @@ pub mod testing {
         }
     }
 
-    pub fn hotshot_builder_url() -> (test_utils::BoundPort, Url) {
+    pub fn hotshot_builder_url() -> Url {
         // spawn the builder api
-        let bound_port =
-            test_utils::bind_tcp_port().expect("Failed to bind TCP port for builder api");
-        let port = bound_port.port();
+        let port = test_utils::reserve_tcp_port().expect("Failed to bind TCP port for builder api");
 
-        let hotshot_builder_api_url =
-            Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-        (bound_port, hotshot_builder_api_url)
+        Url::parse(format!("http://localhost:{port}").as_str()).unwrap()
     }
 
     pub async fn test_builder_impl(

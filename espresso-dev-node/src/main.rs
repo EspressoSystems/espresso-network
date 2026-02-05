@@ -54,7 +54,7 @@ use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
-use test_utils::bind_tcp_port;
+use test_utils::reserve_tcp_port;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -310,12 +310,10 @@ async fn main() -> anyhow::Result<()> {
         (url, Some(instance), Some(anvil_layer))
     };
 
-    let bound_relay_port = bind_tcp_port().unwrap();
-    let relay_server_port = *bound_relay_port.port();
+    let relay_server_port = reserve_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
-    // bound_relay_port will be moved into relay_server_handle to keep it alive
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(epoch_height)
@@ -675,9 +673,6 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let relay_server_handle = spawn(async move {
-        // Keep bound_relay_port alive until after server starts
-        let _bound_relay_port = bound_relay_port;
-
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
         // during `init_genesis()`, since this dev-node didn't expose those APIs.
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);

@@ -42,7 +42,7 @@ use hotshot_types::{
     },
     HotShotConfig, PeerConfig,
 };
-use test_utils::bind_tcp_port;
+use test_utils::reserve_tcp_port;
 use tokio::{
     runtime::Handle,
     task::{block_in_place, yield_now},
@@ -112,8 +112,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             .collect::<Vec<_>>();
 
         // Pick a random, unused port for the builder server
-        let bound_builder_port = bind_tcp_port().expect("Failed to bind TCP port");
-        let builder_port = bound_builder_port.port();
+        let builder_port = reserve_tcp_port().expect("Failed to reserve TCP port");
 
         // Create the bind URL from the random port
         let builder_url =

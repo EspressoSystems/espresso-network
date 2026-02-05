@@ -23,7 +23,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
 use sequencer::SequencerApiVersion;
 use surf_disco::Client;
-use test_utils::bind_tcp_port;
+use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use url::Url;
@@ -49,12 +49,9 @@ impl Drop for BackgroundProcess {
 async fn slow_dev_node_test(
     #[values(DevNodeVersion::V0_3, DevNodeVersion::V0_4)] version: DevNodeVersion,
 ) {
-    let bound_builder = bind_tcp_port().unwrap();
-    let bound_api = bind_tcp_port().unwrap();
-    let bound_dev_node = bind_tcp_port().unwrap();
-    let builder_port = *bound_builder.port();
-    let api_port = *bound_api.port();
-    let dev_node_port = *bound_dev_node.port();
+    let builder_port = reserve_tcp_port().unwrap();
+    let api_port = reserve_tcp_port().unwrap();
+    let dev_node_port = reserve_tcp_port().unwrap();
 
     let instance = Anvil::new().spawn();
     let l1_url = instance.endpoint_url();
@@ -81,8 +78,6 @@ async fn slow_dev_node_test(
         .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
         .env("ESPRESSO_DEV_NODE_VERSION", version.to_string());
 
-    // Release ports right before spawn so child can bind
-    drop((bound_builder, bound_api, bound_dev_node));
     let process = cmd.spawn().unwrap();
 
     let process = BackgroundProcess(process);
@@ -372,12 +367,9 @@ async fn alt_chain_providers() -> (Vec<AnvilInstance>, Vec<Url>) {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_dev_node_multiple_lc_providers_test() {
-    let bound_builder = bind_tcp_port().unwrap();
-    let bound_api = bind_tcp_port().unwrap();
-    let bound_dev_node = bind_tcp_port().unwrap();
-    let builder_port = *bound_builder.port();
-    let api_port = *bound_api.port();
-    let dev_node_port = *bound_dev_node.port();
+    let builder_port = reserve_tcp_port().unwrap();
+    let api_port = reserve_tcp_port().unwrap();
+    let dev_node_port = reserve_tcp_port().unwrap();
 
     let instance = Anvil::new().chain_id(1).spawn();
     let l1_url = instance.endpoint_url();
@@ -414,7 +406,6 @@ async fn slow_dev_node_multiple_lc_providers_test() {
         )
         .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25");
 
-    drop((bound_builder, bound_api, bound_dev_node));
     let process = cmd.spawn().unwrap();
 
     let process = BackgroundProcess(process);

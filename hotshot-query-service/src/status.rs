@@ -115,7 +115,7 @@ mod test {
     use reqwest::redirect::Policy;
     use surf_disco::Client;
     use tempfile::TempDir;
-    use test_utils::bind_tcp_port;
+    use test_utils::reserve_tcp_port;
     use tide_disco::{App, Url};
     use toml::toml;
 
@@ -137,8 +137,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start the web server.
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "status",
@@ -252,8 +251,7 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(data_source));
         app.register_module("status", api).unwrap();
 
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),

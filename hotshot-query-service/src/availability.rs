@@ -805,7 +805,7 @@ mod test {
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
     use tempfile::TempDir;
-    use test_utils::bind_tcp_port;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use toml::toml;
 
@@ -1115,8 +1115,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         let options = Options {
             small_object_range_limit: 500,
@@ -1461,8 +1460,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1515,8 +1513,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
 
         let options = Options {
             small_object_range_limit: 500,
@@ -1677,8 +1674,7 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(data_source));
         app.register_module("availability", api).unwrap();
 
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
@@ -1717,8 +1713,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1808,8 +1803,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1849,8 +1843,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",

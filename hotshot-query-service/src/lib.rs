@@ -600,7 +600,7 @@ mod test {
     use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
     use surf_disco::Client;
     use tempfile::TempDir;
-    use test_utils::bind_tcp_port;
+    use test_utils::reserve_tcp_port;
     use testing::mocks::MockBase;
     use tide_disco::App;
     use toml::toml;
@@ -936,8 +936,7 @@ mod test {
         })
         .unwrap();
 
-        let bound_port = bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),

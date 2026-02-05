@@ -70,7 +70,7 @@ use sequencer::{
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
-use test_utils::bind_tcp_port;
+use test_utils::reserve_tcp_port;
 use tokio::{
     task::{spawn, JoinHandle},
     time::{sleep, timeout},
@@ -1236,18 +1236,13 @@ async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
 /// batch, before starting the services that listen on them, so that the first port selected is not
 /// "in use" when we select later ports in the same batch.
 ///
-/// This object atomically binds to ports and keeps them alive, ensuring no collisions.
+/// This object reserves ports using TIME_WAIT to prevent reuse.
 #[derive(Debug, Default)]
-struct PortPicker {
-    ports: Vec<test_utils::BoundPort>,
-}
+struct PortPicker;
 
 impl PortPicker {
     fn pick(&mut self) -> anyhow::Result<u16> {
-        let bound = bind_tcp_port()?;
-        let port = *bound.port();
-        self.ports.push(bound);
-        Ok(port)
+        Ok(reserve_tcp_port()?)
     }
 }
 

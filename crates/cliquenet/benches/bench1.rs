@@ -5,7 +5,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;
 use rand::RngCore;
-use test_utils::bind_tcp_port;
+use test_utils::reserve_tcp_port;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -48,10 +48,8 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
     let a = Keypair::generate().unwrap();
     let b = Keypair::generate().unwrap();
 
-    let bound_port_a = bind_tcp_port().expect("Could not bind to TCP port");
-    let bound_port_b = bind_tcp_port().expect("Could not bind to TCP port");
-    let port_a = *bound_port_a.port();
-    let port_b = *bound_port_b.port();
+    let port_a = reserve_tcp_port().expect("Could not bind to TCP port");
+    let port_b = reserve_tcp_port().expect("Could not bind to TCP port");
 
     let all: [(u8, PublicKey, Address); 2] = [
         (

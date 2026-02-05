@@ -4,142 +4,72 @@
 //! Use `test-utils` for utilities that only need standard library functionality.
 //! Use crate-specific `utils` modules for utilities that need workspace dependencies.
 //!
-//! # Port Binding
+//! # Port Reservation
 //!
-//! The port binding utilities (`bind_tcp_port`, `bind_udp_port`) return struct wrappers
-//! that keep ports reserved until dropped. This prevents race conditions in concurrent tests.
-//!
-//! These types have `#[must_use]` attributes that enforce correct usage at compile-time.
+//! The port reservation utilities use the TIME_WAIT trick to provide race-free port allocation:
+//! - `reserve_tcp_port()` - Returns a port protected from ephemeral allocation for ~60s
+//! - `reserve_udp_port()` - Returns an available UDP port (tiny race window, acceptable for tests)
 
-#![deny(unused_must_use)]
+use std::net::{TcpListener, TcpStream, UdpSocket};
 
-use std::net::{TcpListener, UdpSocket};
-
-/// A TCP port binding that stays reserved until dropped.
+/// Reserve a TCP port using the TIME_WAIT trick.
 ///
-/// This struct keeps the underlying `TcpListener` alive, preventing
-/// port reuse race conditions common in tests. The port remains bound
-/// until this struct is dropped.
+/// This function allocates an ephemeral port and forces it into TCP TIME_WAIT state
+/// by completing a TCP handshake. The port is then:
+/// - Protected from OS ephemeral allocation for ~60 seconds (TIME_WAIT duration)
+/// - Still available for explicit binds (TIME_WAIT prevents collision with ephemeral
+///   allocation, not intentional rebinding)
 ///
-/// # Compile-Time Safety
+/// This pattern is based on Yelp's ephemeral-port-reserve approach and is useful
+/// when you need to know a port number before starting a service, but the service
+/// needs to bind to the port itself (not use a pre-bound listener).
 ///
-/// The `.port()` method returns `&u16` (not `u16`) to leverage the borrow checker.
-/// This prevents the dangerous pattern `bind_tcp_port()?.port()` from compiling,
-/// forcing you to keep `BoundPort` in scope.
+/// # Errors
 ///
-/// # Examples
+/// Returns an error if unable to bind, connect, or accept on 127.0.0.1.
+///
+/// # Example
 ///
 /// ```
-/// use test_utils::bind_tcp_port;
+/// use test_utils::reserve_tcp_port;
 ///
-/// # fn main() -> std::io::Result<()> {
-/// // Correct usage: keep BoundPort in scope
-/// let bound_port = bind_tcp_port()?;
-/// let service_url = format!("http://localhost:{}", bound_port.port());
-/// // Port stays reserved until bound_port drops
-/// # Ok(())
-/// # }
+/// let port = reserve_tcp_port().expect("Failed to reserve port");
+/// // Port is now in TIME_WAIT state - protected from ephemeral allocation
+/// // Services can still bind to it explicitly
 /// ```
-///
-/// This pattern will NOT compile (borrow checker error):
-/// ```compile_fail
-/// use test_utils::bind_tcp_port;
-///
-/// // ERROR: temporary value dropped while borrowed
-/// let port = bind_tcp_port().unwrap().port();
-/// println!("{}", port); // Must use it to trigger the error
-/// ```
-#[must_use = "Port binding must be kept alive to prevent race conditions"]
-#[derive(Debug)]
-pub struct BoundPort {
-    listener: TcpListener,
-    port: u16,
+pub fn reserve_tcp_port() -> std::io::Result<u16> {
+    let server = TcpListener::bind("127.0.0.1:0")?;
+    let addr = server.local_addr()?;
+
+    // Force TIME_WAIT by completing TCP handshake
+    let _client = TcpStream::connect(addr)?;
+    let (_accepted, _) = server.accept()?;
+    // All sockets drop here - port enters TIME_WAIT
+
+    Ok(addr.port())
 }
 
-impl BoundPort {
-    /// Get the bound port number.
-    ///
-    /// Returns a reference to prevent the common bug where `bind_tcp_port()?.port()`
-    /// drops the listener immediately. The borrow checker enforces keeping `BoundPort`
-    /// in scope.
-    pub fn port(&self) -> &u16 {
-        &self.port
-    }
-
-    /// Consume this binding and return the underlying listener.
-    ///
-    /// Use this if you need to call `accept()` or other listener methods.
-    pub fn into_listener(self) -> TcpListener {
-        self.listener
-    }
-
-    /// Get a reference to the underlying listener.
-    pub fn listener(&self) -> &TcpListener {
-        &self.listener
-    }
-}
-
-/// A UDP socket binding that stays reserved until dropped.
+/// Get an available UDP port.
 ///
-/// This struct keeps the underlying `UdpSocket` alive, preventing
-/// port reuse race conditions common in tests. The port remains bound
-/// until this struct is dropped.
-#[must_use = "Socket binding must be kept alive to prevent race conditions"]
-#[derive(Debug)]
-pub struct BoundSocket {
-    socket: UdpSocket,
-    port: u16,
-}
-
-impl BoundSocket {
-    /// Get the bound port number.
-    ///
-    /// Returns a reference to prevent the common bug where `bind_udp_port()?.port()`
-    /// drops the socket immediately. The borrow checker enforces keeping `BoundSocket`
-    /// in scope.
-    pub fn port(&self) -> &u16 {
-        &self.port
-    }
-
-    /// Consume this binding and return the underlying socket.
-    pub fn into_socket(self) -> UdpSocket {
-        self.socket
-    }
-
-    /// Get a reference to the underlying socket.
-    pub fn socket(&self) -> &UdpSocket {
-        &self.socket
-    }
-}
-
-/// Atomically bind to an available TCP port and return the binding.
-///
-/// The returned `BoundPort` keeps the port reserved until dropped,
-/// preventing race conditions where another process takes the port
-/// before your service binds to it.
+/// UDP does not have a TIME_WAIT state, so this simply binds to an ephemeral
+/// port, notes the port number, and releases it. There is a tiny race window
+/// between release and the service binding, but this is acceptable for tests.
 ///
 /// # Errors
 ///
 /// Returns an error if unable to bind to any port on 127.0.0.1.
-pub fn bind_tcp_port() -> std::io::Result<BoundPort> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    Ok(BoundPort { listener, port })
-}
-
-/// Atomically bind to an available UDP port and return the binding.
 ///
-/// The returned `BoundSocket` keeps the port reserved until dropped,
-/// preventing race conditions where another process takes the port
-/// before your service binds to it.
+/// # Example
 ///
-/// # Errors
+/// ```
+/// use test_utils::reserve_udp_port;
 ///
-/// Returns an error if unable to bind to any port on 127.0.0.1.
-pub fn bind_udp_port() -> std::io::Result<BoundSocket> {
+/// let port = reserve_udp_port().expect("Failed to get port");
+/// // Port was available at time of call, but may be reused by OS
+/// ```
+pub fn reserve_udp_port() -> std::io::Result<u16> {
     let socket = UdpSocket::bind("127.0.0.1:0")?;
-    let port = socket.local_addr()?.port();
-    Ok(BoundSocket { socket, port })
+    Ok(socket.local_addr()?.port())
 }
 
 #[cfg(test)]
@@ -147,73 +77,91 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bind_tcp_port() {
-        let bound = bind_tcp_port().expect("Failed to bind TCP port");
-        assert_ne!(*bound.port(), 0);
+    fn test_reserve_tcp_port_returns_nonzero() {
+        let port = reserve_tcp_port().unwrap();
+        assert_ne!(port, 0);
     }
 
     #[test]
-    fn test_bind_udp_port() {
-        let bound = bind_udp_port().expect("Failed to bind UDP port");
-        assert_ne!(*bound.port(), 0);
+    fn test_reserve_tcp_port_unique() {
+        let ports: Vec<u16> = (0..10).map(|_| reserve_tcp_port().unwrap()).collect();
+        let unique: std::collections::HashSet<_> = ports.iter().collect();
+        assert_eq!(unique.len(), 10, "All ports should be unique");
     }
 
     #[test]
-    fn test_unique_ports() {
-        let bound1 = bind_tcp_port().unwrap();
-        let bound2 = bind_tcp_port().unwrap();
-        let bound3 = bind_tcp_port().unwrap();
+    fn test_reserve_tcp_port_service_can_bind() {
+        let port = reserve_tcp_port().unwrap();
 
-        assert_ne!(bound1.port(), bound2.port());
-        assert_ne!(bound2.port(), bound3.port());
-        assert_ne!(bound1.port(), bound3.port());
+        // Service should be able to bind (TIME_WAIT allows explicit binds)
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+            .expect("Service should bind to TIME_WAIT port");
+
+        assert_eq!(listener.local_addr().unwrap().port(), port);
     }
 
     #[test]
-    fn test_port_kept_bound() {
-        let bound = bind_tcp_port().unwrap();
-        let port = *bound.port(); // Copy the value
+    fn test_reserve_tcp_port_no_ephemeral_collision() {
+        let reserved_port = reserve_tcp_port().unwrap();
 
-        // Port should still be bound
-        let result = TcpListener::bind(format!("127.0.0.1:{}", port));
-        assert!(result.is_err(), "Port should be occupied");
+        // Create many ephemeral connections - none should get our reserved port
+        let mut ephemeral_ports = Vec::new();
+        for _ in 0..100 {
+            let socket = TcpListener::bind("127.0.0.1:0").unwrap();
+            ephemeral_ports.push(socket.local_addr().unwrap().port());
+        }
 
-        drop(bound);
-
-        // Port should now be available
-        let result = TcpListener::bind(format!("127.0.0.1:{}", port));
-        assert!(result.is_ok(), "Port should be available after drop");
-    }
-
-    // This test is intentionally commented out to demonstrate compile-time safety.
-    // Uncommenting this test will cause a compile error:
-    // "error[E0716]: temporary value dropped while borrowed"
-    //
-    // #[test]
-    // fn test_dangerous_pattern_prevented() {
-    //     let port = bind_tcp_port().unwrap().port();
-    //     println!("Port: {}", port);
-    // }
-
-    #[test]
-    fn test_correct_usage_keeps_port_bound() {
-        // Correct pattern: keep BoundPort in scope
-        let bound = bind_tcp_port().unwrap();
-        let port = bound.port();
-
-        // Port should still be bound
-        let result = TcpListener::bind(format!("127.0.0.1:{}", port));
         assert!(
-            result.is_err(),
-            "Port should be occupied while BoundPort is in scope"
+            !ephemeral_ports.contains(&reserved_port),
+            "OS assigned reserved port {} to ephemeral allocation",
+            reserved_port
         );
+    }
 
-        // Port used in URL formatting - common pattern in tests
-        let url = format!("http://localhost:{}", bound.port());
-        assert_eq!(url, format!("http://localhost:{}", port));
+    #[test]
+    fn test_reserve_tcp_port_concurrent() {
+        use std::{
+            collections::HashSet,
+            sync::{Arc, Mutex},
+            thread,
+        };
 
-        // Port still bound
-        let result = TcpListener::bind(format!("127.0.0.1:{}", port));
-        assert!(result.is_err(), "Port should still be occupied");
+        let ports = Arc::new(Mutex::new(HashSet::new()));
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let ports = Arc::clone(&ports);
+            handles.push(thread::spawn(move || {
+                let port = reserve_tcp_port().unwrap();
+                ports.lock().unwrap().insert(port);
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            ports.lock().unwrap().len(),
+            10,
+            "All ports should be unique"
+        );
+    }
+
+    #[test]
+    fn test_reserve_udp_port_returns_nonzero() {
+        let port = reserve_udp_port().unwrap();
+        assert_ne!(port, 0);
+    }
+
+    #[test]
+    fn test_reserve_udp_port_service_can_bind() {
+        let port = reserve_udp_port().unwrap();
+
+        // Service should be able to bind to the port we just released
+        let socket = UdpSocket::bind(format!("127.0.0.1:{}", port))
+            .expect("Service should bind to released UDP port");
+
+        assert_eq!(socket.local_addr().unwrap().port(), port);
     }
 }

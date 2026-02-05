@@ -775,7 +775,7 @@ pub mod testing {
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
-    use test_utils::{bind_tcp_port, BoundPort};
+    use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -822,13 +822,9 @@ pub mod testing {
         max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
-        let (port, _bound_port_guard) = match port {
-            Some(p) => (p, None),
-            None => {
-                let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
-                let p = *bound_port.port();
-                (p, Some(bound_port))
-            },
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("Failed to bind TCP port"),
         };
 
         // This should never fail.
@@ -859,7 +855,6 @@ pub mod testing {
             .expect("Failed to create builder tide-disco app");
 
         spawn(async move {
-            let _guard = _bound_port_guard;
             app.serve(
                 format!("http://0.0.0.0:{port}")
                     .parse::<Url>()
@@ -875,14 +870,10 @@ pub mod testing {
 
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
-    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url, Option<BoundPort>) {
-        let (port, bound_port_guard) = match port {
-            Some(p) => (p, None),
-            None => {
-                let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
-                let p = *bound_port.port();
-                (p, Some(bound_port))
-            },
+    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("Failed to bind TCP port"),
         };
 
         // This should never fail.
@@ -901,7 +892,7 @@ pub mod testing {
         )
         .await;
 
-        (task, url, bound_port_guard)
+        (task, url)
     }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
@@ -916,7 +907,6 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
-        _bound_builder_port: Arc<BoundPort>,
     }
 
     pub fn staking_priv_keys(
@@ -1088,7 +1078,6 @@ pub mod testing {
                 builder_port: self.builder_port,
                 upgrades: self.upgrades,
                 anvil_provider: self.anvil_provider,
-                _bound_builder_port: self._bound_builder_port,
             }
         }
 
@@ -1121,8 +1110,7 @@ pub mod testing {
 
             let master_map = MasterMap::new();
 
-            let bound_builder_port = bind_tcp_port().unwrap();
-            let builder_port = *bound_builder_port.port();
+            let builder_port = reserve_tcp_port().unwrap();
 
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 fixed_leader_for_gpuvid: 0,
@@ -1186,7 +1174,6 @@ pub mod testing {
                 state_relay_url: None,
                 builder_port: None,
                 upgrades: Default::default(),
-                _bound_builder_port: Arc::new(bound_builder_port),
             }
         }
     }
@@ -1204,7 +1191,6 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
-        _bound_builder_port: Arc<BoundPort>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1538,7 +1524,7 @@ mod test {
             .l1_url(url)
             .build();
 
-        let (builder_task, builder_url, _bound_port) = run_test_builder::<NUM_NODES>(None).await;
+        let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
 
@@ -1577,7 +1563,7 @@ mod test {
             .l1_url(url)
             .build();
 
-        let (builder_task, builder_url, _bound_port) = run_test_builder::<NUM_NODES>(None).await;
+        let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
         let handles = config.init_nodes(MockSequencerVersions::new()).await;

@@ -49,7 +49,7 @@ use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 #[cfg(feature = "hotshot-testing")]
-use test_utils::bind_tcp_port;
+use test_utils::reserve_tcp_port;
 use tokio::sync::mpsc::error::TrySendError;
 #[cfg(feature = "hotshot-testing")]
 use tokio::{spawn, time::sleep};
@@ -342,18 +342,15 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             .into_owned();
 
         // Atomically bind to unused public ports
-        let bound_port_1 = bind_tcp_port().expect("could not bind to TCP port");
-        let public_port_1 = bound_port_1.port();
-        let bound_port_2 = bind_tcp_port().expect("could not bind to TCP port");
-        let public_port_2 = bound_port_2.port();
+        let public_port_1 = reserve_tcp_port().expect("could not bind to TCP port");
+        let public_port_2 = reserve_tcp_port().expect("could not bind to TCP port");
         let public_address_1 = format!("127.0.0.1:{public_port_1}");
         let public_address_2 = format!("127.0.0.1:{public_port_2}");
 
         // 2 brokers
         for i in 0..2 {
             // Atomically bind to a private port
-            let bound_private_port = bind_tcp_port().expect("could not bind to TCP port");
-            let private_port = bound_private_port.port();
+            let private_port = reserve_tcp_port().expect("could not bind to TCP port");
 
             // Extrapolate addresses
             let private_address = format!("127.0.0.1:{private_port}");
@@ -408,8 +405,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
         }
 
         // Atomically bind to an available port for the marshal
-        let bound_marshal_port = bind_tcp_port().expect("could not bind to TCP port");
-        let marshal_port = bound_marshal_port.port();
+        let marshal_port = reserve_tcp_port().expect("could not bind to TCP port");
 
         // Configure the marshal
         let marshal_endpoint = format!("127.0.0.1:{marshal_port}");

@@ -224,9 +224,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     node_id < num_bootstrap as u64
                 );
 
-                let port = *test_utils::bind_udp_port()
-                    .expect("Could not bind to UDP port")
-                    .port();
+                let port = test_utils::reserve_udp_port().expect("Could not reserve UDP port");
 
                 let addr =
                     Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();

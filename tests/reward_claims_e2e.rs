@@ -31,7 +31,7 @@ use sequencer::{
     SequencerApiVersion,
 };
 use staking_cli::demo::DelegationConfig;
-use test_utils::bind_tcp_port;
+use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -50,13 +50,11 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let anvil_layer = AnvilLayer::from(Anvil::new().args(["--slots-in-an-epoch", "0"]));
     let l1_url = anvil_layer.endpoint_url();
 
-    let bound_relay_port = bind_tcp_port().unwrap();
-    let relay_server_port = *bound_relay_port.port();
+    let relay_server_port = reserve_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
-    let bound_sequencer_port = bind_tcp_port().unwrap();
-    let sequencer_api_port = *bound_sequencer_port.port();
+    let sequencer_api_port = reserve_tcp_port().unwrap();
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(BLOCKS_PER_EPOCH)

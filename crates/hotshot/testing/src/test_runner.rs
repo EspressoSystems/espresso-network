@@ -316,14 +316,13 @@ where
         let mut builder_tasks = Vec::new();
         let mut builder_urls = Vec::new();
 
-        let mut bound_ports = Vec::new();
+        let mut ports = Vec::new();
         for _ in &self.launcher.metadata.builders {
-            let bound_port = test_utils::bind_tcp_port().expect("Failed to bind to TCP port");
-            bound_ports.push(bound_port);
+            let port = test_utils::reserve_tcp_port().expect("Failed to bind to TCP port");
+            ports.push(port);
         }
 
-        for (metadata, bound_port) in self.launcher.metadata.builders.iter().zip(&bound_ports) {
-            let builder_port = bound_port.port();
+        for (metadata, builder_port) in self.launcher.metadata.builders.iter().zip(&ports) {
             let builder_url =
                 Url::parse(&format!("http://localhost:{builder_port}")).expect("Invalid URL");
             let builder_task = B::start(

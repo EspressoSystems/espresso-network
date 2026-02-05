@@ -251,8 +251,7 @@ mod tests {
     async fn test_event_stream_wrapper() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let bound_port = test_utils::bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = test_utils::reserve_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());
@@ -293,8 +292,7 @@ mod tests {
     async fn test_event_stream_wrapper_with_idle_timeout() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let bound_port = test_utils::bind_tcp_port().unwrap();
-        let port = bound_port.port();
+        let port = test_utils::reserve_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());

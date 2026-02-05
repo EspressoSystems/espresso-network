@@ -1061,8 +1061,7 @@ where
 
     match args.builder_address {
         None => {
-            let bound_port = test_utils::bind_tcp_port().expect("Failed to bind to TCP port");
-            let port = bound_port.port();
+            let port = test_utils::reserve_tcp_port().expect("Failed to bind to TCP port");
             advertise_urls = local_ip_address::list_afinet_netifas()
                 .expect("Couldn't get list of local IP addresses")
                 .into_iter()
