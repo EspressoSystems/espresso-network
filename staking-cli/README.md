@@ -470,6 +470,9 @@ Options for `--metadata-uri`:
 
 Use `--skip-metadata-validation` if your endpoint isn't ready yet. URL cannot exceed 2048 bytes.
 
+The CLI automatically detects the format (JSON or OpenMetrics) by examining the content. This works with any hosting
+service, including GitHub raw URLs.
+
 Preview what will be extracted before registering:
 
 ```bash
