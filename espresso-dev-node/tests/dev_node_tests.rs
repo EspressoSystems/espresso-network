@@ -58,13 +58,13 @@ async fn slow_dev_node_test(
 
     let tmp_dir = tempfile::tempdir().unwrap();
 
-    let mut cmd = CargoBuild::new()
+    let process = CargoBuild::new()
         .bin("espresso-dev-node")
         .current_target()
         .run()
         .unwrap()
-        .command();
-    cmd.env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+        .command()
+        .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
         .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
         .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
@@ -76,9 +76,9 @@ async fn slow_dev_node_test(
         )
         .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
         .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
-        .env("ESPRESSO_DEV_NODE_VERSION", version.to_string());
-
-    let process = cmd.spawn().unwrap();
+        .env("ESPRESSO_DEV_NODE_VERSION", version.to_string())
+        .spawn()
+        .unwrap();
 
     let process = BackgroundProcess(process);
 
@@ -384,13 +384,13 @@ async fn slow_dev_node_multiple_lc_providers_test() {
 
     let tmp_dir = tempfile::tempdir().unwrap();
 
-    let mut cmd = CargoBuild::new()
+    let process = CargoBuild::new()
         .bin("espresso-dev-node")
         .current_target()
         .run()
         .unwrap()
-        .command();
-    cmd.env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+        .command()
+        .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
         .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
         .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
@@ -404,9 +404,9 @@ async fn slow_dev_node_multiple_lc_providers_test() {
             "ESPRESSO_SEQUENCER_STORAGE_PATH",
             tmp_dir.path().as_os_str(),
         )
-        .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25");
-
-    let process = cmd.spawn().unwrap();
+        .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
+        .spawn()
+        .unwrap();
 
     let process = BackgroundProcess(process);
 
