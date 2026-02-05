@@ -642,7 +642,7 @@ impl Drop for TestNetwork {
 
 impl TestNetwork {
     async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
-        let mut ports = PortPicker::default();
+        let mut ports = PortPicker;
 
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
@@ -1237,7 +1237,7 @@ async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
 /// "in use" when we select later ports in the same batch.
 ///
 /// This object reserves ports using TIME_WAIT to prevent reuse.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PortPicker;
 
 impl PortPicker {
