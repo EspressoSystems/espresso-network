@@ -29,7 +29,7 @@ where
     where
         P: IntoIterator<Item = K>,
     {
-        let group = metrics.subgroup(format!("cliquenet_{label})"));
+        let group = metrics.subgroup(format!("cliquenet_{label}"));
 
         let peers = vec!["peers".into()];
 
