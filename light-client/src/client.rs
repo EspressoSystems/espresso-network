@@ -203,7 +203,6 @@ mod test {
         availability::{BlockQueryData, LeafQueryData},
         Resolvable,
     };
-    use hotshot_types::utils;
     use pretty_assertions::assert_eq;
     use rand::RngCore;
     use sequencer::{
@@ -215,6 +214,7 @@ mod test {
         },
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
+    use test_utils;
     use tokio::time::sleep;
 
     use super::*;
@@ -226,7 +226,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_block_height() {
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = test_utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let port = *bound_port.port();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -268,7 +269,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_leaf_proof() {
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = test_utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let port = *bound_port.port();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -352,7 +354,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof() {
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = test_utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let port = *bound_port.port();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -437,7 +440,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_payload_proof() {
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = test_utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let port = *bound_port.port();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -486,7 +490,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_namespace_proof() {
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = test_utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let port = *bound_port.port();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();

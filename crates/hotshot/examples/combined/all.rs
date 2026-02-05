@@ -62,10 +62,10 @@ async fn main() {
     // 2 brokers
     for _ in 0..2 {
         // Atomically bind to available ports
-        let (_private_listener, private_port) =
-            hotshot_types::utils::bind_tcp_port().expect("could not bind to TCP port");
-        let (_public_listener, public_port) =
-            hotshot_types::utils::bind_tcp_port().expect("could not bind to TCP port");
+        let bound_private_port = test_utils::bind_tcp_port().expect("could not bind to TCP port");
+        let private_port = bound_private_port.port();
+        let bound_public_port = test_utils::bind_tcp_port().expect("could not bind to TCP port");
+        let public_port = bound_public_port.port();
 
         // Extrapolate addresses
         let private_address = format!("127.0.0.1:{private_port}");

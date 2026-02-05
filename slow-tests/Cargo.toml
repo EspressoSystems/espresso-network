@@ -29,7 +29,6 @@ hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 itertools = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
-portpicker = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
@@ -39,6 +38,7 @@ staking-cli = { workspace = true }
 surf-disco = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+test-utils = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

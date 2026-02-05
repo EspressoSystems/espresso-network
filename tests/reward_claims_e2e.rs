@@ -18,7 +18,7 @@ use hotshot_query_service::data_source::SqlDataSource;
 use hotshot_state_prover::{v3::service::run_prover_once, StateProverConfig};
 use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
-    utils::{bind_tcp_port, epoch_from_block_number},
+    utils::epoch_from_block_number,
 };
 use sequencer::{
     api::{
@@ -31,6 +31,7 @@ use sequencer::{
     SequencerApiVersion,
 };
 use staking_cli::demo::DelegationConfig;
+use test_utils::bind_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -49,11 +50,13 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let anvil_layer = AnvilLayer::from(Anvil::new().args(["--slots-in-an-epoch", "0"]));
     let l1_url = anvil_layer.endpoint_url();
 
-    let (_listener1, relay_server_port) = bind_tcp_port().unwrap();
+    let bound_relay_port = bind_tcp_port().unwrap();
+    let relay_server_port = *bound_relay_port.port();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
-    let (_listener2, sequencer_api_port) = bind_tcp_port().unwrap();
+    let bound_sequencer_port = bind_tcp_port().unwrap();
+    let sequencer_api_port = *bound_sequencer_port.port();
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(BLOCKS_PER_EPOCH)

@@ -1061,8 +1061,8 @@ where
 
     match args.builder_address {
         None => {
-            let (_listener, port) =
-                hotshot_types::utils::bind_tcp_port().expect("Failed to bind to TCP port");
+            let bound_port = test_utils::bind_tcp_port().expect("Failed to bind to TCP port");
+            let port = bound_port.port();
             advertise_urls = local_ip_address::list_afinet_netifas()
                 .expect("Couldn't get list of local IP addresses")
                 .into_iter()

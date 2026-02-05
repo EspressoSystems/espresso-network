@@ -35,7 +35,7 @@ use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2
 use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
-    utils::{bind_tcp_port, epoch_from_block_number},
+    utils::epoch_from_block_number,
 };
 use itertools::izip;
 use sequencer::{
@@ -54,6 +54,7 @@ use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
+use test_utils::bind_tcp_port;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -308,7 +309,8 @@ async fn main() -> anyhow::Result<()> {
         (url, Some(instance), Some(anvil_layer))
     };
 
-    let (_listener, relay_server_port) = bind_tcp_port().unwrap();
+    let bound_relay_port = bind_tcp_port().unwrap();
+    let relay_server_port = bound_relay_port.port();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();

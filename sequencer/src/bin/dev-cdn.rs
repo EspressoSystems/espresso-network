@@ -11,12 +11,10 @@ use cdn_broker::{
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use espresso_types::SeqTypes;
-use hotshot_types::{
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
-    utils::bind_tcp_port,
-};
+use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use sequencer::network::cdn::{TestingDef, WrappedSignatureKey};
+use test_utils::bind_tcp_port;
 use tokio::spawn;
 
 #[derive(Parser, Debug)]
@@ -57,10 +55,10 @@ async fn main() -> Result<()> {
         .into_owned();
 
     // Acquire unused ports for the broker to use
-    let (_public_listener, broker_public_port) =
-        bind_tcp_port().expect("failed to bind public port for broker");
-    let (_private_listener, broker_private_port) =
-        bind_tcp_port().expect("failed to bind private port for broker");
+    let bound_public_port = bind_tcp_port().expect("failed to bind public port for broker");
+    let broker_public_port = bound_public_port.port();
+    let bound_private_port = bind_tcp_port().expect("failed to bind private port for broker");
+    let broker_private_port = bound_private_port.port();
 
     // Configure the broker
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {

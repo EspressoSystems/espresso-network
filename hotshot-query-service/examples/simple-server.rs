@@ -47,9 +47,9 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
     traits::{election::Membership, network::Topic},
-    utils::bind_tcp_port,
     HotShotConfig, PeerConfig,
 };
+use test_utils::bind_tcp_port;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -173,7 +173,8 @@ async fn init_consensus(
     let num_nodes_with_stake = NonZeroUsize::new(pub_keys.len()).unwrap();
 
     // Pick a random, unused port for the builder server
-    let builder_port = bind_tcp_port().expect("Failed to bind to TCP port").1;
+    let bound_builder_port = bind_tcp_port().expect("Failed to bind to TCP port");
+    let builder_port = bound_builder_port.port();
 
     let builder_url =
         Url::parse(&format!("http://0.0.0.0:{builder_port}")).expect("Failed to parse URL");

@@ -28,8 +28,8 @@ hotshot-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = "0.8.1"
-portpicker = { workspace = true }
 quickcheck = { workspace = true }
+test-utils = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [[bench]]

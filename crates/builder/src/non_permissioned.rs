@@ -266,13 +266,13 @@ mod test {
     /// Builder subscrived to this api, and server the hotshot client request and the private mempool tx submission
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_permissioned_builder() {
-        let (_query_listener, query_port) =
-            hotshot_types::utils::bind_tcp_port().expect("Failed to bind port");
+        let bound_query_port = test_utils::bind_tcp_port().expect("Failed to bind port");
+        let query_port = *bound_query_port.port();
 
         let event_service_url: Url = format!("http://localhost:{query_port}").parse().unwrap();
 
-        let (_builder_listener, builder_port) =
-            hotshot_types::utils::bind_tcp_port().expect("Failed to bind port");
+        let bound_builder_port = test_utils::bind_tcp_port().expect("Failed to bind port");
+        let builder_port = *bound_builder_port.port();
         let builder_api_url: Url = format!("http://localhost:{builder_port}").parse().unwrap();
 
         let network_config = TestConfigBuilder::default().build();

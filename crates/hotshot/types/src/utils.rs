@@ -8,7 +8,6 @@
 
 use std::{
     hash::{Hash, Hasher},
-    net::{TcpListener, UdpSocket},
     ops::Deref,
     sync::Arc,
 };
@@ -562,46 +561,4 @@ mod test {
             epoch_from_block_number(epoch_root_block_number, epoch_height)
         );
     }
-}
-
-/// Atomically bind to an available TCP port and return listener + port.
-///
-/// This function binds to `127.0.0.1:0`, which lets the OS assign an available port.
-/// The returned `TcpListener` keeps the port bound until it's dropped, preventing
-/// race conditions where another process could grab the port between allocation
-/// and usage.
-///
-/// # Example
-/// ```no_run
-/// use hotshot_types::utils::bind_tcp_port;
-///
-/// let (listener, port) = bind_tcp_port().expect("Failed to bind TCP port");
-/// println!("Bound to port {}", port);
-/// // listener keeps the port bound until dropped
-/// ```
-pub fn bind_tcp_port() -> std::io::Result<(TcpListener, u16)> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    Ok((listener, port))
-}
-
-/// Atomically bind to an available UDP port and return socket + port.
-///
-/// This function binds to `127.0.0.1:0`, which lets the OS assign an available port.
-/// The returned `UdpSocket` keeps the port bound until it's dropped, preventing
-/// race conditions where another process could grab the port between allocation
-/// and usage.
-///
-/// # Example
-/// ```no_run
-/// use hotshot_types::utils::bind_udp_port;
-///
-/// let (socket, port) = bind_udp_port().expect("Failed to bind UDP port");
-/// println!("Bound to port {}", port);
-/// // socket keeps the port bound until dropped
-/// ```
-pub fn bind_udp_port() -> std::io::Result<(UdpSocket, u16)> {
-    let socket = UdpSocket::bind("127.0.0.1:0")?;
-    let port = socket.local_addr()?.port();
-    Ok((socket, port))
 }

@@ -597,11 +597,10 @@ mod test {
     use async_trait::async_trait;
     use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
     use futures::future::FutureExt;
-    use hotshot_types::{
-        data::VidShare, simple_certificate::QuorumCertificate2, utils::bind_tcp_port,
-    };
+    use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
     use surf_disco::Client;
     use tempfile::TempDir;
+    use test_utils::bind_tcp_port;
     use testing::mocks::MockBase;
     use tide_disco::App;
     use toml::toml;
@@ -937,7 +936,8 @@ mod test {
         })
         .unwrap();
 
-        let (_listener, port) = bind_tcp_port().unwrap();
+        let bound_port = bind_tcp_port().unwrap();
+        let port = bound_port.port();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),

@@ -15,9 +15,10 @@ mod tests {
             node_implementation::{ConsensusTime, NodeType},
             signature_key::SignatureKey,
         },
-        utils, PeerConfig,
+        PeerConfig,
     };
     use surf_disco::Client;
+    use test_utils::bind_tcp_port;
     use tide_disco::{App, Url};
     use tokio::spawn;
     use tracing_test::traced_test;
@@ -41,7 +42,8 @@ mod tests {
     #[traced_test]
     async fn test_no_active_receiver() {
         tracing::info!("Starting test_no_active_receiver");
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
+        let port = bound_port.port();
         let api_url = Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
 
         let known_nodes_with_stake = vec![];
@@ -90,7 +92,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_startup_info_endpoint() {
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
+        let port = bound_port.port();
         let api_url = Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
 
         let private_key =
@@ -146,7 +149,8 @@ mod tests {
     async fn test_event_stream() {
         tracing::info!("Starting test_event_stream");
 
-        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
+        let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
+        let port = bound_port.port();
         let api_url = Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
 
         let known_nodes_with_stake = vec![];

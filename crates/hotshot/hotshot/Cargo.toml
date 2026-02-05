@@ -47,10 +47,10 @@ libp2p-identity = { workspace = true }
 lru = { workspace = true }
 num_enum = "0.7"
 parking_lot = { workspace = true }
-portpicker = "0.1"
 rand = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 sha2 = { workspace = true }
+test-utils = { workspace = true }
 time = { workspace = true }
 
 tokio = { workspace = true }

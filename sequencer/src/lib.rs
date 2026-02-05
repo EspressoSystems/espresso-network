@@ -770,12 +770,12 @@ pub mod testing {
             node_implementation::ConsensusTime as _, signature_key::BuilderSignatureKey,
             EncodeBytes,
         },
-        utils::bind_tcp_port,
         HotShotConfig, PeerConfig,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use test_utils::bind_tcp_port;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -823,8 +823,8 @@ pub mod testing {
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
         let port = port.unwrap_or_else(|| {
-            let (_listener, port) = bind_tcp_port().expect("Failed to bind TCP port");
-            port
+            let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
+            *bound_port.port()
         });
 
         // This should never fail.
@@ -871,8 +871,8 @@ pub mod testing {
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let port = port.unwrap_or_else(|| {
-            let (_listener, port) = bind_tcp_port().expect("Failed to bind TCP port");
-            port
+            let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
+            *bound_port.port()
         });
 
         // This should never fail.
@@ -1122,7 +1122,8 @@ pub mod testing {
                 view_sync_timeout: Duration::from_secs(1),
                 data_request_delay: Duration::from_secs(1),
                 builder_urls: {
-                    let (_listener, port) = bind_tcp_port().unwrap();
+                    let bound_port = bind_tcp_port().unwrap();
+                    let port = bound_port.port();
                     vec1::vec1![Url::parse(&format!("http://127.0.0.1:{port}")).unwrap()]
                 },
                 builder_timeout: Duration::from_secs(1),

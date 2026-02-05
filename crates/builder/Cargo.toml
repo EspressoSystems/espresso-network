@@ -33,6 +33,7 @@ rand = { workspace = true }
 sequencer = { path = "../../sequencer", default-features = false }
 sequencer-utils = { path = "../../utils" }
 surf-disco = { workspace = true }
+test-utils = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

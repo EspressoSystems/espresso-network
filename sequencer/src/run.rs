@@ -339,11 +339,10 @@ mod test {
     use std::time::Duration;
 
     use espresso_types::{MockSequencerVersions, PubKey};
-    use hotshot_types::{
-        light_client::StateKeyPair, traits::signature_key::SignatureKey, utils::bind_tcp_port,
-    };
+    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
     use surf_disco::{error::ClientError, Client, Url};
     use tempfile::TempDir;
+    use test_utils::bind_tcp_port;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -360,7 +359,8 @@ mod test {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
 
-        let port = bind_tcp_port().expect("Failed to bind to TCP port").1;
+        let bound_port = bind_tcp_port().expect("Failed to bind to TCP port");
+        let port = *bound_port.port();
         let tmp = TempDir::new().unwrap();
 
         let genesis_file = tmp.path().join("genesis.toml");

@@ -242,8 +242,9 @@ pub mod testing {
         // url for the hotshot event streaming api
         pub fn hotshot_event_streaming_api_url() -> Url {
             // spawn the event streaming api
-            let (_listener, port) = hotshot_types::utils::bind_tcp_port()
+            let bound_port = test_utils::bind_tcp_port()
                 .expect("Failed to bind TCP port for hotshot event streaming api");
+            let port = bound_port.port();
 
             let hotshot_events_streaming_api_url =
                 Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
@@ -405,8 +406,9 @@ pub mod testing {
 
     pub fn hotshot_builder_url() -> Url {
         // spawn the builder api
-        let (_listener, port) =
-            hotshot_types::utils::bind_tcp_port().expect("Failed to bind TCP port for builder api");
+        let bound_port =
+            test_utils::bind_tcp_port().expect("Failed to bind TCP port for builder api");
+        let port = bound_port.port();
 
         let hotshot_builder_api_url =
             Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
