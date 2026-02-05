@@ -90,7 +90,6 @@ pub mod testing {
     use super::*;
     use crate::non_permissioned::BuilderConfig;
 
-    #[derive(Clone)]
     pub struct HotShotTestConfig {
         pub config: HotShotConfig<SeqTypes>,
         priv_keys_staking_nodes: Vec<BLSPrivKey>,
@@ -98,6 +97,7 @@ pub mod testing {
         staking_nodes_state_key_pairs: Vec<StateKeyPair>,
         non_staking_nodes_state_key_pairs: Vec<StateKeyPair>,
         anvil: Arc<AnvilInstance>,
+        _bound_builder_port: Arc<test_utils::BoundPort>,
     }
 
     impl Default for HotShotTestConfig {
@@ -115,7 +115,7 @@ pub mod testing {
                 _known_nodes_without_stake,
             ) = generate_stake_table_entries(num_nodes_without_stake as u64, 0);
 
-            let (_bound_builder_port, builder_url) = hotshot_builder_url();
+            let (bound_builder_port, builder_url) = hotshot_builder_url();
 
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 num_nodes_with_stake: NonZeroUsize::new(num_nodes_with_stake).unwrap(),
@@ -156,6 +156,7 @@ pub mod testing {
                 staking_nodes_state_key_pairs,
                 non_staking_nodes_state_key_pairs,
                 anvil: Arc::new(Anvil::new().spawn()),
+                _bound_builder_port: Arc::new(bound_builder_port),
             }
         }
     }

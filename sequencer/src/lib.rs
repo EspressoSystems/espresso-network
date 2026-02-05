@@ -775,7 +775,7 @@ pub mod testing {
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
-    use test_utils::bind_tcp_port;
+    use test_utils::{bind_tcp_port, BoundPort};
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -875,8 +875,8 @@ pub mod testing {
 
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
-    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let (port, _bound_port_guard) = match port {
+    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url, Option<BoundPort>) {
+        let (port, bound_port_guard) = match port {
             Some(p) => (p, None),
             None => {
                 let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
@@ -901,7 +901,7 @@ pub mod testing {
         )
         .await;
 
-        (task, url)
+        (task, url, bound_port_guard)
     }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
@@ -916,6 +916,7 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
+        _bound_builder_port: Arc<BoundPort>,
     }
 
     pub fn staking_priv_keys(
@@ -1087,6 +1088,7 @@ pub mod testing {
                 builder_port: self.builder_port,
                 upgrades: self.upgrades,
                 anvil_provider: self.anvil_provider,
+                _bound_builder_port: self._bound_builder_port,
             }
         }
 
@@ -1119,6 +1121,9 @@ pub mod testing {
 
             let master_map = MasterMap::new();
 
+            let bound_builder_port = bind_tcp_port().unwrap();
+            let builder_port = *bound_builder_port.port();
+
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
@@ -1130,11 +1135,9 @@ pub mod testing {
                 da_staked_committee_size: num_nodes,
                 view_sync_timeout: Duration::from_secs(1),
                 data_request_delay: Duration::from_secs(1),
-                builder_urls: {
-                    let bound_port = bind_tcp_port().unwrap();
-                    let port = bound_port.port();
-                    vec1::vec1![Url::parse(&format!("http://127.0.0.1:{port}")).unwrap()]
-                },
+                builder_urls: vec1::vec1![
+                    Url::parse(&format!("http://127.0.0.1:{builder_port}")).unwrap()
+                ],
                 builder_timeout: Duration::from_secs(1),
                 start_threshold: (
                     known_nodes_with_stake.clone().len() as u64,
@@ -1183,6 +1186,7 @@ pub mod testing {
                 state_relay_url: None,
                 builder_port: None,
                 upgrades: Default::default(),
+                _bound_builder_port: Arc::new(bound_builder_port),
             }
         }
     }
@@ -1200,6 +1204,7 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
+        _bound_builder_port: Arc<BoundPort>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1533,7 +1538,7 @@ mod test {
             .l1_url(url)
             .build();
 
-        let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
+        let (builder_task, builder_url, _bound_port) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
 
@@ -1572,7 +1577,7 @@ mod test {
             .l1_url(url)
             .build();
 
-        let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
+        let (builder_task, builder_url, _bound_port) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
         let handles = config.init_nodes(MockSequencerVersions::new()).await;
