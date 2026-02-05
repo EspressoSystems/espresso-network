@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - uses: taiki-e/install-action@just
 
@@ -30,7 +30,7 @@ jobs:
         run: just doc
 
       - name: Upload Rust Docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rust-docs
           path: target/doc
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -54,7 +54,7 @@ jobs:
         run: just doc-contracts
 
       - name: Upload Contract Docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: contract-docs
           path: docs/book
@@ -65,13 +65,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download Rust Docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: rust-docs
           path: public
 
       - name: Download Contract Docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: contract-docs
           path: public/contracts
