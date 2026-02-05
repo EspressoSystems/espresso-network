@@ -224,9 +224,8 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     node_id < num_bootstrap as u64
                 );
 
-                // Atomically bind to an available UDP port for testing
                 let bound_socket = test_utils::bind_udp_port().expect("Could not bind to UDP port");
-                let port = bound_socket.port();
+                let port = *bound_socket.port();
 
                 let addr =
                     Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();
@@ -266,6 +265,8 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                 let reliability_config_dup = reliability_config.clone();
 
                 Box::pin(async move {
+                    let _bound_socket_guard = bound_socket;
+
                     // If it's the second time we are starting this network, clear the bootstrap info
                     let mut write_ids = node_ids_ref.write().await;
                     if write_ids.contains(&node_id) {

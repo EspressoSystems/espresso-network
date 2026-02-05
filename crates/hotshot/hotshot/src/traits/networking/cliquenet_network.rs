@@ -23,7 +23,7 @@ use hotshot_types::{
     BoxSyncFuture,
 };
 #[cfg(feature = "hotshot-testing")]
-use test_utils::bind_tcp_port;
+use test_utils::{bind_tcp_port, BoundPort};
 
 #[derive(Clone)]
 pub struct Cliquenet<T: NodeType> {
@@ -153,20 +153,20 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
     ) -> AsyncGenerator<Arc<Self>> {
-        let mut parties = Vec::new();
+        use std::net::Ipv4Addr;
+
+        use cliquenet::Address;
+
+        let mut parties: Vec<(Keypair, T::SignatureKey, Address, BoundPort)> = Vec::new();
         for i in 0..expected_node_count {
-            use std::net::Ipv4Addr;
-
-            use cliquenet::Address;
-
             let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
             let public = T::SignatureKey::from_private(&secret);
             let kpair = derive_keypair::<<T as NodeType>::SignatureKey>(&secret);
             let bound_port = bind_tcp_port().expect("Could not bind to TCP port");
-            let port = bound_port.port();
-            let addr = Address::Inet(Ipv4Addr::LOCALHOST.into(), *port);
+            let port = *bound_port.port();
+            let addr = Address::Inet(Ipv4Addr::LOCALHOST.into(), port);
 
-            parties.push((kpair, public, addr));
+            parties.push((kpair, public, addr, bound_port));
         }
 
         let parties = Arc::new(parties);
@@ -176,10 +176,10 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
             let future = async move {
                 use hotshot_types::traits::metrics::NoMetrics;
 
-                let (s, k, a) = &parties[i as usize];
+                let (s, k, a, _bound_port_guard) = &parties[i as usize];
                 let it = parties
                     .iter()
-                    .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
+                    .map(|(s, k, a, _)| (k.clone(), s.public_key(), a.clone()));
                 let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, NoMetrics)
                     .await
                     .unwrap();

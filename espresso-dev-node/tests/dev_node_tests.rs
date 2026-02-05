@@ -55,18 +55,19 @@ async fn slow_dev_node_test(
     let builder_port = *bound_builder.port();
     let api_port = *bound_api.port();
     let dev_node_port = *bound_dev_node.port();
+
     let instance = Anvil::new().spawn();
     let l1_url = instance.endpoint_url();
 
     let tmp_dir = tempfile::tempdir().unwrap();
 
-    let process = CargoBuild::new()
+    let mut cmd = CargoBuild::new()
         .bin("espresso-dev-node")
         .current_target()
         .run()
         .unwrap()
-        .command()
-        .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+        .command();
+    cmd.env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
         .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
         .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
@@ -78,9 +79,11 @@ async fn slow_dev_node_test(
         )
         .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
         .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
-        .env("ESPRESSO_DEV_NODE_VERSION", version.to_string())
-        .spawn()
-        .unwrap();
+        .env("ESPRESSO_DEV_NODE_VERSION", version.to_string());
+
+    // Release ports right before spawn so child can bind
+    drop((bound_builder, bound_api, bound_dev_node));
+    let process = cmd.spawn().unwrap();
 
     let process = BackgroundProcess(process);
 
@@ -389,13 +392,13 @@ async fn slow_dev_node_multiple_lc_providers_test() {
 
     let tmp_dir = tempfile::tempdir().unwrap();
 
-    let process = CargoBuild::new()
+    let mut cmd = CargoBuild::new()
         .bin("espresso-dev-node")
         .current_target()
         .run()
         .unwrap()
-        .command()
-        .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+        .command();
+    cmd.env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
         .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
         .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
@@ -409,9 +412,10 @@ async fn slow_dev_node_multiple_lc_providers_test() {
             "ESPRESSO_SEQUENCER_STORAGE_PATH",
             tmp_dir.path().as_os_str(),
         )
-        .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
-        .spawn()
-        .unwrap();
+        .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25");
+
+    drop((bound_builder, bound_api, bound_dev_node));
+    let process = cmd.spawn().unwrap();
 
     let process = BackgroundProcess(process);
 

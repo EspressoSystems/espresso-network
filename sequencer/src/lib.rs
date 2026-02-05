@@ -822,10 +822,14 @@ pub mod testing {
         max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| {
-            let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
-            *bound_port.port()
-        });
+        let (port, _bound_port_guard) = match port {
+            Some(p) => (p, None),
+            None => {
+                let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
+                let p = *bound_port.port();
+                (p, Some(bound_port))
+            },
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -854,14 +858,16 @@ pub mod testing {
             .into_app()
             .expect("Failed to create builder tide-disco app");
 
-        spawn(
+        spawn(async move {
+            let _guard = _bound_port_guard;
             app.serve(
                 format!("http://0.0.0.0:{port}")
                     .parse::<Url>()
                     .expect("Failed to parse builder listener"),
                 EpochVersion::instance(),
-            ),
-        );
+            )
+            .await
+        });
 
         // Pass on the builder task to be injected in the testing harness
         (Box::new(LegacyBuilderImplementation { global_state }), url)
@@ -870,10 +876,14 @@ pub mod testing {
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let port = port.unwrap_or_else(|| {
-            let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
-            *bound_port.port()
-        });
+        let (port, _bound_port_guard) = match port {
+            Some(p) => (p, None),
+            None => {
+                let bound_port = bind_tcp_port().expect("Failed to bind TCP port");
+                let p = *bound_port.port();
+                (p, Some(bound_port))
+            },
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -881,18 +891,17 @@ pub mod testing {
             .expect("Failed to parse builder URL");
         tracing::info!("Starting test builder on {url}");
 
-        (
-            <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-                NUM_NODES,
-                format!("http://0.0.0.0:{port}")
-                    .parse()
-                    .expect("Failed to parse builder listener"),
-                (),
-                HashMap::new(),
-            )
-            .await,
-            url,
+        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
+            NUM_NODES,
+            format!("http://0.0.0.0:{port}")
+                .parse()
+                .expect("Failed to parse builder listener"),
+            (),
+            HashMap::new(),
         )
+        .await;
+
+        (task, url)
     }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {

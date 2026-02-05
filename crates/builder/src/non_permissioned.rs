@@ -321,9 +321,5 @@ mod test {
             builder_config.fee_account,
         )
         .await;
-
-        // Keep ports bound until servers have started
-        drop(query_bound_port);
-        drop(builder_bound_port);
     }
 }
