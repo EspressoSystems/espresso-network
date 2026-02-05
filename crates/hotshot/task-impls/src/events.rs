@@ -72,8 +72,15 @@ pub struct HotShotTaskCompleted;
 pub enum HotShotEvent<TYPES: NodeType> {
     /// Block sent directly to the network
     BlockSend(PayloadWithMetadata<TYPES>, TYPES::View),
-    /// Block received directly from the leader
-    BlockDirectlyRecv(PayloadWithMetadata<TYPES>, TYPES::View),
+    /// Block received directly from the previous leader
+    BlockDirectRecv(PayloadWithMetadata<TYPES>, TYPES::View),
+    /// Send block directly to the next leader over the network
+    BlockDirectSend(
+        PayloadWithMetadata<TYPES>,
+        TYPES::View,
+        TYPES::SignatureKey,
+        TYPES::SignatureKey,
+    ),
     /// A block has been reconstructed and is ready to be stored
     BlockReady(Arc<PayloadWithMetadata<TYPES>>, VidCommitment, TYPES::View),
     /// Shutdown the task
@@ -418,7 +425,8 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             HotShotEvent::LeavesDecided(..) => None,
             HotShotEvent::BlockReconstructed(_, _, _, view) => Some(*view),
             HotShotEvent::BlockSend(_, view) => Some(*view),
-            HotShotEvent::BlockDirectlyRecv(_, view) => Some(*view),
+            HotShotEvent::BlockDirectRecv(_, view) => Some(*view),
+            HotShotEvent::BlockDirectSend(_, view, ..) => Some(*view),
         }
     }
 }
@@ -428,11 +436,14 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HotShotEvent::BlockReady(_, _, view) => write!(f, "BlockReady(view_number={:?})", view),
-            HotShotEvent::BlockSend(payload, view) => {
+            HotShotEvent::BlockSend(_payload, view) => {
                 write!(f, "BlockSend(view_number={:?})", view)
             },
-            HotShotEvent::BlockDirectlyRecv(payload, view) => {
-                write!(f, "BlockDirectlyRecv(view_number={:?})", view)
+            HotShotEvent::BlockDirectRecv(_, view) => {
+                write!(f, "BlockDirectRecv(view_number={:?})", view)
+            },
+            HotShotEvent::BlockDirectSend(_, view, ..) => {
+                write!(f, "BlockDirectSend(view_number={:?})", view)
             },
             HotShotEvent::Shutdown => write!(f, "Shutdown"),
             HotShotEvent::QuorumProposalRecv(proposal, _) => write!(

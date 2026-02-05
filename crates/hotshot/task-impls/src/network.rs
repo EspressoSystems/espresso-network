@@ -515,6 +515,9 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             }
                             HotShotEvent::EpochRootQcRecv(root_qc.into(), sender)
                         },
+                        GeneralConsensusMessage::BlockDirect(payload, view) => {
+                            HotShotEvent::BlockDirectRecv(payload, view)
+                        },
                     },
                     SequencingMessage::Da(da_message) => match da_message {
                         DaConsensusMessage::DaProposal(proposal) => {
@@ -1572,6 +1575,13 @@ impl<
                     GeneralConsensusMessage::ExtendedQc(quorum_cert, next_epoch_qc),
                 )),
                 TransmitType::Broadcast,
+            )),
+            HotShotEvent::BlockDirectSend(payload, view, sender, recipient) => Some((
+                sender,
+                MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                    GeneralConsensusMessage::BlockDirect(payload, view),
+                )),
+                TransmitType::Direct(recipient),
             )),
             _ => None,
         }
