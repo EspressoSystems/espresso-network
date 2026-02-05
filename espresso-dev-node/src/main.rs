@@ -279,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
     logging.init();
 
     let mut anvil_statefile = NamedTempFile::new()?;
+    // Keep _anvil_layer alive to keep Anvil running (prefix suppresses unused warning)
     let (l1_url, anvil, _anvil_layer) = if let Some(url) = rpc_url {
         (url, None, None)
     } else {
@@ -310,10 +311,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let bound_relay_port = bind_tcp_port().unwrap();
-    let relay_server_port = bound_relay_port.port();
+    let relay_server_port = *bound_relay_port.port();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
+    // bound_relay_port will be moved into relay_server_handle to keep it alive
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(epoch_height)
@@ -673,6 +675,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let relay_server_handle = spawn(async move {
+        // Keep bound_relay_port alive until after server starts
+        let _bound_relay_port = bound_relay_port;
+
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
         // during `init_genesis()`, since this dev-node didn't expose those APIs.
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);

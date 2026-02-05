@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, net::TcpListener, path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use alloy::{
     network::EthereumWallet,
@@ -70,6 +70,7 @@ use sequencer::{
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
+use test_utils::bind_tcp_port;
 use tokio::{
     task::{spawn, JoinHandle},
     time::{sleep, timeout},
@@ -1238,14 +1239,14 @@ async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
 /// This object atomically binds to ports and keeps them alive, ensuring no collisions.
 #[derive(Debug, Default)]
 struct PortPicker {
-    listeners: Vec<TcpListener>,
+    ports: Vec<test_utils::BoundPort>,
 }
 
 impl PortPicker {
     fn pick(&mut self) -> anyhow::Result<u16> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let port = listener.local_addr()?.port();
-        self.listeners.push(listener);
+        let bound = bind_tcp_port()?;
+        let port = *bound.port();
+        self.ports.push(bound);
         Ok(port)
     }
 }

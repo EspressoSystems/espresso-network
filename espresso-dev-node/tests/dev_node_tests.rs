@@ -1,4 +1,4 @@
-use std::{net::TcpListener, process::Child, time::Duration};
+use std::{process::Child, time::Duration};
 
 use alloy::{
     network::EthereumWallet,
@@ -23,28 +23,13 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
 use sequencer::SequencerApiVersion;
 use surf_disco::Client;
+use test_utils::bind_tcp_port;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use url::Url;
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const NUM_ALT_CHAIN_PROVIDERS: usize = 1;
-
-/// This object atomically binds to ports and keeps them alive, ensuring no collisions
-/// when allocating multiple ports in a batch before starting services.
-#[derive(Debug, Default)]
-struct PortPicker {
-    listeners: Vec<TcpListener>,
-}
-
-impl PortPicker {
-    fn pick(&mut self) -> anyhow::Result<u16> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let port = listener.local_addr()?.port();
-        self.listeners.push(listener);
-        Ok(port)
-    }
-}
 
 pub struct BackgroundProcess(Child);
 
@@ -64,10 +49,12 @@ impl Drop for BackgroundProcess {
 async fn slow_dev_node_test(
     #[values(DevNodeVersion::V0_3, DevNodeVersion::V0_4)] version: DevNodeVersion,
 ) {
-    let mut ports = PortPicker::default();
-    let builder_port = ports.pick().unwrap();
-    let api_port = ports.pick().unwrap();
-    let dev_node_port = ports.pick().unwrap();
+    let bound_builder = bind_tcp_port().unwrap();
+    let bound_api = bind_tcp_port().unwrap();
+    let bound_dev_node = bind_tcp_port().unwrap();
+    let builder_port = *bound_builder.port();
+    let api_port = *bound_api.port();
+    let dev_node_port = *bound_dev_node.port();
     let instance = Anvil::new().spawn();
     let l1_url = instance.endpoint_url();
 
@@ -382,10 +369,12 @@ async fn alt_chain_providers() -> (Vec<AnvilInstance>, Vec<Url>) {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_dev_node_multiple_lc_providers_test() {
-    let mut ports = PortPicker::default();
-    let builder_port = ports.pick().unwrap();
-    let api_port = ports.pick().unwrap();
-    let dev_node_port = ports.pick().unwrap();
+    let bound_builder = bind_tcp_port().unwrap();
+    let bound_api = bind_tcp_port().unwrap();
+    let bound_dev_node = bind_tcp_port().unwrap();
+    let builder_port = *bound_builder.port();
+    let api_port = *bound_api.port();
+    let dev_node_port = *bound_dev_node.port();
 
     let instance = Anvil::new().chain_id(1).spawn();
     let l1_url = instance.endpoint_url();

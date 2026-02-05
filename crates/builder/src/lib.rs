@@ -115,7 +115,7 @@ pub mod testing {
                 _known_nodes_without_stake,
             ) = generate_stake_table_entries(num_nodes_without_stake as u64, 0);
 
-            let builder_url = hotshot_builder_url();
+            let (_bound_builder_port, builder_url) = hotshot_builder_url();
 
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 num_nodes_with_stake: NonZeroUsize::new(num_nodes_with_stake).unwrap(),
@@ -237,19 +237,6 @@ pub mod testing {
                     is_da: true,
                 }
             }
-        }
-
-        // url for the hotshot event streaming api
-        pub fn hotshot_event_streaming_api_url() -> Url {
-            // spawn the event streaming api
-            let bound_port = test_utils::bind_tcp_port()
-                .expect("Failed to bind TCP port for hotshot event streaming api");
-            let port = bound_port.port();
-
-            let hotshot_events_streaming_api_url =
-                Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-            hotshot_events_streaming_api_url
         }
 
         // start the server for the hotshot event streaming api
@@ -404,7 +391,7 @@ pub mod testing {
         }
     }
 
-    pub fn hotshot_builder_url() -> Url {
+    pub fn hotshot_builder_url() -> (test_utils::BoundPort, Url) {
         // spawn the builder api
         let bound_port =
             test_utils::bind_tcp_port().expect("Failed to bind TCP port for builder api");
@@ -413,7 +400,7 @@ pub mod testing {
         let hotshot_builder_api_url =
             Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
 
-        hotshot_builder_api_url
+        (bound_port, hotshot_builder_api_url)
     }
 
     pub async fn test_builder_impl(
