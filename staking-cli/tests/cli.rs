@@ -2410,15 +2410,42 @@ async fn test_cli_preview_metadata_valid_json_wrong_schema() -> Result<()> {
         .map(move || warp::reply::with_header(invalid_json, "content-type", "application/json"));
 
     let port = deploy::serve_on_random_port(route).await;
+    let url = format!("http://127.0.0.1:{}/metadata", port);
 
     base_cmd()
         .arg("preview-metadata")
         .arg("--metadata-uri")
-        .arg(format!("http://127.0.0.1:{}/metadata", port))
+        .arg(&url)
         .assert()
         .failure()
+        .stderr(str::contains(&url))
+        .stderr(str::contains("valid JSON but incorrect schema"))
         .stderr(str::contains("missing field"))
+        .stderr(str::contains("pub_key"))
         .stderr(str::contains("OpenMetrics").not());
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_invalid_both_formats_shows_url() -> Result<()> {
+    let invalid_content = "<html>Not JSON or OpenMetrics</html>";
+
+    let route = warp::path("metadata")
+        .map(move || warp::reply::with_header(invalid_content, "content-type", "text/html"));
+
+    let port = deploy::serve_on_random_port(route).await;
+    let url = format!("http://127.0.0.1:{}/metadata", port);
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&url)
+        .assert()
+        .failure()
+        .stderr(str::contains(&url))
+        .stderr(str::contains("failed to parse as JSON"))
+        .stderr(str::contains("OpenMetrics"));
 
     Ok(())
 }
