@@ -40,6 +40,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, Versions},
         signature_key::SignatureKey as _,
     },
+    utils::bind_tcp_port,
     HotShotConfig, PeerConfig,
 };
 use tokio::{
@@ -111,7 +112,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             .collect::<Vec<_>>();
 
         // Pick a random, unused port for the builder server
-        let builder_port = portpicker::pick_unused_port().expect("No ports available");
+        let (_listener, builder_port) = bind_tcp_port().expect("Failed to bind TCP port");
 
         // Create the bind URL from the random port
         let builder_url =

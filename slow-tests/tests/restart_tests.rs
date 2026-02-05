@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, net::TcpListener, path::Path, sync::Arc, time::Duration};
 
 use alloy::{
     network::EthereumWallet,
@@ -56,7 +51,6 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
@@ -242,14 +236,14 @@ struct NodeParams {
 }
 
 impl NodeParams {
-    fn new(ports: &mut PortPicker, i: u64, is_da: bool) -> Self {
-        Self {
-            api_port: ports.pick(),
-            libp2p_port: ports.pick(),
+    fn new(ports: &mut PortPicker, i: u64, is_da: bool) -> anyhow::Result<Self> {
+        Ok(Self {
+            api_port: ports.pick()?,
+            libp2p_port: ports.pick()?,
             staking_key: PubKey::generated_from_seed_indexed([0; 32], i).1,
             state_key: StateKeyPair::generate_from_seed_indexed([0; 32], i),
             is_da,
-        }
+        })
     }
 }
 
@@ -679,10 +673,11 @@ impl TestNetwork {
 
         let node_params = (0..da_nodes + regular_nodes)
             .map(|i| NodeParams::new(&mut ports, i as u64, i < da_nodes))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
 
-        let orchestrator_port = ports.pick();
-        let builder_port = ports.pick();
+        let orchestrator_port = ports.pick().unwrap();
+        let builder_port = ports.pick().unwrap();
         let orchestrator_task = Some(start_orchestrator(
             orchestrator_port,
             &node_params,
@@ -690,7 +685,7 @@ impl TestNetwork {
         ));
 
         let cdn_dir = tmp.path().join("cdn");
-        let cdn_port = ports.pick();
+        let cdn_port = ports.pick().unwrap();
         let broker_task = if cdn {
             Some(start_broker(&mut ports, &cdn_dir).await)
         } else {
@@ -702,7 +697,7 @@ impl TestNetwork {
             None
         };
 
-        let anvil_port = ports.pick();
+        let anvil_port = ports.pick().unwrap();
         let anvil = Anvil::new()
             .args(["--slots-in-an-epoch", "1"])
             .port(anvil_port)
@@ -1178,8 +1173,8 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
 
 async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
     let (public_key, private_key) = PubKey::generated_from_seed_indexed([0; 32], 1337);
-    let public_port = ports.pick();
-    let private_port = ports.pick();
+    let public_port = ports.pick().unwrap();
+    let private_port = ports.pick().unwrap();
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
         public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
         public_bind_endpoint: format!("127.0.0.1:{public_port}"),
@@ -1240,27 +1235,18 @@ async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
 /// batch, before starting the services that listen on them, so that the first port selected is not
 /// "in use" when we select later ports in the same batch.
 ///
-/// This object keeps track not only of ports in use by the OS, but also ports it has already given
-/// out, for which there may not yet be any listener. Thus, it is safe to use this to allocate many
-/// ports at once, without a collision.
+/// This object atomically binds to ports and keeps them alive, ensuring no collisions.
 #[derive(Debug, Default)]
 struct PortPicker {
-    allocated: HashSet<u16>,
+    listeners: Vec<TcpListener>,
 }
 
 impl PortPicker {
-    fn pick(&mut self) -> u16 {
-        loop {
-            let port = pick_unused_port().unwrap();
-            if self.allocated.insert(port) {
-                break port;
-            }
-            tracing::warn!(
-                port,
-                "picked port which is already allocated, will try again. If this error persists, \
-                 try reducing the number of ports being used."
-            );
-        }
+    fn pick(&mut self) -> anyhow::Result<u16> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        self.listeners.push(listener);
+        Ok(port)
     }
 }
 

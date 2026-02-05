@@ -316,7 +316,9 @@ where
         let mut builder_tasks = Vec::new();
         let mut builder_urls = Vec::new();
         for metadata in &self.launcher.metadata.builders {
-            let builder_port = portpicker::pick_unused_port().expect("No free ports");
+            let builder_port = hotshot_types::utils::bind_tcp_port()
+                .expect("Failed to bind to TCP port")
+                .1;
             let builder_url =
                 Url::parse(&format!("http://localhost:{builder_port}")).expect("Invalid URL");
             let builder_task = B::start(

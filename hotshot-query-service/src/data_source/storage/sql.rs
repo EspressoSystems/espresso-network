@@ -1148,7 +1148,7 @@ pub mod testing {
         time::Duration,
     };
 
-    use portpicker::pick_unused_port;
+    use hotshot_types::utils::bind_tcp_port;
     use refinery::Migration;
     use tokio::{net::TcpStream, time::timeout};
 
@@ -1207,7 +1207,7 @@ pub mod testing {
             // "free" port on that system.
             // We *might* be able to get away with this as any remote docker
             // host should hopefully be pretty open with it's port space.
-            let port = pick_unused_port().unwrap();
+            let (_listener, port) = bind_tcp_port().unwrap();
             let host = docker_hostname.unwrap_or("localhost".to_string());
 
             let mut cmd = Command::new("docker");

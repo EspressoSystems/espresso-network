@@ -770,9 +770,9 @@ pub mod testing {
             node_implementation::ConsensusTime as _, signature_key::BuilderSignatureKey,
             EncodeBytes,
         },
+        utils::bind_tcp_port,
         HotShotConfig, PeerConfig,
     };
-    use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
@@ -822,7 +822,10 @@ pub mod testing {
         max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = port.unwrap_or_else(|| {
+            let (_listener, port) = bind_tcp_port().expect("Failed to bind TCP port");
+            port
+        });
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -867,7 +870,10 @@ pub mod testing {
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = port.unwrap_or_else(|| {
+            let (_listener, port) = bind_tcp_port().expect("Failed to bind TCP port");
+            port
+        });
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -1115,11 +1121,10 @@ pub mod testing {
                 da_staked_committee_size: num_nodes,
                 view_sync_timeout: Duration::from_secs(1),
                 data_request_delay: Duration::from_secs(1),
-                builder_urls: vec1::vec1![Url::parse(&format!(
-                    "http://127.0.0.1:{}",
-                    pick_unused_port().unwrap()
-                ))
-                .unwrap()],
+                builder_urls: {
+                    let (_listener, port) = bind_tcp_port().unwrap();
+                    vec1::vec1![Url::parse(&format!("http://127.0.0.1:{port}")).unwrap()]
+                },
                 builder_timeout: Duration::from_secs(1),
                 start_threshold: (
                     known_nodes_with_stake.clone().len() as u64,

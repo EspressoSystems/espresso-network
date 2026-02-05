@@ -47,22 +47,29 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
     let a = Keypair::generate().unwrap();
     let b = Keypair::generate().unwrap();
 
+    let listener_a =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("Could not bind to TCP port");
+    let port_a = listener_a
+        .local_addr()
+        .expect("Could not get local addr")
+        .port();
+    let listener_b =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("Could not bind to TCP port");
+    let port_b = listener_b
+        .local_addr()
+        .expect("Could not get local addr")
+        .port();
+
     let all: [(u8, PublicKey, Address); 2] = [
         (
             A,
             a.public_key(),
-            Address::from((
-                Ipv4Addr::from([127, 0, 0, 1]),
-                portpicker::pick_unused_port().unwrap(),
-            )),
+            Address::from((Ipv4Addr::from([127, 0, 0, 1]), port_a)),
         ),
         (
             B,
             b.public_key(),
-            Address::from((
-                Ipv4Addr::from([127, 0, 0, 1]),
-                portpicker::pick_unused_port().unwrap(),
-            )),
+            Address::from((Ipv4Addr::from([127, 0, 0, 1]), port_b)),
         ),
     ];
 

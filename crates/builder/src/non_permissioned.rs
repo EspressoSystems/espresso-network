@@ -246,7 +246,6 @@ impl BuilderConfig {
 mod test {
     use espresso_types::MockSequencerVersions;
     use futures::StreamExt;
-    use portpicker::pick_unused_port;
     use sequencer::{
         api::{
             options::HotshotEvents,
@@ -267,11 +266,13 @@ mod test {
     /// Builder subscrived to this api, and server the hotshot client request and the private mempool tx submission
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_permissioned_builder() {
-        let query_port = pick_unused_port().expect("No ports free");
+        let (_query_listener, query_port) =
+            hotshot_types::utils::bind_tcp_port().expect("Failed to bind port");
 
         let event_service_url: Url = format!("http://localhost:{query_port}").parse().unwrap();
 
-        let builder_port = pick_unused_port().expect("No ports free");
+        let (_builder_listener, builder_port) =
+            hotshot_types::utils::bind_tcp_port().expect("Failed to bind port");
         let builder_api_url: Url = format!("http://localhost:{builder_port}").parse().unwrap();
 
         let network_config = TestConfigBuilder::default().build();

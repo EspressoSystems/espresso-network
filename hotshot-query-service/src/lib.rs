@@ -597,8 +597,9 @@ mod test {
     use async_trait::async_trait;
     use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
     use futures::future::FutureExt;
-    use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
-    use portpicker::pick_unused_port;
+    use hotshot_types::{
+        data::VidShare, simple_certificate::QuorumCertificate2, utils::bind_tcp_port,
+    };
     use surf_disco::Client;
     use tempfile::TempDir;
     use testing::mocks::MockBase;
@@ -936,7 +937,7 @@ mod test {
         })
         .unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let (_listener, port) = bind_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),

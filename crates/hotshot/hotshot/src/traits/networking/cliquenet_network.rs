@@ -160,7 +160,8 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
             let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
             let public = T::SignatureKey::from_private(&secret);
             let kpair = derive_keypair::<<T as NodeType>::SignatureKey>(&secret);
-            let port = portpicker::pick_unused_port().expect("an unused port is available");
+            let (_listener, port) =
+                hotshot_types::utils::bind_tcp_port().expect("Could not bind to TCP port");
             let addr = Address::Inet(Ipv4Addr::LOCALHOST.into(), port);
 
             parties.push((kpair, public, addr));

@@ -203,7 +203,7 @@ mod test {
         availability::{BlockQueryData, LeafQueryData},
         Resolvable,
     };
-    use portpicker::pick_unused_port;
+    use hotshot_types::utils;
     use pretty_assertions::assert_eq;
     use rand::RngCore;
     use sequencer::{
@@ -226,7 +226,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_block_height() {
-        let port = pick_unused_port().expect("No ports free");
+        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -268,7 +268,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_leaf_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -352,7 +352,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -437,7 +437,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_payload_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -486,7 +486,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_namespace_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let (_listener, port) = utils::bind_tcp_port().expect("Failed to bind TCP port");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();

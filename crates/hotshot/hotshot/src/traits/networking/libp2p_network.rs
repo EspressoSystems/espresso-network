@@ -224,8 +224,9 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     node_id < num_bootstrap as u64
                 );
 
-                // pick a free, unused UDP port for testing
-                let port = portpicker::pick_unused_port().expect("Could not find an open port");
+                // Atomically bind to an available UDP port for testing
+                let (_socket, port) =
+                    hotshot_types::utils::bind_udp_port().expect("Could not bind to UDP port");
 
                 let addr =
                     Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();

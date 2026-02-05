@@ -149,12 +149,11 @@ mod tests {
             node_implementation::{ConsensusTime, Versions},
             EncodeBytes,
         },
-        utils::EpochTransitionIndicator,
+        utils::{bind_tcp_port, EpochTransitionIndicator},
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
     };
     use indexmap::IndexMap;
-    use portpicker::pick_unused_port;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tide_disco::error::ServerError;
@@ -1395,7 +1394,8 @@ mod tests {
 
         let anvil_provider = network_config.anvil().unwrap();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let (_listener, query_service_port) =
+            bind_tcp_port().expect("Failed to bind TCP port for query service");
         let query_api_options = Options::with_port(query_service_port);
 
         const NODE_COUNT: usize = 2;

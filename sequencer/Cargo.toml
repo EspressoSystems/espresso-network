@@ -85,7 +85,6 @@ libp2p = { workspace = true }
 moka = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"
-portpicker = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }

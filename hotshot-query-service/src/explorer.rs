@@ -398,7 +398,7 @@ mod test {
     use std::{cmp::min, time::Duration};
 
     use futures::StreamExt;
-    use portpicker::pick_unused_port;
+    use hotshot_types::utils::bind_tcp_port;
     use surf_disco::Client;
     use tide_disco::App;
 
@@ -867,7 +867,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let (_listener, port) = bind_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "explorer",

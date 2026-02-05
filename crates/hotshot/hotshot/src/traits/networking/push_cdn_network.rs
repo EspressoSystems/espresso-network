@@ -339,20 +339,19 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             .to_string_lossy()
             .into_owned();
 
-        // Pick some unused public ports
-        let public_address_1 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
-        let public_address_2 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
+        // Atomically bind to unused public ports
+        let (_listener_1, public_port_1) =
+            hotshot_types::utils::bind_tcp_port().expect("could not bind to TCP port");
+        let (_listener_2, public_port_2) =
+            hotshot_types::utils::bind_tcp_port().expect("could not bind to TCP port");
+        let public_address_1 = format!("127.0.0.1:{public_port_1}");
+        let public_address_2 = format!("127.0.0.1:{public_port_2}");
 
         // 2 brokers
         for i in 0..2 {
-            // Get the ports to bind to
-            let private_port = portpicker::pick_unused_port().expect("could not find an open port");
+            // Atomically bind to a private port
+            let (_private_listener, private_port) =
+                hotshot_types::utils::bind_tcp_port().expect("could not bind to TCP port");
 
             // Extrapolate addresses
             let private_address = format!("127.0.0.1:{private_port}");
@@ -406,8 +405,9 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             });
         }
 
-        // Get the port to use for the marshal
-        let marshal_port = portpicker::pick_unused_port().expect("could not find an open port");
+        // Atomically bind to an available port for the marshal
+        let (_marshal_listener, marshal_port) =
+            hotshot_types::utils::bind_tcp_port().expect("could not bind to TCP port");
 
         // Configure the marshal
         let marshal_endpoint = format!("127.0.0.1:{marshal_port}");

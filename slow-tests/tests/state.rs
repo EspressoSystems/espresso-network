@@ -24,7 +24,6 @@ use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Node},
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
-use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         data_source::testing::TestableSequencerDataSource,
@@ -44,7 +43,8 @@ type MockSequencerVersions =
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
-    let port = pick_unused_port().expect("No ports free");
+    // Use port 0 to let the OS assign an available port
+    let port = 0;
 
     let storage = SqlDataSource::create_storage().await;
 

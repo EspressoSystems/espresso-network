@@ -1061,7 +1061,8 @@ where
 
     match args.builder_address {
         None => {
-            let port = portpicker::pick_unused_port().expect("Failed to pick an unused port");
+            let (_listener, port) =
+                hotshot_types::utils::bind_tcp_port().expect("Failed to bind to TCP port");
             advertise_urls = local_ip_address::list_afinet_netifas()
                 .expect("Couldn't get list of local IP addresses")
                 .into_iter()

@@ -9,7 +9,7 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::{Address, Bytes, U256},
-    providers::{Provider, ProviderBuilder, WalletProvider},
+    providers::{layers::AnvilLayer, Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
     signers::{
         k256::ecdsa::SigningKey,
@@ -35,10 +35,9 @@ use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2
 use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
 use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
-    utils::epoch_from_block_number,
+    utils::{bind_tcp_port, epoch_from_block_number},
 };
 use itertools::izip;
-use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         options,
@@ -279,12 +278,12 @@ async fn main() -> anyhow::Result<()> {
     logging.init();
 
     let mut anvil_statefile = NamedTempFile::new()?;
-    let (l1_url, anvil) = if let Some(url) = rpc_url {
-        (url, None)
+    let (l1_url, anvil, _anvil_layer) = if let Some(url) = rpc_url {
+        (url, None, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
-        let instance = Anvil::new()
-            .args([
+        let anvil_layer = AnvilLayer::from(
+            Anvil::new().args([
                 "--slots-in-an-epoch",
                 "0",
                 "--mnemonic",
@@ -300,14 +299,16 @@ async fn main() -> anyhow::Result<()> {
                     .context("Failed to convert path to string")?,
                 "--state-interval",
                 "1",
-            ])
-            .spawn();
-        let url = instance.endpoint_url();
+            ]),
+        );
+        let url = anvil_layer.endpoint_url();
         tracing::info!("l1 url: {}", url);
-        (url, Some(instance))
+        // Keep the anvil instance from the layer for state dumping
+        let instance = anvil_layer.instance().clone();
+        (url, Some(instance), Some(anvil_layer))
     };
 
-    let relay_server_port = pick_unused_port().unwrap();
+    let (_listener, relay_server_port) = bind_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
@@ -549,8 +550,8 @@ async fn main() -> anyhow::Result<()> {
         client_states.provider_urls.insert(chain_id, url.clone());
         let lc_proxy_addr = client_states.lc_proxy_addr.get(&chain_id).unwrap();
 
-        // init the prover config
-        let prover_port = prover_port.unwrap_or_else(|| pick_unused_port().unwrap());
+        // init the prover config - use port 0 to let the OS assign an available port
+        let prover_port = prover_port.unwrap_or(0);
         prover_ports.push(prover_port);
         let l1_rpc_client = RpcClient::new_http(url);
         let prover_config = StateProverConfig {

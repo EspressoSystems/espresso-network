@@ -25,6 +25,7 @@ use hotshot_task_impls::builder::v0_1::BuilderClient;
 use hotshot_types::{
     data::ViewNumber,
     traits::node_implementation::{ConsensusTime, NodeType},
+    utils,
 };
 use tokio::spawn;
 use url::Url;
@@ -73,7 +74,7 @@ impl TestServiceWrapper {
         global_state: Arc<GlobalState<TestTypes>>,
         event_stream_sender: Sender<Event<TestTypes>>,
     ) -> Self {
-        let port = portpicker::pick_unused_port().unwrap();
+        let (_listener, port) = utils::bind_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
         let app = Arc::clone(&global_state).into_app().unwrap();
         spawn(app.serve(url.clone(), StaticVersion::<0, 1> {}));
