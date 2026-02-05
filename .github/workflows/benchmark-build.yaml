@@ -20,7 +20,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -39,7 +39,7 @@ jobs:
           cargo build --locked --release --features benchmarking,testing,embedded-db --bin espresso-dev-node
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: x86_64-unknown-linux-gnu-services-bench
           path: |
@@ -66,7 +66,7 @@ jobs:
     runs-on: buildjet-16vcpu-ubuntu-2204-arm
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -83,7 +83,7 @@ jobs:
           cargo build --locked --release --features benchmarking,testing,embedded-db --bin espresso-dev-node
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: aarch64-unknown-linux-gnu-services-bench
           path: |
@@ -125,16 +125,16 @@ jobs:
       bridge-tag: ${{ steps.bridge.outputs.tags }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: x86_64-unknown-linux-gnu-services-bench
           path: target/amd64/release
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: aarch64-unknown-linux-gnu-services-bench
           path: target/arm64/release
@@ -378,7 +378,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Pull docker images
         run: |
