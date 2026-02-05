@@ -6,7 +6,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 pub use cliquenet::{Address, PublicKey};
 use cliquenet::{Keypair, NetConf, Retry, SecretKey};
-
 use futures::future::ready;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
@@ -24,6 +23,7 @@ use hotshot_types::{
     },
     BoxSyncFuture,
 };
+
 #[derive(Clone)]
 pub struct Cliquenet<T: NodeType> {
     net: Retry<T::SignatureKey>,

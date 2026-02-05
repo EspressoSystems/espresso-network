@@ -49,7 +49,7 @@ light-client = { path = ".", features = ["testing"] }
 
 portpicker = { workspace = true }
 pretty_assertions = { workspace = true }
-sequencer = { path = "../sequencer", features = ["testing"] }
+sequencer = { path = "../sequencer", default-features = false, features = ["testing"] }
 test-log = { workspace = true }
 
 [lints]

@@ -8,10 +8,10 @@ description = "A fully connected mesh network"
 metrics = ["dep:hotshot-types"]
 
 [dependencies]
-bon = { workspace = true }
-bytes = { workspace = true }
 bimap = "0.6.3"
+bon = { workspace = true }
 bs58 = "0.5.1"
+bytes = { workspace = true }
 ed25519-compact = "2.2.0"
 nohash-hasher = { workspace = true }
 parking_lot = { workspace = true }
@@ -22,6 +22,7 @@ snow = { version = "0.10.0", features = ["ring-accelerated"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+
 # optional:
 hotshot-types = { workspace = true, optional = true }
 
