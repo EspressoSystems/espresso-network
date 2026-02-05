@@ -237,10 +237,10 @@ struct NodeParams {
 }
 
 impl NodeParams {
-    fn new(ports: &mut PortPicker, i: u64, is_da: bool) -> anyhow::Result<Self> {
+    fn new(i: u64, is_da: bool) -> anyhow::Result<Self> {
         Ok(Self {
-            api_port: ports.pick()?,
-            libp2p_port: ports.pick()?,
+            api_port: reserve_tcp_port()?,
+            libp2p_port: reserve_tcp_port()?,
             staking_key: PubKey::generated_from_seed_indexed([0; 32], i).1,
             state_key: StateKeyPair::generate_from_seed_indexed([0; 32], i),
             is_da,
@@ -642,8 +642,6 @@ impl Drop for TestNetwork {
 
 impl TestNetwork {
     async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
-        let mut ports = PortPicker;
-
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
@@ -673,12 +671,12 @@ impl TestNetwork {
         };
 
         let node_params = (0..da_nodes + regular_nodes)
-            .map(|i| NodeParams::new(&mut ports, i as u64, i < da_nodes))
+            .map(|i| NodeParams::new(i as u64, i < da_nodes))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
-        let orchestrator_port = ports.pick().unwrap();
-        let builder_port = ports.pick().unwrap();
+        let orchestrator_port = reserve_tcp_port().unwrap();
+        let builder_port = reserve_tcp_port().unwrap();
         let orchestrator_task = Some(start_orchestrator(
             orchestrator_port,
             &node_params,
@@ -686,9 +684,9 @@ impl TestNetwork {
         ));
 
         let cdn_dir = tmp.path().join("cdn");
-        let cdn_port = ports.pick().unwrap();
+        let cdn_port = reserve_tcp_port().unwrap();
         let broker_task = if cdn {
-            Some(start_broker(&mut ports, &cdn_dir).await)
+            Some(start_broker(&cdn_dir).await)
         } else {
             None
         };
@@ -698,7 +696,7 @@ impl TestNetwork {
             None
         };
 
-        let anvil_port = ports.pick().unwrap();
+        let anvil_port = reserve_tcp_port().unwrap();
         let anvil = Anvil::new()
             .args(["--slots-in-an-epoch", "1"])
             .port(anvil_port)
@@ -1172,10 +1170,10 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
     })
 }
 
-async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
+async fn start_broker(dir: &Path) -> JoinHandle<()> {
     let (public_key, private_key) = PubKey::generated_from_seed_indexed([0; 32], 1337);
-    let public_port = ports.pick().unwrap();
-    let private_port = ports.pick().unwrap();
+    let public_port = reserve_tcp_port().unwrap();
+    let private_port = reserve_tcp_port().unwrap();
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
         public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
         public_bind_endpoint: format!("127.0.0.1:{public_port}"),
@@ -1226,24 +1224,6 @@ async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
             Err(err) => tracing::error!("marshal failed: {err:#}"),
         }
     })
-}
-
-/// Allocator for unused ports.
-///
-/// While portpicker is able to pick ports that are currently unused by the OS, its allocation is
-/// random, and it may return the same port twice if that port is still unused by the OS the second
-/// time. This test suite allocates many ports, and it is often convenient to allocate many in a
-/// batch, before starting the services that listen on them, so that the first port selected is not
-/// "in use" when we select later ports in the same batch.
-///
-/// This object reserves ports using TIME_WAIT to prevent reuse.
-#[derive(Debug)]
-struct PortPicker;
-
-impl PortPicker {
-    fn pick(&mut self) -> anyhow::Result<u16> {
-        Ok(reserve_tcp_port()?)
-    }
 }
 
 fn builder_key_pair() -> EthKeyPair {
