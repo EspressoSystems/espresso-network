@@ -13,14 +13,12 @@ clap = { workspace = true }
 csv = "1"
 futures = { workspace = true }
 hotshot-types = { workspace = true }
-itertools = { workspace = true }
-libp2p-identity = { workspace = true }
-multiaddr = { workspace = true }
 serde = { workspace = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
+itertools = "0.12"
 tracing = { workspace = true }
 vbs = { workspace = true }
 

@@ -5569,6 +5569,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "sha2 0.10.9",
+ "tagged-base64",
  "time 0.3.44",
  "tokio",
  "tracing",
@@ -5804,41 +5805,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-examples"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-lock 3.4.1",
- "async-trait",
- "cdn-broker",
- "cdn-marshal",
- "chrono",
- "clap 4.5.53",
- "espresso-types",
- "futures",
- "hotshot",
- "hotshot-example-types",
- "hotshot-libp2p-networking",
- "hotshot-orchestrator",
- "hotshot-testing",
- "hotshot-types",
- "local-ip-address",
- "portpicker",
- "rand 0.8.5",
- "reqwest",
- "sequencer",
- "serde",
- "sha2 0.10.9",
- "surf-disco",
- "time 0.3.44",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber 0.3.22",
- "url",
-]
-
-[[package]]
 name = "hotshot-libp2p-networking"
 version = "0.1.0"
 dependencies = [
@@ -5892,8 +5858,6 @@ dependencies = [
  "futures",
  "hotshot-types",
  "itertools 0.12.1",
- "libp2p-identity",
- "multiaddr",
  "serde",
  "surf-disco",
  "tide-disco",

@@ -10,7 +10,7 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CombinedImpl, EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, CliquenetImpl,
+        CombinedImpl, EpochsTestVersions, MemoryImpl, PushCdnImpl, CliquenetImpl,
         TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestVersions,
     },
     state_types::TestTypes,
@@ -36,7 +36,7 @@ use hotshot_types::{
 // Test that a good leader can succeed in the view directly after view sync
 cross_tests!(
     TestName: test_with_failures_2,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
     Versions: [TestVersions],
     Ignore: false,
@@ -73,7 +73,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_with_double_leader_failures,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestConsecutiveLeaderTypes],
     Versions: [TestVersions],
     Ignore: false,

@@ -9,7 +9,7 @@ use std::{
 };
 
 use hotshot::traits::{
-    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
+    implementations::{Cliquenet, CombinedNetworks, MemoryNetwork, PushCdnNetwork},
     NodeImplementation,
 };
 use hotshot_types::{
@@ -286,10 +286,6 @@ pub struct PushCdnImpl;
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct MemoryImpl;
 
-/// Libp2p network implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct Libp2pImpl;
-
 /// Cliquenet network implementation
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct CliquenetImpl;
@@ -314,11 +310,6 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for MemoryImpl {
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for CombinedImpl {
     type Network = CombinedNetworks<TYPES>;
-    type Storage = TestStorage<TYPES>;
-}
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
-    type Network = Libp2pNetwork<TYPES>;
     type Storage = TestStorage<TYPES>;
 }
 

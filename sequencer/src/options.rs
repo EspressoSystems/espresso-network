@@ -6,6 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Formatter},
     iter::once,
+    net::SocketAddr,
     path::PathBuf,
     time::Duration,
 };
@@ -16,7 +17,6 @@ use derivative::Derivative;
 use espresso_types::{parse_duration, BackoffParams, L1ClientOptions};
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 use jf_signature::{bls_over_bn254, schnorr};
-use libp2p::Multiaddr;
 use sequencer_utils::logging;
 use tagged_base64::TaggedBase64;
 use url::Url;
@@ -218,27 +218,29 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_PUBLIC_API_URL")]
     pub public_api_url: Option<Url>,
 
-    /// The address we advertise to other nodes as being a Libp2p endpoint.
-    /// Should be supplied in `host:port` form.
+    /// The address to send to other Cliquenet nodes to contact us
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS",
+        env = "ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS",
+        default_value = "0.0.0.0:1769"
+    )]
+    pub cliquenet_bind_address: SocketAddr,
+
+    /// The address to send to other Cliquenet nodes to contact us
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_CLIQUENET_ADVERTISE_ADDRESS",
         default_value = "localhost:1769"
     )]
-    pub libp2p_advertise_address: String,
+    pub cliquenet_advertise_address: SocketAddr,
 
-    /// A comma-separated list of Libp2p multiaddresses to use as bootstrap
-    /// nodes.
-    ///
-    /// Overrides those loaded from the `HotShot` config.
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_BOOTSTRAP_NODES",
-        value_delimiter = ',',
-        num_args = 1..
-    )]
-    pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
-
+    // #[clap(
+    //     long,
+    //     env = "ESPRESSO_SEQUENCER_CLIQUENET_PEERS",
+    //     value_delimiter = ',',
+    //     num_args = 1..
+    // )]
+    // pub cliquenet_peers: Vec<NodeAddress<BLSPubKey>>,
     /// The URL of the builders to use for submitting transactions
     #[clap(long, env = "ESPRESSO_SEQUENCER_BUILDER_URLS", value_delimiter = ',')]
     pub builder_urls: Vec<Url>,

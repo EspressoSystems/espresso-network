@@ -9,8 +9,9 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
-    UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, MetadataUriUpdated,
+    Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
+    ValidatorRegisteredV2,
 };
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
@@ -20,6 +21,7 @@ use jf_utils::to_bytes;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
+use url::Url;
 
 use super::L1Client;
 use crate::{
@@ -54,6 +56,8 @@ pub struct Validator<KEY: SignatureKey> {
     // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
     pub commission: u16,
     pub delegators: HashMap<Address, U256>,
+    /// The peer's metadata URI
+    pub metadata_uri: Option<Url>,
 }
 
 pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
@@ -146,6 +150,7 @@ pub enum StakeTableEvent {
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
     CommissionUpdate(CommissionUpdated),
+    MetadataUriUpdate(MetadataUriUpdated),
 }
 
 #[derive(Debug, Error)]
@@ -182,6 +187,8 @@ pub enum StakeTableError {
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
     EventSortingError(#[from] EventSortingError),
+    #[error("Invalid metadata URI: {0}")]
+    InvalidMetadataUri(#[from] url::ParseError),
 }
 
 #[derive(Debug, Error)]

@@ -53,6 +53,7 @@ rand = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 sha2 = { workspace = true }
 time = { workspace = true }
+tagged-base64 = { workspace = true }
 
 tokio = { workspace = true }
 tracing = { workspace = true }

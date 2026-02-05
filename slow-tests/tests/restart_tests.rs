@@ -39,7 +39,6 @@ use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_testing::{
@@ -50,7 +49,7 @@ use hotshot_types::{
     data::EpochNumber,
     event::{Event, EventType},
     light_client::StateKeyPair,
-    network::{Libp2pConfig, NetworkConfig},
+    network::{NetworkConfig},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
     PeerConfig,
@@ -1133,7 +1132,7 @@ impl TestNetwork {
     }
 }
 
-fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> JoinHandle<()> {
+fn start_orchestrator(port: u16, _nodes: &[NodeParams], builder_port: u16) -> JoinHandle<()> {
     // We don't run a builder in these tests, so use a very short timeout before nodes decide to
     // build an empty block on their own.
     let builder_timeout = Duration::from_millis(100);
@@ -1141,26 +1140,25 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
     // timeout.
     let view_timeout = Duration::from_secs(2);
 
-    let num_nodes = nodes.len();
-    let bootstrap_nodes = nodes
-        .iter()
-        .map(|node| {
-            let port = node.libp2p_port;
-            let peer_id = derive_libp2p_peer_id::<PubKey>(&node.staking_key).unwrap();
-            let addr = format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
-                .parse()
-                .unwrap();
-            (peer_id, addr)
-        })
-        .collect();
+    // let num_nodes = nodes.len();
+    // let bootstrap_nodes = nodes
+    //     .iter()
+    //     .map(|node| {
+    //         let port = node.libp2p_port;
+    //         let addr = format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
+    //             .parse()
+    //             .unwrap();
+    //         (peer_id, addr)
+    //     })
+    //     .collect();
 
     let mut config = NetworkConfig::<SeqTypes> {
         indexed_da: false,
-        libp2p_config: Some(Libp2pConfig { bootstrap_nodes }),
+        cliquenet_peers: Vec::new(),
         ..Default::default()
     };
-    config.config.num_nodes_with_stake = num_nodes.try_into().unwrap();
-    config.config.da_staked_committee_size = num_nodes;
+    // config.config.num_nodes_with_stake = num_nodes.try_into().unwrap();
+    // config.config.da_staked_committee_size = num_nodes;
     config.config.known_nodes_with_stake = vec![];
     config.config.known_da_nodes = vec![];
     config.config.next_view_timeout = view_timeout.as_millis() as u64;

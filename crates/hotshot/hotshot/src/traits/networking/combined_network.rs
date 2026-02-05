@@ -45,7 +45,7 @@ use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
 use tracing::{debug, info, warn};
 
 use super::{push_cdn_network::PushCdnNetwork, NetworkError};
-use crate::traits::implementations::Libp2pNetwork;
+use crate::traits::implementations::Cliquenet;
 
 /// Thread-safe ref counted lock to a map of channels to the delayed tasks
 type DelayedTasksChannelsMap = Arc<RwLock<BTreeMap<u64, (Sender<()>, InactiveReceiver<()>)>>>;
@@ -86,7 +86,7 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
     #[must_use]
     pub fn new(
         primary_network: PushCdnNetwork<TYPES::SignatureKey>,
-        secondary_network: Libp2pNetwork<TYPES>,
+        secondary_network: Cliquenet<TYPES>,
         delay_duration: Option<Duration>,
     ) -> Self {
         // Create networks from the ones passed in
@@ -116,7 +116,7 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
 
     /// Get a ref to the backup network
     #[must_use]
-    pub fn secondary(&self) -> &Libp2pNetwork<TYPES> {
+    pub fn secondary(&self) -> &Cliquenet<TYPES> {
         &self.networks.1
     }
 
@@ -243,7 +243,7 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
 #[derive(Clone)]
 pub struct UnderlyingCombinedNetworks<TYPES: NodeType>(
     pub PushCdnNetwork<TYPES::SignatureKey>,
-    pub Libp2pNetwork<TYPES>,
+    pub Cliquenet<TYPES>,
 );
 
 #[cfg(feature = "hotshot-testing")]
@@ -265,7 +265,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 None,
                 Duration::default(),
             ),
-            <Libp2pNetwork<TYPES> as TestableNetworkingImplementation<TYPES>>::generator(
+            <Cliquenet<TYPES> as TestableNetworkingImplementation<TYPES>>::generator(
                 expected_node_count,
                 num_bootstrap,
                 network_id,
@@ -289,7 +289,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 // Combine the two
                 let underlying_combined = UnderlyingCombinedNetworks(
                     cdn.clone(),
-                    Arc::<Libp2pNetwork<TYPES>>::unwrap_or_clone(p2p),
+                    Arc::<Cliquenet<TYPES>>::unwrap_or_clone(p2p),
                 );
 
                 // Create a new message deduplication cache
