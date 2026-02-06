@@ -13,7 +13,7 @@ ignored = ["vergen", "include_dir", "hotshot_builder_api"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
+default = ["fee", "drb-and-header"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -24,9 +24,7 @@ testing = [
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 fee = []
-pos = []
 drb-and-header = []
-da-upgrade = []
 
 [dependencies]
 

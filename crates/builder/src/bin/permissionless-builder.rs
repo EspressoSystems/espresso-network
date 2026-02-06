@@ -115,46 +115,6 @@ async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        #[cfg(all(feature = "fee", feature = "da-upgrade"))]
-        (espresso_types::FeeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::DaUpgradeVersion>>(
-                genesis, opt,
-            )
-            .await
-        },
-        #[cfg(all(feature = "drb-and-header", feature = "da-upgrade"))]
-        (
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-            espresso_types::DaUpgradeVersion::VERSION,
-        ) => {
-            run::<
-                SequencerVersions<
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                    espresso_types::DaUpgradeVersion,
-                >,
-            >(genesis, opt)
-            .await
-        },
-        #[cfg(feature = "da-upgrade")]
-        (espresso_types::DaUpgradeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
-            run::<
-                SequencerVersions<
-                    espresso_types::DaUpgradeVersion,
-                    espresso_types::DaUpgradeVersion,
-                >,
-            >(genesis, opt)
-            .await
-        },
-        #[cfg(all(feature = "pos", feature = "drb-and-header"))]
-        (
-            espresso_types::EpochVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
-                genesis, opt,
-            )
-            .await
-        },
         #[cfg(all(feature = "fee", feature = "drb-and-header"))]
         (
             espresso_types::FeeVersion::VERSION,
@@ -169,6 +129,19 @@ async fn main() -> anyhow::Result<()> {
             .await
         },
         #[cfg(feature = "drb-and-header")]
+        (
+            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
+            espresso_types::Vid2UpgradeVersion::VERSION,
+        ) => {
+            run::<
+                SequencerVersions<
+                    espresso_types::DrbAndHeaderUpgradeVersion,
+                    espresso_types::Vid2UpgradeVersion,
+                >,
+            >(genesis, opt)
+            .await
+        },
+        #[cfg(feature = "drb-and-header")]
         (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => {
             run::<
                 SequencerVersions<
@@ -176,21 +149,6 @@ async fn main() -> anyhow::Result<()> {
                     espresso_types::DrbAndHeaderUpgradeVersion,
                 >,
             >(genesis, opt)
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "pos"))]
-        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
-                genesis, opt,
-            )
-            .await
-        },
-        #[cfg(feature = "pos")]
-        (espresso_types::EpochVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::EpochVersion, espresso_types::EpochVersion>>(
-                genesis, opt,
-                // Specifying V0_0 disables upgrades
-            )
             .await
         },
         #[cfg(feature = "fee")]
