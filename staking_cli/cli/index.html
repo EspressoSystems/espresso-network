@@ -165,11 +165,6 @@ Options:
 
           [env: SKIP_SIMULATION=]
 
-      --skip-metadata-validation
-          Skip metadata URI validation (fetch and schema check)
-
-          [env: SKIP_METADATA_VALIDATION=]
-
       --output &lt;OUTPUT&gt;
           Output file path. If not specified, outputs to stdout
 
@@ -365,7 +360,15 @@ to your wallet by running</p>
 <ol start="3">
 <li><strong>No metadata:</strong> <code>--no-metadata-uri</code></li>
 </ol>
-<p>Use <code>--skip-metadata-validation</code> if your endpoint isn’t ready yet. URL cannot exceed 2048 bytes.</p>
+<p><strong>Skipping validation:</strong> If your metadata endpoint isn’t ready yet, use <code>--skip-metadata-validation</code> after the
+<code>--metadata-uri</code> argument:</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli register-validator \
+    --consensus-private-key BLS_SIGNING_KEY~... \
+    --state-private-key SCHNORR_SIGNING_KEY~... \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --skip-metadata-validation</code></pre></div>
+<p>URL cannot exceed 2048 bytes.</p>
 <p>The CLI automatically detects the format (JSON or OpenMetrics) by examining the content. This works with any hosting
 service, including GitHub raw URLs.</p>
 <p>Preview what will be extracted before registering:</p>
@@ -399,6 +402,9 @@ service, including GitHub raw URLs.</p>
 <p>Note: The minimum time interval and maximum increase are contract parameters that may be adjusted by governance.</p>
 <h4 id="updating-your-metadata-url"><a class="doc-anchor" href="#updating-your-metadata-url">§</a>Updating your metadata URL</h4><div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
     --consensus-public-key BLS_VER_KEY~...</code></pre></div>
+<p>To skip validation (if endpoint isn’t ready):</p>
+<div class="example-wrap"><pre class="language-bash"><code>staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
+    --skip-metadata-validation</code></pre></div>
 <p>See <a href="#validator-metadata">Validator Metadata</a> for format options. Use <code>--no-metadata-uri</code> to clear.</p>
 <h5 id="metadata-json-schema-for-custom-hosting"><a class="doc-anchor" href="#metadata-json-schema-for-custom-hosting">§</a>Metadata JSON Schema (for custom hosting)</h5>
 <p>If hosting a custom JSON file instead of using your node’s metrics endpoint:</p>
