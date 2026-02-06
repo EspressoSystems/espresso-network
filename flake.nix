@@ -67,7 +67,7 @@
         export CARGO_TARGET_DIR="$my_pwd/target/nix"
 
         # Add rust binaries to PATH
-        export PATH="$CARGO_TARGET_DIR/debug:$PATH"
+        export PATH="$CARGO_TARGET_DIR/release:$PATH"
       '';
 
       overlays = [

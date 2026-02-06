@@ -169,6 +169,14 @@ where
         message: &GenericArray<<A>::MessageUnit, Self::MessageLength>,
         qc: &Self::Qc,
     ) -> Result<Vec<<A>::VerificationKey>, SignatureError> {
+        Self::check(qc_vp, message, qc)?;
+        Self::signers(qc_vp, qc)
+    }
+
+    fn signers(
+        qc_vp: &Self::QcVerifierParams<'_>,
+        qc: &Self::Qc,
+    ) -> Result<Vec<<A>::VerificationKey>, SignatureError> {
         let (_sig, signers) = qc;
         if signers.len() != qc_vp.stake_entries.len() {
             return Err(SignatureError::ParameterError(format!(
@@ -177,8 +185,6 @@ where
                 qc_vp.stake_entries.len(),
             )));
         }
-
-        Self::check(qc_vp, message, qc)?;
 
         let signer_pks: Vec<_> = qc_vp
             .stake_entries
