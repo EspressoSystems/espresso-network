@@ -150,6 +150,10 @@ impl fmt::Display for MetadataUri {
 }
 
 /// Custom value parser for metadata URIs that enforces 2048 byte limit.
+///
+/// While HTTP specs don't mandate a URL length limit, most browsers and servers
+/// support at least 2048 characters. This practical limit ensures compatibility
+/// across different HTTP clients and servers.
 fn parse_metadata_url(s: &str) -> Result<Url, String> {
     let url = Url::parse(s).map_err(|e| e.to_string())?;
     if url.as_str().len() > 2048 {
@@ -192,8 +196,8 @@ impl TryFrom<MetadataUriArgs> for MetadataUri {
 
     fn try_from(args: MetadataUriArgs) -> Result<Self> {
         match args.metadata_uri {
-            Some(url) => Ok(MetadataUri(Some(url))),
-            None => Ok(MetadataUri::empty()),
+            Some(url) => Self::try_from(url),
+            None => Ok(Self::empty()),
         }
     }
 }

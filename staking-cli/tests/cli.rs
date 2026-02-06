@@ -8,7 +8,7 @@ use alloy::{
     signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
-use common::{base_cmd, Signer, TestSystemExt};
+use common::{base_cmd, MetadataCommand, Signer, TestSystemExt};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use predicates::{prelude::PredicateBooleanExt, str};
@@ -1248,32 +1248,18 @@ async fn test_cli_update_metadata_uri_skip_validation() -> Result<()> {
 }
 
 #[rstest::rstest]
-#[case::register("register-validator")]
-#[case::update("update-metadata-uri")]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
 #[test_log::test(tokio::test)]
 async fn test_cli_skip_metadata_validation_conflicts_with_no_metadata(
-    #[case] command: &str,
+    #[case] command: MetadataCommand,
 ) -> Result<()> {
-    let system = TestSystem::deploy().await?;
-
-    if command == "update-metadata-uri" {
-        system.register_validator().await?;
-    }
-
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg(command);
-
-    if command == "register-validator" {
-        cmd.arg("--consensus-private-key")
-            .arg(system.bls_private_key_str()?)
-            .arg("--state-private-key")
-            .arg(system.state_private_key_str()?)
-            .arg("--commission")
-            .arg("5.00");
-    }
-
     // --skip-metadata-validation requires --metadata-uri, so using it with --no-metadata-uri should fail
-    cmd.arg("--no-metadata-uri")
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--no-metadata-uri")
         .arg("--skip-metadata-validation")
         .assert()
         .failure()
@@ -1287,29 +1273,15 @@ async fn test_cli_skip_metadata_validation_conflicts_with_no_metadata(
 }
 
 #[rstest::rstest]
-#[case::register("register-validator")]
-#[case::update("update-metadata-uri")]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
 #[test_log::test(tokio::test)]
-async fn test_cli_metadata_uri_required(#[case] command: &str) -> Result<()> {
-    let system = TestSystem::deploy().await?;
-
-    if command == "update-metadata-uri" {
-        system.register_validator().await?;
-    }
-
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg(command);
-
-    if command == "register-validator" {
-        cmd.arg("--consensus-private-key")
-            .arg(system.bls_private_key_str()?)
-            .arg("--state-private-key")
-            .arg(system.state_private_key_str()?)
-            .arg("--commission")
-            .arg("5.00");
-    }
-
-    cmd.assert()
+async fn test_cli_metadata_uri_required(#[case] command: MetadataCommand) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .assert()
         .failure()
         .stderr(str::contains("required").and(str::contains("--metadata-uri")));
 
@@ -1317,29 +1289,17 @@ async fn test_cli_metadata_uri_required(#[case] command: &str) -> Result<()> {
 }
 
 #[rstest::rstest]
-#[case::register("register-validator")]
-#[case::update("update-metadata-uri")]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
 #[test_log::test(tokio::test)]
-async fn test_cli_metadata_uri_conflicts_with_no_metadata_uri(#[case] command: &str) -> Result<()> {
-    let system = TestSystem::deploy().await?;
-
-    if command == "update-metadata-uri" {
-        system.register_validator().await?;
-    }
-
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg(command);
-
-    if command == "register-validator" {
-        cmd.arg("--consensus-private-key")
-            .arg(system.bls_private_key_str()?)
-            .arg("--state-private-key")
-            .arg(system.state_private_key_str()?)
-            .arg("--commission")
-            .arg("5.00");
-    }
-
-    cmd.arg("--metadata-uri")
+async fn test_cli_metadata_uri_conflicts_with_no_metadata_uri(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--metadata-uri")
         .arg("https://example.com/metadata")
         .arg("--no-metadata-uri")
         .assert()
@@ -1354,32 +1314,18 @@ async fn test_cli_metadata_uri_conflicts_with_no_metadata_uri(#[case] command: &
 }
 
 #[rstest::rstest]
-#[case::register("register-validator")]
-#[case::update("update-metadata-uri")]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
 #[test_log::test(tokio::test)]
 async fn test_cli_skip_metadata_validation_requires_metadata_uri(
-    #[case] command: &str,
+    #[case] command: MetadataCommand,
 ) -> Result<()> {
-    let system = TestSystem::deploy().await?;
-
-    if command == "update-metadata-uri" {
-        system.register_validator().await?;
-    }
-
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg(command);
-
-    if command == "register-validator" {
-        cmd.arg("--consensus-private-key")
-            .arg(system.bls_private_key_str()?)
-            .arg("--state-private-key")
-            .arg(system.state_private_key_str()?)
-            .arg("--commission")
-            .arg("5.00");
-    }
-
     // --skip-metadata-validation without --metadata-uri should fail (requires it)
-    cmd.arg("--skip-metadata-validation")
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--skip-metadata-validation")
         .assert()
         .failure()
         .stderr(str::contains("required").and(str::contains("--metadata-uri")));
