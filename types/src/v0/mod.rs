@@ -14,6 +14,7 @@ pub mod config;
 mod header;
 mod impls;
 mod nsproof;
+pub mod reward_mt;
 pub mod sparse_mt;
 pub mod traits;
 mod txproof;

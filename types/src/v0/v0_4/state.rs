@@ -3,29 +3,17 @@ use std::collections::HashSet;
 use alloy::primitives::{Address, U256};
 use derive_more::{Display, From, Into};
 use hotshot_contract_adapter::reward::{RewardAuthData, RewardClaimInput};
-use jf_merkle_tree_compat::{
-    universal_merkle_tree::UniversalMerkleTree, MerkleTreeScheme, UniversalMerkleTreeScheme,
-};
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use serde::{Deserialize, Serialize};
 
 use super::FeeAccount;
-use crate::{
-    v0::sparse_mt::{Keccak256Hasher, KeccakNode},
-    v0_3::{RewardAccountV1, RewardAmount},
+use crate::v0_3::RewardAccountV1;
+
+pub use crate::v0::reward_mt::{
+    RewardMerkleCommitmentV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_ARITY,
+    REWARD_MERKLE_TREE_V2_HEIGHT,
 };
 
-pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160;
-pub const REWARD_MERKLE_TREE_V2_ARITY: usize = 2;
-
-pub type RewardMerkleCommitmentV2 = <RewardMerkleTreeV2 as MerkleTreeScheme>::Commitment;
-
-pub type RewardMerkleTreeV2 = UniversalMerkleTree<
-    RewardAmount,
-    Keccak256Hasher,
-    RewardAccountV2,
-    REWARD_MERKLE_TREE_V2_ARITY,
-    KeccakNode,
->;
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
 // This is the same as `RewardAccountV1` but the `ToTraversal` trait implementation

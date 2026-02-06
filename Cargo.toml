@@ -205,12 +205,12 @@ committable = { git = "https://github.com/EspressoSystems/commit.git", features 
 ] }
 derivative = "2.2"
 itertools = "0.12"
-jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.2", features = [
+jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.4", features = [
     "std",
     "parallel",
 ] }
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.2.0" }
-jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.2.0", features = [
+jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.3.1", features = [
     "std",
 ] }
 jf-pcs = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-pcs-v0.3.0", features = [

@@ -2268,7 +2268,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -3107,7 +3107,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -4516,16 +4516,19 @@ dependencies = [
  "portpicker",
  "pretty_assertions",
  "rand 0.8.5",
+ "rand_chacha 0.3.1",
  "rstest",
  "rstest_reuse",
  "sequencer-utils",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha2 0.10.9",
  "sha3",
  "static_assertions",
  "surf-disco",
  "tagged-base64",
+ "tempfile",
  "test-log",
  "thiserror 2.0.17",
  "tide-disco",
@@ -6848,8 +6851,8 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
 name = "jf-advz"
-version = "0.2.2"
-source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-advz-v0.2.2#a2ee55546807c7e6c41ee02945b8c722eeb29023"
+version = "0.2.4"
+source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-advz-v0.2.4#4b935eeb59e404b38f823694eb488c1377468f36"
 dependencies = [
  "anyhow",
  "ark-ec 0.5.0",
@@ -6921,8 +6924,8 @@ dependencies = [
 
 [[package]]
 name = "jf-merkle-tree-compat"
-version = "0.2.0"
-source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.2.0#a2ee55546807c7e6c41ee02945b8c722eeb29023"
+version = "0.3.1"
+source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.3.1#4b935eeb59e404b38f823694eb488c1377468f36"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -9421,7 +9424,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -11236,7 +11239,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
