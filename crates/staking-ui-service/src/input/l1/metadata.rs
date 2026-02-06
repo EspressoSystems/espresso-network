@@ -749,7 +749,11 @@ mod test {
 
         let routes = json_route.or(plain_route).or(metrics_route);
 
-        let (addr, server) = warp::serve(routes).bind_ephemeral(([127, 0, 0, 1], 0));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0u16))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = warp::serve(routes).incoming(listener).run();
         println!("server listening on http://{addr}");
         let server_handle = spawn(server);
 
