@@ -14,7 +14,7 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, Gauge, Metrics},
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
+        node_implementation::Versions,
         ValidatedState as _,
     },
     utils::{View, ViewInner},

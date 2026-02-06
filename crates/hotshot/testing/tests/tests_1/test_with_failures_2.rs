@@ -28,7 +28,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::TransmitType,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
     },
     vote::HasViewNumber,
 };

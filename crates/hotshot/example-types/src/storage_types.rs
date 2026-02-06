@@ -17,8 +17,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
-        VidCommitment, VidDisperseShare,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
+        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
@@ -27,27 +27,24 @@ use hotshot_types::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
-    traits::{
-        node_implementation::{ConsensusTime, NodeType},
-        storage::Storage,
-    },
+    traits::{node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
 };
 
 use crate::testable_delay::{DelayConfig, SupportedTraitTypesForAsyncDelay, TestableDelay};
 
 type VidShares<TYPES> = BTreeMap<
-    <TYPES as NodeType>::View,
+    ViewNumber,
     HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
 >;
 #[derive(Clone, Debug)]
 pub struct TestStorageState<TYPES: NodeType> {
     vids: VidShares<TYPES>,
-    das: HashMap<TYPES::View, Proposal<TYPES, DaProposal<TYPES>>>,
-    da2s: HashMap<TYPES::View, Proposal<TYPES, DaProposal2<TYPES>>>,
-    pub proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
-    pub proposals2: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
-    pub proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    das: HashMap<ViewNumber, Proposal<TYPES, DaProposal<TYPES>>>,
+    da2s: HashMap<ViewNumber, Proposal<TYPES, DaProposal2<TYPES>>>,
+    pub proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposal<TYPES>>>,
+    pub proposals2: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposal2<TYPES>>>,
+    pub proposals_wrapper: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
     high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
     eqc: Option<(
@@ -56,13 +53,13 @@ pub struct TestStorageState<TYPES: NodeType> {
     )>,
     next_epoch_high_qc2:
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
-    action: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
-    state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificateV2<TYPES>>,
-    drb_results: BTreeMap<TYPES::Epoch, DrbResult>,
+    action: ViewNumber,
+    epoch: Option<EpochNumber>,
+    state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
+    drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
-    epoch_roots: BTreeMap<TYPES::Epoch, TYPES::BlockHeader>,
-    restart_view: TYPES::View,
+    epoch_roots: BTreeMap<EpochNumber, TYPES::BlockHeader>,
+    restart_view: ViewNumber,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
@@ -78,13 +75,13 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             high_qc2: None,
             eqc: None,
             next_epoch_high_qc2: None,
-            action: TYPES::View::genesis(),
+            action: ViewNumber::genesis(),
             epoch: None,
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
-            restart_view: TYPES::View::genesis(),
+            restart_view: ViewNumber::genesis(),
         }
     }
 }
@@ -122,7 +119,7 @@ impl<TYPES: NodeType> TestableDelay for TestStorage<TYPES> {
 impl<TYPES: NodeType> TestStorage<TYPES> {
     pub async fn proposals_cloned(
         &self,
-    ) -> BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
+    ) -> BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
         self.inner.read().await.proposals_wrapper.clone()
     }
 
@@ -138,15 +135,15 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.decided_upgrade_certificate.read().await.clone()
     }
 
-    pub async fn last_actioned_view(&self) -> TYPES::View {
+    pub async fn last_actioned_view(&self) -> ViewNumber {
         self.inner.read().await.action
     }
 
-    pub async fn restart_view(&self) -> TYPES::View {
+    pub async fn restart_view(&self) -> ViewNumber {
         self.inner.read().await.restart_view
     }
 
-    pub async fn last_actioned_epoch(&self) -> Option<TYPES::Epoch> {
+    pub async fn last_actioned_epoch(&self) -> Option<EpochNumber> {
         self.inner.read().await.epoch
     }
     pub async fn vids_cloned(&self) -> VidShares<TYPES> {
@@ -259,8 +256,8 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
 
     async fn record_action(
         &self,
-        view: <TYPES as NodeType>::View,
-        epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         action: hotshot_types::event::HotShotAction,
     ) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
@@ -402,7 +399,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()> {
+    async fn store_drb_result(&self, epoch: EpochNumber, drb_result: DrbResult) -> Result<()> {
         let mut inner = self.inner.write().await;
 
         inner.drb_results.insert(epoch, drb_result);
@@ -412,7 +409,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
 
     async fn store_epoch_root(
         &self,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
         block_header: TYPES::BlockHeader,
     ) -> Result<()> {
         let mut inner = self.inner.write().await;

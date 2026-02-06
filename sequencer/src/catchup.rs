@@ -38,7 +38,7 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime as _, NodeType, Versions},
+        node_implementation::Versions,
         ValidatedState as ValidatedStateTrait,
     },
     utils::{verify_leaf_chain, View, ViewInner},
@@ -1730,7 +1730,7 @@ pub async fn add_fee_accounts_to_state<
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
@@ -1788,7 +1788,7 @@ pub async fn add_v2_reward_accounts_to_state<
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
@@ -1846,7 +1846,7 @@ pub async fn add_v1_reward_accounts_to_state<
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,

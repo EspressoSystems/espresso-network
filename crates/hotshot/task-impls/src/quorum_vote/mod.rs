@@ -16,7 +16,7 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::{vid_disperse::vid_total_weight, Leaf2},
+    data::{vid_disperse::vid_total_weight, EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::UpgradeLock,
@@ -25,7 +25,7 @@ use hotshot_types::{
     storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
@@ -80,7 +80,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// View number to vote on.
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// Event sender.
     pub sender: Sender<Arc<HotShotEvent<TYPES>>>,
@@ -104,7 +104,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 
     /// Stake table capacity for light client use
     pub stake_table_capacity: usize,
@@ -280,7 +280,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
             && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
         {
-            let current_epoch = option_epoch_from_block_number::<TYPES>(
+            let current_epoch = option_epoch_from_block_number(
                 leaf.with_epoch,
                 leaf.block_header().block_number(),
                 self.epoch_height,
@@ -373,11 +373,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         .await
         .context(error!("Failed to update shared consensus state"))?;
 
-        let cur_epoch = option_epoch_from_block_number::<TYPES>(
-            leaf.with_epoch,
-            leaf.height(),
-            self.epoch_height,
-        );
+        let cur_epoch =
+            option_epoch_from_block_number(leaf.with_epoch, leaf.height(), self.epoch_height);
 
         let now = Instant::now();
         // We use this `epoch_membership` to vote,
@@ -452,10 +449,10 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub instance_state: Arc<TYPES::InstanceState>,
 
     /// Latest view number that has been voted for.
-    pub latest_voted_view: TYPES::View,
+    pub latest_voted_view: ViewNumber,
 
     /// Table for the in-progress dependency tasks.
-    pub vote_dependencies: BTreeMap<TYPES::View, Sender<()>>,
+    pub vote_dependencies: BTreeMap<ViewNumber, Sender<()>>,
 
     /// The underlying network
     pub network: Arc<I::Network>,
@@ -488,7 +485,7 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 
     /// Stake table capacity for light client use
     pub stake_table_capacity: usize,
@@ -503,7 +500,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
     fn create_event_dependency(
         &self,
         dependency_type: VoteDependency,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         cancel_receiver: Receiver<()>,
     ) -> EventDependency<Arc<HotShotEvent<TYPES>>> {
@@ -557,7 +554,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
     #[instrument(skip_all, fields(id = self.id, latest_voted_view = *self.latest_voted_view), name = "Quorum vote create dependency task if new", level = "error")]
     fn create_dependency_task_if_new(
         &mut self,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
         event: Arc<HotShotEvent<TYPES>>,
@@ -629,7 +626,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
     /// Update the latest voted view number.
     #[instrument(skip_all, fields(id = self.id, latest_voted_view = *self.latest_voted_view), name = "Quorum vote update latest voted view", level = "error")]
-    async fn update_latest_voted_view(&mut self, new_view: TYPES::View) -> bool {
+    async fn update_latest_voted_view(&mut self, new_view: ViewNumber) -> bool {
         if *self.latest_voted_view < *new_view {
             tracing::debug!(
                 "Updating next vote view from {} to {} in the quorum vote task",
@@ -639,7 +636,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
             // Cancel the old dependency tasks.
             for view in *self.latest_voted_view..(*new_view) {
-                let maybe_cancel_sender = self.vote_dependencies.remove(&TYPES::View::new(view));
+                let maybe_cancel_sender = self.vote_dependencies.remove(&ViewNumber::new(view));
                 if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
                     tracing::warn!("Aborting vote dependency task for view {view}");
                     let _ = maybe_cancel_sender.unwrap().try_broadcast(());
@@ -813,7 +810,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 );
             },
             HotShotEvent::Timeout(view, ..) => {
-                let view = TYPES::View::new(view.saturating_sub(1));
+                let view = ViewNumber::new(view.saturating_sub(1));
                 // cancel old tasks
                 let current_tasks = self.vote_dependencies.split_off(&view);
                 while let Some((view, cancel_sender)) = self.vote_dependencies.pop_last() {
@@ -825,7 +822,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 self.vote_dependencies = current_tasks;
             },
             HotShotEvent::ViewChange(mut view, _) => {
-                view = TYPES::View::new(view.saturating_sub(1));
+                view = ViewNumber::new(view.saturating_sub(1));
                 if !self.update_latest_voted_view(view).await {
                     tracing::debug!("view not updated");
                 }

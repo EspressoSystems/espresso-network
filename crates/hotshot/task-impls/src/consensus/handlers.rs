@@ -9,10 +9,11 @@ use std::{sync::Arc, time::Duration};
 use async_broadcast::Sender;
 use chrono::Utc;
 use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
     event::{Event, EventType},
     simple_certificate::EpochRootQuorumCertificateV2,
     simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
-    traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+    traits::node_implementation::{NodeImplementation, NodeType},
     utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
 };
@@ -209,7 +210,7 @@ pub(crate) async fn handle_timeout_vote_recv<
 /// Returns and error if we can't get the version or the version doesn't
 /// yet support HS 2
 pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TYPES>>(
-    new_view_number: TYPES::View,
+    new_view_number: ViewNumber,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {
@@ -350,8 +351,8 @@ pub(crate) async fn handle_view_change<
     I: NodeImplementation<TYPES>,
     V: Versions,
 >(
-    new_view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    new_view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {
@@ -413,7 +414,7 @@ pub(crate) async fn handle_view_change<
             sleep(Duration::from_millis(timeout)).await;
             broadcast_event(
                 Arc::new(HotShotEvent::Timeout(
-                    TYPES::View::new(*view_number),
+                    ViewNumber::new(*view_number),
                     epoch_number,
                 )),
                 &stream,
@@ -478,8 +479,8 @@ pub(crate) async fn handle_view_change<
 /// Handle a `Timeout` event.
 #[instrument(skip_all)]
 pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    view_number: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch: Option<EpochNumber>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {
@@ -500,7 +501,7 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     );
 
     let vote = TimeoutVote2::create_signed_vote(
-        TimeoutData2::<TYPES> {
+        TimeoutData2 {
             view: view_number,
             epoch,
         },

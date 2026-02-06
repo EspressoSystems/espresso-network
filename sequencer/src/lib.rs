@@ -767,8 +767,7 @@ pub mod testing {
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            node_implementation::ConsensusTime as _, signature_key::BuilderSignatureKey,
-            EncodeBytes,
+            signature_key::BuilderSignatureKey, EncodeBytes,
         },
         HotShotConfig, PeerConfig,
     };

@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{fake_commitment, BlockError, Leaf2, ViewNumber},
+    data::{fake_commitment, BlockError, Leaf2},
     traits::{
         block_contents::BlockHeader,
         node_implementation::NodeType,
@@ -96,8 +96,6 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
     type Instance = TestInstanceState;
 
     type Delta = TestStateDelta;
-
-    type Time = ViewNumber;
 
     async fn validate_and_apply_header(
         &self,

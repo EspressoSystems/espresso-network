@@ -24,7 +24,6 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
-    traits::node_implementation::ConsensusTime,
 };
 
 const TIMEOUT: Duration = Duration::from_millis(35);

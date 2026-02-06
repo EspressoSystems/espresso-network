@@ -22,10 +22,7 @@ use hotshot_types::{
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
-    traits::{
-        node_implementation::{ConsensusTime, Versions},
-        EncodeBytes,
-    },
+    traits::{node_implementation::Versions, EncodeBytes},
     utils::EpochTransitionIndicator,
 };
 use sha2::{Digest, Sha256};
@@ -53,7 +50,7 @@ impl SimulatedChainState {
     pub async fn simulate_consensus_round(
         &mut self,
         transactions: Option<Vec<TestTransaction>>,
-    ) -> BuilderStateId<TestTypes> {
+    ) -> BuilderStateId {
         let transactions = transactions.unwrap_or_default();
         let num_transactions = transactions.len() as u64;
         let encoded_transactions = TestTransaction::encode(&transactions);

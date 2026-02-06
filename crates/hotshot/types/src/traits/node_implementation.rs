@@ -9,16 +9,9 @@
 //! This module defines the [`NodeImplementation`] trait, which is a composite trait used for
 //! describing the overall behavior of a node, as a composition of implementations of the node trait.
 
-use std::{
-    fmt::{Debug, Display},
-    hash::Hash,
-    ops::{self, Deref, Sub},
-    sync::Arc,
-    time::Duration,
-};
+use std::{fmt::Debug, hash::Hash, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use committable::Committable;
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersionType;
 
@@ -150,38 +143,6 @@ where
     }
 }
 
-/// Trait for time compatibility needed for reward collection
-pub trait ConsensusTime:
-    PartialOrd
-    + Ord
-    + Send
-    + Sync
-    + Debug
-    + Clone
-    + Copy
-    + Hash
-    + Deref<Target = u64>
-    + serde::Serialize
-    + for<'de> serde::Deserialize<'de>
-    + ops::AddAssign<u64>
-    + ops::Add<u64, Output = Self>
-    + Sub<u64, Output = Self>
-    + 'static
-    + Committable
-{
-    /// Create a new instance of this time unit at time number 0
-    #[must_use]
-    fn genesis() -> Self {
-        Self::new(0)
-    }
-
-    /// Create a new instance of this time unit
-    fn new(val: u64) -> Self;
-
-    /// Get the u64 format of time
-    fn u64(&self) -> u64;
-}
-
 /// Trait with all the type definitions that are used in the current hotshot setup.
 pub trait NodeType:
     Clone
@@ -199,12 +160,6 @@ pub trait NodeType:
 {
     /// Constants used to construct upgrade proposals
     const UPGRADE_CONSTANTS: UpgradeConstants = DEFAULT_UPGRADE_CONSTANTS;
-    /// The time type that this hotshot setup is using.
-    ///
-    /// This should be the same `Time` that `ValidatedState::Time` is using.
-    type View: ConsensusTime + Display;
-    /// Same as above but for epoch.
-    type Epoch: ConsensusTime + Display;
     /// The block header type that this hotshot setup is using.
     type BlockHeader: BlockHeader<Self>;
     /// The block type that this hotshot setup is using.
@@ -227,7 +182,7 @@ pub trait NodeType:
     type InstanceState: InstanceState;
 
     /// The validated state type that this hotshot setup is using.
-    type ValidatedState: ValidatedState<Self, Instance = Self::InstanceState, Time = Self::View>;
+    type ValidatedState: ValidatedState<Self, Instance = Self::InstanceState>;
 
     /// Membership used for this implementation
     type Membership: Membership<Self>;

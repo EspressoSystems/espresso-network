@@ -35,7 +35,7 @@ use hotshot_types::{
     stake_table::{supermajority_threshold, StakeTableEntry},
     traits::{
         block_contents::EncodeBytes,
-        node_implementation::{ConsensusTime, Versions},
+        node_implementation::Versions,
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},

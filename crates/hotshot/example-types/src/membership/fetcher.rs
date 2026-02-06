@@ -14,9 +14,7 @@ use hotshot_types::{
     event::{Event, EventType},
     message::{Message, MessageKind},
     traits::{
-        block_contents::BlockHeader,
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType},
+        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
     },
     vote::HasViewNumber,
 };

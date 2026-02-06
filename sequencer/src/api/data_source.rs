@@ -134,7 +134,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the stake table for a given epoch
     fn get_stake_table(
         &self,
-        epoch: Option<<T as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the stake table for the current epoch if not provided
@@ -145,7 +145,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the DA stake table for a given epoch
     fn get_da_stake_table(
         &self,
-        epoch: Option<<T as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the DA stake table for the current epoch if not provided
@@ -156,7 +156,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get all the validators
     fn get_validators(
         &self,
-        epoch: <T as NodeType>::Epoch,
+        epoch: EpochNumber,
     ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
 
     fn get_block_reward(
@@ -175,7 +175,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
 
     fn get_all_validators(
         &self,
-        epoch: <T as NodeType>::Epoch,
+        epoch: EpochNumber,
         offset: u64,
         limit: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;

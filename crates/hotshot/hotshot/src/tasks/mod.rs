@@ -35,11 +35,12 @@ use hotshot_task_impls::{
 use hotshot_types::{
     consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
+    data::ViewNumber,
     message::{Message, MessageKind, UpgradeLock, EXTERNAL_MESSAGE_VERSION},
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
 };
 use tokio::{spawn, time::sleep};
@@ -205,7 +206,7 @@ pub fn add_network_event_task<
 ) {
     let network_state: NetworkEventTaskState<_, V, _, _> = NetworkEventTaskState {
         network,
-        view: TYPES::View::genesis(),
+        view: ViewNumber::genesis(),
         epoch: genesis_epoch_from_version::<V, TYPES>(),
         membership_coordinator: handle.membership_coordinator.clone(),
         storage: handle.storage(),

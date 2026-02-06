@@ -12,10 +12,10 @@ use async_trait::async_trait;
 use committable::Committable;
 use hotshot_example_types::block_types::TestBlockHeader;
 use hotshot_types::{
-    data::Leaf2,
+    data::{Leaf2, ViewNumber},
     event::{Event, EventType},
     message::UpgradeLock,
-    traits::node_implementation::{ConsensusTime, NodeType, Versions},
+    traits::node_implementation::{NodeType, Versions},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -28,10 +28,10 @@ use crate::{
 };
 
 /// Map from views to leaves for a single node, allowing multiple leaves for each view (because the node may a priori send us multiple leaves for a given view).
-pub type NodeMap<TYPES> = BTreeMap<<TYPES as NodeType>::View, Vec<Leaf2<TYPES>>>;
+pub type NodeMap<TYPES> = BTreeMap<ViewNumber, Vec<Leaf2<TYPES>>>;
 
 /// A sanitized map from views to leaves for a single node, with only a single leaf per view.
-pub type NodeMapSanitized<TYPES> = BTreeMap<<TYPES as NodeType>::View, Leaf2<TYPES>>;
+pub type NodeMapSanitized<TYPES> = BTreeMap<ViewNumber, Leaf2<TYPES>>;
 
 /// Validate that the `NodeMap` only has a single leaf per view.
 fn sanitize_node_map<TYPES: NodeType>(
@@ -72,7 +72,7 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
         .map(|((a, b), c)| (a, b, c));
 
     let mut decided_upgrade_certificate = None;
-    let mut view_decided = TYPES::View::new(0);
+    let mut view_decided = ViewNumber::new(0);
 
     for (grandparent, _parent, child) in leaf_triples {
         if let Some(cert) = grandparent.upgrade_certificate() {
@@ -158,7 +158,7 @@ fn sanitize_network_map<TYPES: NodeType>(
     Ok(result)
 }
 
-pub type ViewMap<TYPES> = BTreeMap<<TYPES as NodeType>::View, BTreeMap<usize, Leaf2<TYPES>>>;
+pub type ViewMap<TYPES> = BTreeMap<ViewNumber, BTreeMap<usize, Leaf2<TYPES>>>;
 
 // Invert the network map by interchanging the roles of the node_id and view number.
 //
@@ -185,7 +185,7 @@ async fn invert_network_map<TYPES: NodeType, V: Versions>(
 }
 
 /// A view map, sanitized to have exactly one leaf per view.
-pub type ViewMapSanitized<TYPES> = BTreeMap<<TYPES as NodeType>::View, Leaf2<TYPES>>;
+pub type ViewMapSanitized<TYPES> = BTreeMap<ViewNumber, Leaf2<TYPES>>;
 
 fn sanitize_view_map<TYPES: NodeType>(
     view_map: &ViewMap<TYPES>,

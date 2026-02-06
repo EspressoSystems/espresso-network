@@ -12,7 +12,7 @@ use committable::Committable;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::UpgradeProposal,
+    data::{EpochNumber, UpgradeProposal, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
@@ -20,7 +20,7 @@ use hotshot_types::{
     simple_vote::{UpgradeProposalData, UpgradeVote},
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
     },
     utils::{epoch_from_block_number, EpochTransitionIndicator},
@@ -42,10 +42,10 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Membership for Quorum Certs/votes
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
@@ -224,7 +224,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 // cause an overflow error.
                 // TODO Come back to this - we probably don't need this, but we should also never receive a UpgradeCertificate where this fails, investigate block ready so it doesn't make one for the genesis block
                 ensure!(
-                    self.cur_view != TYPES::View::genesis()
+                    self.cur_view != ViewNumber::genesis()
                         && *view >= self.cur_view.saturating_sub(1),
                     warn!(
                         "Discarding old upgrade proposal; the proposal is for view {view}, but \
@@ -330,7 +330,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     .membership_coordinator
                     .membership_for_epoch(self.cur_epoch)
                     .await?
-                    .leader(TYPES::View::new(
+                    .leader(ViewNumber::new(
                         view + TYPES::UPGRADE_CONSTANTS.propose_offset,
                     ))
                     .await?;
@@ -390,14 +390,14 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                         old_version: V::Base::VERSION,
                         new_version: V::Upgrade::VERSION,
                         new_version_hash: V::UPGRADE_HASH.to_vec(),
-                        old_version_last_view: TYPES::View::new(old_version_last_view),
-                        new_version_first_view: TYPES::View::new(new_version_first_view),
-                        decide_by: TYPES::View::new(decide_by),
+                        old_version_last_view: ViewNumber::new(old_version_last_view),
+                        new_version_first_view: ViewNumber::new(new_version_first_view),
+                        decide_by: ViewNumber::new(decide_by),
                     };
 
                     let upgrade_proposal = UpgradeProposal {
                         upgrade_proposal: upgrade_proposal_data.clone(),
-                        view_number: TYPES::View::new(
+                        view_number: ViewNumber::new(
                             view + TYPES::UPGRADE_CONSTANTS.propose_offset,
                         ),
                     };

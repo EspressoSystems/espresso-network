@@ -8,8 +8,8 @@ use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, EpochNumber, ViewNumber},
     traits::{
-        block_contents::BlockHeader, node_implementation::ConsensusTime,
-        signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
+        block_contents::BlockHeader, signature_key::BuilderSignatureKey, states::StateDelta,
+        ValidatedState as HotShotState,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
@@ -1133,8 +1133,6 @@ async fn validate_next_stake_table_hash(
 impl HotShotState<SeqTypes> for ValidatedState {
     type Error = BlockError;
     type Instance = NodeState;
-
-    type Time = ViewNumber;
 
     type Delta = Delta;
     fn on_commit(&self) {}

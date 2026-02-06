@@ -11,10 +11,7 @@ mod tests {
         event::{Event, EventType},
         light_client::StateKeyPair,
         signature_key::BLSPubKey,
-        traits::{
-            node_implementation::{ConsensusTime, NodeType},
-            signature_key::SignatureKey,
-        },
+        traits::{node_implementation::NodeType, signature_key::SignatureKey},
         PeerConfig,
     };
     use surf_disco::Client;
@@ -28,7 +25,7 @@ mod tests {
     use crate::events_source::{EventConsumer, EventsStreamer, StartupInfo}; // EventsUpdater};
 
     // return a empty transaction event
-    fn generate_event<Types: NodeType<View = ViewNumber>>(view_number: u64) -> Event<Types> {
+    fn generate_event<Types: NodeType>(view_number: u64) -> Event<Types> {
         Event {
             view_number: ViewNumber::new(view_number),
             event: EventType::Transactions {
