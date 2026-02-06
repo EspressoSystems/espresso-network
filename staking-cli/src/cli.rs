@@ -317,7 +317,9 @@ pub async fn run() -> Result<()> {
         Commands::PreviewMetadata { metadata_uri } => {
             let url = url::Url::parse(&metadata_uri)
                 .with_context(|| format!("Invalid URL: {metadata_uri}"))?;
-            let metadata = fetch_metadata(&url).await?;
+            let metadata = fetch_metadata(&url)
+                .await
+                .with_context(|| format!("from {url}"))?;
             output_success(serde_json::to_string_pretty(&metadata)?);
             return Ok(());
         },
