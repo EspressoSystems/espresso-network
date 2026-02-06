@@ -279,9 +279,8 @@ async fn main() -> anyhow::Result<()> {
     logging.init();
 
     let mut anvil_statefile = NamedTempFile::new()?;
-    // Keep _anvil_layer alive to keep Anvil running (prefix suppresses unused warning)
-    let (l1_url, anvil, _anvil_layer) = if let Some(url) = rpc_url {
-        (url, None, None)
+    let (l1_url, anvil) = if let Some(url) = rpc_url {
+        (url, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
         let anvil_layer = AnvilLayer::from(
@@ -305,9 +304,8 @@ async fn main() -> anyhow::Result<()> {
         );
         let url = anvil_layer.endpoint_url();
         tracing::info!("l1 url: {}", url);
-        // Keep the anvil instance from the layer for state dumping
         let instance = anvil_layer.instance().clone();
-        (url, Some(instance), Some(anvil_layer))
+        (url, Some(instance))
     };
 
     let relay_server_port = reserve_tcp_port().unwrap();
