@@ -3,6 +3,7 @@
 use std::{fmt, str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
+use clap::{ArgAction, Args as ClapArgs};
 use hotshot_types::signature_key::BLSPubKey;
 use thiserror::Error;
 use url::Url;
@@ -148,11 +149,139 @@ impl fmt::Display for MetadataUri {
     }
 }
 
+/// Custom value parser for metadata URIs that enforces 2048 byte limit.
+///
+/// While HTTP specs don't mandate a URL length limit, most browsers and servers
+/// support at least 2048 characters. This practical limit ensures compatibility
+/// across different HTTP clients and servers.
+fn parse_metadata_url(s: &str) -> Result<Url, String> {
+    let url = Url::parse(s).map_err(|e| e.to_string())?;
+    if url.as_str().len() > 2048 {
+        return Err("metadata URI cannot exceed 2048 bytes".to_string());
+    }
+    Ok(url)
+}
+
+/// Command-line arguments for specifying validator metadata.
+#[derive(ClapArgs, Debug, Clone)]
+pub struct MetadataUriArgs {
+    /// URL where validator metadata is hosted (JSON or OpenMetrics format).
+    #[clap(
+        long,
+        env = "METADATA_URI",
+        required_unless_present = "no_metadata_uri",
+        conflicts_with = "no_metadata_uri",
+        value_parser = parse_metadata_url
+    )]
+    pub metadata_uri: Option<Url>,
+
+    /// Register without a metadata URI.
+    // Provided as separate flag to prevent accidental omission of metadata URI.
+    #[clap(long, env = "NO_METADATA_URI", conflicts_with = "metadata_uri")]
+    pub no_metadata_uri: bool,
+
+    /// Skip metadata URI validation (fetch and schema check).
+    #[clap(
+        long,
+        env = "SKIP_METADATA_VALIDATION",
+        action = ArgAction::SetTrue,
+        conflicts_with = "no_metadata_uri",
+        requires = "metadata_uri"
+    )]
+    pub skip_metadata_validation: bool,
+}
+
+impl TryFrom<MetadataUriArgs> for MetadataUri {
+    type Error = anyhow::Error;
+
+    fn try_from(args: MetadataUriArgs) -> Result<Self> {
+        match args.metadata_uri {
+            Some(url) => Self::try_from(url),
+            None => Ok(Self::empty()),
+        }
+    }
+}
+
 #[cfg(test)]
 fn generate_bls_pub_key() -> BLSPubKey {
     use jf_signature::bls_over_bn254::KeyPair;
     let keypair = KeyPair::generate(&mut rand::thread_rng());
     BLSPubKey::from(keypair.ver_key())
+}
+
+#[cfg(test)]
+mod metadata_uri_args_tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_uri_args_with_url() {
+        let args = MetadataUriArgs {
+            metadata_uri: Some(Url::parse("https://example.com/metadata.json").unwrap()),
+            no_metadata_uri: false,
+            skip_metadata_validation: false,
+        };
+        assert_eq!(
+            args.metadata_uri.as_ref().map(|u| u.as_str()),
+            Some("https://example.com/metadata.json")
+        );
+    }
+
+    #[test]
+    fn test_metadata_uri_args_with_no_metadata() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            no_metadata_uri: true,
+            skip_metadata_validation: false,
+        };
+        assert!(args.metadata_uri.is_none());
+        assert!(args.no_metadata_uri);
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_metadata_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: Some(Url::parse("https://example.com/metadata.json").unwrap()),
+            no_metadata_uri: false,
+            skip_metadata_validation: false,
+        };
+        let metadata_uri = MetadataUri::try_from(args).unwrap();
+        assert_eq!(
+            metadata_uri.url().map(|u| u.as_str()),
+            Some("https://example.com/metadata.json")
+        );
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_empty_metadata_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            no_metadata_uri: true,
+            skip_metadata_validation: false,
+        };
+        let metadata_uri = MetadataUri::try_from(args).unwrap();
+        assert!(metadata_uri.url().is_none());
+    }
+
+    #[test]
+    fn test_parse_metadata_url_valid() {
+        let url = parse_metadata_url("https://example.com/metadata").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/metadata");
+    }
+
+    #[test]
+    fn test_parse_metadata_url_too_long() {
+        let long_path = "a".repeat(2100);
+        let url_str = format!("https://example.com/{}", long_path);
+        let result = parse_metadata_url(&url_str);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot exceed 2048 bytes"));
+    }
+
+    #[test]
+    fn test_parse_metadata_url_invalid() {
+        let result = parse_metadata_url("not a url");
+        assert!(result.is_err());
+    }
 }
 
 #[cfg(test)]

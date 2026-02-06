@@ -8,7 +8,7 @@ use alloy::{
     signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
-use common::{base_cmd, Signer, TestSystemExt};
+use common::{base_cmd, MetadataCommand, Signer, TestSystemExt};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use predicates::{prelude::PredicateBooleanExt, str};
@@ -197,8 +197,7 @@ async fn test_cli_register_validator(
     let mut cmd = system.cmd(signer);
     match signer {
         Signer::Mnemonic => {
-            cmd.arg("--skip-metadata-validation")
-                .arg("register-validator")
+            cmd.arg("register-validator")
                 .arg("--consensus-private-key")
                 .arg(system.bls_private_key_str()?)
                 .arg("--state-private-key")
@@ -207,13 +206,13 @@ async fn test_cli_register_validator(
                 .arg("12.34")
                 .arg("--metadata-uri")
                 .arg("https://example.com/metadata")
+                .arg("--skip-metadata-validation")
                 .assert()
                 .success()
                 .stdout(str::contains("ValidatorRegistered"));
         },
         Signer::BrokeMnemonic => {
-            cmd.arg("--skip-metadata-validation")
-                .arg("register-validator")
+            cmd.arg("register-validator")
                 .arg("--consensus-private-key")
                 .arg(system.bls_private_key_str()?)
                 .arg("--state-private-key")
@@ -222,6 +221,7 @@ async fn test_cli_register_validator(
                 .arg("12.34")
                 .arg("--metadata-uri")
                 .arg("https://example.com/metadata")
+                .arg("--skip-metadata-validation")
                 .assert()
                 .failure()
                 .stderr(str::contains("zero Ethereum balance"));
@@ -525,7 +525,6 @@ async fn test_cli_register_validator_skip_metadata_validation() -> Result<()> {
     // With --skip-metadata-validation, should succeed even with wrong pub_key
     system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(&bls_key)
@@ -535,6 +534,7 @@ async fn test_cli_register_validator_skip_metadata_validation() -> Result<()> {
         .arg("5.00")
         .arg("--metadata-uri")
         .arg(&metadata_uri)
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("ValidatorRegistered"));
@@ -1116,10 +1116,10 @@ async fn test_cli_update_metadata_uri() -> Result<()> {
     let updated_uri = "https://example.com/updated-metadata.json";
     system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg(updated_uri)
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("MetadataUriUpdated"))
@@ -1236,13 +1236,99 @@ async fn test_cli_update_metadata_uri_skip_validation() -> Result<()> {
     // With --skip-metadata-validation, should succeed even without --consensus-public-key
     system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg(&metadata_uri)
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("MetadataUriUpdated"));
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_skip_metadata_validation_conflicts_with_no_metadata(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    // --skip-metadata-validation requires --metadata-uri, so using it with --no-metadata-uri should fail
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--no-metadata-uri")
+        .arg("--skip-metadata-validation")
+        .assert()
+        .failure()
+        .stderr(
+            str::contains("cannot be used with")
+                .and(str::contains("--skip-metadata-validation"))
+                .and(str::contains("--no-metadata-uri")),
+        );
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_metadata_uri_required(#[case] command: MetadataCommand) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .assert()
+        .failure()
+        .stderr(str::contains("required").and(str::contains("--metadata-uri")));
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_metadata_uri_conflicts_with_no_metadata_uri(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata")
+        .arg("--no-metadata-uri")
+        .assert()
+        .failure()
+        .stderr(
+            str::contains("cannot be used with")
+                .and(str::contains("--metadata-uri"))
+                .and(str::contains("--no-metadata-uri")),
+        );
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_skip_metadata_validation_requires_metadata_uri(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    // --skip-metadata-validation without --metadata-uri should fail (requires it)
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--skip-metadata-validation")
+        .assert()
+        .failure()
+        .stderr(str::contains("required").and(str::contains("--metadata-uri")));
 
     Ok(())
 }
@@ -1266,7 +1352,6 @@ async fn test_cli_all_operations_manual_inspect(
 
     let output = system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(system.bls_private_key_str()?)
@@ -1276,6 +1361,7 @@ async fn test_cli_all_operations_manual_inspect(
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
@@ -1339,10 +1425,10 @@ async fn test_cli_all_operations_manual_inspect(
 
         let output = system
             .cmd(Signer::Mnemonic)
-            .arg("--skip-metadata-validation")
             .arg("update-metadata-uri")
             .arg("--metadata-uri")
             .arg("https://example.com/updated-metadata")
+            .arg("--skip-metadata-validation")
             .assert()
             .success()
             .get_output()
@@ -1540,7 +1626,6 @@ async fn test_cli_register_validator_private_key() -> Result<()> {
 
     system
         .cmd(Signer::PrivateKey)
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(system.bls_private_key_str()?)
@@ -1550,6 +1635,7 @@ async fn test_cli_register_validator_private_key() -> Result<()> {
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("ValidatorRegistered"));
@@ -1905,7 +1991,6 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
     let output = system
         .export_calldata_cmd()
         .arg("--skip-simulation")
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--node-signatures")
         .arg(&signatures_path)
@@ -1913,6 +1998,7 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
@@ -1984,10 +2070,10 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
     let output = system
         .export_calldata_cmd()
         .arg("--skip-simulation")
-        .arg("--skip-metadata-validation")
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg("https://example.com/updated-metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
