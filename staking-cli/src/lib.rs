@@ -9,7 +9,10 @@ use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
-pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+pub(crate) use hotshot_types::{
+    light_client::StateSignKey,
+    signature_key::{BLSPrivKey, BLSPubKey},
+};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUri;
 use parse::Commission;
@@ -26,6 +29,13 @@ pub mod demo;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
+
+// Re-exported for integration tests (test_real_mainnet_node_metadata)
+pub use metadata::fetch_metadata;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod metadata_types;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod openmetrics;
 pub(crate) mod output;
 pub(crate) mod parse;
 pub(crate) mod receipt;
@@ -40,6 +50,13 @@ pub(crate) mod transaction;
 pub mod deploy;
 
 pub use cli::run;
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum Network {
+    Mainnet,
+    Decaf,
+    Local,
+}
 
 /// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -75,6 +92,7 @@ pub struct Config {
     pub espresso_url: Option<Url>,
 
     #[clap(flatten)]
+    #[serde(default)]
     pub signer: SignerConfig,
 
     /// Export calldata for multisig wallets instead of sending transaction.
@@ -96,6 +114,11 @@ pub struct Config {
     #[clap(long, env = "SKIP_SIMULATION", action = ArgAction::SetTrue, requires = "export_calldata")]
     #[serde(skip)]
     pub skip_simulation: bool,
+
+    /// Skip metadata URI validation (fetch and schema check).
+    #[clap(long, env = "SKIP_METADATA_VALIDATION", action = ArgAction::SetTrue)]
+    #[serde(skip)]
+    pub skip_metadata_validation: bool,
 
     #[clap(flatten)]
     #[serde(skip)]
@@ -199,24 +222,87 @@ impl ValidSignerConfig {
 #[derive(ClapArgs, Debug, Clone)]
 #[group(required = true, multiple = false)]
 pub struct MetadataUriArgs {
+    /// URL where validator metadata is hosted (JSON or OpenMetrics format).
     #[clap(long, env = "METADATA_URI")]
-    metadata_uri: Option<String>,
+    pub metadata_uri: Option<String>,
 
+    /// Register without a metadata URI.
     #[clap(long, env = "NO_METADATA_URI")]
-    no_metadata_uri: bool,
+    pub no_metadata_uri: bool,
+}
+
+impl MetadataUriArgs {
+    /// Parse the metadata URI arguments into an optional URL.
+    fn to_url(&self) -> Result<Option<Url>> {
+        if self.no_metadata_uri {
+            Ok(None)
+        } else if let Some(uri_str) = &self.metadata_uri {
+            Ok(Some(Url::parse(uri_str)?))
+        } else {
+            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
+        }
+    }
 }
 
 impl TryFrom<MetadataUriArgs> for MetadataUri {
     type Error = anyhow::Error;
 
     fn try_from(args: MetadataUriArgs) -> Result<Self> {
-        if args.no_metadata_uri {
-            Ok(MetadataUri::empty())
-        } else if let Some(uri_str) = args.metadata_uri {
-            uri_str.parse()
-        } else {
-            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
+        match args.to_url()? {
+            Some(url) => MetadataUri::try_from(url),
+            None => Ok(MetadataUri::empty()),
         }
+    }
+}
+
+#[cfg(test)]
+mod metadata_uri_args_tests {
+    use super::*;
+
+    #[test]
+    fn test_to_url_with_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: Some("https://example.com/metadata.json".to_string()),
+            no_metadata_uri: false,
+        };
+        let url = args.to_url().unwrap();
+        assert_eq!(
+            url.map(|u| u.as_str().to_string()),
+            Some("https://example.com/metadata.json".to_string())
+        );
+    }
+
+    #[test]
+    fn test_to_url_with_no_metadata() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            no_metadata_uri: true,
+        };
+        let url = args.to_url().unwrap();
+        assert!(url.is_none());
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_metadata_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: Some("https://example.com/metadata.json".to_string()),
+            no_metadata_uri: false,
+        };
+        let metadata_uri = MetadataUri::try_from(args).unwrap();
+        assert_eq!(
+            metadata_uri.url().map(|u| u.as_str()),
+            Some("https://example.com/metadata.json")
+        );
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_empty_metadata_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            no_metadata_uri: true,
+        };
+        let metadata_uri = MetadataUri::try_from(args).unwrap();
+        assert!(metadata_uri.url().is_none());
     }
 }
 
@@ -281,6 +367,10 @@ pub enum Commands {
         /// Use a ledger hardware wallet.
         #[clap(long, env = "LEDGER_INDEX", required_unless_present_any = ["mnemonic", "private_key"])]
         ledger: bool,
+
+        /// Network to configure (mainnet, decaf, or local).
+        #[clap(long, value_enum, env = "NETWORK")]
+        network: Network,
     },
     /// Remove the config file.
     Purge {
@@ -331,6 +421,12 @@ pub enum Commands {
     UpdateMetadataUri {
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
+
+        /// The consensus public key for metadata validation.
+        ///
+        /// Required for metadata validation unless --skip-metadata-validation is set.
+        #[clap(long, value_parser = parse::parse_bls_pub_key, env = "CONSENSUS_PUBLIC_KEY")]
+        consensus_public_key: Option<BLSPubKey>,
     },
     /// Approve stake table contract to move tokens
     Approve {
@@ -427,5 +523,14 @@ pub enum Commands {
 
         #[clap(flatten)]
         output_args: signature::OutputArgs,
+    },
+    /// Preview metadata from a URL without registering.
+    ///
+    /// Fetches and displays validator metadata from a URL. Useful for verifying
+    /// your metadata endpoint before registration.
+    PreviewMetadata {
+        /// URL where validator metadata is hosted (JSON or OpenMetrics format).
+        #[clap(long, env = "METADATA_URI")]
+        metadata_uri: String,
     },
 }

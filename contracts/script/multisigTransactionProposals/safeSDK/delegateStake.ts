@@ -115,6 +115,7 @@ export async function proposeStakeTransaction(
     safeSDK,
     stakeTableAddress,
     stakeData,
+    "0",
     useHardwareWallet,
   );
 

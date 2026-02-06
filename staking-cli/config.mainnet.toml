@@ -1,0 +1,3 @@
+rpc_url = "https://ethereum-rpc.publicnode.com"
+stake_table_address = "0xcef474d372b5b09defe2af187bf17338dc704451"
+espresso_url = "https://query.main.net.espresso.network/"

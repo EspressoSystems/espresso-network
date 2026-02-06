@@ -10,12 +10,15 @@ use anyhow::Context;
 use async_broadcast::{Receiver, RecvError};
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
-    data::Leaf2,
+    data::{Leaf2, ViewNumber},
     event::{Event, EventType},
     message::{Message, MessageKind},
     traits::{
-        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
+        block_contents::BlockHeader,
+        network::ConnectedNetwork,
+        node_implementation::{ConsensusTime, NodeType},
     },
+    vote::HasViewNumber,
 };
 use tokio::task::JoinHandle;
 use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
@@ -34,7 +37,11 @@ pub type RecvMessageFn =
     std::sync::Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Vec<u8>>> + Send + Sync>;
 
 pub type DirectMessageFn<TYPES> = std::sync::Arc<
-    dyn Fn(Vec<u8>, <TYPES as NodeType>::SignatureKey) -> BoxFuture<'static, anyhow::Result<()>>
+    dyn Fn(
+            ViewNumber,
+            Vec<u8>,
+            <TYPES as NodeType>::SignatureKey,
+        ) -> BoxFuture<'static, anyhow::Result<()>>
         + Send
         + Sync,
 >;
@@ -46,11 +53,12 @@ pub struct NetworkFunctions<TYPES: NodeType> {
 
 pub async fn direct_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+    view: ViewNumber,
     message: Vec<u8>,
     recipient: <TYPES as NodeType>::SignatureKey,
 ) -> anyhow::Result<()> {
     network
-        .direct_message(message, recipient.clone())
+        .direct_message(view, message, recipient.clone())
         .await
         .context(format!("Failed to send message to recipient {recipient}"))
 }
@@ -58,9 +66,11 @@ pub async fn direct_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 pub fn direct_message_fn<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     network: Arc<<I as NodeImplementation<TYPES>>::Network>,
 ) -> DirectMessageFn<TYPES> {
-    Arc::new(move |message, recipient| {
+    Arc::new(move |view, message, recipient| {
         let network = network.clone();
-        Box::pin(direct_message_impl::<TYPES, I>(network, message, recipient))
+        Box::pin(direct_message_impl::<TYPES, I>(
+            network, view, message, recipient,
+        ))
     })
 }
 
@@ -101,7 +111,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             loop {
                 match network_receiver.recv_direct().await {
                     Ok(Event {
-                        view_number: _,
+                        view_number: view,
                         event: EventType::ExternalMessageReceived { sender: _, data },
                     }) => {
                         let (requested_height, requester): (u64, TYPES::SignatureKey) =
@@ -148,9 +158,12 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             BincodeSerializer::<StaticVersion<0, 0>>::serialize(&leaf_response)
                                 .expect("Failed to serialize leaf response");
 
-                        if let Err(e) =
-                            (network_functions.direct_message)(serialized_leaf_response, requester)
-                                .await
+                        if let Err(e) = (network_functions.direct_message)(
+                            view.u64().into(),
+                            serialized_leaf_response,
+                            requester,
+                        )
+                        .await
                         {
                             tracing::error!(
                                 "Failed to send leaf response in test membership fetcher: {e}, \
@@ -183,6 +196,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                     .expect("Failed to serialize leaf request"),
             ),
         };
+        let view = leaf_request.view_number();
 
         let leaves: BTreeMap<u64, Leaf2<TYPES>> = self
             .storage
@@ -217,8 +231,12 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             BincodeSerializer::<StaticVersion<0, 0>>::serialize(&leaf_request)
                 .expect("Failed to serialize leaf request");
 
-        if let Err(e) =
-            (self.network_functions.direct_message)(serialized_leaf_request, source).await
+        if let Err(e) = (self.network_functions.direct_message)(
+            view.u64().into(),
+            serialized_leaf_request,
+            source,
+        )
+        .await
         {
             tracing::error!("Failed to send leaf request in test membership fetcher: {e}");
         };

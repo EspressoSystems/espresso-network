@@ -89,6 +89,7 @@ export async function proposeSetEpochStartBlockTransaction(
     safeSDK,
     contractAddress,
     data,
+    "0",
     useHardwareWallet,
   );
 

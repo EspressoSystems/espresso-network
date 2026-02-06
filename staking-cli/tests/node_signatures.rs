@@ -221,6 +221,7 @@ async fn test_register_validator_with_pre_signed_payload(
 
     let mut reg_cmd = system.cmd(Signer::Mnemonic);
     reg_cmd
+        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--commission")
         .arg("12.34")
@@ -307,7 +308,8 @@ async fn test_address_validation_mismatch_error() -> Result<()> {
 
     let mut cmd = system.cmd(Signer::Mnemonic);
 
-    cmd.arg("register-validator")
+    cmd.arg("--skip-metadata-validation")
+        .arg("register-validator")
         .arg("--commission")
         .arg("12.34")
         .arg("--metadata-uri")
@@ -375,6 +377,7 @@ async fn test_signature_verification_failure(
     let mut cmd = system.cmd(Signer::Mnemonic);
 
     let cmd_result = cmd
+        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--commission")
         .arg("12.34")

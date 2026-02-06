@@ -26,9 +26,10 @@ use hotshot_types::{
     traits::{
         consensus_api::ConsensusApi,
         network::{BroadcastDelay, ConnectedNetwork, Topic},
-        node_implementation::NodeType,
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
     },
+    vote::HasViewNumber,
 };
 use tracing::instrument;
 
@@ -106,22 +107,33 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             sender: self.public_key().clone(),
             kind: MessageKind::External(msg),
         };
+        let view: TYPES::View = message.view_number();
         let serialized_message = self.hotshot.upgrade_lock.serialize(&message).await?;
 
         match recipients {
             RecipientList::Broadcast => {
                 self.network
-                    .broadcast_message(serialized_message, Topic::Global, BroadcastDelay::None)
+                    .broadcast_message(
+                        view.u64().into(),
+                        serialized_message,
+                        Topic::Global,
+                        BroadcastDelay::None,
+                    )
                     .await?;
             },
             RecipientList::Direct(recipient) => {
                 self.network
-                    .direct_message(serialized_message, recipient)
+                    .direct_message(view.u64().into(), serialized_message, recipient)
                     .await?;
             },
             RecipientList::Many(recipients) => {
                 self.network
-                    .da_broadcast_message(serialized_message, recipients, BroadcastDelay::None)
+                    .da_broadcast_message(
+                        view.u64().into(),
+                        serialized_message,
+                        recipients,
+                        BroadcastDelay::None,
+                    )
                     .await?;
             },
         }

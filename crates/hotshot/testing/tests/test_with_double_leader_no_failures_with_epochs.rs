@@ -5,8 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl, TestConsecutiveLeaderTypes,
-    TestTwoStakeTablesTypes,
+    CliquenetImpl, CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl,
+    TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -15,7 +15,7 @@ use hotshot_testing::{
 };
 cross_tests!(
     TestName: test_with_double_leader_no_failures_with_epochs,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
+    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes],
     Versions: [EpochsTestVersions],
     Ignore: false,
