@@ -154,7 +154,6 @@ pub async fn fetch_claim_rewards_inputs(
 mod test {
     use alloy::primitives::{utils::parse_ether, U256};
     use hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV2};
-    use warp::Filter as _;
 
     use super::*;
     use crate::{deploy::TestSystem, receipt::ReceiptExt as _, transaction::Transaction};
@@ -207,7 +206,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_claim_reward() -> Result<()> {
         let system = TestSystem::deploy().await?;
         let reward_balance = U256::from(1000000);
@@ -240,20 +239,10 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_unclaimed_rewards_not_found() -> Result<()> {
         let system = TestSystem::deploy().await?;
-
-        let port = portpicker::pick_unused_port().expect("No ports available");
-
-        let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String)
-            .map(|_, _| warp::reply::with_status(warp::reply(), warp::http::StatusCode::NOT_FOUND));
-
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        let espresso_url = format!("http://localhost:{}/", port).parse()?;
+        let espresso_url = system.setup_reward_claim_not_found_mock().await;
 
         let unclaimed = unclaimed_rewards(
             &system.provider,

@@ -31,7 +31,7 @@ jf-signature = { workspace = true }
 portpicker = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-sequencer = { path = "../sequencer", features = ["testing"] }
+sequencer = { path = "../sequencer", default-features = false, features = ["testing"] }
 sequencer-utils = { path = "../utils" }
 staking-cli = { path = "../staking-cli" }
 surf-disco = { workspace = true }
