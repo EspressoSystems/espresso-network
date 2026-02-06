@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["fetch_metadata","validate_metadata_uri"],"struct":["MetadataUri"]};
+window.SIDEBAR_ITEMS = {"enum":["MetadataError"],"fn":["fetch_metadata","validate_metadata_uri"],"struct":["MetadataUri"]};
