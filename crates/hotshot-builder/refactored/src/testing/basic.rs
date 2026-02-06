@@ -19,10 +19,7 @@ use hotshot_types::{
     data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
     event::LeafInfo,
     simple_certificate::{CertificatePair, QuorumCertificate2},
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::BuilderCommitment,
 };
 use tokio::time::sleep;

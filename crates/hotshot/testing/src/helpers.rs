@@ -26,7 +26,8 @@ use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{
-        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        vid_commitment, EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration,
+        VidDisperseShare, ViewNumber,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
@@ -176,7 +177,7 @@ pub async fn build_cert<
 >(
     data: DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     public_key: &TYPES::SignatureKey,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: &UpgradeLock<TYPES, V>,
@@ -240,7 +241,7 @@ pub async fn build_assembled_sig<
 >(
     data: &DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> <TYPES::SignatureKey as SignatureKey>::QcType {
     let stake_table = CERT::stake_table(epoch_membership).await;
@@ -312,7 +313,7 @@ pub async fn da_payload_commitment<TYPES: NodeType, V: Versions>(
 
 pub async fn build_payload_commitment<TYPES: NodeType, V: Versions>(
     membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     version: Version,
 ) -> VidCommitment {
     // Make some empty encoded transactions, we just care about having a commitment handy for the
@@ -324,8 +325,8 @@ pub async fn build_payload_commitment<TYPES: NodeType, V: Versions>(
 
 pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     payload: &TYPES::BlockPayload,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -375,8 +376,8 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
 #[allow(clippy::too_many_arguments)]
 pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     transactions: Vec<TestTransaction>,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     public_key: &TYPES::SignatureKey,
@@ -415,7 +416,7 @@ pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
     };
 
     anyhow::Ok(
-        build_cert::<TYPES, V, DaData2<TYPES>, DaVote2<TYPES>, DaCertificate2<TYPES>>(
+        build_cert::<TYPES, V, DaData2, DaVote2<TYPES>, DaCertificate2<TYPES>>(
             da_data,
             membership,
             view_number,
@@ -466,8 +467,7 @@ pub async fn build_fake_view_with_leaf_and_state<V: Versions>(
     _upgrade_lock: &UpgradeLock<TestTypes, V>,
     epoch_height: u64,
 ) -> View<TestTypes> {
-    let epoch =
-        option_epoch_from_block_number::<TestTypes>(leaf.with_epoch, leaf.height(), epoch_height);
+    let epoch = option_epoch_from_block_number(leaf.with_epoch, leaf.height(), epoch_height);
     View {
         view_inner: ViewInner::Leaf {
             leaf: leaf.commit(),

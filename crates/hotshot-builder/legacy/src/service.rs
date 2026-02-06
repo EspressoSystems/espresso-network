@@ -23,12 +23,12 @@ use hotshot_builder_api::{
 };
 use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
-    data::{DaProposal2, Leaf2, QuorumProposalWrapper, VidCommitment},
+    data::{DaProposal2, Leaf2, QuorumProposalWrapper, VidCommitment, ViewNumber},
     event::EventType,
     message::Proposal,
     traits::{
         block_contents::{BlockPayload, Transaction},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::{BuilderSignatureKey, SignatureKey},
     },
     utils::BuilderCommitment,
@@ -139,11 +139,11 @@ impl BlockSizeLimits {
 #[derive(Debug)]
 pub struct GlobalState<Types: NodeType> {
     // data store for the blocks
-    pub blocks: lru::LruCache<BlockId<Types>, BlockInfo<Types>>,
+    pub blocks: lru::LruCache<BlockId, BlockInfo<Types>>,
 
     // registered builder states
     pub spawned_builder_states: HashMap<
-        BuilderStateId<Types>,
+        BuilderStateId,
         (
             // This is provided as an Option for convenience with initialization.
             // When we build the initial state, we don't necessarily want to
@@ -159,17 +159,17 @@ pub struct GlobalState<Types: NodeType> {
 
     // builder state -> last built block , it is used to respond the client
     // if the req channel times out during get_available_blocks
-    pub builder_state_to_last_built_block: HashMap<BuilderStateId<Types>, ResponseMessage>,
+    pub builder_state_to_last_built_block: HashMap<BuilderStateId, ResponseMessage>,
 
     // sending a transaction from the hotshot/private mempool to the builder states
     // NOTE: Currently, we don't differentiate between the transactions from the hotshot and the private mempool
     pub tx_sender: BroadcastSender<Arc<ReceivedTransaction<Types>>>,
 
     // last garbage collected view number
-    pub last_garbage_collected_view_num: Types::View,
+    pub last_garbage_collected_view_num: ViewNumber,
 
     // highest view running builder task
-    pub highest_view_num_builder_id: BuilderStateId<Types>,
+    pub highest_view_num_builder_id: BuilderStateId,
 
     pub block_size_limits: BlockSizeLimits,
 
@@ -217,8 +217,8 @@ impl<Types: NodeType> GlobalState<Types> {
         bootstrap_sender: BroadcastSender<MessageType<Types>>,
         tx_sender: BroadcastSender<Arc<ReceivedTransaction<Types>>>,
         bootstrapped_builder_state_id: VidCommitment,
-        bootstrapped_view_num: Types::View,
-        last_garbage_collected_view_num: Types::View,
+        bootstrapped_view_num: ViewNumber,
+        last_garbage_collected_view_num: ViewNumber,
         max_block_size_increment_period: Duration,
         protocol_max_block_size: u64,
         num_nodes: usize,
@@ -262,7 +262,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// result in unexpected behavior.
     pub fn register_builder_state(
         &mut self,
-        parent_id: BuilderStateId<Types>,
+        parent_id: BuilderStateId,
         built_from_proposed_block: ParentBlockReferences<Types>,
         request_sender: BroadcastSender<MessageType<Types>>,
     ) {
@@ -304,7 +304,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// stored with the same key in the [`Self::builder_state_to_last_built_block`].
     pub fn update_global_state(
         &mut self,
-        state_id: BuilderStateId<Types>,
+        state_id: BuilderStateId,
         build_block_info: BuildBlockInfo<Types>,
         response_msg: ResponseMessage,
     ) {
@@ -354,7 +354,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// target cutoff view number for tracking purposes.  The value returned
     /// is the cutoff view number such that the returned value indicates the
     /// point before which everything was cleaned up.
-    pub fn remove_handles(&mut self, on_decide_view: Types::View) -> Types::View {
+    pub fn remove_handles(&mut self, on_decide_view: ViewNumber) -> ViewNumber {
         // remove everything from the spawned builder states when view_num <= on_decide_view;
         // if we don't have a highest view > decide, use highest view as cutoff.
         let cutoff = std::cmp::min(self.highest_view_num_builder_id.parent_view, on_decide_view);
@@ -364,7 +364,7 @@ impl<Types: NodeType> GlobalState<Types> {
         let cutoff_u64 = cutoff.u64();
         let gc_view = if cutoff_u64 > 0 { cutoff_u64 - 1 } else { 0 };
 
-        self.last_garbage_collected_view_num = Types::View::new(gc_view);
+        self.last_garbage_collected_view_num = ViewNumber::new(gc_view);
 
         cutoff
     }
@@ -440,7 +440,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// instead.
     pub(crate) fn get_channel_for_matching_builder_or_highest_view_builder(
         &self,
-        key: &BuilderStateId<Types>,
+        key: &BuilderStateId,
     ) -> Result<&BroadcastSender<MessageType<Types>>, GetChannelForMatchingBuilderError> {
         if let Some(id_and_sender) = self.spawned_builder_states.get(key) {
             tracing::info!("Got matching builder for parent {key}");
@@ -460,7 +460,7 @@ impl<Types: NodeType> GlobalState<Types> {
     }
 
     // check for the existence of the builder state for a view
-    pub fn check_builder_state_existence_for_a_view(&self, key: &Types::View) -> bool {
+    pub fn check_builder_state_existence_for_a_view(&self, key: &ViewNumber) -> bool {
         // iterate over the spawned builder states and check if the view number exists
         self.spawned_builder_states
             .iter()
@@ -469,8 +469,8 @@ impl<Types: NodeType> GlobalState<Types> {
 
     pub fn should_view_handle_other_proposals(
         &self,
-        builder_view: &Types::View,
-        proposal_view: &Types::View,
+        builder_view: &ViewNumber,
+        proposal_view: &ViewNumber,
     ) -> bool {
         *builder_view == self.highest_view_num_builder_id.parent_view
             && !self.check_builder_state_existence_for_a_view(proposal_view)
@@ -629,7 +629,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
 
         let state_id = BuilderStateId {
             parent_commitment: *for_parent,
-            parent_view: Types::View::new(view_number),
+            parent_view: ViewNumber::new(view_number),
         };
 
         // verify the signature
@@ -805,7 +805,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
     ) -> Result<AvailableBlockData<Types>, ClaimBlockError<Types>> {
         let block_id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         tracing::info!("Received request for claiming block {block_id}",);
@@ -881,7 +881,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
     ) -> Result<AvailableBlockHeaderInputV1<Types>, ClaimBlockHeaderInputError<Types>> {
         let id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         tracing::info!("Received request for claiming block header input for block {id}");
@@ -1335,9 +1335,9 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
 
 async fn handle_decide_event<Types: NodeType>(
     decide_channel_sender: &BroadcastSender<MessageType<Types>>,
-    latest_decide_view_number: Types::View,
+    latest_decide_view_number: ViewNumber,
 ) {
-    let decide_msg: DecideMessage<Types> = DecideMessage::<Types> {
+    let decide_msg: DecideMessage = DecideMessage {
         latest_decide_view_number,
     };
     tracing::debug!("Sending Decide event to builder states for view {latest_decide_view_number}");
@@ -1555,8 +1555,7 @@ mod test {
         message::Proposal,
         simple_certificate::QuorumCertificate2,
         traits::{
-            block_contents::Transaction,
-            node_implementation::{ConsensusTime, Versions},
+            block_contents::Transaction, node_implementation::Versions,
             signature_key::BuilderSignatureKey,
         },
         utils::{BuilderCommitment, EpochTransitionIndicator},
@@ -4522,7 +4521,7 @@ mod test {
         tracing::debug!("start tests on correctly setting transaction status.");
 
         let mut round = 0;
-        let mut current_builder_state_id = BuilderStateId::<TestTypes> {
+        let mut current_builder_state_id = BuilderStateId {
             parent_commitment: vid_commitment::<TestVersions>(
                 &[],
                 &[],

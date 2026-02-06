@@ -25,7 +25,7 @@ use vbs::version::Version;
 
 use super::{node_implementation::Versions, signature_key::BuilderSignatureKey};
 use crate::{
-    data::{Leaf2, VidCommitment},
+    data::{Leaf2, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
     utils::BuilderCommitment,
@@ -210,7 +210,7 @@ pub trait BlockHeader<TYPES: NodeType>:
     fn builder_commitment(&self) -> BuilderCommitment;
 
     /// Get the light client state
-    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState>;
 
     /// Returns the `auth_root` value for versions >= V4 (`DrbAndHeaderUpgrade`).
     ///

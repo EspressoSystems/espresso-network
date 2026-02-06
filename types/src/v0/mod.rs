@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{
         node_implementation::{NodeType, Versions},
@@ -141,8 +140,6 @@ pub use v0_4::StateCertQueryDataV2;
 pub struct SeqTypes;
 
 impl NodeType for SeqTypes {
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = Header;
     type BlockPayload = Payload;
     type SignatureKey = PubKey;

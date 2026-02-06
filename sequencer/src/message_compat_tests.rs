@@ -28,9 +28,7 @@ use hotshot_types::{
     },
     simple_certificate::{DaCertificate, QuorumCertificate, UpgradeCertificate},
     simple_vote::{DaData, DaVote, QuorumData, QuorumVote, UpgradeProposalData, UpgradeVote},
-    traits::{
-        node_implementation::ConsensusTime, signature_key::SignatureKey, BlockPayload, EncodeBytes,
-    },
+    traits::{signature_key::SignatureKey, BlockPayload, EncodeBytes},
 };
 use pretty_assertions::assert_eq;
 use serde_json::Value;

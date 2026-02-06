@@ -16,7 +16,7 @@ use hotshot_testing::{
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, ViewNumber},
-    traits::{consensus_api::ConsensusApi, node_implementation::ConsensusTime},
+    traits::{consensus_api::ConsensusApi},
 };
 use itertools::Itertools;
 use tokio::time::timeout;

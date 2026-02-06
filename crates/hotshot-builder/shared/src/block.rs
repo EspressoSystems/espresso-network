@@ -4,11 +4,8 @@ use std::time::Instant;
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{fake_commitment, Leaf2, VidCommitment},
-    traits::{
-        block_contents::Transaction,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    data::{fake_commitment, Leaf2, VidCommitment, ViewNumber},
+    traits::{block_contents::Transaction, node_implementation::NodeType},
     utils::BuilderCommitment,
 };
 
@@ -51,14 +48,14 @@ impl<Types: NodeType> ReceivedTransaction<Types> {
 
 /// Unique identifier for a block
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct BlockId<Types: NodeType> {
+pub struct BlockId {
     /// Block hash
     pub hash: BuilderCommitment,
     /// Block view
-    pub view: Types::View,
+    pub view: ViewNumber,
 }
 
-impl<Types: NodeType> std::fmt::Display for BlockId<Types> {
+impl std::fmt::Display for BlockId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -76,14 +73,14 @@ impl<Types: NodeType> std::fmt::Display for BlockId<Types> {
 /// builder with given state ID assumes blocks/bundles it's building
 /// are going to be included immediately after the parent block.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct BuilderStateId<Types: NodeType> {
+pub struct BuilderStateId {
     /// View number of the parent block
-    pub parent_view: Types::View,
+    pub parent_view: ViewNumber,
     /// VID commitment of the parent block
     pub parent_commitment: VidCommitment,
 }
 
-impl<Types: NodeType> std::fmt::Display for BuilderStateId<Types> {
+impl std::fmt::Display for BuilderStateId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -97,7 +94,7 @@ impl<Types: NodeType> std::fmt::Display for BuilderStateId<Types> {
 #[derive(derive_more::Debug, Clone, PartialEq, Eq)]
 pub struct ParentBlockReferences<Types: NodeType> {
     /// View on which the parent block was proposed
-    pub view_number: Types::View,
+    pub view_number: ViewNumber,
     /// VID commitment of the parent block payload
     pub vid_commitment: VidCommitment,
     /// Leaf commitment of the parent leaf
@@ -107,17 +104,14 @@ pub struct ParentBlockReferences<Types: NodeType> {
     /// Number of transactions included in the parent block
     pub tx_count: usize,
     /// Last known view that had a block with transactions
-    pub last_nonempty_view: Option<Types::View>,
+    pub last_nonempty_view: Option<ViewNumber>,
 }
 
-impl<Types> ParentBlockReferences<Types>
-where
-    Types: NodeType,
-{
+impl<Types: NodeType> ParentBlockReferences<Types> {
     /// Create mock references for bootstrap (don't correspond to a real block)
     pub fn bootstrap() -> Self {
         Self {
-            view_number: Types::View::genesis(),
+            view_number: ViewNumber::genesis(),
             vid_commitment: VidCommitment::default(),
             leaf_commit: fake_commitment(),
             builder_commitment: BuilderCommitment::from_bytes([]),

@@ -134,7 +134,7 @@ where
         })
     }
 
-    pub fn id(&self) -> BuilderStateId<Types> {
+    pub fn id(&self) -> BuilderStateId {
         BuilderStateId {
             parent_view: self.parent_block_references.view_number,
             parent_commitment: self.parent_block_references.vid_commitment,

@@ -17,7 +17,7 @@ use hotshot_task::task::{ConsensusTaskRegistry, NetworkTaskRegistry, Task, TaskS
 use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 use hotshot_types::{
     consensus::Consensus,
-    data::{Leaf2, QuorumProposalWrapper},
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     message::{Message, MessageKind, Proposal, RecipientList},
@@ -26,7 +26,7 @@ use hotshot_types::{
     traits::{
         consensus_api::ConsensusApi,
         network::{BroadcastDelay, ConnectedNetwork, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     vote::HasViewNumber,
@@ -105,9 +105,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     ) -> Result<()> {
         let message = Message {
             sender: self.public_key().clone(),
-            kind: MessageKind::External(msg),
+            kind: MessageKind::<TYPES>::External(msg),
         };
-        let view: TYPES::View = message.view_number();
+        let view: ViewNumber = message.view_number();
         let serialized_message = self.hotshot.upgrade_lock.serialize(&message).await?;
 
         match recipients {
@@ -148,7 +148,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     /// Errors if signing the request for proposal fails
     pub fn request_proposal(
         &self,
-        view: TYPES::View,
+        view: ViewNumber,
         leaf_commitment: Commitment<Leaf2<TYPES>>,
     ) -> Result<impl futures::Future<Output = Result<Proposal<TYPES, QuorumProposalWrapper<TYPES>>>>>
     {
@@ -227,7 +227,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     /// return [`None`] if the requested view has already been decided (but see
     /// [`decided_state`](Self::decided_state)) or if there is no path for the requested
     /// view to ever be decided.
-    pub async fn state(&self, view: TYPES::View) -> Option<Arc<TYPES::ValidatedState>> {
+    pub async fn state(&self, view: ViewNumber) -> Option<Arc<TYPES::ValidatedState>> {
         self.hotshot.state(view).await
     }
 
@@ -305,8 +305,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     #[allow(clippy::unused_async)] // async for API compatibility reasons
     pub async fn leader(
         &self,
-        view_number: TYPES::View,
-        epoch_number: Option<TYPES::Epoch>,
+        view_number: ViewNumber,
+        epoch_number: Option<EpochNumber>,
     ) -> Result<TYPES::SignatureKey> {
         self.hotshot
             .membership_coordinator
@@ -341,13 +341,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
 
     /// Wrapper to get the view number this node is on.
     #[instrument(skip_all, target = "SystemContextHandle", fields(id = self.hotshot.id))]
-    pub async fn cur_view(&self) -> TYPES::View {
+    pub async fn cur_view(&self) -> ViewNumber {
         self.hotshot.consensus.read().await.cur_view()
     }
 
     /// Wrapper to get the epoch number this node is on.
     #[instrument(skip_all, target = "SystemContextHandle", fields(id = self.hotshot.id))]
-    pub async fn cur_epoch(&self) -> Option<TYPES::Epoch> {
+    pub async fn cur_epoch(&self) -> Option<EpochNumber> {
         self.hotshot.consensus.read().await.cur_epoch()
     }
 

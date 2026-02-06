@@ -78,7 +78,7 @@ pub mod testing {
         light_client::StateKeyPair,
         traits::{
             block_contents::BlockHeader,
-            node_implementation::{ConsensusTime, NodeType, Versions},
+            node_implementation::{NodeType, Versions},
             signature_key::BuilderSignatureKey as _,
         },
         HotShotConfig, PeerConfig, ValidatorConfig,

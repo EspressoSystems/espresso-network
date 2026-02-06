@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, Sender};
 use committable::Committable;
 use hotshot_types::{
     consensus::{Consensus, LockedConsensusState, OuterConsensus},
-    data::VidDisperseShare,
+    data::{EpochNumber, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     traits::{
@@ -147,7 +147,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     /// if the calculation was done
     async fn get_or_calc_vid_share(
         &self,
-        view: TYPES::View,
+        view: ViewNumber,
         sender: &TYPES::SignatureKey,
     ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
         let consensus_reader = self.consensus.read().await;
@@ -240,11 +240,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     }
 
     /// Makes sure the sender is allowed to send a request in the given epoch.
-    async fn valid_sender(
-        &self,
-        sender: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
-    ) -> bool {
+    async fn valid_sender(&self, sender: &TYPES::SignatureKey, epoch: Option<EpochNumber>) -> bool {
         let Ok(memb) = self.membership.stake_table_for_epoch(epoch).await else {
             return false;
         };

@@ -16,7 +16,7 @@ use futures::future::{err, join_all};
 use hotshot_task::task::{Task, TaskState};
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus},
-    data::{EpochNumber, Leaf, ViewChangeEvidence2},
+    data::{EpochNumber, Leaf, ViewChangeEvidence2, ViewNumber},
     epoch_membership::{self, EpochMembership, EpochMembershipCoordinator},
     event::Event,
     message::UpgradeLock,
@@ -24,7 +24,7 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
     utils::option_epoch_from_block_number,
@@ -56,10 +56,10 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub consensus: OuterConsensus<TYPES>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Membership for Quorum Certs/votes
     pub membership: EpochMembershipCoordinator<TYPES>,
@@ -75,7 +75,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
 
     /// Spawned tasks related to a specific view, so we can cancel them when
     /// they are stale
-    pub spawned_tasks: BTreeMap<TYPES::View, Vec<JoinHandle<()>>>,
+    pub spawned_tasks: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 
     /// The node's id
     pub id: u64,
@@ -87,7 +87,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub epoch_height: u64,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
 /// all the info we need to validate a proposal.  This makes it easy to spawn an effemeral task to
@@ -121,14 +121,14 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub epoch_height: u64,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     QuorumProposalRecvTaskState<TYPES, I, V>
 {
     /// Cancel all tasks the consensus tasks has spawned before the given view
-    pub fn cancel_tasks(&mut self, view: TYPES::View) {
+    pub fn cancel_tasks(&mut self, view: ViewNumber) {
         let keep = self.spawned_tasks.split_off(&view);
         while let Some((_, tasks)) = self.spawned_tasks.pop_first() {
             for task in tasks {
@@ -162,7 +162,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     );
                     return;
                 }
-                let proposal_epoch = option_epoch_from_block_number::<TYPES>(
+                let proposal_epoch = option_epoch_from_block_number(
                     proposal.data.proposal.epoch().is_some(),
                     proposal.data.block_header().block_number(),
                     self.epoch_height,
@@ -210,7 +210,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // view we want to KEEP tasks for.  We keep the view prior to this because
                 // we might still be processing the proposal from view V which caused us
                 // to enter view V + 1.
-                let oldest_view_to_keep = TYPES::View::new(view.saturating_sub(1));
+                let oldest_view_to_keep = ViewNumber::new(view.saturating_sub(1));
                 self.cancel_tasks(oldest_view_to_keep);
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {

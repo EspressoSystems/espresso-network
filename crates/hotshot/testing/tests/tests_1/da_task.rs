@@ -24,7 +24,7 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, PackedBundle, ViewNumber},
     simple_vote::DaData2,
-    traits::node_implementation::{ConsensusTime, Versions},
+    traits::node_implementation::{Versions},
 };
 use vbs::version::{StaticVersionType, Version};
 

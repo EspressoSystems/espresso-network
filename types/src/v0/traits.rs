@@ -24,7 +24,7 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     traits::{
         metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         storage::Storage,
         ValidatedState as HotShotState,
     },
@@ -951,14 +951,14 @@ pub trait SequencerPersistence:
 
     async fn store_drb_result(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
     async fn store_epoch_root(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()>;
     async fn add_state_cert(
@@ -1087,7 +1087,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn store_drb_result(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
         (**self).store_drb_result(epoch, drb_result).await
@@ -1095,7 +1095,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn store_epoch_root(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
         (**self).store_epoch_root(epoch, block_header).await

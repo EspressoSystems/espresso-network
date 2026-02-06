@@ -792,7 +792,7 @@ pub mod node_tests {
         simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::{
             block_contents::{BlockHeader, EncodeBytes},
-            node_implementation::{ConsensusTime, Versions},
+            node_implementation::Versions,
         },
         vid::advz::{advz_scheme, ADVZScheme},
     };

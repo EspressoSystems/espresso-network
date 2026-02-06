@@ -9,11 +9,8 @@ use espresso_contract_deployer::network_config::{
     fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
 };
 use hotshot_types::{
-    data::EpochNumber,
-    light_client::StateVerKey,
-    stake_table::one_honest_threshold,
-    traits::{node_implementation::ConsensusTime, signature_key::StakeTableEntryType},
-    utils::epoch_from_block_number,
+    data::EpochNumber, light_client::StateVerKey, stake_table::one_honest_threshold,
+    traits::signature_key::StakeTableEntryType, utils::epoch_from_block_number,
 };
 use url::Url;
 
