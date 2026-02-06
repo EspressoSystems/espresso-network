@@ -169,11 +169,6 @@ Options:
 
           [env: SKIP_SIMULATION=]
 
-      --skip-metadata-validation
-          Skip metadata URI validation (fetch and schema check)
-
-          [env: SKIP_METADATA_VALIDATION=]
-
       --output <OUTPUT>
           Output file path. If not specified, outputs to stdout
 
@@ -468,7 +463,19 @@ Options for `--metadata-uri`:
 
 3. **No metadata:** `--no-metadata-uri`
 
-Use `--skip-metadata-validation` if your endpoint isn't ready yet. URL cannot exceed 2048 bytes.
+**Skipping validation:** If your metadata endpoint isn't ready yet, use `--skip-metadata-validation` after the
+`--metadata-uri` argument:
+
+```bash
+staking-cli register-validator \
+    --consensus-private-key BLS_SIGNING_KEY~... \
+    --state-private-key SCHNORR_SIGNING_KEY~... \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --skip-metadata-validation
+```
+
+URL cannot exceed 2048 bytes.
 
 The CLI automatically detects the format (JSON or OpenMetrics) by examining the content. This works with any hosting
 service, including GitHub raw URLs.
@@ -528,6 +535,13 @@ Note: The minimum time interval and maximum increase are contract parameters tha
 ```bash
 staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
     --consensus-public-key BLS_VER_KEY~...
+```
+
+To skip validation (if endpoint isn't ready):
+
+```bash
+staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
+    --skip-metadata-validation
 ```
 
 See [Validator Metadata](#validator-metadata) for format options. Use `--no-metadata-uri` to clear.
