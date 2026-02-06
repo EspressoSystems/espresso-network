@@ -10,13 +10,11 @@ use espresso_types::{
         ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{
-        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
-        REWARD_MERKLE_TREE_V2_HEIGHT,
-    },
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     NodeState, ValidatedState,
 };
+use futures::future::Future;
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
     availability::{BlockId, LeafId},
@@ -44,7 +42,7 @@ use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme,
 };
 use serde_json::Value;
-use sqlx::{Encode, Type};
+use sqlx::{Encode, Row, Type};
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -52,7 +50,7 @@ use super::{
     BlocksFrontier,
 };
 use crate::{
-    api::RewardAccountProofDataSource,
+    api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{sql::Options, ChainConfigPersistence},
     state::compute_state_update,
@@ -102,7 +100,7 @@ impl SequencerDataSource for DataSource {
     }
 }
 
-impl RewardAccountProofDataSource for SqlStorage {
+impl RewardMerkleTreeDataSource for SqlStorage {
     async fn load_v1_reward_account_proof(
         &self,
         height: u64,
@@ -143,46 +141,238 @@ impl RewardAccountProofDataSource for SqlStorage {
         }
     }
 
-    async fn load_v2_reward_account_proof(
+    fn persist_tree(
         &self,
         height: u64,
-        account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch reward account {account:?}; height {height}"
-        ))?;
-
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
-
-        // Check if we have the desired state snapshot. If so, we can load the desired accounts
-        // directly.
-        if height < block_height {
-            let (tree, _) = load_v2_reward_accounts(self, height, &[account])
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            let mut tx = self
+                .write()
                 .await
-                .with_context(|| {
-                    format!("failed to load v2 reward account {account:?} at height {height}")
-                })?;
+                .context("opening transaction for state update")?;
 
-            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
-                .with_context(|| {
-                    format!("reward account {account:?} not available at height {height}")
-                })?;
+            tx.upsert(
+                "reward_merkle_tree_v2_data",
+                ["height", "balances"],
+                ["height"],
+                [(height as i64, merkle_tree)],
+            )
+            .await?;
 
-            Ok(RewardAccountQueryDataV2 { balance, proof })
-        } else {
-            bail!(
-                "requested height {height} is not yet available (latest block height: \
-                 {block_height})"
-            );
+            hotshot_query_service::data_source::Transaction::commit(tx)
+                .await
+                .context("Transaction to store reward merkle tree failed.")?;
+
+            Ok(())
+        }
+    }
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction for state update")?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT balances
+                FROM reward_merkle_tree_v2_data
+                WHERE height = $1
+                "#,
+            )
+            .bind(height as i64)
+            .fetch_optional(tx.as_mut())
+            .await?
+            .context(format!(
+                "No reward merkle tree for height {} in storage",
+                height
+            ))?;
+
+            row.try_get::<Vec<u8>, _>("balances")
+                .context("Missing field balances from row; this should never happen")
+        }
+    }
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            let mut iter = proofs.map(|(account, proof)| (height as i64, account, proof));
+
+            loop {
+                let mut chunk = Vec::with_capacity(20);
+
+                for _ in 0..20 {
+                    let Some(row) = iter.next() else {
+                        continue;
+                    };
+                    chunk.push(row);
+                }
+
+                if chunk.is_empty() {
+                    break;
+                }
+
+                let mut tx = self
+                    .write()
+                    .await
+                    .context("opening transaction for state update")?;
+
+                tokio::spawn(async move {
+                    tx.upsert(
+                        "reward_merkle_tree_v2_proofs",
+                        ["height", "account", "proof"],
+                        ["height", "account"],
+                        chunk,
+                    )
+                    .await?;
+
+                    hotshot_query_service::data_source::Transaction::commit(tx)
+                        .await
+                        .context("Transaction to store reward merkle tree failed.")?;
+
+                    Ok::<_, anyhow::Error>(())
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction for state update")?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT proof 
+                FROM reward_merkle_tree_v2_proofs
+                WHERE height = $1 AND account = $2
+                "#,
+            )
+            .bind(height as i64)
+            .bind(account)
+            .fetch_optional(tx.as_mut())
+            .await?
+            .context(format!("Missing proofs at height {}", height))?;
+
+            row.try_get::<Vec<u8>, _>("proof")
+                .context("Missing field proof from row; this should never happen")
+        }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction for state update")?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT proof 
+                FROM reward_merkle_tree_v2_proofs
+                WHERE account = $1
+                ORDER BY height DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(account)
+            .fetch_optional(tx.as_mut())
+            .await?
+            .context("Missing proofs")?;
+
+            row.try_get::<Vec<u8>, _>("proof")
+                .context("Missing field proof from row; this should never happen")
+        }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            {
+                let mut tx = self
+                    .write()
+                    .await
+                    .context("opening transaction for state update")?;
+
+                sqlx::query(
+                    r#"
+                  DELETE FROM reward_merkle_tree_v2_data
+                  WHERE height < $1
+                "#,
+                )
+                .bind(height as i64)
+                .fetch_optional(tx.as_mut())
+                .await?;
+
+                hotshot_query_service::data_source::Transaction::commit(tx)
+                    .await
+                    .context(
+                        "Transaction to garbage collect reward merkle trees from storage failed.",
+                    )?;
+            }
+            {
+                let mut tx = self
+                    .write()
+                    .await
+                    .context("opening transaction for state update")?;
+
+                sqlx::query(
+                    r#"
+                  DELETE FROM reward_merkle_tree_v2_proofs
+                  WHERE height < $1
+                "#,
+                )
+                .bind(height as i64)
+                .fetch_optional(tx.as_mut())
+                .await?;
+
+                hotshot_query_service::data_source::Transaction::commit(tx)
+                    .await
+                    .context("Transaction to garbage collect proofs from storage failed.")?;
+            }
+
+            Ok(())
+        }
+    }
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
+        async move {
+            let Ok(mut tx) = self.write().await else {
+                return false;
+            };
+
+            sqlx::query_as(
+                r#"
+                SELECT EXISTS(
+                SELECT 1 FROM reward_merkle_tree_v2_proofs
+                WHERE height = $1
+                )
+                "#,
+            )
+            .bind(height as i64)
+            .fetch_one(tx.as_mut())
+            .await
+            .ok()
+            .unwrap_or((false,))
+            .0
         }
     }
 }
+
 impl CatchupStorage for SqlStorage {
     async fn get_reward_accounts_v1(
         &self,
@@ -250,7 +440,7 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_v2_reward_accounts(self, height, accounts).await
+            load_reward_merkle_tree_v2(self, height).await
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -498,7 +688,7 @@ impl CatchupStorage for SqlStorage {
     }
 }
 
-impl RewardAccountProofDataSource for DataSource {
+impl RewardMerkleTreeDataSource for DataSource {
     async fn load_v1_reward_account_proof(
         &self,
         height: u64,
@@ -509,14 +699,47 @@ impl RewardAccountProofDataSource for DataSource {
             .await
     }
 
-    async fn load_v2_reward_account_proof(
+    fn persist_tree(
         &self,
         height: u64,
-        account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        self.as_ref()
-            .load_v2_reward_account_proof(height, account)
-            .await
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.as_ref().persist_tree(height, merkle_tree).await }
+    }
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.as_ref().load_tree(height).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.as_ref().garbage_collect(height).await }
+    }
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.as_ref().persist_proofs(height, proofs).await }
+    }
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.as_ref().load_proof(height, account).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.as_ref().load_latest_proof(account).await }
+    }
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
+        async move { self.as_ref().proof_exists(height).await }
     }
 }
 
@@ -727,10 +950,9 @@ async fn load_v1_reward_accounts(
 }
 
 /// Loads reward accounts for new reward merkle tree (V4).
-async fn load_v2_reward_accounts(
+async fn load_reward_merkle_tree_v2(
     db: &SqlStorage,
     height: u64,
-    accounts: &[RewardAccountV2],
 ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
     // Open a new read transaction to get the leaf
     let mut tx = db
@@ -743,94 +965,8 @@ async fn load_v2_reward_accounts(
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
         .with_context(|| format!("leaf {height} not available"))?;
-    let header = leaf.header();
 
-    // If the header is before the epoch version, we can return the new reward merkle tree
-    if header.version() <= EpochVersion::version() {
-        return Ok((
-            RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT),
-            leaf.leaf().clone(),
-        ));
-    }
-
-    // Get the merkle root from the header and create a snapshot from it
-    let merkle_root = header.reward_merkle_tree_root().unwrap_right();
-    let mut snapshot = RewardMerkleTreeV2::from_commitment(merkle_root);
-
-    // Create a bounded join set with 10 concurrent tasks
-    let mut join_set = BoundedJoinSet::new(10);
-
-    // Create a map from task ID to account
-    let mut task_id_to_account = HashMap::new();
-
-    // Loop through each account, spawning a task to get the path for the account
-    for account in accounts {
-        // Clone things we will need in the closure
-        let db_clone = db.clone();
-        let account_clone = *account;
-        let header_height = header.height();
-
-        // Create the closure that will get the path for the account
-        let func = async move {
-            // Open a new transaction
-            let mut tx = db_clone
-                .read()
-                .await
-                .with_context(|| "failed to open read transaction")?;
-
-            // Get the path for the account
-            let proof = tx
-                .get_path(
-                    Snapshot::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::Index(
-                        header_height,
-                    ),
-                    account_clone,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to get path for v2 reward account {account_clone:?}; height \
-                         {height}"
-                    )
-                })?;
-
-            Ok::<_, anyhow::Error>(proof)
-        };
-
-        // Spawn the task
-        let id = join_set.spawn(func).id();
-
-        // Add the task ID to the account map
-        task_id_to_account.insert(id, account);
-    }
-
-    // Wait for each task to complete
-    while let Some(result) = join_set.join_next_with_id().await {
-        // Get the inner result (past the join error)
-        let (id, result) = result.with_context(|| "failed to join task")?;
-
-        // Get the proof from the result
-        let proof = result?;
-
-        // Get the account from the task ID to account map
-        let account = task_id_to_account
-            .remove(&id)
-            .with_context(|| "task ID for spawned task not found")?;
-
-        match proof.proof.first().with_context(|| {
-            format!("empty proof for v2 reward account {account:?}; height {height}")
-        })? {
-            MerkleNode::Leaf { pos, elem, .. } => {
-                snapshot.remember(*pos, *elem, proof)?;
-            },
-            MerkleNode::Empty => {
-                snapshot.non_membership_remember(*account, proof)?;
-            },
-            _ => {
-                bail!("invalid proof for v2 reward account {account:?}; height {height}");
-            },
-        }
-    }
+    let snapshot = db.load_reward_merkle_tree_v2(height).await?;
 
     Ok((snapshot, leaf.leaf().clone()))
 }
@@ -1005,14 +1141,13 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             );
         },
         either::Either::Right(expected_root) => {
-            state.reward_merkle_tree_v2 =
-                load_v2_reward_accounts(db, from_height, &reward_accounts)
-                    .await
-                    .context(
-                        "unable to reconstruct state because v2 reward accounts are not available \
-                         at origin",
-                    )?
-                    .0;
+            state.reward_merkle_tree_v2 = load_reward_merkle_tree_v2(db, from_height)
+                .await
+                .context(
+                    "unable to reconstruct state because RewardMerkleTreeV2 not available at \
+                     origin",
+                )?
+                .0;
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
                 "loaded reward state does not match parent header"

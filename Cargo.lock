@@ -4510,6 +4510,7 @@ dependencies = [
  "jf-merkle-tree-compat",
  "jf-utils",
  "lru 0.12.5",
+ "moka",
  "num-traits",
  "parking_lot",
  "paste",

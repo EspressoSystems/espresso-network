@@ -1,6 +1,6 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -20,7 +20,10 @@ use espresso_types::{
         ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
         StakeTableEvent, Validator,
     },
-    v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
 };
@@ -28,7 +31,7 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
-use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
+use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -53,6 +56,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
@@ -96,9 +100,6 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
     #[derivative(Debug = "ignore")]
     sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
 
-    // we cache `token_contract_address` for the lifetime of the program, since we do not expect this to ever change
-    token_contract_address: Cache<(), Address>,
-
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
@@ -107,7 +108,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
     fn new(context_init: impl Future<Output = SequencerContext<N, P, V>> + Send + 'static) -> Self {
         Self {
             sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
-            token_contract_address: Cache::builder().max_capacity(1).build(),
             token_supply: Cache::builder()
                 .max_capacity(1)
                 .time_to_live(Duration::from_secs(3600))
@@ -290,51 +290,23 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDat
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         match self.token_supply.get(&()).await {
             Some(supply) => Ok(supply),
-            None => match self.token_contract_address.get(&()).await {
-                Some(token_contract_address) => {
-                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
-                    let provider = node_state.l1_client.provider;
+            None => {
+                let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                let token_contract_address = node_state.token_contract_address().await?;
 
-                    let token = EspToken::new(token_contract_address, provider.clone());
+                let provider = node_state.l1_client.provider;
 
-                    let supply = token
-                        .totalSupply()
-                        .call()
-                        .await
-                        .context("Failed to retrieve totalSupply from the contract")?;
+                let token = EspToken::new(token_contract_address, provider.clone());
 
-                    self.token_supply.insert((), supply).await;
+                let supply = token
+                    .totalSupply()
+                    .call()
+                    .await
+                    .context("Failed to retrieve totalSupply from the contract")?;
 
-                    Ok(supply)
-                },
-                None => {
-                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
-                    let stake_table_address = node_state
-                        .chain_config
-                        .stake_table_contract
-                        .context("No stake table contract in chain config")?;
+                self.token_supply.insert((), supply).await;
 
-                    let provider = node_state.l1_client.provider;
-
-                    let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
-                    let token_contract_address = stake_table.token().call().await?;
-
-                    self.token_contract_address
-                        .insert((), token_contract_address)
-                        .await;
-
-                    let token = EspToken::new(token_contract_address, provider.clone());
-
-                    let supply = token
-                        .totalSupply()
-                        .call()
-                        .await
-                        .context("Failed to retrieve totalSupply from the contract")?;
-
-                    self.token_supply.insert((), supply).await;
-
-                    Ok(supply)
-                },
+                Ok(supply)
             },
         }
     }
@@ -1279,7 +1251,201 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     }
 }
 
-pub(crate) trait RewardAccountProofDataSource: Sync {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Representation of the RewardMerkleTreeV2 as a set of key-value pairs
+pub(crate) struct RewardMerkleTreeV2Data {
+    balances: Vec<(RewardAccountV2, RewardAmount)>,
+}
+
+impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
+    type Error = anyhow::Error;
+    // Required method
+    fn try_into(self) -> anyhow::Result<RewardMerkleTreeV2Data> {
+        let num_leaves = self.num_leaves();
+
+        let balances: Vec<_> = self
+            .iter()
+            .map(|(account, balance)| (*account, *balance))
+            .collect();
+
+        if balances.len() as u64 == num_leaves {
+            Ok(RewardMerkleTreeV2Data { balances })
+        } else {
+            tracing::error!(
+                "Attempted to serialize an incomplete RewardMerkleTreeV2. This is not a fatal \
+                 error, but it should never happen and indicates that something may be seriously \
+                 wrong."
+            );
+            bail!(
+                "Failed to convert RewardMerkleTreeV2 into key-value pairs. Some accounts are \
+                 missing."
+            );
+        }
+    }
+}
+
+impl TryInto<RewardMerkleTreeV2> for RewardMerkleTreeV2Data {
+    type Error = anyhow::Error;
+    // Required method
+    fn try_into(self) -> anyhow::Result<RewardMerkleTreeV2> {
+        RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, self.balances)
+            .context("Failed to rebuild reward merkle tree from balances")
+    }
+}
+
+pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
+    fn load_v1_reward_account_proof(
+        &self,
+        _height: u64,
+        _account: RewardAccountV1,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>>;
+
+    fn save_reward_merkle_tree_v2(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        merkle_tree: &RewardMerkleTreeV2,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            {
+                let serialization =
+                    bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
+                        .context("Merkle tree serialization failed; this should never happen.")?;
+                self.persist_tree(height, serialization).await?;
+            }
+
+            // it's imperative that we do not block the state update loop from this point on.
+            // ultimately, we would retry in the next iteration anyway;
+            // all the information already exists.
+            if height.is_multiple_of(30) {
+                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
+                else {
+                    return Ok(());
+                };
+
+                // check to see whether we have proofs at that height already stored
+                if !self.proof_exists(finalized_hotshot_height).await {
+                    let Ok(tree) = self
+                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
+                        .await
+                    else {
+                        return Ok(());
+                    };
+
+                    // we try to be careful to avoid allocating for all the proofs immediately,
+                    // but note that there are no guarantees here (if e.g. the database is slow)
+                    let iter =
+                        tree.iter()
+                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
+                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
+
+                                let proof = RewardAccountQueryDataV2 {
+                                    balance: (*balance).into(),
+                                    proof: proof.0,
+                                };
+
+                                let serialized_account = bincode::serialize(&account).ok()?;
+                                let serialized_proof = bincode::serialize(&proof).ok()?;
+
+                                Some((serialized_account, serialized_proof))
+                            });
+
+                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
+                        return Ok(());
+                    };
+
+                    let _ = self.garbage_collect(finalized_hotshot_height).await;
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    fn load_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV2>> {
+        async move {
+            let tree_bytes = self.load_tree(height).await?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes).context(
+                "Failed to deserialize RewardMerkleTreeV2 for height {height} from storage; this \
+                 should never happen.",
+            )?;
+
+            tree_data
+                .try_into()
+                .context("Failed to reconstruct reward merkle tree from storage")
+        }
+    }
+
+    fn load_reward_account_proof_v2(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move {
+            let serialized_account = bincode::serialize(&account).context(
+                "Failed to serialize RewardAccountV2 for lookup; this should never happen.",
+            )?;
+            let proof_bytes = self.load_proof(height, serialized_account).await?;
+
+            bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes).context(
+                "Failed to deserialize RewardAccountQueryDataV2 for height {height} from storage; \
+                 this should never happen.",
+            )
+        }
+    }
+
+    fn load_latest_reward_account_proof_v2(
+        &self,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move {
+            let serialized_account = bincode::serialize(&account).context(
+                "Failed to serialize RewardAccountV2 for lookup; this should never happen.",
+            )?;
+            let proof_bytes = self.load_latest_proof(serialized_account).await?;
+
+            bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes).context(
+                "Failed to deserialize RewardAccountQueryDataV2 for account {account} from \
+                 storage; this should never happen.",
+            )
+        }
+    }
+
+    fn persist_tree(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool>;
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>>;
+}
+
+impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsDataSource {
     fn load_v1_reward_account_proof(
         &self,
         _height: u64,
@@ -1290,24 +1456,67 @@ pub(crate) trait RewardAccountProofDataSource: Sync {
         }
     }
 
-    fn load_v2_reward_account_proof(
+    fn persist_tree(
         &self,
         _height: u64,
-        _account: RewardAccountV2,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
-        async {
+        _merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
             bail!("reward merklized state is not supported for this data source");
         }
     }
+
+    fn load_tree(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn garbage_collect(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn persist_proofs(
+        &self,
+        _height: u64,
+        _proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_proof(
+        &self,
+        _height: u64,
+        _account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_latest_proof(
+        &self,
+        _account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn proof_exists(&self, _height: u64) -> impl Send + Future<Output = bool> {
+        async move { false }
+    }
 }
 
-impl RewardAccountProofDataSource for hotshot_query_service::data_source::MetricsDataSource {}
-
-impl<T, S> RewardAccountProofDataSource
+impl<T, S> RewardMerkleTreeDataSource
     for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
-    T: RewardAccountProofDataSource,
-    S: Sync,
+    T: RewardMerkleTreeDataSource,
+    S: Send + Sync + Clone + 'static,
 {
     async fn load_v1_reward_account_proof(
         &self,
@@ -1319,14 +1528,47 @@ where
             .await
     }
 
-    async fn load_v2_reward_account_proof(
+    fn persist_tree(
         &self,
         height: u64,
-        account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        self.inner()
-            .load_v2_reward_account_proof(height, account)
-            .await
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().persist_tree(height, merkle_tree).await }
+    }
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_tree(height).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().garbage_collect(height).await }
+    }
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().persist_proofs(height, proofs).await }
+    }
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_proof(height, account).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_latest_proof(account).await }
+    }
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
+        async move { self.inner().proof_exists(height).await }
     }
 }
 

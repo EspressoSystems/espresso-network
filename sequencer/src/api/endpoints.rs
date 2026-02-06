@@ -48,9 +48,7 @@ use super::data_source::{
     CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
     StateSignatureDataSource, SubmitDataSource,
 };
-use crate::{
-    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
-};
+use crate::{api::RewardMerkleTreeDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence};
 
 mod availability;
 pub(super) use availability::*;
@@ -109,7 +107,7 @@ where
     <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
-        + RewardAccountProofDataSource
+        + RewardMerkleTreeDataSource
         + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {
@@ -123,44 +121,88 @@ where
     api.get("get_latest_reward_balance", move |req, state| {
         async move {
             let address = req.string_param("address")?;
-            let height = state.get_last_state_height().await?;
-            let snapshot = Snapshot::Index(height as u64);
-            let key = address
+            let account = address
                 .parse()
                 .map_err(|_| merklized_state::Error::Custom {
-                    message: "failed to parse reward address".to_string(),
+                    message: format!("invalid reward address: {address}"),
                     status: StatusCode::BAD_REQUEST,
                 })?;
-            let path = state.get_path(snapshot, key).await?;
-            Ok(path.elem().copied())
+
+            state
+                .load_latest_reward_account_proof_v2(account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load latest reward account proof from storage for account \
+                         {account}: {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
+                .map(|proof| proof.balance)
+        }
+        .boxed()
+    })?
+    .get("get_latest_reward_account_proof", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let account = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: format!("invalid reward address: {address}"),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+
+            state
+                .load_latest_reward_account_proof_v2(account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load latest reward account proof from storage for account \
+                         {account}: {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?
     .get("get_reward_balance", move |req, state| {
         async move {
             let address = req.string_param("address")?;
-            let height: usize = req.integer_param("height")?;
-            let snapshot = Snapshot::Index(height as u64);
-            let key = address
+            let height = req.integer_param("height")?;
+            let account = address
                 .parse()
                 .map_err(|_| merklized_state::Error::Custom {
-                    message: "failed to parse reward address".to_string(),
+                    message: format!("invalid reward address: {address}"),
                     status: StatusCode::BAD_REQUEST,
                 })?;
-            let path = state.get_path(snapshot, key).await?;
 
-            let last_height = state.get_last_state_height().await?;
-
-            if height > last_height {
-                return Err(merklized_state::Error::Custom {
+            state
+                .load_reward_account_proof_v2(height, account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
                     message: format!(
-                        "requested height {height} is greater than last known height {last_height}"
+                        "failed to load v2 reward account {address} at height {height}: {err}"
                     ),
-                    status: StatusCode::BAD_REQUEST,
-                });
-            }
+                    status: StatusCode::NOT_FOUND,
+                })
+                .map(|proof| proof.balance)
+        }
+        .boxed()
+    })?
+    .get("get_reward_merkle_tree_v2", move |req, state| {
+        async move {
+            let height = req.integer_param("height")?;
 
-            Ok(path.elem().copied())
+            state
+                .load_tree(height)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load RewardMerkleTreeV2Data from storage at height {height}: \
+                         {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?;
@@ -205,7 +247,7 @@ where
                         })?;
 
                     state
-                        .load_v2_reward_account_proof(height, account)
+                        .load_reward_account_proof_v2(height, account)
                         .await
                         .map_err(|err| merklized_state::Error::Custom {
                             message: format!(
@@ -230,7 +272,7 @@ where
                         })?;
 
                     let proof = state
-                        .load_v2_reward_account_proof(height, account)
+                        .load_reward_account_proof_v2(height, account)
                         .await
                         .map_err(|err| merklized_state::Error::Custom {
                             message: format!(

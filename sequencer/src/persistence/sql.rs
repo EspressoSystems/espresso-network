@@ -6,17 +6,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context};
+use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
+use either::Either;
 use espresso_types::{
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     StakeTableHash, ValidatorMap,
 };
@@ -26,7 +28,7 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_query_service::{
-    availability::LeafQueryData,
+    availability::{BlockId, LeafQueryData},
     data_source::{
         storage::{
             pruning::PrunerCfg,
@@ -34,6 +36,7 @@ use hotshot_query_service::{
                 include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, Read, SqlStorage,
                 StorageConnectionType, Transaction, TransactionMode, Write,
             },
+            AvailabilityStorage,
         },
         Transaction as _, VersionedDataSource,
     },
@@ -63,9 +66,11 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
+    api::RewardMerkleTreeV2Data,
     catchup::SqlStateCatchup,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
     NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
@@ -1113,6 +1118,118 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
+    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
+        let max_height: Option<i64> = {
+            let mut tx = self.db.read().await?;
+            query_as::<(Option<i64>,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
+                .fetch_one(tx.as_mut())
+                .await?
+                .0
+        };
+
+        let max_height = match max_height {
+            Some(h) => h,
+            None => {
+                tracing::info!("no reward data found in reward_merkle_tree_v2, skipping migration");
+                return Ok(());
+            },
+        };
+
+        tracing::warn!("migrating reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height {max_height}...");
+
+        let mut tx = self.db.read().await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        let query_str = "SELECT DISTINCT ON (idx) idx, entry
+               FROM reward_merkle_tree_v2
+              WHERE idx IS NOT NULL AND created <= $1
+              ORDER BY idx DESC, created DESC";
+
+        #[cfg(feature = "embedded-db")]
+        let query_str = "SELECT idx, entry FROM (
+                 SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
+                         rn
+                   FROM reward_merkle_tree_v2
+                  WHERE created <= $1 AND idx IS NOT NULL
+             ) sub
+             WHERE rn = 1";
+
+        let rows = query_as::<(serde_json::Value, serde_json::Value)>(query_str)
+            .bind(max_height)
+            .fetch_all(tx.as_mut())
+            .await
+            .context("loading reward accounts from reward_merkle_tree_v2")?;
+
+        drop(tx);
+
+        let mut balances = Vec::with_capacity(rows.len());
+        for (idx, entry) in rows {
+            let account: RewardAccountV2 =
+                serde_json::from_value(idx).context("deserializing reward account")?;
+            let balance: RewardAmount = serde_json::from_value(entry).context(format!(
+                "deserializing reward balance for account {account}"
+            ))?;
+            balances.push((account, balance));
+        }
+
+        if balances.is_empty() {
+            tracing::info!("no reward accounts found, skipping tree rebuild");
+            return Ok(());
+        }
+
+        tracing::info!(
+            "rebuilding RewardMerkleTreeV2 from {} accounts",
+            balances.len()
+        );
+
+        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
+            .context("failed to rebuild RewardMerkleTreeV2 from balances")?;
+
+        let mut tx = self.db.read().await?;
+        let header = tx
+            .get_header(BlockId::<SeqTypes>::from(max_height as usize))
+            .await
+            .context(format!("header {max_height} not available"))?;
+        drop(tx);
+
+        match header.reward_merkle_tree_root() {
+            Either::Right(expected_root) => {
+                ensure!(
+                    tree.commitment() == expected_root,
+                    "rebuilt RewardMerkleTreeV2 commitment {} does not match header commitment {} \
+                     at height {max_height}",
+                    tree.commitment(),
+                    expected_root,
+                );
+            },
+            Either::Left(_) => {
+                bail!(
+                    "header at height {max_height} has a v1 reward merkle tree root, expected v2"
+                );
+            },
+        }
+
+        let tree_data: RewardMerkleTreeV2Data = (&tree)
+            .try_into()
+            .context("failed to convert RewardMerkleTreeV2 to RewardMerkleTreeV2Data")?;
+        let serialized =
+            bincode::serialize(&tree_data).context("failed to serialize RewardMerkleTreeV2Data")?;
+
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "reward_merkle_tree_v2_data",
+            ["height", "balances"],
+            ["height"],
+            [(max_height, serialized)],
+        )
+        .await?;
+        tx.commit().await?;
+
+        tracing::warn!("migrated reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height {max_height}");
+
+        Ok(())
+    }
+
     fn into_catchup_provider(
         self,
         backoff: BackoffParams,

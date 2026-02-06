@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -5,7 +7,10 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
+    v0_4::{
+        forgotten_accounts_include, RewardAccountProofV2, RewardAccountV2,
+        RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+    },
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };
@@ -22,9 +27,12 @@ use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
 use tokio::time::timeout;
 
-use crate::request_response::{
-    request::{Request, Response},
-    RequestResponseProtocol,
+use crate::{
+    api::RewardMerkleTreeV2Data,
+    request_response::{
+        request::{Request, Response},
+        RequestResponseProtocol,
+    },
 };
 
 #[async_trait]
@@ -140,6 +148,26 @@ impl<
         )
         .await
         .with_context(|| "timed out while fetching reward accounts")?
+    }
+
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        _retry: usize,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Fetch the reward accounts
+        timeout(
+            timeout_duration,
+            self.fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root, accounts),
+        )
+        .await
+        .with_context(|| "timed out while fetching reward merkle tree v2")?
     }
 
     async fn try_fetch_reward_accounts_v1(
@@ -389,6 +417,55 @@ impl<
         tracing::info!("Fetched blocks frontier for height: {height}, view: {view}");
 
         Ok(())
+    }
+
+    async fn fetch_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<RewardMerkleTreeV2> {
+        tracing::info!("Fetching RewardMerkleTreeV2 for height: {height}");
+
+        // Create the response validation function
+        let response_validation_fn = move |_request: &Request, response: Response| {
+            let accounts = accounts.clone();
+            async move {
+                // Make sure the response is a reward accounts response
+                let Response::RewardMerkleTreeV2(tree_bytes) = response else {
+                    return Err(anyhow::anyhow!("expected reward accounts response"));
+                };
+
+                let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+                    .context(
+                        "Failed to deserialize RewardMerkleTreeV2 for height {height} from remote",
+                    )?;
+
+                // Verify the tree's commitment
+                let reward_merkle_tree: RewardMerkleTreeV2 = tree_data.try_into().context(
+                    "Failed to reconstruct RewardMerkleTreeV2 for height {height} from remote",
+                )?;
+                anyhow::ensure!(reward_merkle_tree.commitment() == reward_merkle_tree_root);
+                anyhow::ensure!(!forgotten_accounts_include(&reward_merkle_tree, &accounts));
+
+                Ok(reward_merkle_tree)
+            }
+        };
+
+        // Wait for the protocol to send us the reward accounts
+        let response = self
+            .request_indefinitely(
+                Request::RewardMerkleTreeV2(height, *view),
+                RequestType::Batched,
+                response_validation_fn,
+            )
+            .await
+            .with_context(|| "failed to request reward accounts")?;
+
+        tracing::info!("Fetched RewardMerkleTreeV2 for height: {height}");
+
+        Ok(response)
     }
 
     async fn fetch_reward_accounts_v2(

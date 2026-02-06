@@ -54,6 +54,10 @@ pub struct NoStorage;
 
 #[async_trait]
 impl SequencerPersistence for NoStorage {
+    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         Ok(None)
     }

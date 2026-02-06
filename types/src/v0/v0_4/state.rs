@@ -26,6 +26,22 @@ pub type RewardMerkleTreeV2 = UniversalMerkleTree<
     REWARD_MERKLE_TREE_V2_ARITY,
     KeccakNode,
 >;
+
+    /// Return `true` if any of the given accounts have been forgotten in the `ValidatedState` reward_merkle_tree_v2
+    pub fn forgotten_accounts_include(
+        tree: &RewardMerkleTreeV2,
+        accounts: &[RewardAccountV2],
+    ) -> bool {
+      for account in accounts {
+        if tree.lookup(*account).expect_not_in_memory().is_ok() {
+          return true;
+        }
+      }
+
+      false
+    }
+
+
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
 // This is the same as `RewardAccountV1` but the `ToTraversal` trait implementation
