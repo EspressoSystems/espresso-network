@@ -224,7 +224,12 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     node_id < num_bootstrap as u64
                 );
 
-                let port = test_utils::reserve_udp_port().expect("Could not reserve UDP port");
+                // UDP has no TIME_WAIT, so there's a tiny race before libp2p binds.
+                let port = std::net::UdpSocket::bind("127.0.0.1:0")
+                    .expect("Could not bind UDP socket")
+                    .local_addr()
+                    .expect("Could not get UDP local addr")
+                    .port();
 
                 let addr =
                     Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();

@@ -4,13 +4,12 @@
 //! Use `test-utils` for utilities that only need standard library functionality.
 //! Use crate-specific `utils` modules for utilities that need workspace dependencies.
 //!
-//! # Port Reservation
+//! # Port Allocation
 //!
-//! The port reservation utilities use the TIME_WAIT trick to provide race-free port allocation:
-//! - `reserve_tcp_port()` - Returns a port protected from ephemeral allocation for ~60s
-//! - `reserve_udp_port()` - Returns an available UDP port (tiny race window, acceptable for tests)
+//! The `reserve_tcp_port()` function uses the TIME_WAIT trick to provide race-free port
+//! allocation, returning a port protected from ephemeral allocation for ~60s.
 
-use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::net::{TcpListener, TcpStream};
 
 /// Reserve a TCP port using the TIME_WAIT trick.
 ///
@@ -47,29 +46,6 @@ pub fn reserve_tcp_port() -> std::io::Result<u16> {
     // All sockets drop here - port enters TIME_WAIT
 
     Ok(addr.port())
-}
-
-/// Get an available UDP port.
-///
-/// UDP does not have a TIME_WAIT state, so this simply binds to an ephemeral
-/// port, notes the port number, and releases it. There is a tiny race window
-/// between release and the service binding, but this is acceptable for tests.
-///
-/// # Errors
-///
-/// Returns an error if unable to bind to any port on 127.0.0.1.
-///
-/// # Example
-///
-/// ```
-/// use test_utils::reserve_udp_port;
-///
-/// let port = reserve_udp_port().expect("Failed to get port");
-/// // Port was available at time of call, but may be reused by OS
-/// ```
-pub fn reserve_udp_port() -> std::io::Result<u16> {
-    let socket = UdpSocket::bind("127.0.0.1:0")?;
-    Ok(socket.local_addr()?.port())
 }
 
 #[cfg(test)]
@@ -146,22 +122,5 @@ mod tests {
             10,
             "All ports should be unique"
         );
-    }
-
-    #[test]
-    fn test_reserve_udp_port_returns_nonzero() {
-        let port = reserve_udp_port().unwrap();
-        assert_ne!(port, 0);
-    }
-
-    #[test]
-    fn test_reserve_udp_port_service_can_bind() {
-        let port = reserve_udp_port().unwrap();
-
-        // Service should be able to bind to the port we just released
-        let socket = UdpSocket::bind(format!("127.0.0.1:{}", port))
-            .expect("Service should bind to released UDP port");
-
-        assert_eq!(socket.local_addr().unwrap().port(), port);
     }
 }
