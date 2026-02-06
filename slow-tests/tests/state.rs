@@ -35,6 +35,7 @@ use sequencer::{
     SequencerApiVersion,
 };
 use surf_disco::Client;
+use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
 
@@ -43,8 +44,7 @@ type MockSequencerVersions =
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
-    // Use port 0 to let the OS assign an available port
-    let port = 0;
+    let port = reserve_tcp_port().expect("Failed to reserve TCP port");
 
     let storage = SqlDataSource::create_storage().await;
 
