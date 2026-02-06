@@ -23,7 +23,6 @@ extend-exclude = [
   "data/genesis/staging.toml",
   "data/genesis/staging-proposer.toml",
   "data/genesis/staging-new.toml",
-  "data/genesis/demo-da-committees.toml",
   "tests/proof_of_stake.rs",
 ]
 

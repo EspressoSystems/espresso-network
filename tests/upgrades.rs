@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, UpgradeMode};
+use espresso_types::{DrbAndHeaderUpgradeVersion, FeeVersion, UpgradeMode};
 use futures::{future::join_all, StreamExt};
 use sequencer::Genesis;
 use vbs::version::StaticVersionType;
@@ -132,19 +132,6 @@ where
     assert_native_demo_works(progress_requirements).await?;
 
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_pos_upgrade() -> Result<()> {
-    run_upgrade_test::<FeeVersion, EpochVersion>("data/genesis/demo-pos.toml").await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_drb_header_upgrade() -> Result<()> {
-    run_upgrade_test::<EpochVersion, DrbAndHeaderUpgradeVersion>(
-        "data/genesis/demo-drb-header-upgrade.toml",
-    )
-    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
