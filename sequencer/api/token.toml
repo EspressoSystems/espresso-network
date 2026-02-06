@@ -1,3 +1,7 @@
 [route.get_total_minted_supply]
 PATH = ["total-minted-supply"]
 DOC = "Get the total supply of the espresso token, counting only tokens that have been minted on Ethereum. Notably, this does not include unminted tokens from (for example) unclaimed rewards, or other sources. The value is returned as a decimal in token units, equal to the raw `totalSupply` retrieved from the contract divided by 10^18. Calls are cached for an hour after retrieval, so this endpoint should not be used if realtime information from the contract is required."
+
+[route.get_total_distributed_supply]
+PATH = ["total-distributed-supply"]
+DOC = "Get the total distributed block reward, whether or not those rewards have been minted. The reward returned is derived from this block's most recently decided leaf, and may not accurately reflect the state of rewards distributed on the network. The value is returned as a decimal in token units, equal to the raw `total_reward_distributed` on the block header divided by 10^18. Calls are cached for 12 seconds after retrieval."
