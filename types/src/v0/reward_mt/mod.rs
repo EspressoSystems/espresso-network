@@ -19,7 +19,7 @@
 use std::{borrow::Borrow, sync::Arc};
 
 use jf_merkle_tree_compat::{
-    internal::{MerkleTreeIntoIter, MerkleTreeIter},
+    internal::MerkleTreeIter,
     prelude::{MerkleNode, MerkleProof},
     universal_merkle_tree::UniversalMerkleTree,
     DigestAlgorithm, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -340,21 +340,54 @@ impl<S: RewardMerkleTreeStorage> MerkleTreeScheme for RewardMerkleTreeV2Impl<S> 
     }
 
     /// Iterate over all accounts and balances (not yet implemented)
+    ///
+    /// Note: This method is challenging to implement efficiently for the two-level tree structure
+    /// because MerkleTreeIter requires borrowing from a single tree. Use `into_iter()` instead
+    /// to consume the tree and iterate over all entries.
     fn iter(&'_ self) -> MerkleTreeIter<'_, Self::Element, Self::Index, Self::NodeValue> {
         todo!()
-        // self.inner.iter()
     }
 }
 
-/// Iterator over all accounts and balances (not yet implemented)
+/// Iterator over all accounts and balances
 impl<S: RewardMerkleTreeStorage> IntoIterator for RewardMerkleTreeV2Impl<S> {
     type Item = (RewardAccountV2, RewardAmount);
 
-    type IntoIter = MerkleTreeIntoIter<RewardAmount, RewardAccountV2, KeccakNode>;
+    type IntoIter = <std::vec::Vec<(RewardAccountV2, RewardAmount)> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        todo!()
-        // self.inner.into_iter()
+        // Collect all entries from all inner trees
+        let indices = self.storage.indices();
+        let mut all_entries = Vec::new();
+
+        for outer_idx in indices {
+            self.storage.with_tree(outer_idx, |root| {
+                // Traverse the MerkleNode tree to collect all leaf entries
+                collect_merkle_leaves(root, &mut all_entries);
+            });
+        }
+
+        all_entries.into_iter()
+    }
+}
+
+/// Helper function to recursively collect all leaf entries from a MerkleNode
+fn collect_merkle_leaves(
+    node: &storage::InnerRewardMerkleTreeRoot,
+    entries: &mut Vec<(RewardAccountV2, RewardAmount)>,
+) {
+    match node {
+        MerkleNode::Leaf { pos, elem, .. } => {
+            entries.push((*pos, *elem));
+        },
+        MerkleNode::Branch { children, .. } => {
+            for child in children.iter() {
+                collect_merkle_leaves(child, entries);
+            }
+        },
+        MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. } => {
+            // No leaves to collect
+        },
     }
 }
 
@@ -889,5 +922,42 @@ mod tests {
             known_accounts.len() as u64,
             "Number of leaves should match known accounts"
         );
+    }
+
+    #[test]
+    fn test_into_iter() {
+        let mut rng = ChaCha20Rng::seed_from_u64(424344);
+
+        let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+        let mut expected_entries = std::collections::HashMap::new();
+
+        // Insert accounts across multiple partitions
+        for _ in 0..20 {
+            let account = random_account(&mut rng);
+            let amount = random_amount(&mut rng);
+            expected_entries.insert(account, amount);
+            tree.update(account, amount).unwrap();
+        }
+
+        // Collect entries from iterator
+        let collected_entries: std::collections::HashMap<_, _> = tree.into_iter().collect();
+
+        // Verify all expected entries are present
+        assert_eq!(
+            collected_entries.len(),
+            expected_entries.len(),
+            "Iterator should return all entries"
+        );
+
+        for (account, expected_amount) in &expected_entries {
+            let collected_amount = collected_entries
+                .get(account)
+                .expect("Account should be in iterator results");
+            assert_eq!(
+                collected_amount, expected_amount,
+                "Amount should match for account {:?}",
+                account
+            );
+        }
     }
 }
