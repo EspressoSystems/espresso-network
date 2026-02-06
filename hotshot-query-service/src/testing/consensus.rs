@@ -231,6 +231,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                             hs_storage,
                             StorageMetricsValue::new(&*data_source.populate_metrics()),
+                            None,
                         )
                         .await
                         .unwrap()

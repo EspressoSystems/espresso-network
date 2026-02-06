@@ -33,6 +33,7 @@ cdn-client = { workspace = true }
 cdn-marshal = { workspace = true }
 chrono = { workspace = true }
 cliquenet = { workspace = true, features = ["metrics"] }
+collector-common = { path = "../../collector-common" }
 committable = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }

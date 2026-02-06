@@ -19,6 +19,6 @@ cross_tests!(
     Versions: [Vid2TestVersions],
     Ignore: false,
     Metadata: {
-        TestDescription::default().set_num_nodes(5, 5)
+        TestDescription::default().set_num_nodes(10, 1)
     },
 );

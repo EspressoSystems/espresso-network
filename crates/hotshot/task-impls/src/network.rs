@@ -12,6 +12,7 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
+use collector_common::{send_trace, Trace};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -98,7 +99,19 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
+
+                            let proposal_view_number = proposal.data.view_number();
+                            let event = HotShotEvent::QuorumProposalRecv(
+                                convert_proposal(proposal),
+                                sender,
+                            );
+
+                            // Send the trace when we receive the proposal
+                            let _ = send_trace(&Trace::ProposalReceivedEventGenerated(
+                                *proposal_view_number,
+                            ));
+
+                            event
                         },
                         GeneralConsensusMessage::Proposal2Legacy(proposal) => {
                             if !self
@@ -113,7 +126,19 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
+
+                            let proposal_view_number = proposal.data.view_number();
+                            let event = HotShotEvent::QuorumProposalRecv(
+                                convert_proposal(proposal),
+                                sender,
+                            );
+
+                            // Send the trace when we receive the proposal
+                            let _ = send_trace(&Trace::ProposalReceivedEventGenerated(
+                                *proposal_view_number,
+                            ));
+
+                            event
                         },
                         GeneralConsensusMessage::Proposal2(proposal) => {
                             if !self
@@ -128,7 +153,19 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
+
+                            let proposal_view_number = proposal.data.view_number();
+                            let event = HotShotEvent::QuorumProposalRecv(
+                                convert_proposal(proposal),
+                                sender,
+                            );
+
+                            // Send the trace when we receive the proposal
+                            let _ = send_trace(&Trace::ProposalReceivedEventGenerated(
+                                *proposal_view_number,
+                            ));
+
+                            event
                         },
                         GeneralConsensusMessage::ProposalRequested(req, sig) => {
                             HotShotEvent::QuorumProposalRequestRecv(req, sig)
@@ -533,6 +570,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             HotShotEvent::DaVoteRecv(vote.clone())
                         },
                         DaConsensusMessage::DaCertificate(cert) => {
+                            tracing::error!(
+                                "received DaConsensusMessage::DaCertificate for view {}",
+                                cert.view_number()
+                            );
                             if self.upgrade_lock.epochs_enabled(cert.view_number()).await {
                                 tracing::warn!(
                                     "received DaConsensusMessage::DaCertificate for view {} but \
@@ -1118,6 +1159,13 @@ impl<
                 self.handle_vid_disperse_proposal(proposal, &sender).await;
                 None
             },
+            HotShotEvent::VidShareSend(proposal) => Some((
+                proposal.data.recipient_key.clone(),
+                MessageKind::<TYPES>::from_consensus_message(SequencingMessage::Da(
+                    DaConsensusMessage::VidDisperseMsg2(proposal),
+                )),
+                TransmitType::Broadcast,
+            )),
             HotShotEvent::DaProposalSend(proposal, sender) => {
                 *maybe_action = Some(HotShotAction::DaPropose);
 
@@ -1601,6 +1649,26 @@ impl<
                     return;
                 },
             };
+
+            // Match on the message kind
+            match &message.kind {
+                MessageKind::Consensus(SequencingMessage::General(
+                    GeneralConsensusMessage::Proposal(proposal),
+                )) => {
+                    let _ = send_trace(&Trace::ProposalSent(*(proposal.data.view_number())));
+                },
+                MessageKind::Consensus(SequencingMessage::General(
+                    GeneralConsensusMessage::Proposal2(proposal),
+                )) => {
+                    let _ = send_trace(&Trace::ProposalSent(*(proposal.data.view_number())));
+                },
+                MessageKind::Consensus(SequencingMessage::General(
+                    GeneralConsensusMessage::Proposal2Legacy(proposal),
+                )) => {
+                    let _ = send_trace(&Trace::ProposalSent(*(proposal.data.view_number())));
+                },
+                _ => {},
+            }
 
             let transmit_result = match transmit {
                 TransmitType::Direct(recipient) => {

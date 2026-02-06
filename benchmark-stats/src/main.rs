@@ -4,9 +4,10 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use espresso_types::SeqTypes;
-use hotshot_task_impls::stats::{LeaderViewStats, ReplicaViewStats};
-use hotshot_types::data::ViewNumber;
+use hotshot_types::{
+    benchmarking::{LeaderViewStats, ReplicaViewStats},
+    data::ViewNumber,
+};
 use plotly::{
     common::{HoverInfo, Line, Marker, MarkerSymbol, Mode},
     layout::{self, Axis, GridPattern, LayoutGrid},
@@ -81,14 +82,14 @@ struct ReplicaStats {
 /// Read replica stats from CSV into a BTreeMap
 fn read_replica_view_stats(
     path: &Path,
-) -> Result<BTreeMap<ViewNumber, ReplicaViewStats<SeqTypes>>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<ViewNumber, ReplicaViewStats<ViewNumber>>, Box<dyn std::error::Error>> {
     println!("\n**--- Replica Stats ---**");
     let mut reader = csv::Reader::from_path(path)
         .map_err(|e| format!("Failed to open replica stats CSV at {path:?}: {e}"))?;
     let mut replica_view_stats = BTreeMap::new();
 
     for result in reader.deserialize() {
-        let record: ReplicaViewStats<SeqTypes> = result?;
+        let record: ReplicaViewStats<ViewNumber> = result?;
         replica_view_stats.insert(record.view, record);
     }
 
@@ -97,7 +98,7 @@ fn read_replica_view_stats(
 
 /// Generate plots of replica stats
 fn plot_replica_stats(
-    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<SeqTypes>>,
+    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<ViewNumber>>,
     output_file: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut x_views = Vec::new();
@@ -112,7 +113,6 @@ fn plot_replica_stats(
     let mut views = Vec::new();
     let mut proposal_times = Vec::new();
     let mut vid_share_times = Vec::new();
-    let mut dac_times = Vec::new();
 
     for (&view, record) in replica_view_stats {
         // Skip views without a proposal receive event
@@ -131,15 +131,6 @@ fn plot_replica_stats(
         }
         if let Some(ts) = record.timeout_vote_send {
             events_with_ts.push(("timeout_vote_send", ts / 1_000_000));
-        }
-        if let Some(ts) = record.da_proposal_received {
-            events_with_ts.push(("da_proposal_received", ts / 1_000_000));
-        }
-        if let Some(ts) = record.da_proposal_validated {
-            events_with_ts.push(("da_proposal_validated", ts / 1_000_000));
-        }
-        if let Some(ts) = record.da_certificate_recv {
-            events_with_ts.push(("da_certificate_recv", ts / 1_000_000));
         }
         if let Some(ts) = record.proposal_prelim_validated {
             events_with_ts.push(("proposal_prelim_validated", ts / 1_000_000));
@@ -186,7 +177,6 @@ fn plot_replica_stats(
         views.push(view);
         proposal_times.push(record.proposal_recv.map(|t| t as f64));
         vid_share_times.push(record.vid_share_recv.map(|t| t as f64));
-        dac_times.push(record.da_certificate_recv.map(|t| t as f64));
     }
 
     // Aggregate first event stats for bar chart
@@ -243,26 +233,12 @@ fn plot_replica_stats(
                 .line(Line::new().color("orange").width(1.0)),
         );
 
-    let trace_dac_time = Scatter::new(views.clone(), dac_times)
-        .mode(Mode::Markers)
-        .name("DAC Received")
-        .x_axis("x3")
-        .y_axis("y3")
-        .marker(
-            Marker::new()
-                .symbol(MarkerSymbol::Diamond)
-                .size(10)
-                .color("rgba(0,0,0,0)")
-                .line(Line::new().color("blue").width(1.0)),
-        );
-
     let mut plot = Plot::new();
     plot.add_trace(trace_normal.clone());
     plot.add_trace(trace_timeout.clone());
     plot.add_trace(trace_bar.clone());
     plot.add_trace(trace_proposal_time.clone());
     plot.add_trace(trace_vid_share_time.clone());
-    plot.add_trace(trace_dac_time.clone());
 
     plot.set_layout(
         Layout::new()
@@ -279,7 +255,7 @@ fn plot_replica_stats(
             .x_axis2(Axis::new().title("Event").domain(&[0.0, 0.5]))
             .y_axis2(Axis::new().title("First Event Count"))
             .x_axis3(Axis::new().title("View"))
-            .y_axis3(Axis::new().title("DAC, VID, Proposal Timestamps (s)"))
+            .y_axis3(Axis::new().title("VID, Proposal Timestamps (s)"))
             .height(2500)
             .margin(layout::Margin::new().left(130)),
     );
@@ -294,7 +270,7 @@ fn plot_replica_stats(
 /// it generates the time difference for VID/DAC/Proposal
 /// from the view change event
 fn generate_replica_stats(
-    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<SeqTypes>>,
+    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<ViewNumber>>,
 ) -> ReplicaStats {
     let mut vid_deltas_from_vc = Vec::new();
     let mut dac_deltas_from_vc = Vec::new();
@@ -305,11 +281,6 @@ fn generate_replica_stats(
             if let Some(vid) = record.vid_share_recv {
                 let delta_ms = (vid - vc) as f64 / 1_000_000.0;
                 vid_deltas_from_vc.push(delta_ms);
-            }
-
-            if let Some(dac) = record.da_certificate_recv {
-                let delta_ms = (dac - vc) as f64 / 1_000_000.0;
-                dac_deltas_from_vc.push(delta_ms);
             }
 
             if let Some(prop) = record.proposal_recv {
@@ -336,30 +307,28 @@ fn print_replica_stats(stats: &ReplicaStats) {
 /// Read leader stats from CSV into a BTreeMap
 fn read_leader_view_stats(
     path: &Path,
-) -> Result<BTreeMap<ViewNumber, LeaderViewStats<SeqTypes>>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<ViewNumber, LeaderViewStats<ViewNumber>>, Box<dyn std::error::Error>> {
     println!("\n**--- Leader Stats ---**");
     let mut reader = csv::Reader::from_path(path)
         .map_err(|e| format!("Failed to open leader stats CSV at {path:?}: {e}"))?;
-    let mut leader_view_stats = BTreeMap::<ViewNumber, LeaderViewStats<SeqTypes>>::new();
+    let mut leader_view_stats = BTreeMap::<ViewNumber, LeaderViewStats<ViewNumber>>::new();
 
     for result in reader.deserialize() {
-        let record: LeaderViewStats<SeqTypes> = result?;
+        let record: LeaderViewStats<ViewNumber> = result?;
         leader_view_stats.insert(record.view, record);
     }
     Ok(leader_view_stats)
 }
 
 fn plot_and_print_leader_stats(
-    leader_view_stats: &BTreeMap<ViewNumber, LeaderViewStats<SeqTypes>>,
+    leader_view_stats: &BTreeMap<ViewNumber, LeaderViewStats<ViewNumber>>,
     output_file: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut views = Vec::new();
     let mut vid_ts = Vec::new();
-    let mut dac_ts = Vec::new();
     let mut qc_ts = Vec::new();
 
     // Deltas relative to block built
-    let mut da_cert_deltas = Vec::new();
     let mut vid_disperse_deltas = Vec::new();
     // Deltas relative to previous proposal received
     let mut block_built_prev_prop_deltas = Vec::new();
@@ -367,35 +336,29 @@ fn plot_and_print_leader_stats(
     // For stats
     let mut first_event_counts = HashMap::new();
     let mut qc_vid_diffs = Vec::new();
-    let mut qc_dac_diffs = Vec::new();
-    let mut vid_dac_diffs = Vec::new();
 
     for (&view, record) in leader_view_stats.iter() {
         // Skip if either Block built, DA, VID, or QC is missing
-        let (block_built, dac, vid, qc) = match (
+        let (block_built, vid, qc) = match (
             record.block_built,
-            record.da_cert_send,
             record.vid_disperse_send,
             record.qc_formed,
         ) {
-            (Some(block_built), Some(dac), Some(vid), Some(qc)) => (block_built, dac, vid, qc),
+            (Some(block_built), Some(vid), Some(qc)) => (block_built, vid, qc),
             _ => continue, // need all three
         };
 
         views.push(view);
 
         // Determine first among QC / VID / DAC
-        let mut events = [("QC", qc), ("VID", vid), ("DAC", dac)];
+        let mut events = [("QC", qc), ("VID", vid)];
         events.sort_by_key(|&(_, ts)| ts);
         let first = events[0].0;
         *first_event_counts.entry(first).or_insert(0) += 1;
 
         qc_vid_diffs.push(((qc as i64 - vid as i64) as f64) / 1_000_000.0);
-        qc_dac_diffs.push(((qc as i64 - dac as i64) as f64) / 1_000_000.0);
-        vid_dac_diffs.push(((vid as i64 - dac as i64) as f64) / 1_000_000.0);
 
         // Difference relative to block built
-        da_cert_deltas.push((dac - block_built) as f64 / 1_000_000.0);
         vid_disperse_deltas.push((vid - block_built) as f64 / 1_000_000.0);
 
         // Difference between block built and previous proposal
@@ -404,20 +367,8 @@ fn plot_and_print_leader_stats(
         }
 
         vid_ts.push(Some(vid as f64 / 1_000_000_000.0));
-        dac_ts.push(Some(dac as f64 / 1_000_000_000.0));
         qc_ts.push(Some(qc as f64 / 1_000_000_000.0));
     }
-
-    let trace_da_cert_deltas = Scatter::new(views.clone(), da_cert_deltas.clone())
-        .mode(Mode::Markers)
-        .name("DA Cert Δ (ms)")
-        .marker(
-            Marker::new()
-                .symbol(MarkerSymbol::Diamond)
-                .size(10)
-                .color("rgba(0,0,0,0)")
-                .line(Line::new().color("blue").width(1.0)),
-        );
 
     let trace_vid_disperse_deltas = Scatter::new(views.clone(), vid_disperse_deltas.clone())
         .mode(Mode::Markers)
@@ -432,7 +383,6 @@ fn plot_and_print_leader_stats(
 
     let mut plot = Plot::new();
 
-    plot.add_trace(trace_da_cert_deltas);
     plot.add_trace(trace_vid_disperse_deltas);
 
     let trace_block_built_prev_prop =
@@ -457,19 +407,6 @@ fn plot_and_print_leader_stats(
                 .line(Line::new().color("orange").width(1.0)),
         );
 
-    let trace_dac = Scatter::new(views.clone(), dac_ts)
-        .mode(Mode::Markers)
-        .name("DAC Timestamp")
-        .x_axis("x3")
-        .y_axis("y3")
-        .marker(
-            Marker::new()
-                .symbol(MarkerSymbol::Diamond)
-                .size(10)
-                .color("rgba(0,0,0,0)")
-                .line(Line::new().color("blue").width(1.0)),
-        );
-
     let trace_qc = Scatter::new(views.clone(), qc_ts)
         .mode(Mode::Markers)
         .name("QC Timestamp")
@@ -484,7 +421,6 @@ fn plot_and_print_leader_stats(
         );
 
     plot.add_trace(trace_vid);
-    plot.add_trace(trace_dac);
     plot.add_trace(trace_qc);
 
     plot.set_layout(
@@ -512,7 +448,6 @@ fn plot_and_print_leader_stats(
     }
 
     println!("\nDeltas calculated from block built:");
-    print_delta_stats("DA Cert:", &da_cert_deltas);
     print_delta_stats("VID Disperse:", &vid_disperse_deltas);
 
     println!("\nDeltas calculated from previous proposal:");

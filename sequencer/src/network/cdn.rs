@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use bincode::Options;
 use cdn_broker::reexports::{
-    connection::protocols::{Quic, Tcp},
+    connection::protocols::Tcp,
     crypto::signature::{Serializable, SignatureScheme},
     def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
     discovery::{Embedded, Redis},
@@ -99,7 +99,7 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 /// Uses the real protocols and a Redis discovery client.
 pub struct ProductionDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
-    type User = UserDefQuic<TYPES>;
+    type User = UserDefTcp<TYPES>;
     type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Redis;
@@ -112,7 +112,7 @@ impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
 pub struct UserDefQuic<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for UserDefQuic<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -149,7 +149,7 @@ impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
 /// Uses the real protocols, but with an embedded discovery client.
 pub struct TestingDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> RunDef for TestingDef<TYPES> {
-    type User = UserDefQuic<TYPES>;
+    type User = UserDefTcp<TYPES>;
     type User2 = UserDefTcp<TYPES>;
     type Broker = BrokerDef<TYPES>;
     type DiscoveryClientType = Embedded;
