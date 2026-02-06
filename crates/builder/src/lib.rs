@@ -90,6 +90,7 @@ pub mod testing {
     use super::*;
     use crate::non_permissioned::BuilderConfig;
 
+    #[derive(Clone)]
     pub struct HotShotTestConfig {
         pub config: HotShotConfig<SeqTypes>,
         priv_keys_staking_nodes: Vec<BLSPrivKey>,
