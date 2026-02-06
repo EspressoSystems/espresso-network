@@ -1,4 +1,9 @@
-use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr};
+use std::{
+    borrow::Borrow,
+    collections::{HashMap, HashSet},
+    iter::once,
+    str::FromStr,
+};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
@@ -12,9 +17,11 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{election::Membership, node_implementation::ConsensusTime},
     utils::epoch_from_block_number,
 };
+use itertools::Itertools;
 use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
@@ -24,6 +31,7 @@ use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
+use tokio::task::JoinHandle;
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -41,7 +49,8 @@ use crate::{
         RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    v0_6::LeaderCounts,
+    DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeAccount, SeqTypes,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);
@@ -662,7 +671,7 @@ impl RewardDistributor {
         Ok(())
     }
 
-    fn update_reward_balance<P>(
+    pub fn update_reward_balance<P>(
         tree: &mut P,
         account: &P::Index,
         amount: P::Element,
@@ -1005,6 +1014,378 @@ pub async fn get_leader_and_fetch_missing_rewards(
     }
 
     Ok(validator)
+}
+
+/// Result of epoch rewards calculation.
+#[derive(Debug, Clone)]
+pub struct EpochRewardsResult {
+    /// The epoch this calculation was for.
+    pub epoch: EpochNumber,
+    /// The updated reward merkle tree with all rewards applied.
+    pub reward_tree: RewardMerkleTreeV2,
+    /// Total amount of rewards distributed in this epoch.
+    pub total_distributed: RewardAmount,
+    /// Set of all reward accounts that were modified.
+    pub changed_accounts: HashSet<RewardAccountV2>,
+    /// Timestamp when this result was inserted into the cache.
+    pub inserted_at: std::time::Instant,
+}
+
+/// Manages epoch-based reward calculations in the background.
+#[derive(Debug, Default)]
+pub struct EpochRewardsCalculator {
+    /// Cached results by epoch
+    pub results: HashMap<EpochNumber, EpochRewardsResult>,
+    /// Pending calculations by epoch
+    pending: HashMap<EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>>,
+}
+
+impl EpochRewardsCalculator {
+    pub fn new() -> Self {
+        Self {
+            results: HashMap::new(),
+            pending: HashMap::new(),
+        }
+    }
+
+    /// Check if we have a cached result for epoch.
+    pub fn has_result(&self, epoch: EpochNumber) -> bool {
+        self.results.contains_key(&epoch)
+    }
+
+    /// Check if calculation is in progress for epoch.
+    pub fn is_calculating(&self, epoch: EpochNumber) -> bool {
+        self.pending.contains_key(&epoch)
+    }
+
+    /// Get result for epoch, awaiting pending calculation if needed.
+    pub async fn get_result(&mut self, epoch: EpochNumber) -> Option<EpochRewardsResult> {
+        if let Some(result) = self.results.get(&epoch) {
+            return Some(result.clone());
+        }
+
+        // Await pending calculation if exists
+        if let Some(handle) = self.pending.remove(&epoch) {
+            match handle.await {
+                Ok(Ok(result)) => {
+                    tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
+                    self.results.insert(epoch, result.clone());
+                    return Some(result);
+                },
+                Ok(Err(e)) => {
+                    tracing::error!(%epoch, error = %e, "epoch rewards calculation failed");
+                },
+                Err(e) => {
+                    tracing::error!(%epoch, error = %e, "epoch rewards task panicked");
+                },
+            }
+        }
+
+        None
+    }
+
+    /// Start a background task that calculates epoch rewards.
+    /// Does nothing if calculation is already done or in progress for this epoch.
+    ///
+    pub fn spawn_background_task(
+        &mut self,
+        epoch: EpochNumber,
+        epoch_height: u64,
+        reward_tree: RewardMerkleTreeV2,
+        instance_state: NodeState,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
+        leader_counts: Option<LeaderCounts>,
+    ) {
+        if self.results.contains_key(&epoch) {
+            tracing::debug!(%epoch, "calculation already completed, skipping");
+            return;
+        }
+        if self.pending.contains_key(&epoch) {
+            tracing::debug!(%epoch, "calculation already in progress, skipping");
+            return;
+        }
+
+        tracing::info!(
+            %epoch,
+            has_leader_counts = leader_counts.is_some(),
+            "starting background epoch rewards task"
+        );
+
+        let handle = tokio::spawn(async move {
+            Self::fetch_and_calculate(
+                epoch,
+                epoch_height,
+                reward_tree,
+                instance_state,
+                coordinator,
+                leader_counts,
+            )
+            .await
+        });
+        self.pending.insert(epoch, handle);
+    }
+
+    async fn fetch_and_calculate(
+        epoch: EpochNumber,
+        epoch_height: u64,
+        mut reward_tree: RewardMerkleTreeV2,
+        instance_state: NodeState,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
+        leader_counts: Option<LeaderCounts>,
+    ) -> anyhow::Result<EpochRewardsResult> {
+        let epoch_last_block_height = (*epoch) * epoch_height;
+
+        tracing::info!(
+            %epoch,
+            epoch_last_block_height,
+            has_leader_counts = leader_counts.is_some(),
+            "fetch_and_calculate: starting"
+        );
+
+        // Get leader_counts for this epoch if not provided
+        let leader_counts = if let Some(lc) = leader_counts {
+            lc
+        } else {
+            // Fetch the header at the last block of the epoch
+            let header = instance_state
+                .state_catchup
+                .as_ref()
+                .fetch_header(epoch_last_block_height)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to fetch header at height {epoch_last_block_height} for epoch \
+                         {epoch}"
+                    )
+                })?;
+
+            tracing::info!(
+                %epoch,
+                header_height = header.height(),
+                header_version = %header.version(),
+                header_reward_merkle_tree_root = %header.reward_merkle_tree_root(),
+                "fetch_and_calculate: fetched header"
+            );
+
+            anyhow::ensure!(
+                header.version() >= EpochRewardVersion::version(),
+                "header version {} is pre-V6, cannot calculate rewards",
+                header.version()
+            );
+
+            // Validate the reward merkle tree against the header commitment.
+            // If they don't match, use an empty tree so the rebuild logic
+            // will fetch all accounts from peers.
+            // This should never happen though because we are passing parent reward merkle tree
+            // which is only changed once per epoch
+            let expected_root = header.reward_merkle_tree_root().right();
+            let actual_root = reward_tree.commitment();
+            if expected_root != Some(actual_root) {
+                tracing::warn!(
+                    %epoch,
+                    ?expected_root,
+                    ?actual_root,
+                    "reward merkle tree root mismatch, using empty tree"
+                );
+                reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            }
+
+            *header
+                .leader_counts()
+                .expect("V6+ header must have leader_counts")
+        };
+
+        // Ensure stake table is available for this epoch
+        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
+            tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
+            coordinator
+                .wait_for_catchup(epoch)
+                .await
+                .context(format!("failed to catch up for epoch={epoch}"))?;
+        }
+
+        let membership = coordinator.membership().read().await;
+        let validators: Vec<_> = membership
+            .stake_table(Some(epoch))
+            .iter()
+            .sorted_by(|a, b| a.stake_table_entry.key().cmp(b.stake_table_entry.key()))
+            .filter_map(|entry| {
+                membership
+                    .get_validator_config(&epoch, entry.stake_table_entry.stake_key)
+                    .ok()
+            })
+            .collect();
+        let block_reward = membership
+            .epoch_block_reward(epoch)
+            .context("block reward not found for epoch")?;
+        drop(membership);
+
+        tracing::info!(
+            %epoch,
+            num_validators = validators.len(),
+            %block_reward,
+            "fetch_and_calculate: got validators and block_reward"
+        );
+
+        // Check if we're missing accounts that need to be in the tree
+        let accounts_to_update: Vec<_> = leader_counts
+            .iter()
+            .enumerate()
+            .filter(|(_, &count)| count > 0)
+            .flat_map(|(index, _)| {
+                validators.get(index).into_iter().flat_map(|v| {
+                    std::iter::once(RewardAccountV2(v.account))
+                        .chain(v.delegators.keys().map(|d| RewardAccountV2(*d)))
+                })
+            })
+            .collect();
+
+        let missing_accounts: Vec<_> = accounts_to_update
+            .iter()
+            .filter(|account| reward_tree.lookup(**account).expect_not_in_memory().is_ok())
+            .cloned()
+            .collect();
+
+        // If we have missing accounts, fetch all reward accounts from peers and rebuild the tree
+        if !missing_accounts.is_empty() {
+            tracing::info!(
+                %epoch,
+                num_missing = missing_accounts.len(),
+                "missing accounts detected, fetching all reward accounts from peers"
+            );
+
+            // Fetch all reward accounts at the height just before this epoch
+            // This fetches from the reward_state table which stores all account balances
+
+            tracing::info!(
+                %epoch,
+                epoch_last_block_height,
+                "fetching all reward accounts from peers to rebuild tree"
+            );
+
+            // Fetch all reward accounts from peers (paginated)
+            let mut all_accounts = Vec::new();
+            let mut offset = 0u64;
+            let limit = 10_000u64;
+
+            loop {
+                let accounts = instance_state
+                    .state_catchup
+                    .as_ref()
+                    .fetch_all_reward_accounts(epoch_last_block_height, offset, limit)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to fetch reward accounts at height {epoch_last_block_height}, \
+                             offset {offset}"
+                        )
+                    })?;
+
+                let count = accounts.len();
+                all_accounts.extend(accounts);
+
+                if (count as u64) < limit {
+                    break;
+                }
+                offset += limit;
+            }
+
+            tracing::info!(
+                %epoch,
+                num_accounts = all_accounts.len(),
+                "fetched all reward accounts, rebuilding tree"
+            );
+
+            // Rebuild the tree from scratch with all the accounts
+            let kv_pairs: Vec<(RewardAccountV2, RewardAmount)> = all_accounts;
+            reward_tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, kv_pairs)
+                .context("failed to rebuild reward merkle tree from accounts")?;
+
+            tracing::info!(
+                %epoch,
+                reward_tree_commitment = %reward_tree.commitment(),
+                "reward tree rebuilt successfully"
+            );
+        }
+
+        tracing::info!(
+            %epoch,
+            reward_tree_commitment = %reward_tree.commitment(),
+            "starting final epoch calculation"
+        );
+
+        Self::calculate_all_rewards(epoch, leader_counts, reward_tree, block_reward, validators)
+            .await
+    }
+
+    /// Calculate all rewards for the epoch and update the reward tree.
+    pub async fn calculate_all_rewards(
+        epoch: EpochNumber,
+        leader_counts: LeaderCounts,
+        mut reward_tree: RewardMerkleTreeV2,
+        block_reward: RewardAmount,
+        validators: Vec<Validator<BLSPubKey>>,
+    ) -> anyhow::Result<EpochRewardsResult> {
+        let mut total_distributed = U256::ZERO;
+        let mut changed_accounts = HashSet::new();
+
+        for (index, &count) in leader_counts.iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
+
+            let validator = validators.get(index).context(format!(
+                "validator not found for leader index {index} with count {count} in epoch {epoch}"
+            ))?;
+
+            // validator_reward = count * block_reward
+            let validator_reward = block_reward
+                .0
+                .checked_mul(U256::from(count))
+                .context("overflow in validator reward calculation")?;
+
+            if validator_reward.is_zero() {
+                continue;
+            }
+
+            changed_accounts.insert(RewardAccountV2(validator.account));
+            changed_accounts.extend(validator.delegators.keys().map(|d| RewardAccountV2(*d)));
+
+            let distributor = RewardDistributor::new(
+                validator.clone(),
+                RewardAmount(validator_reward),
+                Default::default(),
+            );
+
+            let computed_rewards = distributor.compute_rewards()?;
+
+            for (address, reward) in computed_rewards.all_rewards() {
+                RewardDistributor::update_reward_balance(
+                    &mut reward_tree,
+                    &RewardAccountV2(address),
+                    reward,
+                )?;
+                tracing::debug!(%epoch, %address, %reward, "applied epoch reward");
+            }
+
+            total_distributed += validator_reward;
+        }
+
+        tracing::info!(
+            %epoch,
+            total_distributed = %total_distributed,
+            num_changed_accounts = changed_accounts.len(),
+            "epoch rewards calculation complete"
+        );
+
+        Ok(EpochRewardsResult {
+            epoch,
+            reward_tree,
+            total_distributed: RewardAmount(total_distributed),
+            changed_accounts,
+            inserted_at: std::time::Instant::now(),
+        })
+    }
 }
 
 #[cfg(test)]

@@ -2641,9 +2641,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{
-            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
-        },
+        v0_4::{RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2},
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
@@ -2686,10 +2684,7 @@ mod test {
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
-    use jf_merkle_tree_compat::{
-        prelude::{MerkleProof, Sha3Node},
-        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
-    };
+    use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
@@ -2720,9 +2715,7 @@ mod test {
         endpoint: &str,
         height: u64,
     ) {
-        const MAX_RETRIES: usize = 30;
-
-        for _retry in 0..=MAX_RETRIES {
+        for _retry in 0.. {
             let bh = client
                 .get::<u64>(endpoint)
                 .send()
@@ -2734,8 +2727,6 @@ mod test {
             }
             sleep(Duration::from_secs(3)).await;
         }
-
-        panic!("Max retries reached. {endpoint} block height did not exceed {height}");
     }
     use crate::{
         api::{
@@ -4514,6 +4505,463 @@ mod test {
 
             // Stop the test after verifying 5 full epochs.
             if leaf.height() == EPOCH_HEIGHT * 5 {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_reward_distribution_basic() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        type V6 = SequencerVersions<StaticVersion<0, 6>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V6>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, V6::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // Wait for chain to reach epoch 5
+        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        // Epochs 1-3: verify no rewards
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+            assert_eq!(
+                total_distributed.0,
+                U256::ZERO,
+                "epochs 1-3 should have no rewards, height={height}"
+            );
+
+            if height == EPOCH_HEIGHT * 3 {
+                break;
+            }
+        }
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            if height == EPOCH_HEIGHT * 4 {
+                let total_distributed = header.total_reward_distributed().unwrap();
+                assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            if height == EPOCH_HEIGHT * 5 {
+                let total_distributed = header.total_reward_distributed().unwrap();
+                assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_reward_total_distributed_rewards() -> anyhow::Result<()> {
+        // Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
+        // Epoch 4: Rewards only distributed in the LAST block
+        // Epoch 5: All blocks before last have same total as epoch 4 last block,
+        //          last block has higher total because of new distribution
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        type V6 = SequencerVersions<StaticVersion<0, 6>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V6>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, V6::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+            assert_eq!(total_distributed.0, U256::ZERO,);
+
+            if height == EPOCH_HEIGHT * 3 {
+                break;
+            }
+        }
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+
+            if height < EPOCH_HEIGHT * 4 {
+                assert_eq!(total_distributed.0, U256::ZERO,);
+            } else {
+                assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        let epoch4_last_reward = {
+            let header = client
+                .get::<Header>(&format!("availability/header/{}", EPOCH_HEIGHT * 4))
+                .send()
+                .await
+                .unwrap();
+            header.total_reward_distributed().unwrap()
+        };
+
+        assert!(
+            epoch4_last_reward.0 > U256::ZERO,
+            "epoch 4 last block should have positive rewards"
+        );
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+
+            if height < EPOCH_HEIGHT * 5 {
+                assert_eq!(total_distributed, epoch4_last_reward,);
+            } else {
+                assert!(total_distributed.0 > epoch4_last_reward.0,);
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    // test actual rewards
+    // todo: test each account rewards by querying merklized state api
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_reward_state_v2_epoch_distribution() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const NUM_EPOCHS: u64 = 6;
+        type V6 = SequencerVersions<StaticVersion<0, 6>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V6>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V6::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let node_state = network.server.node_state();
+        let coordinator = node_state.coordinator;
+
+        let mut expected_total_distributed = U256::ZERO;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+
+            let is_epoch_last_block = height % EPOCH_HEIGHT == 0;
+
+            if epoch <= 3 {
+                continue;
+            }
+
+            let header_total_distributed = header
+                .total_reward_distributed()
+                .expect("total_reward_distributed should exist");
+
+            if is_epoch_last_block {
+                let prev_epoch = epoch - 1;
+                let prev_epoch_number = EpochNumber::new(prev_epoch);
+                let membership = coordinator.membership().read().await;
+                let prev_block_reward = membership
+                    .epoch_block_reward(prev_epoch_number)
+                    .expect("epoch block reward should exist");
+                drop(membership);
+
+                let epoch_total = prev_block_reward.0 * U256::from(EPOCH_HEIGHT);
+                expected_total_distributed += epoch_total;
+            }
+
+            assert_eq!(
+                header_total_distributed.0, expected_total_distributed,
+                "total_reward_distributed mismatch at height {height}"
+            );
+
+            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Verifies that the `leader_counts` array in V6 headers is correct.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_leader_counts() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const NUM_EPOCHS: u64 = 6;
+        type V6 = SequencerVersions<StaticVersion<0, 6>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<V6>(DelegationConfig::MultipleDelegators, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V6::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let node_state = network.server.node_state();
+        let coordinator = node_state.coordinator;
+
+        // Track expected leader counts by address
+        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+            let epoch_number = EpochNumber::new(epoch);
+
+            if epoch <= 2 {
+                continue;
+            }
+
+            let header_leader_counts = header
+                .leader_counts()
+                .expect("V6 header must have leader_counts");
+
+            // Reset counts at the start of a new epoch
+            let is_epoch_start = (height - 1) % EPOCH_HEIGHT == 0;
+            if is_epoch_start {
+                expected_counts.clear();
+            }
+
+            // Determine the leader for this block and track by address
+            let view_number = leaf.leaf().view_number();
+            let membership = coordinator.membership().read().await;
+            let leader = membership
+                .leader(view_number, Some(epoch_number))
+                .expect("leader should exist");
+            let leader_address = membership
+                .address(&epoch_number, leader)
+                .expect("leader should have an address");
+            drop(membership);
+
+            *expected_counts.entry(leader_address).or_insert(0) += 1;
+
+            // Convert the header's leader_counts array to a HashMap<Address, u16>
+            // using the stake table to map index -> address
+            let validators = client
+                .get::<ValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("failed to get validators");
+            let mut validator_entries: Vec<_> = validators
+                .iter()
+                .map(|(addr, v)| (*addr, v.stake_table_key))
+                .collect();
+            validator_entries.sort_by(|a, b| a.1.cmp(&b.1));
+            let validator_addresses: Vec<Address> =
+                validator_entries.iter().map(|(addr, _)| *addr).collect();
+
+            let mut header_counts: HashMap<Address, u16> = HashMap::new();
+            for (index, &count) in header_leader_counts.iter().enumerate() {
+                if count == 0 {
+                    continue;
+                }
+                let address = validator_addresses
+                    .get(index)
+                    .expect("leader_counts index should map to a validator");
+                header_counts.insert(*address, count);
+            }
+
+            assert_eq!(
+                header_counts, expected_counts,
+                "leader_counts mismatch at height {height} (epoch {epoch})"
+            );
+
+            if height % EPOCH_HEIGHT == 0 {
+                let total: u16 = expected_counts.values().sum();
+                assert_eq!(
+                    total, EPOCH_HEIGHT as u16,
+                    "total leader_counts at epoch boundary should equal EPOCH_HEIGHT at height \
+                     {height}"
+                );
+            }
+
+            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
                 break;
             }
         }
@@ -6846,8 +7294,8 @@ mod test {
             .iter()
             .map(|(addr, amt)| (*addr, *amt))
             .collect();
-        // Results are sorted by account address descending
-        expected.sort_by_key(|(acct, _)| std::cmp::Reverse(*acct));
+        // Results are sorted by account address ascending
+        expected.sort_by_key(|(acct, _)| *acct);
 
         tracing::info!("expected accounts = {expected:?}");
         let limit = expected.len().min(10_000) as u64;
@@ -6884,8 +7332,6 @@ mod test {
             SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
         >(&validated_state, &instance_state)
         .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
         let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
         let account2 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000002")?;
@@ -6926,28 +7372,21 @@ mod test {
             .await?;
         }
 
+        // Insert into reward_state table
         for (height, accounts) in [
-            (5u64, &accounts_height_5),
+            (5i64, &accounts_height_5),
             (10, &accounts_height_10),
             (15, &accounts_height_15),
         ] {
             for (account, balance) in accounts {
-                reward_tree.update(*account, *balance)?;
-
-                let (_, proof) = reward_tree.lookup(*account).expect_ok().unwrap();
-
-                let traversal_path = <RewardAccountV2 as ToTraversalPath<
-                    { RewardMerkleTreeV2::ARITY },
-                >>::to_traversal_path(
-                    account, reward_tree.height()
-                );
-
-                UpdateStateData::<
-                    SeqTypes,
-                    RewardMerkleTreeV2,
-                    { RewardMerkleTreeV2::ARITY },
-                >::insert_merkle_nodes(&mut tx, proof, traversal_path, height)
-                .await?;
+                let account_json = serde_json::to_value(account)?;
+                let balance_json = serde_json::to_value(balance)?;
+                query("INSERT INTO reward_state (height, account, balance) VALUES ($1, $2, $3)")
+                    .bind(height)
+                    .bind(&account_json)
+                    .bind(&balance_json)
+                    .execute(tx.as_mut())
+                    .await?;
             }
         }
 
@@ -7001,16 +7440,16 @@ mod test {
         }
 
         // Test pagination
-        // results are sorted by account address descending
+        // results are sorted by account address ascending
         let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
         assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account4, RewardAmount::from(4000u64)));
-        assert_eq!(result_limit_2[1], (account3, RewardAmount::from(3000u64)));
+        assert_eq!(result_limit_2[0], (account1, RewardAmount::from(1500u64)));
+        assert_eq!(result_limit_2[1], (account2, RewardAmount::from(2500u64)));
 
         let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
         assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account2, RewardAmount::from(2500u64)));
-        assert_eq!(result_offset_2[1], (account1, RewardAmount::from(1500u64)));
+        assert_eq!(result_offset_2[0], (account3, RewardAmount::from(3000u64)));
+        assert_eq!(result_offset_2[1], (account4, RewardAmount::from(4000u64)));
 
         Ok(())
     }
@@ -7035,7 +7474,6 @@ mod test {
         >(&validated_state, &instance_state)
         .await;
 
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
         let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
 
         let mut tx = db.write().await?;
@@ -7056,20 +7494,15 @@ mod test {
             .await?;
         }
 
-        // Insert merkle data at height 5
-        reward_tree.update(account1, RewardAmount::from(1000u64))?;
-        let (_, proof) = reward_tree.lookup(account1).expect_ok().unwrap();
-        let traversal_path =
-            <RewardAccountV2 as ToTraversalPath<{ RewardMerkleTreeV2::ARITY }>>::to_traversal_path(
-                &account1,
-                reward_tree.height(),
-            );
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::insert_merkle_nodes(&mut tx, proof, traversal_path, 5)
-        .await?;
+        // Insert reward state at height 5
+        let account_json = serde_json::to_value(account1)?;
+        let balance_json = serde_json::to_value(RewardAmount::from(1000u64))?;
+        query("INSERT INTO reward_state (height, account, balance) VALUES ($1, $2, $3)")
+            .bind(5i64)
+            .bind(&account_json)
+            .bind(&balance_json)
+            .execute(tx.as_mut())
+            .await?;
 
         // Set the merklized state height to 10
         // less than max block height of 20

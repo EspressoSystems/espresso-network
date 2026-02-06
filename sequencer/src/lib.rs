@@ -23,7 +23,8 @@ use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
     v0_3::Fetcher,
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
+    BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
+    SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
@@ -619,6 +620,8 @@ where
         &persistence.clone(),
     );
 
+    let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
+
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
         genesis_chain_config,
@@ -634,6 +637,7 @@ where
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        epoch_rewards_calculator,
     };
 
     // Initialize the Libp2p network
@@ -1384,12 +1388,14 @@ pub mod testing {
                 V::Base::VERSION,
                 coordinator.clone(),
                 V::Base::VERSION,
-            )
-            .with_current_version(V::Base::version())
-            .with_genesis(state)
-            .with_epoch_height(config.epoch_height)
-            .with_upgrades(upgrades)
-            .with_epoch_start_block(config.epoch_start_block);
+            );
+
+            let node_state = node_state
+                .with_current_version(V::Base::version())
+                .with_genesis(state)
+                .with_epoch_height(config.epoch_height)
+                .with_upgrades(upgrades)
+                .with_epoch_start_block(config.epoch_start_block);
 
             tracing::info!(
                 i,
