@@ -4494,6 +4494,7 @@ dependencies = [
  "espresso-contract-deployer",
  "espresso-types",
  "ethers-core",
+ "flate2",
  "fluent-asserter",
  "futures",
  "hotshot",

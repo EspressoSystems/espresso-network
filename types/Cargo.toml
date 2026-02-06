@@ -35,6 +35,7 @@ committable = { workspace = true }
 derive_more = { workspace = true }
 either = { workspace = true }
 ethers-core = "2.0"
+flate2 = "1.0"
 fluent-asserter = "0.1.9"
 futures = { workspace = true }
 hotshot = { workspace = true }
