@@ -5,7 +5,7 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
 };
 use anyhow::{bail, Result};
-use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
@@ -14,7 +14,7 @@ pub(crate) use hotshot_types::{
     signature_key::{BLSPrivKey, BLSPubKey},
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
-use metadata::MetadataUri;
+use metadata::MetadataUriArgs;
 use parse::Commission;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
@@ -115,11 +115,6 @@ pub struct Config {
     #[serde(skip)]
     pub skip_simulation: bool,
 
-    /// Skip metadata URI validation (fetch and schema check).
-    #[clap(long, env = "SKIP_METADATA_VALIDATION", action = ArgAction::SetTrue)]
-    #[serde(skip)]
-    pub skip_metadata_validation: bool,
-
     #[clap(flatten)]
     #[serde(skip)]
     pub output: OutputArgs,
@@ -216,93 +211,6 @@ impl ValidSignerConfig {
                 Ok(EthereumWallet::from(signer))
             },
         }
-    }
-}
-
-#[derive(ClapArgs, Debug, Clone)]
-#[group(required = true, multiple = false)]
-pub struct MetadataUriArgs {
-    /// URL where validator metadata is hosted (JSON or OpenMetrics format).
-    #[clap(long, env = "METADATA_URI")]
-    pub metadata_uri: Option<String>,
-
-    /// Register without a metadata URI.
-    #[clap(long, env = "NO_METADATA_URI")]
-    pub no_metadata_uri: bool,
-}
-
-impl MetadataUriArgs {
-    /// Parse the metadata URI arguments into an optional URL.
-    fn to_url(&self) -> Result<Option<Url>> {
-        if self.no_metadata_uri {
-            Ok(None)
-        } else if let Some(uri_str) = &self.metadata_uri {
-            Ok(Some(Url::parse(uri_str)?))
-        } else {
-            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
-        }
-    }
-}
-
-impl TryFrom<MetadataUriArgs> for MetadataUri {
-    type Error = anyhow::Error;
-
-    fn try_from(args: MetadataUriArgs) -> Result<Self> {
-        match args.to_url()? {
-            Some(url) => MetadataUri::try_from(url),
-            None => Ok(MetadataUri::empty()),
-        }
-    }
-}
-
-#[cfg(test)]
-mod metadata_uri_args_tests {
-    use super::*;
-
-    #[test]
-    fn test_to_url_with_uri() {
-        let args = MetadataUriArgs {
-            metadata_uri: Some("https://example.com/metadata.json".to_string()),
-            no_metadata_uri: false,
-        };
-        let url = args.to_url().unwrap();
-        assert_eq!(
-            url.map(|u| u.as_str().to_string()),
-            Some("https://example.com/metadata.json".to_string())
-        );
-    }
-
-    #[test]
-    fn test_to_url_with_no_metadata() {
-        let args = MetadataUriArgs {
-            metadata_uri: None,
-            no_metadata_uri: true,
-        };
-        let url = args.to_url().unwrap();
-        assert!(url.is_none());
-    }
-
-    #[test]
-    fn test_metadata_uri_args_to_metadata_uri() {
-        let args = MetadataUriArgs {
-            metadata_uri: Some("https://example.com/metadata.json".to_string()),
-            no_metadata_uri: false,
-        };
-        let metadata_uri = MetadataUri::try_from(args).unwrap();
-        assert_eq!(
-            metadata_uri.url().map(|u| u.as_str()),
-            Some("https://example.com/metadata.json")
-        );
-    }
-
-    #[test]
-    fn test_metadata_uri_args_to_empty_metadata_uri() {
-        let args = MetadataUriArgs {
-            metadata_uri: None,
-            no_metadata_uri: true,
-        };
-        let metadata_uri = MetadataUri::try_from(args).unwrap();
-        assert!(metadata_uri.url().is_none());
     }
 }
 
