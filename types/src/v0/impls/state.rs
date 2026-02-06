@@ -246,7 +246,7 @@ impl ValidatedState {
 
     pub fn balance(&mut self, account: FeeAccount) -> Option<FeeAmount> {
         match self.fee_merkle_tree.lookup(account) {
-            LookupResult::Ok(balance, _) => Some(*balance),
+            LookupResult::Ok(balance, _) => Some(balance),
             LookupResult::NotFound(_) => Some(0.into()),
             LookupResult::NotInMemory => None,
         }
