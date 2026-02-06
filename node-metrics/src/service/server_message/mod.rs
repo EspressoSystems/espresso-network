@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitvec::vec::BitVec;
-use espresso_types::{v0_3::Validator, SeqTypes};
+use espresso_types::{v0_3::AuthenticatedValidator, SeqTypes};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
 use hotshot_types::PeerConfig;
@@ -50,7 +50,7 @@ pub enum ServerMessage {
     //
     /// LatestValidator is a message that is meant to show the most recent
     /// validator that has arrived.
-    LatestValidator(Arc<Validator<BLSPubKey>>),
+    LatestValidator(Arc<AuthenticatedValidator<BLSPubKey>>),
 
     /// LatestStakeTable is a message that is meant to show the most recent
     /// stake table that has arrived.
@@ -58,7 +58,7 @@ pub enum ServerMessage {
 
     /// ValidatorSnapshot is a message that is sent in response to a request
     /// for the snapshot of the current validators information.
-    ValidatorsSnapshot(Arc<Vec<Validator<BLSPubKey>>>),
+    ValidatorsSnapshot(Arc<Vec<AuthenticatedValidator<BLSPubKey>>>),
 
     /// StakeTableSnapshot is a message that is sent in response to a request
     /// for the snapshot of the current stake table information.

@@ -7,7 +7,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x05ba535dd36641d95f35b7342baf9a2e5f767fd9": {
     "account": "0x05ba535dd36641d95f35b7342baf9a2e5f767fd9",
@@ -17,7 +18,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x39eb442a9480737456565b6a1f60014037289097": {
     "account": "0x39eb442a9480737456565b6a1f60014037289097",
@@ -27,7 +29,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x29b4ec1be1cddc1c74a4f55baf373d54d3c5bef6": {
     "account": "0x29b4ec1be1cddc1c74a4f55baf373d54d3c5bef6",
@@ -37,7 +40,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x6afbad8b8ec93d9aeac0bc0e94d3911324e44f22": {
     "account": "0x6afbad8b8ec93d9aeac0bc0e94d3911324e44f22",
@@ -47,7 +51,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x8cf56afa1b3c9b6ff148b77929678e271d6e1f5a": {
     "account": "0x8cf56afa1b3c9b6ff148b77929678e271d6e1f5a",
@@ -57,7 +62,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x1c22119fbb5eb16e3f3f11c1a162f28db7e72f67": {
     "account": "0x1c22119fbb5eb16e3f3f11c1a162f28db7e72f67",
@@ -67,7 +73,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xb14217e8a9be87351970ce15790a853b6d7c5f8d": {
     "account": "0xb14217e8a9be87351970ce15790a853b6d7c5f8d",
@@ -77,7 +84,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x6103c13c8b0b609a247fb8e00f088924139f6390": {
     "account": "0x6103c13c8b0b609a247fb8e00f088924139f6390",
@@ -87,7 +95,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xceaa793079b49346b7d9ce74a4aafa0623270f72": {
     "account": "0xceaa793079b49346b7d9ce74a4aafa0623270f72",
@@ -97,7 +106,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x96c7b78b7db245c9728823250f4544ccb2e0464b": {
     "account": "0x96c7b78b7db245c9728823250f4544ccb2e0464b",
@@ -107,7 +117,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xb714cb37e89b8e9bbaaea11ed07ad7e1a91d42c8": {
     "account": "0xb714cb37e89b8e9bbaaea11ed07ad7e1a91d42c8",
@@ -117,7 +128,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x90004b687ca04570a58d8ef6a14d11ed38513a88": {
     "account": "0x90004b687ca04570a58d8ef6a14d11ed38513a88",
@@ -127,7 +139,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x40bfa267e95fc5b7e97264432022df7f00927928": {
     "account": "0x40bfa267e95fc5b7e97264432022df7f00927928",
@@ -137,7 +150,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x4819dc94efcc3b708276ed5c7506822e20f91ded": {
     "account": "0x4819dc94efcc3b708276ed5c7506822e20f91ded",
@@ -147,7 +161,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x5f512c708a395e0e9ee0c76d69506d42ff178ae1": {
     "account": "0x5f512c708a395e0e9ee0c76d69506d42ff178ae1",
@@ -157,7 +172,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xe9c2ff55589510bfa27e41af6564f31496e7266a": {
     "account": "0xe9c2ff55589510bfa27e41af6564f31496e7266a",
@@ -167,7 +183,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x76ddab5fd7777c73e1b91be24b7ef187ab7934ba": {
     "account": "0x76ddab5fd7777c73e1b91be24b7ef187ab7934ba",
@@ -177,7 +194,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x0ac5ab782b21028d0626a9db3602b66541359765": {
     "account": "0x0ac5ab782b21028d0626a9db3602b66541359765",
@@ -187,7 +205,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd0a4a9eeac9a8b56b13aa7d4202396eea75a955a": {
     "account": "0xd0a4a9eeac9a8b56b13aa7d4202396eea75a955a",
@@ -197,7 +216,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xe5e3ca133e4aa45ee7d788c559747fb3dfc3d5ec": {
     "account": "0xe5e3ca133e4aa45ee7d788c559747fb3dfc3d5ec",
@@ -207,7 +227,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x73d41fbabc30dea1a0f87dc8d83756b62936731a": {
     "account": "0x73d41fbabc30dea1a0f87dc8d83756b62936731a",
@@ -217,7 +238,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x2e5133efce9abdf03a578710c52c006a6b46a549": {
     "account": "0x2e5133efce9abdf03a578710c52c006a6b46a549",
@@ -227,7 +249,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x334615ccdb4fad02208ad8a6f590819cb5ef056e": {
     "account": "0x334615ccdb4fad02208ad8a6f590819cb5ef056e",
@@ -237,7 +260,8 @@
     "commission": 2000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xc0e00ce63f94f3b7ab2d96a61d7e36131b6f8f35": {
     "account": "0xc0e00ce63f94f3b7ab2d96a61d7e36131b6f8f35",
@@ -247,7 +271,8 @@
     "commission": 2000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd1245becaa8cae37d792a47eb363f032d7e0a9ec": {
     "account": "0xd1245becaa8cae37d792a47eb363f032d7e0a9ec",
@@ -257,7 +282,8 @@
     "commission": 2000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x0255f0cea86911fdf32d34feec50f8003dee7306": {
     "account": "0x0255f0cea86911fdf32d34feec50f8003dee7306",
@@ -267,7 +293,8 @@
     "commission": 2000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xbca2502d399c95f39fcdacb600a683079597afc3": {
     "account": "0xbca2502d399c95f39fcdacb600a683079597afc3",
@@ -277,7 +304,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xfe4e2884c3d2126dd54e31d1c481f2c4a83ebec0": {
     "account": "0xfe4e2884c3d2126dd54e31d1c481f2c4a83ebec0",
@@ -287,7 +315,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x34e4ae250e67a23b4aa61135fec285a19a145af2": {
     "account": "0x34e4ae250e67a23b4aa61135fec285a19a145af2",
@@ -297,7 +326,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xca685f5e35bee0567447600d4fbc818671d059c1": {
     "account": "0xca685f5e35bee0567447600d4fbc818671d059c1",
@@ -307,7 +337,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x6b456a7cac52836a57c654b17ce2c51f6c2df141": {
     "account": "0x6b456a7cac52836a57c654b17ce2c51f6c2df141",
@@ -317,7 +348,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x9d9ca895f1a1e4e759c0cf4f716bc8b1dfbe1789": {
     "account": "0x9d9ca895f1a1e4e759c0cf4f716bc8b1dfbe1789",
@@ -327,7 +359,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x88313555fafc5fb1c22c17fd77b87bf00079746b": {
     "account": "0x88313555fafc5fb1c22c17fd77b87bf00079746b",
@@ -337,7 +370,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x1b1658a5c3dcbb970c18bd1ef628110dadeb4c6a": {
     "account": "0x1b1658a5c3dcbb970c18bd1ef628110dadeb4c6a",
@@ -347,7 +381,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x183a0dd3dca62c46ef47b94b412b80e7c1b7fa5a": {
     "account": "0x183a0dd3dca62c46ef47b94b412b80e7c1b7fa5a",
@@ -357,7 +392,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x25125271e928934819f9a1078e6dc0b37c98f02e": {
     "account": "0x25125271e928934819f9a1078e6dc0b37c98f02e",
@@ -367,7 +403,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x3cf01fa2d1ddf6a59b63ab3ab0ccbc95d2438fd0": {
     "account": "0x3cf01fa2d1ddf6a59b63ab3ab0ccbc95d2438fd0",
@@ -377,7 +414,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x50c483b6af26614f37ce90df0b0fb9dbb392a46c": {
     "account": "0x50c483b6af26614f37ce90df0b0fb9dbb392a46c",
@@ -387,7 +425,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xbf74084c57a6f84db029dd94b26cff4ed841c131": {
     "account": "0xbf74084c57a6f84db029dd94b26cff4ed841c131",
@@ -397,7 +436,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xfad0a5b248b1822f8cdf9ad68671a45017418c05": {
     "account": "0xfad0a5b248b1822f8cdf9ad68671a45017418c05",
@@ -407,7 +447,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x35b136cb030eec900b4d30b02d8d53a6aadb446c": {
     "account": "0x35b136cb030eec900b4d30b02d8d53a6aadb446c",
@@ -417,7 +458,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xdf30ac3b38bf198c1ca2cf20d99d7ba0287fd2ec": {
     "account": "0xdf30ac3b38bf198c1ca2cf20d99d7ba0287fd2ec",
@@ -427,7 +469,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x4664bcbf4560ad9145984955269989bc32d19b2e": {
     "account": "0x4664bcbf4560ad9145984955269989bc32d19b2e",
@@ -437,7 +480,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x4adf51ed73b75d17570cd55869f9bb21c4b28ffc": {
     "account": "0x4adf51ed73b75d17570cd55869f9bb21c4b28ffc",
@@ -447,7 +491,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xa654127cb989a192ba63e5bb249f4bbe03664e26": {
     "account": "0xa654127cb989a192ba63e5bb249f4bbe03664e26",
@@ -457,7 +502,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x8ad38f8924fb5cb10ac36e22eacec65ad6181a9c": {
     "account": "0x8ad38f8924fb5cb10ac36e22eacec65ad6181a9c",
@@ -467,7 +513,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x85058595f51b4b98b6c3ebf7a34c3505c6caf420": {
     "account": "0x85058595f51b4b98b6c3ebf7a34c3505c6caf420",
@@ -477,7 +524,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xbc997b59f2a03fc03b9288c2bf9a9cbeb9dfc561": {
     "account": "0xbc997b59f2a03fc03b9288c2bf9a9cbeb9dfc561",
@@ -487,7 +535,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd4b31d8a197f3c56f621c5052c11b76995a76ddd": {
     "account": "0xd4b31d8a197f3c56f621c5052c11b76995a76ddd",
@@ -497,7 +546,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xa3eaa8a8936e3847ad9487ead4d749a83e8f710c": {
     "account": "0xa3eaa8a8936e3847ad9487ead4d749a83e8f710c",
@@ -507,7 +557,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd232c63314f41ade3fd417d7fd5c13e5377ec16a": {
     "account": "0xd232c63314f41ade3fd417d7fd5c13e5377ec16a",
@@ -517,7 +568,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x737ad9930853942601f55250a73bc8db5fe41de6": {
     "account": "0x737ad9930853942601f55250a73bc8db5fe41de6",
@@ -527,7 +579,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x11e382f1fd209c45794da60988a5aa2e671924fd": {
     "account": "0x11e382f1fd209c45794da60988a5aa2e671924fd",
@@ -537,7 +590,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x0cb40b43d63014b1ea9f6fbbf5df2b8739126fc2": {
     "account": "0x0cb40b43d63014b1ea9f6fbbf5df2b8739126fc2",
@@ -547,7 +601,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xf90d4c7a5aa3cec802ecb7977754c05d3623e423": {
     "account": "0xf90d4c7a5aa3cec802ecb7977754c05d3623e423",
@@ -557,7 +612,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x2a8b6a37d15168e3338a1f8aaed71a05ad8fa60f": {
     "account": "0x2a8b6a37d15168e3338a1f8aaed71a05ad8fa60f",
@@ -567,7 +623,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xdeb6596c66aa13566fd6592569001a7b1005d75c": {
     "account": "0xdeb6596c66aa13566fd6592569001a7b1005d75c",
@@ -577,7 +634,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x80d39bc1301b29e141ed7f6ad9382960a12d0edd": {
     "account": "0x80d39bc1301b29e141ed7f6ad9382960a12d0edd",
@@ -587,7 +645,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xb079d8c8668923bdc1b196372296170285791f78": {
     "account": "0xb079d8c8668923bdc1b196372296170285791f78",
@@ -597,7 +656,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd9c6b8b69a0004f43c63d83831b2fdd483ec8076": {
     "account": "0xd9c6b8b69a0004f43c63d83831b2fdd483ec8076",
@@ -607,7 +667,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x55c9360500d02e1eb1f6f0d890fa5ffb70e7dbac": {
     "account": "0x55c9360500d02e1eb1f6f0d890fa5ffb70e7dbac",
@@ -617,7 +678,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xae9afbb012bc9a968c56cebaf461ec4996527a39": {
     "account": "0xae9afbb012bc9a968c56cebaf461ec4996527a39",
@@ -627,7 +689,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x5ff36e0d0988483833d3e1d99dea4a7456a322ed": {
     "account": "0x5ff36e0d0988483833d3e1d99dea4a7456a322ed",
@@ -637,7 +700,8 @@
     "commission": 1234,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x6dbee56aa3aac553ec771970e0d705be0acb5d5b": {
     "account": "0x6dbee56aa3aac553ec771970e0d705be0acb5d5b",
@@ -647,7 +711,8 @@
     "commission": 700,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x83deef0e75e975de1239c189c7024d5f38d85908": {
     "account": "0x83deef0e75e975de1239c189c7024d5f38d85908",
@@ -657,7 +722,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x5a5a819efe1c38dcbc2fcc0cea9034b4742244ba": {
     "account": "0x5a5a819efe1c38dcbc2fcc0cea9034b4742244ba",
@@ -667,7 +733,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x3c6deba25bab50f93eb8b0c8bd518babab6aa184": {
     "account": "0x3c6deba25bab50f93eb8b0c8bd518babab6aa184",
@@ -677,7 +744,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x6fce5864f48a9a5caa6c9b60ddbdf73253550377": {
     "account": "0x6fce5864f48a9a5caa6c9b60ddbdf73253550377",
@@ -687,7 +755,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x1975198063dab03c2f41b5dcf8380b4ee9799557": {
     "account": "0x1975198063dab03c2f41b5dcf8380b4ee9799557",
@@ -697,7 +766,8 @@
     "commission": 700,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xc7edb5ea4454eb812cf123def3d96a30cf8a5c9c": {
     "account": "0xc7edb5ea4454eb812cf123def3d96a30cf8a5c9c",
@@ -707,7 +777,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x42645071cc71d9413dd433da398279c805995b8b": {
     "account": "0x42645071cc71d9413dd433da398279c805995b8b",
@@ -717,7 +788,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x685e03207e722a62fedf7fd6b0d1d869209b4017": {
     "account": "0x685e03207e722a62fedf7fd6b0d1d869209b4017",
@@ -727,7 +799,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd4ac369083683a180e8dc3e19bb9398748d677b0": {
     "account": "0xd4ac369083683a180e8dc3e19bb9398748d677b0",
@@ -737,7 +810,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xa10bc3249329a978a245dc74b1dfbbd3eaacec96": {
     "account": "0xa10bc3249329a978a245dc74b1dfbbd3eaacec96",
@@ -747,7 +821,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x21bb73833454c3b3522de8f009550e78981053dd": {
     "account": "0x21bb73833454c3b3522de8f009550e78981053dd",
@@ -757,7 +832,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x0baf9218f2dec1dae5413a6339b29e80cd92e0ca": {
     "account": "0x0baf9218f2dec1dae5413a6339b29e80cd92e0ca",
@@ -767,7 +843,8 @@
     "commission": 700,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x3482ceae67d08a683015312dfc2d1e5ca8b5b1d8": {
     "account": "0x3482ceae67d08a683015312dfc2d1e5ca8b5b1d8",
@@ -777,7 +854,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xcf0a04799ad52e86afc5877df79bdf8668194457": {
     "account": "0xcf0a04799ad52e86afc5877df79bdf8668194457",
@@ -787,7 +865,8 @@
     "commission": 700,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xfee09ab5c19a16638369ebacb55438f8978c377e": {
     "account": "0xfee09ab5c19a16638369ebacb55438f8978c377e",
@@ -797,7 +876,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd445beb88ac21a44bdcb4362e15f2587bf03b510": {
     "account": "0xd445beb88ac21a44bdcb4362e15f2587bf03b510",
@@ -807,7 +887,8 @@
     "commission": 500,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xc8216bcc1a3497aa1fc901a702619533dd8ae467": {
     "account": "0xc8216bcc1a3497aa1fc901a702619533dd8ae467",
@@ -817,7 +898,8 @@
     "commission": 500,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xc1ce82654d541decf0c956d2f78e658e154c5399": {
     "account": "0xc1ce82654d541decf0c956d2f78e658e154c5399",
@@ -827,7 +909,8 @@
     "commission": 500,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xc7ec6244823372d93cc5f417d582f2b17378699b": {
     "account": "0xc7ec6244823372d93cc5f417d582f2b17378699b",
@@ -837,7 +920,8 @@
     "commission": 500,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x320debb9f7da6f5d0042e27903b2c456763aee18": {
     "account": "0x320debb9f7da6f5d0042e27903b2c456763aee18",
@@ -847,7 +931,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xc9fe898b87fcffec6be6c922f9aca0450482fc50": {
     "account": "0xc9fe898b87fcffec6be6c922f9aca0450482fc50",
@@ -857,7 +942,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x87b9b06b1d77c537e9ada4e97f6ba892754bcd0c": {
     "account": "0x87b9b06b1d77c537e9ada4e97f6ba892754bcd0c",
@@ -867,7 +953,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xb7ee9d4d6c1421fb7779a9577394c8f0d5aeab9f": {
     "account": "0xb7ee9d4d6c1421fb7779a9577394c8f0d5aeab9f",
@@ -877,7 +964,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x169dadc749e50981c8ecc570c42842fca032c99a": {
     "account": "0x169dadc749e50981c8ecc570c42842fca032c99a",
@@ -887,7 +975,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x4461d19e36b60ab07377e9398bd80cef9c229c41": {
     "account": "0x4461d19e36b60ab07377e9398bd80cef9c229c41",
@@ -897,7 +986,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xd18302a3e2a25c369936be2657a045fea594b89f": {
     "account": "0xd18302a3e2a25c369936be2657a045fea594b89f",
@@ -907,7 +997,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xf0ef08333382ccd75eb97f8c5065633b418e268e": {
     "account": "0xf0ef08333382ccd75eb97f8c5065633b418e268e",
@@ -917,7 +1008,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xbf7e5949ebf57004ce9592796b77dbeba675d148": {
     "account": "0xbf7e5949ebf57004ce9592796b77dbeba675d148",
@@ -927,7 +1019,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0xaa4b2a257e6a97dfc652a35bf4f14ac4d28c5101": {
     "account": "0xaa4b2a257e6a97dfc652a35bf4f14ac4d28c5101",
@@ -937,7 +1030,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x8c195e9574a24eac651c6126be6978d52bc66e6d": {
     "account": "0x8c195e9574a24eac651c6126be6978d52bc66e6d",
@@ -947,7 +1041,8 @@
     "commission": 1034,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x3b708c9e46798a23243e69446d229bb575528a7c": {
     "account": "0x3b708c9e46798a23243e69446d229bb575528a7c",
@@ -957,7 +1052,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x9e19d0e69f5f527e06fa32d5d0b07680ef2ab10e": {
     "account": "0x9e19d0e69f5f527e06fa32d5d0b07680ef2ab10e",
@@ -967,7 +1063,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x042d22347a88436195a2450ee9803da2a88cc0a9": {
     "account": "0x042d22347a88436195a2450ee9803da2a88cc0a9",
@@ -977,7 +1074,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x9edbbbd70d51b2e103714f467637106d8055f85b": {
     "account": "0x9edbbbd70d51b2e103714f467637106d8055f85b",
@@ -987,7 +1085,8 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x3635c9adc5dea00000"
-    }
+    },
+    "authenticated": true
   },
   "0x746dc398b16e88838329045c0c66b6255a307c4f": {
     "account": "0x746dc398b16e88838329045c0c66b6255a307c4f",
@@ -997,6 +1096,7 @@
     "commission": 1000,
     "delegators": {
       "0x0774a80189030b3673983ebd4d81dcb5af21c78a": "0x56bc75e2d63100000"
-    }
+    },
+    "authenticated": true
   }
 }

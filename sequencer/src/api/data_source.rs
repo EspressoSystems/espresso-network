@@ -8,8 +8,9 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
-        RewardMerkleTreeV1, StakeTableEvent, Validator,
+        AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
+        RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+        StakeTableEvent,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -157,7 +158,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn get_validators(
         &self,
         epoch: <T as NodeType>::Epoch,
-    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>>;
 
     fn get_block_reward(
         &self,
@@ -178,7 +179,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         epoch: <T as NodeType>::Epoch,
         offset: u64,
         limit: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<RegisteredValidator<PubKey>>>>;
 
     /// Get stake table events from L1 blocks `from_l1_block..=to_l1_block`.
     fn stake_table_events(

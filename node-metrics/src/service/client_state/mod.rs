@@ -5,7 +5,7 @@ use std::{
 
 use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
-use espresso_types::{v0_3::Validator, SeqTypes};
+use espresso_types::{v0_3::AuthenticatedValidator, SeqTypes};
 use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
@@ -1156,7 +1156,7 @@ async fn handle_received_stake_table<K>(
 
 async fn handle_received_validator<K>(
     client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
-    validator: Validator<BLSPubKey>,
+    validator: AuthenticatedValidator<BLSPubKey>,
 ) where
     K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
 {
@@ -1556,7 +1556,7 @@ impl ProcessDistributeValidatorHandlingTask {
         validator_receiver: S,
     ) -> Self
     where
-        S: Stream<Item = Validator<BLSPubKey>> + Send + Sync + Unpin + 'static,
+        S: Stream<Item = AuthenticatedValidator<BLSPubKey>> + Send + Sync + Unpin + 'static,
         K: Sink<ServerMessage, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
     {
         let task_handle = spawn(Self::process_distribute_validator_handling_stream(
@@ -1576,7 +1576,7 @@ impl ProcessDistributeValidatorHandlingTask {
         client_thread_state: Arc<RwLock<ClientThreadState<K>>>,
         mut stream: S,
     ) where
-        S: Stream<Item = Validator<BLSPubKey>> + Unpin,
+        S: Stream<Item = AuthenticatedValidator<BLSPubKey>> + Unpin,
         K: Sink<ServerMessage, Error = SendError> + Clone + Unpin,
     {
         loop {

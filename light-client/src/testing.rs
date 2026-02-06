@@ -13,10 +13,10 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    v0_3::{StakeTableEvent, Validator},
+    v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NamespaceId,
-    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash,
-    StakeTableState, Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
+    NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes,
+    SequencerVersions, StakeTableHash, StakeTableState, Transaction, BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -340,7 +340,7 @@ struct InnerTestClient {
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
     invalid_payloads: HashSet<usize>,
-    quorum: Vec<(PrivKey, Validator<PubKey>)>,
+    quorum: Vec<(PrivKey, AuthenticatedValidator<PubKey>)>,
     #[derivative(Default(value = "3"))]
     first_epoch_with_dynamic_stake_table: u64,
     missing_quorums: HashSet<u64>,
@@ -349,7 +349,7 @@ struct InnerTestClient {
 }
 
 impl InnerTestClient {
-    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, Validator<PubKey>)] {
+    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, AuthenticatedValidator<PubKey>)] {
         // For testing purposes, we will say that one new node joins the quorum each epoch. The
         // static stake table used before the first epoch with dynamic stake is the same as the
         // stake table used in that epoch.
@@ -363,14 +363,17 @@ impl InnerTestClient {
                 self.quorum.len() as u64,
             );
             let stake = U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128);
-            let validator = Validator {
+            let validator: AuthenticatedValidator<PubKey> = RegisteredValidator {
                 account: Address::random(),
                 stake_table_key,
                 state_ver_key,
                 stake,
                 commission: 1,
                 delegators: [(Address::random(), stake)].into_iter().collect(),
-            };
+                authenticated: true,
+            }
+            .try_into()
+            .expect("authenticated validator");
             self.quorum.push((priv_key, validator));
         }
 
@@ -379,11 +382,11 @@ impl InnerTestClient {
 
     fn stake_table_hash(&mut self, epoch: u64) -> StakeTableHash {
         let quorum = self.quorum_for_epoch(epoch);
-        let mut validators = ValidatorMap::default();
+        let mut validators = RegisteredValidatorMap::default();
         let mut used_bls_keys = HashSet::default();
         let mut used_schnorr_keys = HashSet::default();
         for (_, validator) in quorum {
-            validators.insert(validator.account, validator.clone());
+            validators.insert(validator.account, validator.clone().into());
             used_bls_keys.insert(validator.stake_table_key);
             used_schnorr_keys.insert(validator.state_ver_key.clone());
         }
@@ -854,7 +857,10 @@ impl Client for TestClient {
     }
 }
 
-fn register_validator_events(events: &mut Vec<StakeTableEvent>, validator: &Validator<PubKey>) {
+fn register_validator_events(
+    events: &mut Vec<StakeTableEvent>,
+    validator: &AuthenticatedValidator<PubKey>,
+) {
     events.push(StakeTableEvent::Register(ValidatorRegistered {
         account: validator.account,
         blsVk: validator.stake_table_key.into(),
@@ -870,17 +876,20 @@ fn register_validator_events(events: &mut Vec<StakeTableEvent>, validator: &Vali
     }
 }
 
-pub fn random_validator() -> Validator<PubKey> {
+pub fn random_validator() -> AuthenticatedValidator<PubKey> {
     let account = Address::random();
     let mut seed = [0; 32];
     rand::thread_rng().fill_bytes(&mut seed);
     let stake = U256::from(rand::thread_rng().next_u64());
-    Validator {
+    RegisteredValidator {
         account,
         stake_table_key: PubKey::generated_from_seed_indexed(seed, 0).0,
         state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, 0).0,
         stake,
         commission: 1,
         delegators: [(Address::random(), stake)].into_iter().collect(),
+        authenticated: true,
     }
+    .try_into()
+    .expect("authenticated validator")
 }
