@@ -8,10 +8,10 @@ use alloy::{
     signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
-use common::{base_cmd, Signer, TestSystemExt};
+use common::{base_cmd, MetadataCommand, Signer, TestSystemExt};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
-use predicates::str;
+use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{rngs::StdRng, SeedableRng as _};
 use staking_cli::{
     demo::DelegationConfig,
@@ -25,31 +25,6 @@ fn random_mnemonic() -> String {
     Mnemonic::<English>::new(&mut rand::thread_rng())
         .to_phrase()
         .to_string()
-}
-
-struct MetadataMockServer {
-    port: u16,
-}
-
-impl MetadataMockServer {
-    fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/metadata", self.port)
-    }
-}
-
-async fn start_metadata_server(pub_key: &BLSPubKey) -> MetadataMockServer {
-    let metadata_json = serde_json::json!({
-        "pub_key": pub_key.to_string(),
-        "name": "Test Validator"
-    });
-    let json_body = serde_json::to_string(&metadata_json).unwrap();
-
-    let route = warp::path("metadata").map(move || {
-        warp::reply::with_header(json_body.clone(), "content-type", "application/json")
-    });
-
-    let port = deploy::serve_on_random_port(route).await;
-    MetadataMockServer { port }
 }
 
 use crate::deploy::TestSystem;
@@ -222,8 +197,7 @@ async fn test_cli_register_validator(
     let mut cmd = system.cmd(signer);
     match signer {
         Signer::Mnemonic => {
-            cmd.arg("--skip-metadata-validation")
-                .arg("register-validator")
+            cmd.arg("register-validator")
                 .arg("--consensus-private-key")
                 .arg(system.bls_private_key_str()?)
                 .arg("--state-private-key")
@@ -232,13 +206,13 @@ async fn test_cli_register_validator(
                 .arg("12.34")
                 .arg("--metadata-uri")
                 .arg("https://example.com/metadata")
+                .arg("--skip-metadata-validation")
                 .assert()
                 .success()
                 .stdout(str::contains("ValidatorRegistered"));
         },
         Signer::BrokeMnemonic => {
-            cmd.arg("--skip-metadata-validation")
-                .arg("register-validator")
+            cmd.arg("register-validator")
                 .arg("--consensus-private-key")
                 .arg(system.bls_private_key_str()?)
                 .arg("--state-private-key")
@@ -247,6 +221,7 @@ async fn test_cli_register_validator(
                 .arg("12.34")
                 .arg("--metadata-uri")
                 .arg("https://example.com/metadata")
+                .arg("--skip-metadata-validation")
                 .assert()
                 .failure()
                 .stderr(str::contains("zero Ethereum balance"));
@@ -313,73 +288,124 @@ enum MetadataFormat {
     OpenMetrics,
 }
 
-struct MetadataServer {
-    port: u16,
-    format: MetadataFormat,
+// Content-Type header values for testing wrong content-type scenarios
+#[derive(Clone, Copy, Debug)]
+enum ContentType {
+    Json,       // application/json (correct for JSON)
+    Text,       // text/plain (GitHub raw, wrong for JSON)
+    Empty,      // empty string
+    Unexpected, // completely unexpected/unusual content-type
 }
 
-impl MetadataServer {
-    fn cli_args(&self) -> Vec<String> {
-        match self.format {
-            MetadataFormat::Json => {
-                vec![
-                    "--metadata-uri".to_string(),
-                    format!("http://127.0.0.1:{}/metadata", self.port),
-                ]
-            },
-            MetadataFormat::OpenMetrics => {
-                vec![
-                    "--metadata-uri".to_string(),
-                    format!("http://127.0.0.1:{}/status/metrics", self.port),
-                ]
-            },
+impl ContentType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ContentType::Json => "application/json",
+            ContentType::Text => "text/plain",
+            ContentType::Empty => "",
+            ContentType::Unexpected => "application/x-unexpected-type; charset=unknown",
         }
     }
 }
 
-async fn start_metadata_server_format(
-    pub_key: &BLSPubKey,
+struct MetadataServer {
+    port: u16,
+}
+
+impl MetadataServer {
+    fn add_cli_args(&self, cmd: &mut assert_cmd::Command) {
+        cmd.arg("--metadata-uri")
+            .arg(format!("http://127.0.0.1:{}/metadata", self.port));
+    }
+
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}/metadata", self.port)
+    }
+}
+
+struct MetadataServerBuilder {
+    pub_key: BLSPubKey,
     format: MetadataFormat,
-) -> MetadataServer {
-    let port = match format {
-        MetadataFormat::Json => {
-            let metadata_json = serde_json::json!({
-                "pub_key": pub_key.to_string(),
-                "name": "Test Validator"
-            });
-            let json_body = serde_json::to_string(&metadata_json).unwrap();
+    content_type: Option<ContentType>,
+    name: String,
+}
 
-            let route = warp::path("metadata").map(move || {
-                warp::reply::with_header(json_body.clone(), "content-type", "application/json")
-            });
+impl MetadataServerBuilder {
+    fn new(pub_key: BLSPubKey) -> Self {
+        Self {
+            pub_key,
+            format: MetadataFormat::Json,
+            content_type: None,
+            name: "Test Validator".to_string(),
+        }
+    }
 
-            deploy::serve_on_random_port(route).await
-        },
-        MetadataFormat::OpenMetrics => {
-            let metrics_body = format!(
-                r#"# HELP consensus_node node
+    fn format(mut self, format: MetadataFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    fn content_type(mut self, content_type: ContentType) -> Self {
+        self.content_type = Some(content_type);
+        self
+    }
+
+    #[allow(dead_code)]
+    fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    async fn start(self) -> MetadataServer {
+        let content_type = self.content_type.unwrap_or(match self.format {
+            MetadataFormat::Json => ContentType::Json,
+            MetadataFormat::OpenMetrics => ContentType::Text,
+        });
+
+        let port = match self.format {
+            MetadataFormat::Json => {
+                let metadata_json = serde_json::json!({
+                    "pub_key": self.pub_key.to_string(),
+                    "name": self.name
+                });
+                let json_body = serde_json::to_string(&metadata_json).unwrap();
+
+                let route = warp::path("metadata").map(move || {
+                    warp::reply::with_header(
+                        json_body.clone(),
+                        "content-type",
+                        content_type.as_str(),
+                    )
+                });
+
+                deploy::serve_on_random_port(route).await
+            },
+            MetadataFormat::OpenMetrics => {
+                let metrics_body = format!(
+                    r#"# HELP consensus_node node
 # TYPE consensus_node gauge
 consensus_node{{key="{}"}} 1
 # HELP consensus_node_identity_general node_identity_general
 # TYPE consensus_node_identity_general gauge
-consensus_node_identity_general{{name="Test Validator",company_name="Test Corp"}} 1
+consensus_node_identity_general{{name="{}"}} 1
 "#,
-                pub_key
-            );
+                    self.pub_key, self.name
+                );
 
-            let route = warp::path!("status" / "metrics").map(move || {
-                warp::reply::with_header(
-                    metrics_body.clone(),
-                    "content-type",
-                    "text/plain; charset=utf-8",
-                )
-            });
+                let route = warp::path("metadata").map(move || {
+                    warp::reply::with_header(
+                        metrics_body.clone(),
+                        "content-type",
+                        content_type.as_str(),
+                    )
+                });
 
-            deploy::serve_on_random_port(route).await
-        },
-    };
+                deploy::serve_on_random_port(route).await
+            },
+        };
 
-    MetadataServer { port, format }
+        MetadataServer { port }
+    }
 }
 
 #[test_log::test(rstest::rstest)]
@@ -391,7 +417,10 @@ async fn test_cli_register_validator_metadata_validation_success(
 ) -> Result<()> {
     let system = TestSystem::deploy().await?;
     let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
-    let server = start_metadata_server_format(&bls_vk, format).await;
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .start()
+        .await;
 
     let bls_key = system.bls_private_key_str()?;
     let state_key = system.state_private_key_str()?;
@@ -404,9 +433,7 @@ async fn test_cli_register_validator_metadata_validation_success(
         .arg(&state_key)
         .arg("--commission")
         .arg("5.00");
-    for arg in server.cli_args() {
-        cmd.arg(arg);
-    }
+    server.add_cli_args(&mut cmd);
     cmd.assert()
         .success()
         .stdout(str::contains("ValidatorRegistered"));
@@ -426,7 +453,10 @@ async fn test_cli_register_validator_metadata_validation_wrong_pub_key(
     let mut rng = StdRng::from_seed([99u8; 32]);
     let (_, different_bls, _) = TestSystem::gen_keys(&mut rng);
     let different_bls_vk = BLSPubKey::from(different_bls.ver_key());
-    let server = start_metadata_server_format(&different_bls_vk, format).await;
+    let server = MetadataServerBuilder::new(different_bls_vk)
+        .format(format)
+        .start()
+        .await;
 
     let bls_key = system.bls_private_key_str()?;
     let state_key = system.state_private_key_str()?;
@@ -439,9 +469,7 @@ async fn test_cli_register_validator_metadata_validation_wrong_pub_key(
         .arg(&state_key)
         .arg("--commission")
         .arg("5.00");
-    for arg in server.cli_args() {
-        cmd.arg(arg);
-    }
+    server.add_cli_args(&mut cmd);
     cmd.assert()
         .failure()
         .stderr(str::contains("pub_key mismatch"));
@@ -488,7 +516,7 @@ async fn test_cli_register_validator_skip_metadata_validation() -> Result<()> {
     let mut rng = StdRng::from_seed([99u8; 32]);
     let (_, different_bls, _) = TestSystem::gen_keys(&mut rng);
     let different_bls_vk = BLSPubKey::from(different_bls.ver_key());
-    let server = start_metadata_server(&different_bls_vk).await;
+    let server = MetadataServerBuilder::new(different_bls_vk).start().await;
 
     let bls_key = system.bls_private_key_str()?;
     let state_key = system.state_private_key_str()?;
@@ -497,7 +525,6 @@ async fn test_cli_register_validator_skip_metadata_validation() -> Result<()> {
     // With --skip-metadata-validation, should succeed even with wrong pub_key
     system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(&bls_key)
@@ -507,6 +534,7 @@ async fn test_cli_register_validator_skip_metadata_validation() -> Result<()> {
         .arg("5.00")
         .arg("--metadata-uri")
         .arg(&metadata_uri)
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("ValidatorRegistered"));
@@ -1088,10 +1116,10 @@ async fn test_cli_update_metadata_uri() -> Result<()> {
     let updated_uri = "https://example.com/updated-metadata.json";
     system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg(updated_uri)
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("MetadataUriUpdated"))
@@ -1128,14 +1156,15 @@ async fn test_cli_update_metadata_uri_validation_success(
     system.register_validator().await?;
 
     let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
-    let server = start_metadata_server_format(&bls_vk, format).await;
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .start()
+        .await;
     let bls_pub_key = system.bls_public_key_str();
 
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("update-metadata-uri");
-    for arg in server.cli_args() {
-        cmd.arg(arg);
-    }
+    server.add_cli_args(&mut cmd);
     cmd.arg("--consensus-public-key").arg(&bls_pub_key);
     cmd.assert()
         .success()
@@ -1157,14 +1186,15 @@ async fn test_cli_update_metadata_uri_validation_wrong_pub_key(
     let mut rng = StdRng::from_seed([99u8; 32]);
     let (_, different_bls, _) = TestSystem::gen_keys(&mut rng);
     let different_bls_vk = BLSPubKey::from(different_bls.ver_key());
-    let server = start_metadata_server_format(&different_bls_vk, format).await;
+    let server = MetadataServerBuilder::new(different_bls_vk)
+        .format(format)
+        .start()
+        .await;
     let bls_pub_key = system.bls_public_key_str();
 
     let mut cmd = system.cmd(Signer::Mnemonic);
     cmd.arg("update-metadata-uri");
-    for arg in server.cli_args() {
-        cmd.arg(arg);
-    }
+    server.add_cli_args(&mut cmd);
     cmd.arg("--consensus-public-key").arg(&bls_pub_key);
     cmd.assert()
         .failure()
@@ -1200,19 +1230,105 @@ async fn test_cli_update_metadata_uri_skip_validation() -> Result<()> {
     let mut rng = StdRng::from_seed([99u8; 32]);
     let (_, different_bls, _) = TestSystem::gen_keys(&mut rng);
     let different_bls_vk = BLSPubKey::from(different_bls.ver_key());
-    let server = start_metadata_server(&different_bls_vk).await;
+    let server = MetadataServerBuilder::new(different_bls_vk).start().await;
     let metadata_uri = server.url();
 
     // With --skip-metadata-validation, should succeed even without --consensus-public-key
     system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg(&metadata_uri)
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("MetadataUriUpdated"));
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_skip_metadata_validation_conflicts_with_no_metadata(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    // --skip-metadata-validation requires --metadata-uri, so using it with --no-metadata-uri should fail
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--no-metadata-uri")
+        .arg("--skip-metadata-validation")
+        .assert()
+        .failure()
+        .stderr(
+            str::contains("cannot be used with")
+                .and(str::contains("--skip-metadata-validation"))
+                .and(str::contains("--no-metadata-uri")),
+        );
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_metadata_uri_required(#[case] command: MetadataCommand) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .assert()
+        .failure()
+        .stderr(str::contains("required").and(str::contains("--metadata-uri")));
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_metadata_uri_conflicts_with_no_metadata_uri(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata")
+        .arg("--no-metadata-uri")
+        .assert()
+        .failure()
+        .stderr(
+            str::contains("cannot be used with")
+                .and(str::contains("--metadata-uri"))
+                .and(str::contains("--no-metadata-uri")),
+        );
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_skip_metadata_validation_requires_metadata_uri(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    // --skip-metadata-validation without --metadata-uri should fail (requires it)
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--skip-metadata-validation")
+        .assert()
+        .failure()
+        .stderr(str::contains("required").and(str::contains("--metadata-uri")));
 
     Ok(())
 }
@@ -1236,7 +1352,6 @@ async fn test_cli_all_operations_manual_inspect(
 
     let output = system
         .cmd(Signer::Mnemonic)
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(system.bls_private_key_str()?)
@@ -1246,6 +1361,7 @@ async fn test_cli_all_operations_manual_inspect(
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
@@ -1309,10 +1425,10 @@ async fn test_cli_all_operations_manual_inspect(
 
         let output = system
             .cmd(Signer::Mnemonic)
-            .arg("--skip-metadata-validation")
             .arg("update-metadata-uri")
             .arg("--metadata-uri")
             .arg("https://example.com/updated-metadata")
+            .arg("--skip-metadata-validation")
             .assert()
             .success()
             .get_output()
@@ -1510,7 +1626,6 @@ async fn test_cli_register_validator_private_key() -> Result<()> {
 
     system
         .cmd(Signer::PrivateKey)
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(system.bls_private_key_str()?)
@@ -1520,6 +1635,7 @@ async fn test_cli_register_validator_private_key() -> Result<()> {
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("ValidatorRegistered"));
@@ -1875,7 +1991,6 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
     let output = system
         .export_calldata_cmd()
         .arg("--skip-simulation")
-        .arg("--skip-metadata-validation")
         .arg("register-validator")
         .arg("--node-signatures")
         .arg(&signatures_path)
@@ -1883,6 +1998,7 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
@@ -1954,10 +2070,10 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
     let output = system
         .export_calldata_cmd()
         .arg("--skip-simulation")
-        .arg("--skip-metadata-validation")
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg("https://example.com/updated-metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
@@ -2228,16 +2344,15 @@ async fn test_cli_preview_metadata(#[case] format: MetadataFormat) -> Result<()>
     let (_, bls_key, _) = TestSystem::gen_keys(&mut rng);
     let bls_vk = BLSPubKey::from(bls_key.ver_key());
 
-    let server = start_metadata_server_format(&bls_vk, format).await;
-    let metadata_uri = match format {
-        MetadataFormat::Json => format!("http://127.0.0.1:{}/metadata", server.port),
-        MetadataFormat::OpenMetrics => format!("http://127.0.0.1:{}/status/metrics", server.port),
-    };
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .start()
+        .await;
 
     base_cmd()
         .arg("preview-metadata")
         .arg("--metadata-uri")
-        .arg(&metadata_uri)
+        .arg(server.url())
         .assert()
         .success()
         .stdout(str::contains(format!("\"pub_key\": \"{}\"", bls_vk)))
@@ -2268,6 +2383,155 @@ async fn test_cli_preview_metadata_connection_refused() -> Result<()> {
         .assert()
         .failure()
         .stderr(str::contains("failed to fetch metadata"));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_register_validator_metadata_with_wrong_content_type(
+    #[values(MetadataFormat::Json, MetadataFormat::OpenMetrics)] format: MetadataFormat,
+    #[values(
+        ContentType::Text,
+        ContentType::Empty,
+        ContentType::Json,
+        ContentType::Unexpected
+    )]
+    content_type: ContentType,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
+
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .content_type(content_type)
+        .start()
+        .await;
+
+    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+
+    let bls_key = system.bls_private_key_str()?;
+    let state_key = system.state_private_key_str()?;
+
+    // Should succeed despite wrong content-type (content-based detection)
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(&bls_key)
+        .arg("--state-private-key")
+        .arg(&state_key)
+        .arg("--commission")
+        .arg("5.00")
+        .arg("--metadata-uri")
+        .arg(&metadata_uri)
+        .assert()
+        .success()
+        .stdout(str::contains("ValidatorRegistered"));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_preview_metadata_with_wrong_content_type(
+    #[values(MetadataFormat::Json, MetadataFormat::OpenMetrics)] format: MetadataFormat,
+    #[values(
+        ContentType::Text,
+        ContentType::Empty,
+        ContentType::Json,
+        ContentType::Unexpected
+    )]
+    content_type: ContentType,
+) -> Result<()> {
+    let mut rng = StdRng::from_seed([42u8; 32]);
+    let (_, bls_key, _) = TestSystem::gen_keys(&mut rng);
+    let bls_vk = BLSPubKey::from(bls_key.ver_key());
+
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .content_type(content_type)
+        .start()
+        .await;
+
+    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&metadata_uri)
+        .assert()
+        .success()
+        .stdout(str::contains(format!("\"pub_key\": \"{}\"", bls_vk)))
+        .stdout(str::contains("Test Validator"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_invalid_both_formats_shows_both_errors() -> Result<()> {
+    // Serve content that's neither valid JSON nor valid OpenMetrics
+    let route = warp::path("metadata")
+        .map(|| warp::reply::with_header("<html>Not metadata</html>", "content-type", "text/html"));
+
+    let port = deploy::serve_on_random_port(route).await;
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(format!("http://127.0.0.1:{}/metadata", port))
+        .assert()
+        .failure()
+        .stderr(str::contains("JSON"))
+        .stderr(str::contains("OpenMetrics"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_valid_json_wrong_schema() -> Result<()> {
+    let invalid_json = r#"{"name": "Some Service", "version": "1.0"}"#;
+
+    let route = warp::path("metadata")
+        .map(move || warp::reply::with_header(invalid_json, "content-type", "application/json"));
+
+    let port = deploy::serve_on_random_port(route).await;
+    let url = format!("http://127.0.0.1:{}/metadata", port);
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&url)
+        .assert()
+        .failure()
+        .stderr(str::contains(&url))
+        .stderr(str::contains("valid JSON but incorrect schema"))
+        .stderr(str::contains("missing field"))
+        .stderr(str::contains("pub_key"))
+        .stderr(str::contains("OpenMetrics").not());
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_invalid_both_formats_shows_url() -> Result<()> {
+    let invalid_content = "<html>Not JSON or OpenMetrics</html>";
+
+    let route = warp::path("metadata")
+        .map(move || warp::reply::with_header(invalid_content, "content-type", "text/html"));
+
+    let port = deploy::serve_on_random_port(route).await;
+    let url = format!("http://127.0.0.1:{}/metadata", port);
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&url)
+        .assert()
+        .failure()
+        .stderr(str::contains(&url))
+        .stderr(str::contains("failed to parse as JSON"))
+        .stderr(str::contains("OpenMetrics"));
 
     Ok(())
 }

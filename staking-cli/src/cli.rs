@@ -317,7 +317,9 @@ pub async fn run() -> Result<()> {
         Commands::PreviewMetadata { metadata_uri } => {
             let url = url::Url::parse(&metadata_uri)
                 .with_context(|| format!("Invalid URL: {metadata_uri}"))?;
-            let metadata = fetch_metadata(&url).await?;
+            let metadata = fetch_metadata(&url)
+                .await
+                .with_context(|| format!("from {url}"))?;
             output_success(serde_json::to_string_pretty(&metadata)?);
             return Ok(());
         },
@@ -478,7 +480,7 @@ pub async fn run() -> Result<()> {
 
             // Validate metadata URI if present and validation not skipped
             if let Some(url) = metadata_uri.url() {
-                if !config.skip_metadata_validation {
+                if !metadata_uri_args.skip_metadata_validation {
                     validate_metadata_uri(url, &payload.bls_vk)
                         .await
                         .context("use --skip-metadata-validation to skip")?;
@@ -532,7 +534,7 @@ pub async fn run() -> Result<()> {
 
             // Validate metadata URI if present and validation not skipped
             if let Some(url) = metadata_uri.url() {
-                if !config.skip_metadata_validation {
+                if !metadata_uri_args.skip_metadata_validation {
                     let bls_vk = consensus_public_key.ok_or_else(|| {
                         anyhow::anyhow!(
                             "--consensus-public-key is required for metadata validation (use \
