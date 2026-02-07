@@ -447,17 +447,22 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         }
 
         tracing::error!("Waiting for previous block for parent view {parent_view}");
+        let now = Instant::now();
         // TODO: Handle the case where the block is received before this call
         while let Ok(event) = receiver.recv_direct().await {
             if let HotShotEvent::BlockReconstructed(_, _, _, view) = event.as_ref() {
                 if *view == parent_view {
                     tracing::error!("Block reconstructed for parent view {parent_view}");
+                    let elapsed = now.elapsed();
+                    tracing::error!("Waited for previous block in {elapsed:?}");
                     return Ok(());
                 }
             }
             if let HotShotEvent::BlockRecv(block_recv) = event.as_ref() {
                 if block_recv.view_number == parent_view {
                     tracing::error!("Block received for parent view {parent_view}");
+                    let elapsed = now.elapsed();
+                    tracing::error!("Waited for previous block in {elapsed:?}");
                     return Ok(());
                 }
             }
