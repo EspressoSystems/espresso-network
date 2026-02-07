@@ -9,7 +9,7 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::{Address, Bytes, U256},
-    providers::{Provider, ProviderBuilder, WalletProvider},
+    providers::{layers::AnvilLayer, Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
     signers::{
         k256::ecdsa::SigningKey,
@@ -38,7 +38,6 @@ use hotshot_types::{
     utils::epoch_from_block_number,
 };
 use itertools::izip;
-use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         options,
@@ -55,6 +54,7 @@ use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
+use test_utils::reserve_tcp_port;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -283,8 +283,8 @@ async fn main() -> anyhow::Result<()> {
         (url, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
-        let instance = Anvil::new()
-            .args([
+        let anvil_layer = AnvilLayer::from(
+            Anvil::new().args([
                 "--slots-in-an-epoch",
                 "0",
                 "--mnemonic",
@@ -300,14 +300,15 @@ async fn main() -> anyhow::Result<()> {
                     .context("Failed to convert path to string")?,
                 "--state-interval",
                 "1",
-            ])
-            .spawn();
-        let url = instance.endpoint_url();
+            ]),
+        );
+        let url = anvil_layer.endpoint_url();
         tracing::info!("l1 url: {}", url);
+        let instance = anvil_layer.instance().clone();
         (url, Some(instance))
     };
 
-    let relay_server_port = pick_unused_port().unwrap();
+    let relay_server_port = reserve_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
@@ -549,8 +550,8 @@ async fn main() -> anyhow::Result<()> {
         client_states.provider_urls.insert(chain_id, url.clone());
         let lc_proxy_addr = client_states.lc_proxy_addr.get(&chain_id).unwrap();
 
-        // init the prover config
-        let prover_port = prover_port.unwrap_or_else(|| pick_unused_port().unwrap());
+        // init the prover config - use port 0 to let the OS assign an available port
+        let prover_port = prover_port.unwrap_or(0);
         prover_ports.push(prover_port);
         let l1_rpc_client = RpcClient::new_http(url);
         let prover_config = StateProverConfig {

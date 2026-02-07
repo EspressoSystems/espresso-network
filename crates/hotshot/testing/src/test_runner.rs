@@ -315,8 +315,14 @@ where
     ) -> (Vec<Box<dyn BuilderTask<TYPES>>>, Vec<Url>) {
         let mut builder_tasks = Vec::new();
         let mut builder_urls = Vec::new();
-        for metadata in &self.launcher.metadata.builders {
-            let builder_port = portpicker::pick_unused_port().expect("No free ports");
+
+        let mut ports = Vec::new();
+        for _ in &self.launcher.metadata.builders {
+            let port = test_utils::reserve_tcp_port().expect("Failed to bind to TCP port");
+            ports.push(port);
+        }
+
+        for (metadata, builder_port) in self.launcher.metadata.builders.iter().zip(&ports) {
             let builder_url =
                 Url::parse(&format!("http://localhost:{builder_port}")).expect("Invalid URL");
             let builder_task = B::start(

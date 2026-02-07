@@ -27,7 +27,6 @@ hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
-portpicker = { workspace = true }
 prometheus-parse = "0.2"
 rand = { workspace = true }
 rand_chacha = { workspace = true }
@@ -55,6 +54,7 @@ pretty_assertions = { workspace = true }
 staking-cli = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+test-utils = { workspace = true }
 
 [lints]
 workspace = true

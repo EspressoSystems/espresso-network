@@ -23,6 +23,7 @@ use hotshot_types::{
     network::RandomBuilderConfig,
     traits::{node_implementation::NodeType, signature_key::SignatureKey, BlockPayload},
 };
+use test_utils::reserve_tcp_port;
 use tide_disco::Url;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
@@ -34,7 +35,7 @@ async fn test_random_block_builder() {
     use hotshot_example_types::node_types::TestVersions;
     use vbs::version::Version;
 
-    let port = portpicker::pick_unused_port().expect("No free ports");
+    let port = reserve_tcp_port().expect("Failed to bind to TCP port");
     let api_url = Url::parse(&format!("http://localhost:{port}")).expect("Valid URL");
     let task: Box<dyn BuilderTask<TestTypes>> = RandomBuilderImplementation::start(
         1,

@@ -398,8 +398,8 @@ mod test {
     use std::{cmp::min, time::Duration};
 
     use futures::StreamExt;
-    use portpicker::pick_unused_port;
     use surf_disco::Client;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
 
     use super::*;
@@ -867,7 +867,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "explorer",

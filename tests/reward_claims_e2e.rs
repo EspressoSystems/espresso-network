@@ -4,7 +4,7 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::U256,
-    providers::{Provider, ProviderBuilder, WalletProvider},
+    providers::{layers::AnvilLayer, Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
 };
 use espresso_contract_deployer::{build_signer, Contract};
@@ -20,7 +20,6 @@ use hotshot_types::{
     stake_table::{one_honest_threshold, HSStakeTable},
     utils::epoch_from_block_number,
 };
-use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         data_source::testing::TestableSequencerDataSource,
@@ -32,6 +31,7 @@ use sequencer::{
     SequencerApiVersion,
 };
 use staking_cli::demo::DelegationConfig;
+use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -45,15 +45,16 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
 #[test_log::test(tokio::test)]
 async fn test_reward_claims_e2e() -> anyhow::Result<()> {
+    // Use AnvilLayer to keep Anvil alive and prevent port race conditions.
     // Finalize blocks immediately to ensure we have a finalized stake table on L1 for consensus.
-    let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-    let l1_url = anvil.endpoint_url();
+    let anvil_layer = AnvilLayer::from(Anvil::new().args(["--slots-in-an-epoch", "0"]));
+    let l1_url = anvil_layer.endpoint_url();
 
-    let relay_server_port = pick_unused_port().unwrap();
+    let relay_server_port = reserve_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
-    let sequencer_api_port = pick_unused_port().unwrap();
+    let sequencer_api_port = reserve_tcp_port().unwrap();
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(BLOCKS_PER_EPOCH)

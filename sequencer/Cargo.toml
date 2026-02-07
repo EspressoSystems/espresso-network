@@ -85,7 +85,6 @@ libp2p = { workspace = true }
 moka = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"
-portpicker = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
@@ -112,6 +111,7 @@ strum = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
+test-utils = { workspace = true }
 thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "test-utils"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description = "Test utilities for Espresso Network"
+license = "MIT"
+
+[dependencies]
+
+[lints]
+workspace = true

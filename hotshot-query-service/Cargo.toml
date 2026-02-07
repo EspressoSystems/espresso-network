@@ -37,9 +37,9 @@ sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log"]
 # Enable extra features useful for writing tests with a query service.
 testing = [
     "espresso-macros",
-    "portpicker",
     "rand",
     "tempfile",
+    "test-utils",
     "sql-data-source",
     "file-system-data-source",
 ]
@@ -80,7 +80,6 @@ jf-merkle-tree-compat = { workspace = true, features = [
 ] }
 lazy_static = "1"
 log = { version = "0.4", optional = true }
-portpicker = { version = "0.1", optional = true }
 prometheus = { version = "0.13", default-features = false }
 rand = { workspace = true, optional = true }
 refinery = { version = "0.8", features = ["tokio-postgres"], optional = true }
@@ -98,6 +97,7 @@ sqlx = { version = "0.8", features = [
 surf-disco = "0.9"
 tagged-base64 = { workspace = true }
 tempfile = { version = "3.10", optional = true }
+test-utils = { workspace = true, optional = true }
 tide-disco = "0.9"
 time = "0.3"
 tokio = { version = "1", default-features = false, features = [
@@ -129,11 +129,11 @@ backtrace-on-stack-overflow = { version = "0.3", optional = true }
 clap = { version = "4.5", features = ["derive", "env"] }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 generic-array = "0.14"
-portpicker = "0.1"
 rand = { workspace = true }
 reqwest = { workspace = true }
 tempfile = "3.10"
 test-log = { workspace = true }
+test-utils = { workspace = true }
 
 [[example]]
 name = "simple-server"

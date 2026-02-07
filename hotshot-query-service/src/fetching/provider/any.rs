@@ -208,7 +208,7 @@ where
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use futures::stream::StreamExt;
-    use portpicker::pick_unused_port;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use vbs::version::StaticVersionType;
 
@@ -234,7 +234,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",

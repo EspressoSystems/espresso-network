@@ -48,6 +48,8 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
 use rand::{rngs::StdRng, RngCore, SeedableRng};
+#[cfg(feature = "hotshot-testing")]
+use test_utils::reserve_tcp_port;
 use tokio::sync::mpsc::error::TrySendError;
 #[cfg(feature = "hotshot-testing")]
 use tokio::{spawn, time::sleep};
@@ -339,20 +341,16 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             .to_string_lossy()
             .into_owned();
 
-        // Pick some unused public ports
-        let public_address_1 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
-        let public_address_2 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
+        // Atomically bind to unused public ports
+        let public_port_1 = reserve_tcp_port().expect("could not bind to TCP port");
+        let public_port_2 = reserve_tcp_port().expect("could not bind to TCP port");
+        let public_address_1 = format!("127.0.0.1:{public_port_1}");
+        let public_address_2 = format!("127.0.0.1:{public_port_2}");
 
         // 2 brokers
         for i in 0..2 {
-            // Get the ports to bind to
-            let private_port = portpicker::pick_unused_port().expect("could not find an open port");
+            // Atomically bind to a private port
+            let private_port = reserve_tcp_port().expect("could not bind to TCP port");
 
             // Extrapolate addresses
             let private_address = format!("127.0.0.1:{private_port}");
@@ -406,8 +404,8 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             });
         }
 
-        // Get the port to use for the marshal
-        let marshal_port = portpicker::pick_unused_port().expect("could not find an open port");
+        // Atomically bind to an available port for the marshal
+        let marshal_port = reserve_tcp_port().expect("could not bind to TCP port");
 
         // Configure the marshal
         let marshal_endpoint = format!("127.0.0.1:{marshal_port}");

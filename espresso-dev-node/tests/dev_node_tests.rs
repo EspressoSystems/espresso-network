@@ -20,10 +20,10 @@ use hotshot_query_service::{
     explorer::TransactionDetailResponse,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use portpicker::pick_unused_port;
 use rand::Rng;
 use sequencer::SequencerApiVersion;
 use surf_disco::Client;
+use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use url::Url;
@@ -49,9 +49,10 @@ impl Drop for BackgroundProcess {
 async fn slow_dev_node_test(
     #[values(DevNodeVersion::V0_3, DevNodeVersion::V0_4)] version: DevNodeVersion,
 ) {
-    let builder_port = pick_unused_port().unwrap();
-    let api_port = pick_unused_port().unwrap();
-    let dev_node_port = pick_unused_port().unwrap();
+    let builder_port = reserve_tcp_port().unwrap();
+    let api_port = reserve_tcp_port().unwrap();
+    let dev_node_port = reserve_tcp_port().unwrap();
+
     let instance = Anvil::new().spawn();
     let l1_url = instance.endpoint_url();
 
@@ -366,9 +367,9 @@ async fn alt_chain_providers() -> (Vec<AnvilInstance>, Vec<Url>) {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_dev_node_multiple_lc_providers_test() {
-    let builder_port = pick_unused_port().unwrap();
-    let api_port = pick_unused_port().unwrap();
-    let dev_node_port = pick_unused_port().unwrap();
+    let builder_port = reserve_tcp_port().unwrap();
+    let api_port = reserve_tcp_port().unwrap();
+    let dev_node_port = reserve_tcp_port().unwrap();
 
     let instance = Anvil::new().chain_id(1).spawn();
     let l1_url = instance.endpoint_url();

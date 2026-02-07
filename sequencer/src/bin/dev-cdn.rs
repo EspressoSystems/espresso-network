@@ -12,9 +12,9 @@ use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use espresso_types::SeqTypes;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
-use portpicker::pick_unused_port;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use sequencer::network::cdn::{TestingDef, WrappedSignatureKey};
+use test_utils::reserve_tcp_port;
 use tokio::spawn;
 
 #[derive(Parser, Debug)]
@@ -55,8 +55,8 @@ async fn main() -> Result<()> {
         .into_owned();
 
     // Acquire unused ports for the broker to use
-    let broker_public_port = pick_unused_port().expect("failed to find free port for broker");
-    let broker_private_port = pick_unused_port().expect("failed to find free port for broker");
+    let broker_public_port = reserve_tcp_port().expect("failed to bind public port for broker");
+    let broker_private_port = reserve_tcp_port().expect("failed to bind private port for broker");
 
     // Configure the broker
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {

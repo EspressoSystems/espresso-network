@@ -49,6 +49,7 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
+use test_utils::reserve_tcp_port;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -172,7 +173,7 @@ async fn init_consensus(
     let num_nodes_with_stake = NonZeroUsize::new(pub_keys.len()).unwrap();
 
     // Pick a random, unused port for the builder server
-    let builder_port = portpicker::pick_unused_port().expect("No ports available");
+    let builder_port = reserve_tcp_port().expect("Failed to reserve TCP port");
 
     let builder_url =
         Url::parse(&format!("http://0.0.0.0:{builder_port}")).expect("Failed to parse URL");

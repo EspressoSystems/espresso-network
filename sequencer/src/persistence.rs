@@ -154,9 +154,9 @@ mod tests {
         vote::HasViewNumber,
     };
     use indexmap::IndexMap;
-    use portpicker::pick_unused_port;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
+    use test_utils::reserve_tcp_port;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
     use vbs::version::{StaticVersion, StaticVersionType, Version};
@@ -1395,7 +1395,8 @@ mod tests {
 
         let anvil_provider = network_config.anvil().unwrap();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_service_port =
+            reserve_tcp_port().expect("Failed to bind TCP port for query service");
         let query_api_options = Options::with_port(query_service_port);
 
         const NODE_COUNT: usize = 2;
