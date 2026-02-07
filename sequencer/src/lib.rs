@@ -32,7 +32,6 @@ use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
 use proposal_fetcher::ProposalFetcherConfig;
-use tokio::select;
 use tracing::info;
 use url::Url;
 
@@ -46,9 +45,8 @@ use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, GossipConfig,
+        KeyPair, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
 };
@@ -336,7 +334,7 @@ where
     info!("Libp2p advertise address: {}", libp2p_advertise_address);
 
     // Orchestrator client
-    let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
+    let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url.clone());
     let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
     let validator_config = ValidatorConfig {
         public_key: pub_key,
@@ -642,45 +640,31 @@ where
 
     // Initialize the Libp2p network
     let network = {
-        info!("Initializing Libp2p network");
-        let p2p_network = Libp2pNetwork::from_config(
-            network_config.clone(),
-            persistence.clone(),
-            gossip_config,
-            request_response_config,
-            libp2p_bind_address,
-            &validator_config.public_key,
-            // We need the private key so we can derive our Libp2p keypair
-            // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
-            &validator_config.private_key,
-            hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to create libp2p network on node {node_index}; binding to {:?}",
-                network_params.libp2p_bind_address
-            )
-        })?;
+        //     let p2p_network = Libp2pNetwork::from_config(
+        //         network_config.clone(),
+        //         persistence.clone(),
+        //         gossip_config,
+        //         request_response_config,
+        //         libp2p_bind_address,
+        //         &validator_config.public_key,
+        //         // We need the private key so we can derive our Libp2p keypair
+        //         // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
+        //         &validator_config.private_key,
+        //         hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
+        //     )
+        //     .await
+        //     .with_context(|| {
+        //         format!(
+        //             "Failed to create libp2p network on node {node_index}; binding to {:?}",
+        //             network_params.libp2p_bind_address
+        //         )
+        //     })?;
 
-        info!("Libp2p network initialized");
-
-        tracing::warn!("Waiting for at least one connection to be initialized");
-        select! {
-            _ = cdn_network.wait_for_ready() => {
-                tracing::warn!("CDN connection initialized");
-            },
-            _ = p2p_network.wait_for_ready() => {
-                tracing::warn!("P2P connection initialized");
-            },
-        };
+        tracing::warn!("Waiting for the CDN connection to be initialized");
+        cdn_network.wait_for_ready().await;
 
         // Combine the CDN and P2P networks
-        Arc::from(CombinedNetworks::new(
-            cdn_network,
-            p2p_network,
-            Some(Duration::from_secs(1)),
-        ))
+        Arc::from(cdn_network)
     };
 
     let mut ctx = SequencerContext::init(
@@ -698,6 +682,7 @@ where
         event_consumer,
         seq_versions,
         proposal_fetcher_config,
+        Some(network_params.orchestrator_url),
     )
     .await?;
     if wait_for_orchestrator {
@@ -1424,6 +1409,7 @@ pub mod testing {
                 event_consumer,
                 bind_version,
                 Default::default(),
+                None,
             )
             .await
             .unwrap()

@@ -18,3 +18,10 @@ anyhow = { workspace = true }
 # disable default features to allow including versions on demand
 sequencer = { path = "../sequencer", default-features = false, features = ["embedded-db"] }
 tokio = { workspace = true }
+
+# NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
+[profile.dev]
+# This profile should allow connecting debuggers. Compiles more slowly and
+# requires significantly more memory to compile.
+strip = "none"
+debug = "full"

@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Instant};
 
 use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_trait::async_trait;
@@ -16,12 +16,11 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::{vid_disperse::vid_total_weight, Leaf2},
+    data::{vid_disperse::vid_total_weight, Leaf2, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
-    message::UpgradeLock,
+    message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
-    stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::BlockHeader,
@@ -29,8 +28,8 @@ use hotshot_types::{
         signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
-    utils::{is_epoch_root, is_epoch_transition, is_last_block, option_epoch_from_block_number},
-    vote::{Certificate, HasViewNumber},
+    utils::{is_epoch_root, is_last_block, option_epoch_from_block_number},
+    vote::HasViewNumber,
     VersionedDaCommittee,
 };
 use hotshot_utils::anytrace::*;
@@ -38,7 +37,7 @@ use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, broadcast_view_change, wait_for_second_vid_share},
+    helpers::{broadcast_event, broadcast_view_change},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
 };
 
@@ -50,8 +49,6 @@ mod handlers;
 enum VoteDependency {
     /// For the `QuorumProposalValidated` event after validating `QuorumProposalRecv`.
     QuorumProposal,
-    /// For the `DaCertificateRecv` event.
-    Dac,
     /// For the `VidShareRecv` event.
     Vid,
 }
@@ -86,7 +83,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub sender: Sender<Arc<HotShotEvent<TYPES>>>,
 
     /// Event receiver.
-    pub receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
+    pub receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -149,7 +146,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         let mut next_epoch_payload_commitment = None;
         let mut leaf = None;
         let mut vid_share = None;
-        let mut da_cert = None;
         let mut parent_view_number = None;
         for event in res.iter() {
             match event.as_ref() {
@@ -195,31 +191,31 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                     leaf = Some(proposed_leaf);
                     parent_view_number = Some(parent_leaf.view_number());
                 },
-                HotShotEvent::DaCertificateValidated(cert) => {
-                    let cert_payload_comm = &cert.data().payload_commit;
-                    let next_epoch_cert_payload_comm = cert.data().next_epoch_payload_commit;
-                    if let Some(ref comm) = payload_commitment {
-                        ensure!(
-                            cert_payload_comm == comm,
-                            error!(
-                                "DAC has inconsistent payload commitment with quorum proposal or \
-                                 VID."
-                            )
-                        );
-                    } else {
-                        payload_commitment = Some(*cert_payload_comm);
-                    }
-                    if next_epoch_payload_commitment.is_some()
-                        && next_epoch_payload_commitment != next_epoch_cert_payload_comm
-                    {
-                        bail!(error!(
-                            "DAC has inconsistent next epoch payload commitment with VID."
-                        ));
-                    } else {
-                        next_epoch_payload_commitment = next_epoch_cert_payload_comm;
-                    }
-                    da_cert = Some(cert.clone());
-                },
+                // HotShotEvent::DaCertificateValidated(cert) => {
+                //     let cert_payload_comm = &cert.data().payload_commit;
+                //     let next_epoch_cert_payload_comm = cert.data().next_epoch_payload_commit;
+                //     if let Some(ref comm) = payload_commitment {
+                //         ensure!(
+                //             cert_payload_comm == comm,
+                //             error!(
+                //                 "DAC has inconsistent payload commitment with quorum proposal or \
+                //                  VID."
+                //             )
+                //         );
+                //     } else {
+                //         payload_commitment = Some(*cert_payload_comm);
+                //     }
+                //     if next_epoch_payload_commitment.is_some()
+                //         && next_epoch_payload_commitment != next_epoch_cert_payload_comm
+                //     {
+                //         bail!(error!(
+                //             "DAC has inconsistent next epoch payload commitment with VID."
+                //         ));
+                //     } else {
+                //         next_epoch_payload_commitment = next_epoch_cert_payload_comm;
+                //     }
+                //     da_cert = Some(cert.clone());
+                // },
                 HotShotEvent::VidShareValidated(share) => {
                     let vid_payload_commitment = &share.data.payload_commitment();
                     vid_share = Some(share.clone());
@@ -267,98 +263,89 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             ));
         };
 
-        let Some(da_cert) = da_cert else {
-            bail!(error!(
-                "We don't have the DA cert for this view {}, but we should, because the vote \
-                 dependencies have completed.",
-                self.view_number
-            ));
-        };
-
-        let mut maybe_current_epoch_vid_share = None;
+        // let mut maybe_current_epoch_vid_share = None;
         // If this is an epoch transition block, we might need two VID shares.
-        if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
-            && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
-        {
-            let current_epoch = option_epoch_from_block_number::<TYPES>(
-                leaf.with_epoch,
-                leaf.block_header().block_number(),
-                self.epoch_height,
-            );
-            let next_epoch = current_epoch.map(|e| e + 1);
+        // if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
+        //     && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
+        // {
+        //     let current_epoch = option_epoch_from_block_number::<TYPES>(
+        //         leaf.with_epoch,
+        //         leaf.block_header().block_number(),
+        //         self.epoch_height,
+        //     );
+        //     let next_epoch = current_epoch.map(|e| e + 1);
 
-            let Ok(current_epoch_membership) = self
-                .membership_coordinator
-                .stake_table_for_epoch(current_epoch)
-                .await
-            else {
-                bail!(warn!(
-                    "Couldn't acquire current epoch membership. Do not vote!"
-                ));
-            };
-            let Ok(next_epoch_membership) = self
-                .membership_coordinator
-                .stake_table_for_epoch(next_epoch)
-                .await
-            else {
-                bail!(warn!(
-                    "Couldn't acquire next epoch membership. Do not vote!"
-                ));
-            };
+        //     let Ok(current_epoch_membership) = self
+        //         .membership_coordinator
+        //         .stake_table_for_epoch(current_epoch)
+        //         .await
+        //     else {
+        //         bail!(warn!(
+        //             "Couldn't acquire current epoch membership. Do not vote!"
+        //         ));
+        //     };
+        // let Ok(next_epoch_membership) = self
+        //     .membership_coordinator
+        //     .stake_table_for_epoch(next_epoch)
+        //     .await
+        // else {
+        //     bail!(warn!(
+        //         "Couldn't acquire next epoch membership. Do not vote!"
+        //     ));
+        // };
 
-            // If we belong to both epochs, we require VID shares from both epochs.
-            if current_epoch_membership.has_stake(&self.public_key).await
-                && next_epoch_membership.has_stake(&self.public_key).await
-            {
-                let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
-                    maybe_current_epoch_vid_share = Some(vid_share.clone());
-                    next_epoch
-                } else {
-                    current_epoch
-                };
-                match wait_for_second_vid_share(
-                    other_target_epoch,
-                    &vid_share,
-                    &da_cert,
-                    &self.consensus,
-                    &self.receiver.activate_cloned(),
-                    self.cancel_receiver.clone(),
-                    self.id,
-                )
-                .await
-                {
-                    Ok(other_vid_share) => {
-                        if maybe_current_epoch_vid_share.is_none() {
-                            maybe_current_epoch_vid_share = Some(other_vid_share);
-                        }
-                        ensure!(
-                            leaf.block_header().payload_commitment()
-                                == maybe_current_epoch_vid_share
-                                    .as_ref()
-                                    .unwrap()
-                                    .data
-                                    .payload_commitment(),
-                            error!(
-                                "We have both epochs vid shares but the leaf's vid commit doesn't \
-                                 match the old epoch vid share's commit. It should never happen."
-                            )
-                        );
-                    },
-                    Err(e) => {
-                        bail!(warn!(
-                            "This is an epoch transition block, we are in both epochs but we \
-                             received only one VID share. Do not vote! Error: {e:?}"
-                        ));
-                    },
-                }
-            }
-        }
+        //     // If we belong to both epochs, we require VID shares from both epochs.
+        //     if current_epoch_membership.has_stake(&self.public_key).await
+        //         && next_epoch_membership.has_stake(&self.public_key).await
+        //     {
+        //         let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
+        //             maybe_current_epoch_vid_share = Some(vid_share.clone());
+        //             next_epoch
+        //         } else {
+        //             current_epoch
+        //         };
+        //         match wait_for_second_vid_share(
+        //             other_target_epoch,
+        //             &vid_share,
+        //             &self.consensus,
+        //             &self.receiver.activate_cloned(),
+        //             self.cancel_receiver.clone(),
+        //             self.id,
+        //         )
+        //         .await
+        //         {
+        //             Ok(other_vid_share) => {
+        //                 if maybe_current_epoch_vid_share.is_none() {
+        //                     maybe_current_epoch_vid_share = Some(other_vid_share);
+        //                 }
+        //                 ensure!(
+        //                     leaf.block_header().payload_commitment()
+        //                         == maybe_current_epoch_vid_share
+        //                             .as_ref()
+        //                             .unwrap()
+        //                             .data
+        //                             .payload_commitment(),
+        //                     error!(
+        //                         "We have both epochs vid shares but the leaf's vid commit doesn't \
+        //                          match the old epoch vid share's commit. It should never happen."
+        //                     )
+        //                 );
+        //             },
+        //             Err(e) => {
+        //                 bail!(warn!(
+        //                     "This is an epoch transition block, we are in both epochs but we \
+        //                      received only one VID share. Do not vote! Error: {e:?}"
+        //                 ));
+        //             },
+        //         }
+        //     }
+        // }
 
         // Update internal state
         update_shared_state::<TYPES, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
-            self.receiver.clone(),
+            self.receiver.clone().deactivate(),
             self.membership_coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
@@ -366,7 +353,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.view_number,
             Arc::clone(&self.instance_state),
             &leaf,
-            maybe_current_epoch_vid_share.as_ref().unwrap_or(&vid_share),
+            &vid_share,
             parent_view_number,
             self.epoch_height,
         )
@@ -414,6 +401,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                 .update_validator_participation(leader_key, cur_epoch, true);
         }
 
+        self.wait_for_previous_block(parent_view_number, self.receiver.clone())
+            .await?;
+
         submit_vote::<TYPES, I, V>(
             self.sender.clone(),
             epoch_membership,
@@ -424,7 +414,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.storage.clone(),
             Arc::clone(&self.storage_metrics),
             leaf,
-            maybe_current_epoch_vid_share.unwrap_or(vid_share),
+            vid_share,
             is_vote_leaf_extended,
             is_vote_epoch_root,
             self.epoch_height,
@@ -432,6 +422,52 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.stake_table_capacity,
         )
         .await
+    }
+    async fn wait_for_previous_block(
+        &self,
+        parent_view: Option<TYPES::View>,
+        mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    ) -> Result<()> {
+        let Some(parent_view) = parent_view else {
+            bail!(error!("No parent view"));
+        };
+        if parent_view <= TYPES::View::genesis() + 2 {
+            return Ok(());
+        }
+        if self
+            .consensus
+            .read()
+            .await
+            .saved_payloads()
+            .get(&parent_view)
+            .is_some()
+        {
+            // tracing::error!("Block already reconstructed for parent view {parent_view}");
+            return Ok(());
+        }
+
+        tracing::error!("Waiting for previous block for parent view {parent_view}");
+        let now = Instant::now();
+        // TODO: Handle the case where the block is received before this call
+        while let Ok(event) = receiver.recv_direct().await {
+            if let HotShotEvent::BlockReconstructed(_, _, _, view) = event.as_ref() {
+                if *view == parent_view {
+                    tracing::error!("Block reconstructed for parent view {parent_view}");
+                    let elapsed = now.elapsed();
+                    tracing::error!("Waited for previous block in {elapsed:?}");
+                    return Ok(());
+                }
+            }
+            if let HotShotEvent::BlockRecv(block_recv) = event.as_ref() {
+                if block_recv.view_number == parent_view {
+                    tracing::error!("Block received for parent view {parent_view}");
+                    let elapsed = now.elapsed();
+                    tracing::error!("Waited for previous block in {elapsed:?}");
+                    return Ok(());
+                }
+            }
+        }
+        Err(hotshot_utils::anytrace::error!("No block received"))
     }
 }
 
@@ -508,6 +544,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
         cancel_receiver: Receiver<()>,
     ) -> EventDependency<Arc<HotShotEvent<TYPES>>> {
         let id = self.id;
+        let public_key = self.public_key.clone();
         EventDependency::new(
             event_receiver,
             cancel_receiver,
@@ -525,15 +562,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                             return false;
                         }
                     },
-                    VoteDependency::Dac => {
-                        if let HotShotEvent::DaCertificateValidated(cert) = event {
-                            cert.view_number
-                        } else {
-                            return false;
-                        }
-                    },
                     VoteDependency::Vid => {
                         if let HotShotEvent::VidShareValidated(disperse) = event {
+                            if disperse.data.recipient_key() != &public_key {
+                                return false;
+                            }
                             disperse.data.view_number()
                         } else {
                             return false;
@@ -578,12 +611,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             event_receiver.clone(),
             cancel_receiver.clone(),
         );
-        let dac_dependency = self.create_event_dependency(
-            VoteDependency::Dac,
-            view_number,
-            event_receiver.clone(),
-            cancel_receiver.clone(),
-        );
+        // let dac_dependency = self.create_event_dependency(
+        //     VoteDependency::Dac,
+        //     view_number,
+        //     event_receiver.clone(),
+        //     cancel_receiver.clone(),
+        // );
         let vid_dependency = self.create_event_dependency(
             VoteDependency::Vid,
             view_number,
@@ -595,7 +628,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             quorum_proposal_dependency.mark_as_completed(event);
         }
 
-        let deps = vec![quorum_proposal_dependency, dac_dependency, vid_dependency];
+        let deps = vec![quorum_proposal_dependency, vid_dependency];
 
         let dependency_chain = AndDependency::from_deps(deps);
 
@@ -611,7 +644,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 storage_metrics: Arc::clone(&self.storage_metrics),
                 view_number,
                 sender: event_sender.clone(),
-                receiver: event_receiver.clone().deactivate(),
+                receiver: event_receiver.clone(),
                 upgrade_lock: self.upgrade_lock.clone(),
                 id: self.id,
                 epoch_height: self.epoch_height,
@@ -698,55 +731,60 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     Arc::clone(&event),
                 );
             },
-            HotShotEvent::DaCertificateRecv(cert) => {
-                let view = cert.view_number;
+            // HotShotEvent::DaCertificateRecv(cert) => {
+            //     let view = cert.view_number;
 
-                tracing::trace!("Received DAC for view {view}");
-                // Do nothing if the DAC is old
-                ensure!(
-                    view > self.latest_voted_view,
-                    "Received DAC for an older view."
-                );
+            //     tracing::trace!("Received DAC for view {view}");
+            //     // Do nothing if the DAC is old
+            //     ensure!(
+            //         view > self.latest_voted_view,
+            //         "Received DAC for an older view."
+            //     );
 
-                let cert_epoch = cert.data.epoch;
+            //     let cert_epoch = cert.data.epoch;
 
-                let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
-                let membership_da_stake_table = epoch_membership.da_stake_table().await;
-                let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
+            //     let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
+            //     let membership_da_stake_table = epoch_membership.da_stake_table().await;
+            //     let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
 
-                // Validate the DAC.
-                cert.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
-                    membership_da_success_threshold,
-                    &self.upgrade_lock,
-                )
-                .await
-                .context(|e| warn!("Invalid DAC: {e}"))?;
+            //     // Validate the DAC.
+            //     cert.is_valid_cert(
+            //         &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
+            //         membership_da_success_threshold,
+            //         &self.upgrade_lock,
+            //     )
+            //     .await
+            //     .context(|e| warn!("Invalid DAC: {e}"))?;
 
-                // Add to the storage.
-                self.consensus
-                    .write()
-                    .await
-                    .update_saved_da_certs(view, cert.clone());
+            //     // Add to the storage.
+            //     self.consensus
+            //         .write()
+            //         .await
+            //         .update_saved_da_certs(view, cert.clone());
 
-                broadcast_event(
-                    Arc::new(HotShotEvent::DaCertificateValidated(cert.clone())),
-                    &event_sender.clone(),
-                )
-                .await;
-                self.create_dependency_task_if_new(
-                    view,
-                    event_receiver,
-                    &event_sender,
-                    Arc::clone(&event),
-                );
-            },
+            //     broadcast_event(
+            //         Arc::new(HotShotEvent::DaCertificateValidated(cert.clone())),
+            //         &event_sender.clone(),
+            //     )
+            //     .await;
+            //     self.create_dependency_task_if_new(
+            //         view,
+            //         event_receiver,
+            //         &event_sender,
+            //         Arc::clone(&event),
+            //     );
+            // },
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();
+                let vid_epoch = share.data.epoch();
+                let target_epoch = share.data.target_epoch();
+                let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
+
+                let leader = membership_reader.leader(view).await?;
                 // Do nothing if the VID share is old
                 tracing::trace!("Received VID share for view {view}");
                 ensure!(
-                    view > self.latest_voted_view,
+                    *view > self.latest_voted_view.saturating_sub(10),
                     "Received VID share for an older view."
                 );
 
@@ -755,21 +793,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 // Check that the signature is valid
                 ensure!(
-                    sender.validate(&share.signature, payload_commitment.as_ref()),
-                    warn!(
+                    sender.validate(&share.signature, payload_commitment.as_ref())
+                        || leader.validate(&share.signature, payload_commitment.as_ref()),
+                    error!(
                         "VID share signature is invalid, sender: {}, signature: {:?}, \
                          payload_commitment: {:?}",
                         sender, share.signature, payload_commitment
                     )
                 );
-
-                let vid_epoch = share.data.epoch();
-                let target_epoch = share.data.target_epoch();
-                let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
-                // ensure that the VID share was sent by a DA member OR the view leader
                 ensure!(
                     membership_reader
-                        .da_committee_members(view)
+                        .committee_members(view)
                         .await
                         .contains(sender)
                         || *sender == membership_reader.leader(view).await?,
@@ -790,27 +824,56 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     bail!("Failed to verify VID share");
                 }
 
+                // if we have the share already we are done
+                if self
+                    .consensus
+                    .read()
+                    .await
+                    .vid_shares()
+                    .get(&view)
+                    .is_some_and(|key_map| key_map.get(share.data.recipient_key()).is_some())
+                {
+                    return Ok(());
+                }
+
                 self.consensus
                     .write()
                     .await
                     .update_vid_shares(view, share.clone());
 
-                ensure!(
-                    *share.data.recipient_key() == self.public_key,
-                    "Got a Valid VID share but it's not for our key"
-                );
+                // ensure!(
+                //     *share.data.recipient_key() == self.public_key,
+                //     "Got a Valid VID share but it's not for our key"
+                // );
+
+                // If it's the first time receiving our share send it to all nodes
+                if *share.data.recipient_key() == self.public_key {
+                    if let VidDisperseShare::V2(ref inner_share) = share.data {
+                        tracing::warn!("Received our own VID share for view {view}");
+                        let proposal = Proposal {
+                            signature: share.signature.clone(),
+                            data: inner_share.clone(),
+                            _pd: PhantomData,
+                        };
+                        broadcast_event(
+                            Arc::new(HotShotEvent::VidShareSend(proposal)),
+                            &event_sender.clone(),
+                        )
+                        .await;
+                        self.create_dependency_task_if_new(
+                            view,
+                            event_receiver,
+                            &event_sender,
+                            Arc::clone(&event),
+                        );
+                    }
+                }
 
                 broadcast_event(
                     Arc::new(HotShotEvent::VidShareValidated(share.clone())),
                     &event_sender.clone(),
                 )
                 .await;
-                self.create_dependency_task_if_new(
-                    view,
-                    event_receiver,
-                    &event_sender,
-                    Arc::clone(&event),
-                );
             },
             HotShotEvent::Timeout(view, ..) => {
                 let view = TYPES::View::new(view.saturating_sub(1));

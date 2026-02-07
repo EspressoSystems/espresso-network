@@ -267,7 +267,80 @@ ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS=0xe1da8919f262ee86f9be05059c9280142cf23f
 
 # Timelock Proposals
 
-These are demonstration commands and should not be used in production environments
+## Overview
+
+Timelock operations can be performed via two execution paths:
+
+1. **EOA Path**: Direct execution using a private key/mnemonic
+   - Use for: Local development, testing, or when you control the proposer/executor accounts
+   - Requires: No multisig address needed
+   - Execution: Immediate transaction submission
+
+2. **Multisig Path** (Safe Multisig): Operations are proposed via Safe multisig wallet
+   - Use for: Production environments requiring multiple signatures
+   - Requires: `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
+   - Execution: Creates a Safe proposal that requires multisig approval before execution
+
+The deployer automatically routes to the appropriate path based on whether `--multisig-address` or
+`ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` is set.
+
+## Execution Paths
+
+### EOA Path (Direct Execution)
+
+When no multisig address is provided, operations execute directly via EOA:
+
+```bash
+# Example: Schedule operation via EOA
+RUST_LOG=info cargo run --bin deploy -- \
+  --rpc-url=$RPC_URL \
+  --perform-timelock-operation \
+  --timelock-operation-type schedule \
+  --target-contract FeeContract \
+  --function-signature "transferOwnership(address)" \
+  --function-values "0xNEWOWNERADDRESS" \
+  --timelock-operation-salt 0x \
+  --timelock-operation-delay 0 \
+  --timelock-operation-value 0
+```
+
+**Requirements:**
+
+- The deployer account must have proposer/executor roles on the timelock
+- No multisig address needed
+- Operations execute immediately
+
+**Multisig Path (Safe Proposal)** When a multisig address is set, operations are proposed via Safe:
+
+```bash
+# Set multisig address
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
+
+# Example: Schedule operation via multisig
+RUST_LOG=info cargo run --bin deploy -- \
+  --rpc-url=$RPC_URL \
+  --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+  --perform-timelock-operation \
+  --timelock-operation-type schedule \
+  --target-contract FeeContract \
+  --function-signature "transferOwnership(address)" \
+  --function-values "0xNEWOWNERADDRESS" \
+  --timelock-operation-salt 0x \
+  --timelock-operation-delay 0 \
+  --timelock-operation-value 0
+```
+
+**Requirements:**
+
+- `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
+- The deployer account must have proposal rights on the Safe multisig
+- Operations create a Safe proposal requiring multisig approval
+- After approval, the proposal can be executed **Note:** After creating a multisig proposal, you'll receive a link to
+  the Safe UI where signers can approve the proposal:
+
+```
+Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=0xMULTISIG_ADDRESS
+```
 
 ## Transfer Ownership
 
@@ -383,6 +456,41 @@ docker compose run --rm \
 ```bash
 cast call $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rpc-url http://127.0.0.1:8545
 ```
+
+## Cancel Operation
+
+Cancelling a timelock operation allows you to prevent a scheduled operation from being executed. This is useful if you
+need to abort a pending operation.
+
+### Prerequisites
+
+- The operation must be in a `Pending` state (scheduled but not yet executed)
+- You must have proposer privileges on the timelock
+- You need the operation ID from when the operation was scheduled
+
+### Getting the Operation ID
+
+The operation ID is returned when you schedule an operation. Save it for later use.
+
+```bash
+# Set the operation ID from the scheduled operation
+export ESPRESSO_TIMELOCK_OPERATION_ID=0xOPERATION_ID_HERE
+
+# Cancel the operation
+RUST_LOG=info cargo run --bin deploy -- \
+  --rpc-url=$RPC_URL \
+  --perform-timelock-operation \
+  --timelock-operation-type cancel \
+  --target-contract FeeContract \
+  --timelock-operation-id $ESPRESSO_TIMELOCK_OPERATION_ID
+```
+
+**Note:** For cancel operations, you only need:
+
+- --timelock-operation-type cancel
+- --target-contract (to identify which timelock to use)
+- --timelock-operation-id (the operation ID to cancel) The other operation parameters (--function-signature,
+  --function-values, etc.) are not required for cancel operations.
 
 ## Upgrade To And Call
 

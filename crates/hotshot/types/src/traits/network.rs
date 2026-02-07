@@ -30,7 +30,9 @@ use tokio::{sync::mpsc::error::TrySendError, time::sleep};
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
 use crate::{
-    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::SequencingMessage,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    message::SequencingMessage,
     BoxSyncFuture,
 };
 
@@ -207,6 +209,7 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// blocking
     async fn broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         broadcast_delay: BroadcastDelay,
@@ -216,6 +219,7 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// blocking
     async fn da_broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<K>,
         broadcast_delay: BroadcastDelay,
@@ -225,11 +229,11 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// blocking
     async fn vid_broadcast_message(
         &self,
-        messages: HashMap<K, Vec<u8>>,
+        messages: HashMap<K, (ViewNumber, Vec<u8>)>,
     ) -> Result<(), NetworkError> {
         let future_results = messages
             .into_iter()
-            .map(|(recipient_key, message)| self.direct_message(message, recipient_key));
+            .map(|(recipient_key, (v, m))| self.direct_message(v, m, recipient_key));
         let results = join_all(future_results).await;
 
         let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
@@ -243,7 +247,12 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
 
     /// Sends a direct message to a specific node
     /// blocking
-    async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError>;
+    async fn direct_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError>;
 
     /// Receive one or many messages from the underlying network.
     ///
@@ -257,21 +266,21 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// Does not error.
     fn queue_node_lookup(
         &self,
-        _view_number: ViewNumber,
-        _pk: K,
+        _: ViewNumber,
+        _: K,
     ) -> Result<(), TrySendError<Option<(ViewNumber, K)>>> {
         Ok(())
     }
 
     /// Update view can be used for any reason, but mostly it's for canceling tasks,
     /// and looking up the address of the leader of a future view.
-    async fn update_view<'a, TYPES>(
-        &'a self,
-        _view: u64,
-        _epoch: Option<u64>,
-        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    async fn update_view<TYPES>(
+        &self,
+        _: ViewNumber,
+        _: Option<EpochNumber>,
+        _: EpochMembershipCoordinator<TYPES>,
     ) where
-        TYPES: NodeType<SignatureKey = K> + 'a,
+        TYPES: NodeType<SignatureKey = K>,
     {
     }
 
