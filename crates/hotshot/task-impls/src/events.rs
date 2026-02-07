@@ -4,15 +4,16 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::fmt::Display;
+use std::{fmt::Display, sync::Arc};
 
 use async_broadcast::Sender;
 use either::Either;
 use hotshot_task::task::TaskEvent;
 use hotshot_types::{
+    consensus::PayloadWithMetadata,
     data::{
         DaProposal2, Leaf2, PackedBundle, QuorumProposal2, QuorumProposalWrapper, UpgradeProposal,
-        VidCommitment, VidDisperse, VidDisperseShare,
+        VidCommitment, VidDisperse, VidDisperseShare, VidDisperseShare2,
     },
     message::Proposal,
     request_response::ProposalRequestPayload,
@@ -69,6 +70,12 @@ pub struct HotShotTaskCompleted;
 #[derive(Eq, PartialEq, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum HotShotEvent<TYPES: NodeType> {
+    /// Block sent directly to the network
+    BlockSend(PayloadWithMetadata<TYPES>, TYPES::View),
+    /// Block received directly from the leader
+    BlockDirectlyRecv(PayloadWithMetadata<TYPES>, TYPES::View),
+    /// A block has been reconstructed and is ready to be stored
+    BlockReady(Arc<PayloadWithMetadata<TYPES>>, VidCommitment, TYPES::View),
     /// Shutdown the task
     Shutdown,
     /// A quorum proposal has been received from the network; handled by the consensus task
@@ -199,10 +206,23 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ),
     /// Event when the transactions task has sequenced transactions. Contains the encoded transactions, the metadata, and the view number
     BlockRecv(PackedBundle<TYPES>),
+
+    /// A proposed block has been reconstructed, or received from the network.
+    BlockReconstructed(
+        TYPES::BlockPayload,
+        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        VidCommitment,
+        TYPES::View,
+    ),
+
     /// Send VID shares to VID storage nodes; emitted by the DA leader
     ///
     /// Like [`HotShotEvent::DaProposalSend`].
     VidDisperseSend(Proposal<TYPES, VidDisperse<TYPES>>, TYPES::SignatureKey),
+
+    /// Broadcast a share to all nodes
+    VidShareSend(Proposal<TYPES, VidDisperseShare2<TYPES>>),
+
     /// Vid disperse share has been received from the network; handled by the consensus task
     ///
     /// Like [`HotShotEvent::DaProposalRecv`].
@@ -305,6 +325,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
     /// Return the view number for a hotshot event if present
     pub fn view_number(&self) -> Option<TYPES::View> {
         match self {
+            HotShotEvent::BlockReady(_, _, view) => Some(*view),
             HotShotEvent::QuorumVoteSend(v)
             | HotShotEvent::QuorumVoteRecv(v)
             | HotShotEvent::ExtendedQuorumVoteSend(v) => Some(v.view_number()),
@@ -362,6 +383,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             | HotShotEvent::TransactionSend(..)
             | HotShotEvent::TransactionsRecv(_) => None,
             HotShotEvent::VidDisperseSend(proposal, _) => Some(proposal.data.view_number()),
+            HotShotEvent::VidShareSend(proposal) => Some(proposal.data.view_number()),
             HotShotEvent::VidShareRecv(_, proposal) | HotShotEvent::VidShareValidated(proposal) => {
                 Some(proposal.data.view_number())
             },
@@ -394,6 +416,9 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             },
             HotShotEvent::SetFirstEpoch(..) => None,
             HotShotEvent::LeavesDecided(..) => None,
+            HotShotEvent::BlockReconstructed(_, _, _, view) => Some(*view),
+            HotShotEvent::BlockSend(_, view) => Some(*view),
+            HotShotEvent::BlockDirectlyRecv(_, view) => Some(*view),
         }
     }
 }
@@ -402,6 +427,13 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            HotShotEvent::BlockReady(_, _, view) => write!(f, "BlockReady(view_number={:?})", view),
+            HotShotEvent::BlockSend(payload, view) => {
+                write!(f, "BlockSend(view_number={:?})", view)
+            },
+            HotShotEvent::BlockDirectlyRecv(payload, view) => {
+                write!(f, "BlockDirectlyRecv(view_number={:?})", view)
+            },
             HotShotEvent::Shutdown => write!(f, "Shutdown"),
             HotShotEvent::QuorumProposalRecv(proposal, _) => write!(
                 f,
@@ -714,6 +746,14 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             HotShotEvent::LeavesDecided(leaf) => {
                 write!(f, "LeavesDecided(leaf={leaf:?})")
             },
+            HotShotEvent::BlockReconstructed(_, _, _, view) => {
+                write!(f, "BlockReconstructed(view_number={:?}", view)
+            },
+            HotShotEvent::VidShareSend(proposal) => write!(
+                f,
+                "VidShareSend(view_number={:?})",
+                proposal.data.view_number()
+            ),
         }
     }
 }

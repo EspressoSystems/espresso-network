@@ -1,6 +1,7 @@
 use anyhow::Result;
 use assert_cmd::Command;
-use staking_cli::{deploy::TestSystem, DEV_MNEMONIC};
+use hotshot_types::signature_key::BLSPubKey;
+use staking_cli::{deploy::TestSystem, DEV_MNEMONIC, DEV_PRIVATE_KEY};
 
 // rstest macro usage isn't detected
 #[allow(dead_code)]
@@ -9,11 +10,17 @@ pub enum Signer {
     Ledger,
     Mnemonic,
     BrokeMnemonic,
+    PrivateKey,
 }
 
+// Methods that aren't used by *all* test binaries lead to warnings.
 pub trait TestSystemExt {
     /// Create a base staking-cli command configured for this test system
     fn cmd(&self, signer: Signer) -> Command;
+
+    #[allow(dead_code)]
+    /// Create an export-calldata command with sender-address for validation
+    fn export_calldata_cmd(&self) -> Command;
 
     // method is used, but somehow flagged as unused
     #[allow(dead_code)]
@@ -21,6 +28,9 @@ pub trait TestSystemExt {
     fn export_node_signatures_cmd(&self) -> Result<Command>;
 
     fn bls_private_key_str(&self) -> Result<String>;
+
+    #[allow(dead_code)]
+    fn bls_public_key_str(&self) -> String;
 
     fn state_private_key_str(&self) -> Result<String>;
 }
@@ -47,7 +57,22 @@ impl TestSystemExt for TestSystem {
                     "roast term reopen pave choose high rally trouble upon govern hollow stand",
                 );
             },
+            Signer::PrivateKey => {
+                cmd.arg("--private-key").arg(DEV_PRIVATE_KEY);
+            },
         };
+        cmd
+    }
+
+    fn export_calldata_cmd(&self) -> Command {
+        let mut cmd = base_cmd();
+        cmd.arg("--rpc-url")
+            .arg(self.rpc_url.to_string())
+            .arg("--stake-table-address")
+            .arg(self.stake_table.to_string())
+            .arg("--export-calldata")
+            .arg("--sender-address")
+            .arg(self.deployer_address.to_string());
         cmd
     }
 
@@ -69,6 +94,10 @@ impl TestSystemExt for TestSystem {
             .sign_key_ref()
             .to_tagged_base64()?
             .to_string())
+    }
+
+    fn bls_public_key_str(&self) -> String {
+        BLSPubKey::from(self.bls_key_pair.ver_key()).to_string()
     }
 
     fn state_private_key_str(&self) -> Result<String> {

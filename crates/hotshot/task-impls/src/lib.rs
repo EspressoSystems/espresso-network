@@ -13,11 +13,14 @@ pub mod consensus;
 /// The task which handles the logic for the quorum vote.
 pub mod quorum_vote;
 
-/// The task which implements the main parts of data availability.
-pub mod da;
+// /// The task which implements the main parts of data availability.
+// pub mod da;
 
 /// The task which implements all transaction handling
 pub mod transactions;
+
+/// Block building task
+pub mod block;
 
 /// Defines the events passed between tasks
 pub mod events;
@@ -64,3 +67,9 @@ pub mod rewind;
 
 /// Task for collecting stats
 pub mod stats;
+
+/// Task for storing blocks
+pub mod block_storer;
+
+/// Task for reconstructing blocks
+pub mod reconstruct;

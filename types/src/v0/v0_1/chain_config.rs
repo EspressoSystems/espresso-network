@@ -14,7 +14,7 @@ pub struct ChainId(pub U256);
 
 #[derive(Hash, Copy, Clone, Debug, Default, Display, PartialEq, Eq, From, Into, Deref)]
 #[display("{_0}")]
-pub struct BlockSize(pub(crate) u64);
+pub struct BlockSize(pub u64);
 
 /// Global variables for an Espresso blockchain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

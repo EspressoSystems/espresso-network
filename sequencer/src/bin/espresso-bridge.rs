@@ -74,6 +74,12 @@ struct Deposit {
     #[clap(short, long, env = "AMOUNT")]
     amount: u64,
 
+    /// Recipient address on Espresso.
+    ///
+    /// If not provided, the deposit will be credited to the sender's address.
+    #[clap(long, env = "RECIPIENT")]
+    recipient: Option<Address>,
+
     /// Number of confirmations to wait for before considering an L1 transaction mined.
     #[clap(long, env = "CONFIRMATIONS", default_value = "6")]
     confirmations: usize,
@@ -165,6 +171,9 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
     // Connect to Espresso.
     let espresso = SequencerClient::new(opt.espresso_provider);
 
+    // Determine the recipient address (defaults to sender if not specified).
+    let recipient = opt.recipient.unwrap_or_else(|| signer.address());
+
     // Validate deposit.
     let amount = U256::from(opt.amount);
     let min_deposit = contract.minDepositAmount().call().await?;
@@ -180,15 +189,15 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
 
     // Record the initial balance on Espresso.
     let initial_balance = espresso
-        .get_espresso_balance(signer.address(), None)
+        .get_espresso_balance(recipient, None)
         .await
         .context("getting Espresso balance")?;
     tracing::debug!(%initial_balance, "initial balance");
 
     // Send the deposit transaction.
-    tracing::info!(address = %signer.address(), %amount, "sending deposit transaction");
+    tracing::info!(sender = %signer.address(), %recipient, %amount, "sending deposit transaction");
     let tx = contract
-        .deposit(signer.address())
+        .deposit(recipient)
         .value(amount)
         .send()
         .await
@@ -236,7 +245,7 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
 
     // Confirm that the Espresso balance has increased.
     let final_balance = espresso
-        .get_espresso_balance(signer.address(), Some(espresso_block))
+        .get_espresso_balance(recipient, Some(espresso_block))
         .await?;
     if final_balance >= initial_balance + amount.into() {
         tracing::info!(%final_balance, "deposit successful");

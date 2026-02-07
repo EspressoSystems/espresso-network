@@ -5,20 +5,20 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes, Vid2TestVersions,
+    CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes, Vid2TestVersions,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
 
 cross_tests!(
     TestName: test_vid2_success,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [
         TestTypes,
     ],
     Versions: [Vid2TestVersions],
     Ignore: false,
     Metadata: {
-        TestDescription::default().set_num_nodes(5, 5)
+        TestDescription::default().set_num_nodes(10, 1)
     },
 );

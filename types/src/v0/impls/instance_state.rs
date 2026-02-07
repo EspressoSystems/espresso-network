@@ -449,7 +449,11 @@ impl Default for NodeState {
     }
 }
 
-impl InstanceState for NodeState {}
+impl InstanceState for NodeState {
+    fn max_block_size(&self) -> u64 {
+        self.chain_config.max_block_size.0
+    }
+}
 
 impl Upgrade {
     pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<SeqTypes>) {
