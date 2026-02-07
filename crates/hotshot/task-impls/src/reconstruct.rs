@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Instant,
+};
 
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
@@ -6,7 +10,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{VidCommitment, VidDisperseShare},
+    data::{QuorumProposal2, VidCommitment, VidDisperseShare, VidDisperseShare2},
     epoch_membership::EpochMembershipCoordinator,
     simple_vote::HasEpoch,
     traits::{
@@ -26,60 +30,79 @@ use crate::{
 };
 
 pub struct ReconstructTaskState<TYPES: NodeType> {
+    pub id: u64,
     pub event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     pub consensus: OuterConsensus<TYPES>,
     pub calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
+    pub proposals: BTreeMap<TYPES::View, QuorumProposal2<TYPES>>,
+    pub vid_shares:
+        Arc<RwLock<BTreeMap<(TYPES::View, TYPES::Epoch), Vec<VidDisperseShare2<TYPES>>>>>,
 }
 
 async fn try_reconstruct_block<TYPES: NodeType>(
+    id: u64,
     calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
     consensus: OuterConsensus<TYPES>,
     view: TYPES::View,
     epoch: Option<TYPES::Epoch>,
+    vid_shares: Arc<RwLock<BTreeMap<(TYPES::View, TYPES::Epoch), Vec<VidDisperseShare2<TYPES>>>>>,
     event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     mut signal_rx: mpsc::Receiver<()>,
 ) -> Option<()> {
     loop {
         let Some(()) = signal_rx.recv().await else {
+            tracing::error!("Signal received, stopping reconstruction task for view {view}");
             break;
         };
         if consensus.read().await.saved_payloads().contains_key(&view) {
-            tracing::debug!("We already have the payload for view {view}, skipping reconstruction");
+            if *view == 4 {
+                tracing::error!(
+                    "We already have the payload for view {view}, skipping reconstruction"
+                );
+            }
+
             return None;
         }
-        let shares = consensus.read().await.vid_shares().get(&view).cloned()?;
+        if *view == 4 {
+            tracing::error!("No payload found for view {view}, trying to reconstruct");
+        }
+        let Some(shares) = vid_shares.read().await.get(&(view, epoch?)).cloned() else {
+            tracing::error!("No shares found for view {view}, skipping reconstruction");
+            continue;
+        };
         if shares.is_empty() {
+            tracing::error!("No shares found for view {view}, skipping reconstruction");
             continue;
         }
 
-        let mut reconstruct_shares = vec![];
         let (common, vid_commitment) = {
-            let first_share = shares.values().next()?;
-            let VidDisperseShare::V2(ref share) = first_share.get(&epoch)?.data else {
-                continue;
-            };
-            (share.common.clone(), share.payload_commitment.clone())
+            let first_share = shares.first()?;
+            (
+                first_share.common.clone(),
+                first_share.payload_commitment.clone(),
+            )
         };
-
-        for share in shares.values() {
-            let share = share.get(&epoch)?;
-            let VidDisperseShare::V2(ref share) = share.data else {
-                continue;
-            };
-            reconstruct_shares.push(share.share.clone());
-        }
 
         let now = Instant::now();
         let reconstruct_result = tokio::task::spawn_blocking(move || {
-            AvidmGf2Scheme::recover(&common, &reconstruct_shares)
+            AvidmGf2Scheme::recover(
+                &common,
+                &shares.iter().map(|s| s.share.clone()).collect::<Vec<_>>(),
+            )
         })
         .await
+        .inspect_err(|e| {
+            tracing::error!(error=?e, "spawn blocking failed for view {view}");
+        })
         .ok()?;
 
         let payload_bytes = match reconstruct_result {
             Ok(payload_bytes) => payload_bytes,
             Err(e) => {
+                if *view == 4 {
+                    tracing::error!("Failed to reconstruct block for view {view}: {e}");
+                }
                 tracing::debug!(error=?e, "Failed to reconstruct block for view {view}");
                 continue;
             },
@@ -121,6 +144,9 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
         epoch: Option<TYPES::Epoch>,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) {
+        // if self.id == 2 {
+        //     tracing::error!("Spawning reconstruct task for view {} with epoch {}", view, epoch.unwrap());
+        // }
         let tx = self.calc_lock.read().await.get(&view).cloned();
         let tx = match tx {
             Some(tx) => tx,
@@ -128,10 +154,12 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                 let (tx, rx) = mpsc::channel(100);
                 self.calc_lock.write().await.insert(view, tx.clone());
                 spawn(try_reconstruct_block(
+                    self.id,
                     self.calc_lock.clone(),
                     self.consensus.clone(),
                     view,
                     epoch,
+                    self.vid_shares.clone(),
                     self.event_stream.clone(),
                     metadata,
                     rx,
@@ -150,7 +178,27 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                 let VidDisperseShare::V2(ref share) = share.data else {
                     return None;
                 };
+                // if self.id == 2 {
+                //     tracing::error!("Received vid share for view {} with epoch {}", share.view_number(), share.epoch().unwrap());
+                // }
                 let view = share.view_number();
+                self.vid_shares
+                    .write()
+                    .await
+                    .entry((view, share.epoch().unwrap()))
+                    .or_default()
+                    .push(share.clone());
+                tracing::error!(
+                    "Received vid share for view {} we now have {} shares",
+                    view,
+                    self.vid_shares
+                        .read()
+                        .await
+                        .get(&(view, share.epoch().unwrap()))
+                        .unwrap()
+                        .len()
+                );
+
                 // if we already have the payload, no need to try to reconstruct it
                 if self
                     .consensus
@@ -159,28 +207,34 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     .saved_payloads()
                     .contains_key(&view)
                 {
+                    // if self.id == 2 {
+                    //     tracing::error!("We already have the payload for view {view}, skipping reconstruction");
+                    // }
+                    if *view == 4 {
+                        tracing::error!(
+                            "We already have the payload for view {view}, skipping reconstruction"
+                        );
+                    }
                     tracing::debug!(
                         "We already have the payload for view {view}, skipping reconstruction"
                     );
                     return None;
                 }
 
-                let proposal = self
-                    .consensus
-                    .read()
-                    .await
-                    .last_proposals()
-                    .get(&view)
-                    .cloned()?;
+                let proposal = self.proposals.get(&view).cloned()?;
                 self.spawn_reconstruct_task(
                     view,
-                    proposal.data.epoch(),
-                    proposal.data.block_header().metadata().clone(),
+                    proposal.epoch(),
+                    proposal.block_header.metadata().clone(),
                 )
                 .await;
             },
             HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 let view = proposal.data.view_number();
+                self.proposals.insert(view, proposal.data.clone().into());
+                // if self.id == 2 {
+                //     tracing::error!("Received quorum proposal for view {} with epoch {}", view, proposal.data.epoch().unwrap());
+                // }
                 // if we already have the payload
                 if self
                     .consensus

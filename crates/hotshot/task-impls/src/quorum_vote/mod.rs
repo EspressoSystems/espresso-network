@@ -83,7 +83,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub sender: Sender<Arc<HotShotEvent<TYPES>>>,
 
     /// Event receiver.
-    pub receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
+    pub receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -345,7 +345,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         update_shared_state::<TYPES, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
-            self.receiver.clone(),
+            self.receiver.clone().deactivate(),
             self.membership_coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
@@ -401,6 +401,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                 .update_validator_participation(leader_key, cur_epoch, true);
         }
 
+        self.wait_for_previous_block(parent_view_number, self.receiver.clone())
+            .await?;
+
         submit_vote::<TYPES, I, V>(
             self.sender.clone(),
             epoch_membership,
@@ -419,6 +422,47 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.stake_table_capacity,
         )
         .await
+    }
+    async fn wait_for_previous_block(
+        &self,
+        parent_view: Option<TYPES::View>,
+        mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    ) -> Result<()> {
+        let Some(parent_view) = parent_view else {
+            bail!(error!("No parent view"));
+        };
+        if parent_view <= TYPES::View::genesis() + 2 {
+            return Ok(());
+        }
+        if self
+            .consensus
+            .read()
+            .await
+            .saved_payloads()
+            .get(&parent_view)
+            .is_some()
+        {
+            // tracing::error!("Block already reconstructed for parent view {parent_view}");
+            return Ok(());
+        }
+
+        tracing::error!("Waiting for previous block for parent view {parent_view}");
+        // TODO: Handle the case where the block is received before this call
+        while let Ok(event) = receiver.recv_direct().await {
+            if let HotShotEvent::BlockReconstructed(_, _, _, view) = event.as_ref() {
+                if *view == parent_view {
+                    tracing::error!("Block reconstructed for parent view {parent_view}");
+                    return Ok(());
+                }
+            }
+            if let HotShotEvent::BlockRecv(block_recv) = event.as_ref() {
+                if block_recv.view_number == parent_view {
+                    tracing::error!("Block received for parent view {parent_view}");
+                    return Ok(());
+                }
+            }
+        }
+        Err(hotshot_utils::anytrace::error!("No block received"))
     }
 }
 
@@ -595,7 +639,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 storage_metrics: Arc::clone(&self.storage_metrics),
                 view_number,
                 sender: event_sender.clone(),
-                receiver: event_receiver.clone().deactivate(),
+                receiver: event_receiver.clone(),
                 upgrade_lock: self.upgrade_lock.clone(),
                 id: self.id,
                 epoch_height: self.epoch_height,

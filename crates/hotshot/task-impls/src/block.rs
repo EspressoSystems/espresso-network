@@ -97,7 +97,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             view,
         });
         let elapsed = now.elapsed();
-        tracing::error!("Received transactions in {elapsed:?}");
+        tracing::info!("Received transactions in {elapsed:?}");
     }
 
     fn decide_block(
@@ -119,7 +119,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
         self.recently_proposed_blocks.remove(&view);
         let elapsed = now.elapsed();
-        tracing::error!("Mempool processed block in {elapsed:?}");
+        tracing::info!("Mempool processed block in {elapsed:?}");
     }
 
     fn receive_block(
@@ -281,7 +281,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             if upgrade {
                 None
             } else {
-                self.wait_for_block(block_view).await
+                self.wait_for_block(block_view, receiver).await
             }
         };
 
@@ -329,24 +329,24 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
-        // receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
-        // let now = Instant::now();
-        // let (previous_block, metadata) = timeout(
-        //     Duration::from_secs(1),
-        //     self.wait_for_previous_block(block_view - 1, receiver),
-        // )
-        // .await
-        // .ok()?
-        // .ok()?;
-        // let elapsed = now.elapsed();
-        // tracing::error!("Waited for previous block in {elapsed:?}");
+        let now = Instant::now();
+        let (previous_block, metadata) = timeout(
+            Duration::from_secs(1),
+            self.wait_for_previous_block(block_view - 1, receiver),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        let elapsed = now.elapsed();
+        tracing::error!("Waited for previous block in {elapsed:?}");
 
-        // let now = Instant::now();
-        // self.handle_block(block_view - 1, previous_block, metadata)
-        //     .await;
-        // let elapsed = now.elapsed();
-        // tracing::error!("Handled previous block in {elapsed:?}");
+        let now = Instant::now();
+        self.handle_block(block_view - 1, previous_block, metadata)
+            .await;
+        let elapsed = now.elapsed();
+        tracing::error!("Handled previous block in {elapsed:?}");
         let now = Instant::now();
         let PayloadWithMetadata { payload, metadata } = self.build_block(block_view).await?;
         let elapsed = now.elapsed();
@@ -456,6 +456,15 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                 if *view == parent_view {
                     tracing::error!("Received block for parent view {parent_view}, building block");
                     return Ok((block.clone(), metadata.clone()));
+                }
+            }
+            if let HotShotEvent::BlockRecv(block_recv) = event.as_ref() {
+                if block_recv.view_number == parent_view {
+                    let payload = <TYPES::BlockPayload as BlockPayload<TYPES>>::from_bytes(
+                        &block_recv.encoded_transactions,
+                        &block_recv.metadata,
+                    );
+                    return Ok((payload, block_recv.metadata.clone()));
                 }
             }
         }

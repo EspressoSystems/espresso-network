@@ -372,7 +372,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
     let validation_duration = now.elapsed();
-    tracing::error!("Validation time: {validation_duration:?}");
+    // tracing::error!("Validation time: {validation_duration:?}");
 
     let now = Instant::now();
     // Now that we've rounded everyone up, we need to update the shared state
@@ -540,7 +540,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .await;
     } else {
-        tracing::info!(
+        tracing::error!(
             "sending vote to next quorum leader {:?}",
             vote.view_number() + 1
         );

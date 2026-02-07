@@ -170,9 +170,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
         Self {
+            id: handle.hotshot.id,
             event_stream: handle.internal_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             calc_lock: Arc::new(RwLock::new(HashMap::new())),
+            proposals: BTreeMap::new(),
+            vid_shares: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 }
