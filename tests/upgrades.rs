@@ -113,7 +113,7 @@ where
             } else {
                 2
             };
-            Some(start_proposing_view + (epoch_length * epochs_needed).max(300))
+            Some(start_proposing_view + (epoch_length * epochs_needed))
         } else {
             None
         };
