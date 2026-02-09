@@ -1000,6 +1000,9 @@ pub trait SequencerPersistence:
         self.migrate_vid_shares().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
+        self.migrate_reward_merkle_tree_v2()
+            .await
+            .context("failed to migrate reward merkle tree v2")?;
 
         tracing::warn!("consensus storage has been migrated to new types");
 
