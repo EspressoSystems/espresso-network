@@ -45,7 +45,10 @@ use crate::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
         Validator,
     },
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
+    v0_4::{
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
+        RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+    },
     BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
     PubKey, SeqTypes, ValidatorMap,
 };
@@ -194,7 +197,7 @@ pub trait StateCatchup: Send + Sync {
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2>;
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2>;
 
     /// Fetch the given list of reward accounts, retrying on transient errors.
     async fn fetch_reward_accounts_v2(
@@ -237,7 +240,7 @@ pub trait StateCatchup: Send + Sync {
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         self.backoff()
             .retry(self, |provider, retry| {
                 let accounts = accounts.clone();
@@ -464,7 +467,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         (**self)
             .try_fetch_reward_merkle_tree_v2(retry, height, view, reward_merkle_tree_root, accounts)
             .await
@@ -489,7 +492,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         (**self)
             .fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root, accounts)
             .await

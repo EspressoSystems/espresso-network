@@ -28,7 +28,7 @@ use crate::{
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::{RewardAmount, Validator},
-    v0_4::RewardMerkleTreeV2,
+    v0_4::{PermittedRewardMerkleTreeV2, RewardMerkleTreeV2},
     EpochCommittees, PubKey, ValidatorMap,
 };
 /// Represents the immutable state of a node.
@@ -654,7 +654,7 @@ pub mod mock {
             _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitmentV2,
             _accounts: Arc<Vec<RewardAccountV2>>,
-        ) -> anyhow::Result<RewardMerkleTreeV2> {
+        ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
             anyhow::bail!("unimplemented")
         }
 

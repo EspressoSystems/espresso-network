@@ -10,7 +10,7 @@ use espresso_types::{
         ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     NodeState, ValidatedState,
 };
@@ -440,7 +440,9 @@ impl CatchupStorage for SqlStorage {
         // Check if we have the desired state snapshot. If so, we can load the desired accounts
         // directly.
         if height < block_height {
-            load_reward_merkle_tree_v2(self, height).await
+            load_reward_merkle_tree_v2(self, height)
+                .await
+                .map(|(permitted_tree, leaf)| (permitted_tree.tree, leaf))
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -953,7 +955,7 @@ async fn load_v1_reward_accounts(
 async fn load_reward_merkle_tree_v2(
     db: &SqlStorage,
     height: u64,
-) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+) -> anyhow::Result<(PermittedRewardMerkleTreeV2, Leaf2)> {
     // Open a new read transaction to get the leaf
     let mut tx = db
         .read()
@@ -1147,7 +1149,8 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
                     "unable to reconstruct state because RewardMerkleTreeV2 not available at \
                      origin",
                 )?
-                .0;
+                .0
+                .tree;
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
                 "loaded reward state does not match parent header"

@@ -21,8 +21,8 @@ use espresso_types::{
         StakeTableEvent, Validator,
     },
     v0_4::{
-        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
-        REWARD_MERKLE_TREE_V2_HEIGHT,
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
+        RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
     },
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
@@ -1254,7 +1254,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Representation of the RewardMerkleTreeV2 as a set of key-value pairs
 pub(crate) struct RewardMerkleTreeV2Data {
-    balances: Vec<(RewardAccountV2, RewardAmount)>,
+    pub balances: Vec<(RewardAccountV2, RewardAmount)>,
 }
 
 impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
@@ -1281,15 +1281,6 @@ impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
                  missing."
             );
         }
-    }
-}
-
-impl TryInto<RewardMerkleTreeV2> for RewardMerkleTreeV2Data {
-    type Error = anyhow::Error;
-    // Required method
-    fn try_into(self) -> anyhow::Result<RewardMerkleTreeV2> {
-        RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, self.balances)
-            .context("Failed to rebuild reward merkle tree from balances")
     }
 }
 
@@ -1325,12 +1316,14 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
                 // check to see whether we have proofs at that height already stored
                 if !self.proof_exists(finalized_hotshot_height).await {
-                    let Ok(tree) = self
+                    let Ok(permitted_tree) = self
                         .load_reward_merkle_tree_v2(finalized_hotshot_height)
                         .await
                     else {
                         return Ok(());
                     };
+
+                    let tree = permitted_tree.tree;
 
                     // we try to be careful to avoid allocating for all the proofs immediately,
                     // but note that there are no guarantees here (if e.g. the database is slow)
@@ -1355,6 +1348,8 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                     };
 
                     let _ = self.garbage_collect(finalized_hotshot_height).await;
+
+                    // tree is dropped here
                 }
             }
 
@@ -1365,7 +1360,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
     fn load_reward_merkle_tree_v2(
         &self,
         height: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV2>> {
+    ) -> impl Send + Future<Output = anyhow::Result<PermittedRewardMerkleTreeV2>> {
         async move {
             let tree_bytes = self.load_tree(height).await?;
 
@@ -1374,8 +1369,8 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                  should never happen.",
             )?;
 
-            tree_data
-                .try_into()
+            PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances)
+                .await
                 .context("Failed to reconstruct reward merkle tree from storage")
         }
     }

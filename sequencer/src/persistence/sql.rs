@@ -1135,7 +1135,10 @@ impl SequencerPersistence for Persistence {
             },
         };
 
-        tracing::warn!("migrating reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height {max_height}...");
+        tracing::warn!(
+            "migrating reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height \
+             {max_height}..."
+        );
 
         let mut tx = self.db.read().await?;
 
@@ -1225,7 +1228,9 @@ impl SequencerPersistence for Persistence {
         .await?;
         tx.commit().await?;
 
-        tracing::warn!("migrated reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height {max_height}");
+        tracing::warn!(
+            "migrated reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height {max_height}"
+        );
 
         Ok(())
     }

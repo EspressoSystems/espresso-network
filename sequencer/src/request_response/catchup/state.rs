@@ -8,8 +8,8 @@ use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
-        forgotten_accounts_include, RewardAccountProofV2, RewardAccountV2,
-        RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
+        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
     },
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
@@ -157,7 +157,7 @@ impl<
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         // Timeout after a few batches
         let timeout_duration = self.config.request_batch_interval * 3;
 
@@ -425,7 +425,7 @@ impl<
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         tracing::info!("Fetching RewardMerkleTreeV2 for height: {height}");
 
         // Create the response validation function
@@ -443,10 +443,10 @@ impl<
                     )?;
 
                 // Verify the tree's commitment
-                let reward_merkle_tree: RewardMerkleTreeV2 = tree_data.try_into().context(
-                    "Failed to reconstruct RewardMerkleTreeV2 for height {height} from remote",
-                )?;
-                anyhow::ensure!(reward_merkle_tree.commitment() == reward_merkle_tree_root);
+                let reward_merkle_tree: PermittedRewardMerkleTreeV2 =
+                    PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances).await?;
+
+                anyhow::ensure!(reward_merkle_tree.tree.commitment() == reward_merkle_tree_root);
                 anyhow::ensure!(!forgotten_accounts_include(&reward_merkle_tree, &accounts));
 
                 Ok(reward_merkle_tree)

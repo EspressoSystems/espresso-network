@@ -20,8 +20,8 @@ use espresso_types::{
         RewardMerkleTreeV1,
     },
     v0_4::{
-        forgotten_accounts_include, RewardAccountProofV2, RewardAccountV2,
-        RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
+        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
     },
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
@@ -436,7 +436,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         let result = self
             .fetch(retry, |client| async move {
                 let tree_bytes = client
@@ -453,10 +453,11 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
             .context("Failed to deserialize merkle tree from catchup")?;
 
-        let tree: RewardMerkleTreeV2 = tree_data.try_into()?;
+        let tree: PermittedRewardMerkleTreeV2 =
+            PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances).await?;
 
         ensure!(
-            tree.commitment() == reward_merkle_tree_root,
+            tree.tree.commitment() == reward_merkle_tree_root,
             "RewardMerkleTreeV2 from peer failed commitment check."
         );
         ensure!(!forgotten_accounts_include(&tree, &accounts));
@@ -872,10 +873,10 @@ where
         _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let tree: RewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        let tree: PermittedRewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
 
-        ensure!(tree.commitment() == reward_merkle_tree_root);
+        ensure!(tree.tree.commitment() == reward_merkle_tree_root);
         ensure!(!forgotten_accounts_include(&tree, &accounts));
 
         Ok(tree)
@@ -1029,7 +1030,7 @@ impl StateCatchup for NullStateCatchup {
         _view: ViewNumber,
         _reward_merkle_tree_root: RewardMerkleCommitmentV2,
         _accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         bail!("state catchup is disabled");
     }
 
@@ -1411,7 +1412,7 @@ impl StateCatchup for ParallelStateCatchup {
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         let local_result = self
             .on_local_providers(clone! {(accounts) move |provider| {
                 clone! {(accounts) async move {
