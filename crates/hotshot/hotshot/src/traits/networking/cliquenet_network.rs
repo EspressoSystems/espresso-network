@@ -119,7 +119,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
     ) where
         U: NodeType<SignatureKey = T::SignatureKey>,
     {
-        self.net.gc(*v)
+        self.net.gc((*v).saturating_sub(3))
     }
 
     async fn wait_for_ready(&self) {}
