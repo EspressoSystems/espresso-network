@@ -260,6 +260,15 @@ struct Options {
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
+
+    /// Option to upgrade fee contract v1 patch version
+    #[clap(long, default_value = "false")]
+    pub upgrade_fee_v1: bool,
+
+    /// Option to propose a transaction via Safe multisig
+    /// This allows calling any contract function via multisig proposal
+    #[clap(long, default_value = "false")]
+    pub propose_multisig_transaction: bool,
     ///
     /// If the light client contract is being deployed and this is set, the prover will be
     /// permissioned so that only this address can update the light client state. Otherwise, proving
@@ -398,12 +407,59 @@ struct Options {
     )]
     timelock_operation_delay: Option<u64>,
 
-    /// Option to upgrade fee contract v1 patch version
-    #[clap(long, default_value = "false")]
-    upgrade_fee_v1: bool,
+    /// The operation ID for cancel operations (optional, can be used instead of reconstructing from parameters)
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_ID",
+        requires = "perform_timelock_operation"
+    )]
+    timelock_operation_id: Option<String>,
+
+    /// Target contract address for multisig transaction proposal
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_TARGET",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_target: Option<Address>,
+
+    /// Function signature for multisig transaction (e.g., "transfer(address,uint256)")
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_FUNCTION_SIGNATURE",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_function_signature: Option<String>,
+
+    /// Function arguments for multisig transaction
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_FUNCTION_ARGS",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_function_args: Option<Vec<String>>,
+
+    /// Value to send with multisig transaction (in wei, as string)
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_VALUE",
+        requires = "propose_multisig_transaction",
+        default_value = "0"
+    )]
+    multisig_transaction_value: Option<String>,
 
     #[clap(flatten)]
     logging: logging::Config,
+
+    /// Cooldown after each contract deployment to avoid outdated state during post deployment
+    /// verification steps.
+    #[clap(
+        long,
+        env = "ESPRESSO_POST_DEPLOYMENT_COOLDOWN",
+        default_value = "1s",
+        value_parser = parse_duration,
+    )]
+    post_deployment_cooldown: Duration,
 
     /// Command to run
     ///
@@ -432,6 +488,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut contracts = Contracts::from(opt.contracts);
+    contracts.set_cooldown(opt.post_deployment_cooldown);
+
     let provider = if opt.ledger {
         let signer = connect_ledger(opt.account_index as usize).await?;
         tracing::info!("Using ledger for signing, watch ledger device for prompts.");
@@ -492,7 +550,8 @@ async fn main() -> anyhow::Result<()> {
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
-        .rpc_url(opt.rpc_url.clone());
+        .rpc_url(opt.rpc_url.clone())
+        .ledger(opt.ledger);
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
     }
@@ -639,33 +698,39 @@ async fn main() -> anyhow::Result<()> {
             )
         })?;
         args_builder.target_contract(target_contract);
-        let function_signature = opt.function_signature.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --function-signature or \
-                 ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing timelock \
-                 operation"
-            )
-        })?;
-        args_builder.timelock_operation_function_signature(function_signature);
 
-        // allow empty function_values for functions with no parameters
-        let function_values = opt.function_values.unwrap_or_default();
-        args_builder.timelock_operation_function_values(function_values);
+        // Only require these fields if operation_id is not provided
+        // (for cancel with operation_id, we don't need to reconstruct the operation)
+        if opt.timelock_operation_id.is_none() {
+            let function_signature = opt.function_signature.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --function-signature or \
+                     ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing \
+                     timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_function_signature(function_signature);
+            // allow empty function_values for functions with no parameters
+            let function_values = opt.function_values.unwrap_or_default();
+            args_builder.timelock_operation_function_values(function_values);
+            let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT \
+                     env var when scheduling timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_salt(timelock_operation_salt);
+            let timelock_operation_delay = opt.timelock_operation_delay.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY \
+                     env var when scheduling timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
+        } else if let Some(operation_id) = opt.timelock_operation_id {
+            args_builder.timelock_operation_id(operation_id);
+        }
 
-        let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env \
-                 var when scheduling timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_salt(timelock_operation_salt);
-        let timelock_operation_delay = opt.timelock_operation_delay.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY env \
-                 var when scheduling timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
         let timelock_operation_value = opt.timelock_operation_value.unwrap_or_default();
         args_builder.timelock_operation_value(timelock_operation_value);
     }
@@ -718,6 +783,21 @@ async fn main() -> anyhow::Result<()> {
         args_builder.target_contract(target_contract);
     }
 
+    if opt.propose_multisig_transaction {
+        if let Some(target) = opt.multisig_transaction_target {
+            args_builder.multisig_transaction_target(target);
+        }
+        if let Some(sig) = opt.multisig_transaction_function_signature {
+            args_builder.multisig_transaction_function_signature(sig);
+        }
+        if let Some(args) = opt.multisig_transaction_function_args {
+            args_builder.multisig_transaction_function_args(args);
+        }
+        if let Some(val) = opt.multisig_transaction_value {
+            args_builder.multisig_transaction_value(val);
+        }
+    }
+
     // then deploy specified contracts
     let args = args_builder.build()?;
 
@@ -766,7 +846,7 @@ async fn main() -> anyhow::Result<()> {
 
     // then perform the timelock operation if any
     if opt.perform_timelock_operation {
-        args.perform_timelock_operation_on_contract(&mut contracts)
+        args.propose_timelock_operation_for_contract(&mut contracts)
             .await?;
     }
 
@@ -785,6 +865,11 @@ async fn main() -> anyhow::Result<()> {
         args.deploy(&mut contracts, Contract::FeeContractProxy)
             .await?;
     }
+
+    if opt.propose_multisig_transaction {
+        args.propose_multisig_transaction().await?;
+    }
+
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()

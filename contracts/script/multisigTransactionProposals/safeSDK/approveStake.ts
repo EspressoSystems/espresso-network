@@ -87,6 +87,7 @@ export async function proposeApproveTransaction(
     safeSDK,
     tokenAddress,
     approveData,
+    "0",
     useHardwareWallet,
   );
 

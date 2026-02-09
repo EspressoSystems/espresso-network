@@ -43,7 +43,7 @@ vec1 = { workspace = true }
 
 [dev-dependencies]
 jf-signature = { workspace = true, features = ["bls"] }
-sequencer = { path = "../../sequencer", features = ["testing"] }
+sequencer = { path = "../../sequencer", default-features = false, features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 
