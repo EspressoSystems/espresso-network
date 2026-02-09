@@ -237,7 +237,7 @@ pub struct Options {
     ///
     /// This helps prevent queries from running indefinitely and consuming resources.
     /// Set to 10 minutes by default
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "15m")]
     pub(crate) statement_timeout: Duration,
 
     /// The minimum number of database connections to maintain at any time.
