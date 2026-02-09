@@ -1,6 +1,6 @@
-CREATE TABLE reward_merkle_tree_v2_data (
+CREATE TABLE reward_merkle_tree_v2_bincode (
     height BIGINT PRIMARY KEY,
-    balances BLOB
+    serialized_bytes BLOB
 );
 
 CREATE TABLE reward_merkle_tree_v2_proofs (
