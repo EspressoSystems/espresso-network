@@ -2,7 +2,7 @@ use crate::{
     v0::impls::StakeTableHash,
     v0_3::RewardAmount,
     v0_4::RewardMerkleCommitmentV2,
-    v0_6::{LeaderCounts, MAX_VALIDATORS},
+    v0_5::{LeaderCounts, MAX_VALIDATORS},
     NsTable, TimestampMillis,
 };
 
@@ -44,7 +44,7 @@ mod leader_counts_serde {
     }
 }
 
-/// Header V6 with leader_counts for per-epoch reward distribution.
+/// Header V5 with leader_counts for per-epoch reward distribution.
 ///
 /// This version introduces epoch-based reward distribution where:
 /// - `leader_counts` tracks how many blocks each validator has led during the current epoch
@@ -89,7 +89,7 @@ impl Committable for Header {
             .serialize_with_mode(&mut rwd_bytes, ark_serialize::Compress::Yes)
             .unwrap();
 
-        
+
         let leader_counts_bytes: Vec<u8> = self
             .leader_counts
             .iter()

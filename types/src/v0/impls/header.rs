@@ -44,8 +44,8 @@ use crate::{
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2},
-    v0_5,
-    v0_6::{self, LeaderCounts, RewardMerkleTreeV2, MAX_VALIDATORS, REWARD_MERKLE_TREE_V2_HEIGHT},
+    v0_5::{self, LeaderCounts, MAX_VALIDATORS},
+    v0_6::{self, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
     BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion,
     FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2,
     NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
@@ -418,6 +418,7 @@ impl Header {
                 reward_merkle_tree_root: reward_merkle_tree_root_v2,
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts required for V5 header"),
             }),
             (0, 6) => Self::V6(v0_6::Header {
                 chain_config: chain_config.into(),
@@ -448,24 +449,27 @@ impl Header {
     pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
         match self {
             Self::V4(fields) => fields.next_stake_table_hash,
-            Self::V5(fields) => fields.next_stake_table_hash,
-            Self::V6(fields) => fields.next_stake_table_hash,
+            Self::V5(fields) | Self::V6(fields) => fields.next_stake_table_hash,
             _ => None,
         }
     }
 
-    /// Get the leader counts for V6 headers.
+    /// Get the leader counts for V5+ headers.
     /// Returns None for earlier versions.
     pub fn leader_counts(&self) -> Option<&LeaderCounts> {
         match self {
-            Self::V6(fields) => Some(&fields.leader_counts),
+            Self::V5(fields) | Self::V6(fields) => Some(&fields.leader_counts),
             _ => None,
         }
     }
 
     pub fn set_next_stake_table_hash(&mut self, hash: StakeTableHash) -> bool {
         match self {
-            Self::V4(fields) | Self::V5(fields) => {
+            Self::V4(fields) => {
+                fields.next_stake_table_hash = Some(hash);
+                true
+            },
+            Self::V5(fields) | Self::V6(fields) => {
                 fields.next_stake_table_hash = Some(hash);
                 true
             },
@@ -718,6 +722,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts is required for V5 headers"),
             }),
             (0, 6) => Self::V6(v0_6::Header {
                 chain_config: chain_config.into(),
@@ -746,7 +751,7 @@ impl Header {
         Ok(header)
     }
 
-    /// Calculate leader_counts for V6 headers.
+    /// Calculate leader_counts for V5+ headers.
     pub fn calculate_leader_counts(
         parent_header: &Header,
         height: u64,
@@ -1614,7 +1619,7 @@ impl BlockHeader<SeqTypes> for Header {
     fn auth_root(&self) -> anyhow::Result<B256> {
         match self {
             Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(B256::ZERO),
-            Header::V4(header) | Header::V5(header) => {
+            Header::V4(header) => {
                 // Temporary placeholder values for future fields
                 let placeholder_1 = B256::ZERO;
                 let placeholder_2 = B256::ZERO;
@@ -1638,7 +1643,7 @@ impl BlockHeader<SeqTypes> for Header {
 
                 Ok(hasher.finalize())
             },
-            Header::V6(header) => {
+            Header::V5(header) | Header::V6(header) => {
                 // Temporary placeholder values for future fields
                 let placeholder_1 = B256::ZERO;
                 let placeholder_2 = B256::ZERO;

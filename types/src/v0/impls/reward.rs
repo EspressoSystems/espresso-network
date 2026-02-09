@@ -49,7 +49,7 @@ use crate::{
         RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-    v0_6::LeaderCounts,
+    v0_5::LeaderCounts,
     DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeAccount, SeqTypes,
 };
 

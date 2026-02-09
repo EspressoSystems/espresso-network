@@ -44,7 +44,7 @@ use crate::{
         Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    v0_6::LeaderCounts,
+    v0_5::LeaderCounts,
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochRewardVersion, FeeAccount, FeeAmount,
     FeeInfo, FeeMerkleTree, Header, Leaf2, NsTableValidationError, PayloadByteLen, SeqTypes,
     UpgradeType, BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT,

@@ -2643,7 +2643,7 @@ mod test {
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
         v0_4::{RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2},
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
-        EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
+        EpochRewardVersion, EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
         SequencerVersions, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
         ValidatedState,
@@ -3291,6 +3291,12 @@ mod test {
         test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_reward_upgrade() {
+        type EpochRewardUpgrade = SequencerVersions<DrbAndHeaderUpgradeVersion, EpochRewardVersion>;
+        test_upgrade_helper::<EpochRewardUpgrade>(EpochRewardUpgrade::new()).await;
+    }
+
     async fn test_upgrade_helper<V: Versions>(version: V) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
@@ -3299,10 +3305,15 @@ mod test {
         const NUM_NODES: usize = 5;
         let upgrade_version = <V as Versions>::Upgrade::VERSION;
         let port = pick_unused_port().expect("No ports free");
+        let epoch_start_block = if V::Base::VERSION >= V::Epochs::VERSION {
+            0
+        } else {
+            321
+        };
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(200)
-            .epoch_start_block(321)
+            .epoch_start_block(epoch_start_block)
             .set_upgrades(upgrade_version)
             .await
             .build();

@@ -1,5 +1,5 @@
 base_version = "0.4"
-upgrade_version = "0.5"
+upgrade_version = "0.6"
 genesis_version = "0.4"
 epoch_height = 3000
 drb_difficulty = 5000000000
@@ -7,7 +7,7 @@ drb_upgrade_difficulty = 5000000000
 epoch_start_block = 1
 
 [[da_committees]]
-start_version = "0.5"
+start_version = "0.6"
 start_epoch = 114
 
 [[da_committees.committee]]
@@ -56,7 +56,7 @@ stop_voting_view = 999999999
 start_proposing_view = 0
 stop_proposing_view = 1
 
-version = "0.5"
+version = "0.6"
 
 [upgrade.da]
 [upgrade.da.chain_config]

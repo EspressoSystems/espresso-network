@@ -1,6 +1,6 @@
-base_version = "0.5"
-upgrade_version = "0.6"
-genesis_version = "0.5"
+base_version = "0.4"
+upgrade_version = "0.5"
+genesis_version = "0.4"
 epoch_height = 150
 drb_difficulty = 10
 drb_upgrade_difficulty = 20
@@ -33,7 +33,7 @@ stake_table_contract = "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"
 number = 0
 
 [[upgrade]]
-version = "0.6"
+version = "0.5"
 start_proposing_view = 150
 stop_proposing_view = 1000
 

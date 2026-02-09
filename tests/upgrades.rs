@@ -2,8 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use espresso_types::{
-    DaUpgradeVersion, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeVersion,
-    UpgradeMode,
+    DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeVersion, UpgradeMode,
 };
 use futures::{future::join_all, StreamExt};
 use sequencer::Genesis;
@@ -165,7 +164,7 @@ async fn test_native_demo_fee_to_drb_header_upgrade() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_demo_epoch_reward_upgrade() -> Result<()> {
-    run_upgrade_test::<DaUpgradeVersion, EpochRewardVersion>(
+    run_upgrade_test::<DrbAndHeaderUpgradeVersion, EpochRewardVersion>(
         "data/genesis/demo-epoch-reward-upgrade.toml",
     )
     .await
