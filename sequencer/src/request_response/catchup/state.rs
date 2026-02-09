@@ -123,33 +123,6 @@ impl<
             .with_context(|| "timed out while fetching chain config")?
     }
 
-    async fn try_fetch_reward_accounts_v2(
-        &self,
-        _retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        // Timeout after a few batches
-        let timeout_duration = self.config.request_batch_interval * 3;
-
-        // Fetch the reward accounts
-        timeout(
-            timeout_duration,
-            self.fetch_reward_accounts_v2(
-                instance,
-                height,
-                view,
-                reward_merkle_tree_root,
-                accounts.to_vec(),
-            ),
-        )
-        .await
-        .with_context(|| "timed out while fetching reward accounts")?
-    }
-
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         _retry: usize,
@@ -464,64 +437,6 @@ impl<
             .with_context(|| "failed to request reward accounts")?;
 
         tracing::info!("Fetched RewardMerkleTreeV2 for height: {height}");
-
-        Ok(response)
-    }
-
-    async fn fetch_reward_accounts_v2(
-        &self,
-        _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Vec<RewardAccountV2>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        tracing::info!("Fetching reward accounts for height: {height}, view: {view}");
-
-        // Clone things we need in the first closure
-        let accounts_clone = accounts.clone();
-
-        // Create the response validation function
-        let response_validation_fn = move |_request: &Request, response: Response| {
-            // Clone again
-            let accounts_clone = accounts_clone.clone();
-
-            async move {
-                // Make sure the response is a reward accounts response
-                let Response::RewardAccountsV2(reward_merkle_tree) = response else {
-                    return Err(anyhow::anyhow!("expected reward accounts response"));
-                };
-
-                // Verify the merkle proofs
-                let mut proofs = Vec::new();
-                for account in accounts_clone {
-                    let (proof, _) =
-                        RewardAccountProofV2::prove(&reward_merkle_tree, account.into())
-                            .with_context(|| format!("response was missing account {account}"))?;
-                    proof.verify(&reward_merkle_tree_root).with_context(|| {
-                        format!(
-                            "invalid proof for v2 reward account {account}, root: \
-                             {reward_merkle_tree_root}"
-                        )
-                    })?;
-                    proofs.push(proof);
-                }
-
-                Ok(proofs)
-            }
-        };
-
-        // Wait for the protocol to send us the reward accounts
-        let response = self
-            .request_indefinitely(
-                Request::RewardAccountsV2(height, *view, accounts),
-                RequestType::Batched,
-                response_validation_fn,
-            )
-            .await
-            .with_context(|| "failed to request reward accounts")?;
-
-        tracing::info!("Fetched reward accounts for height: {height}, view: {view}");
 
         Ok(response)
     }

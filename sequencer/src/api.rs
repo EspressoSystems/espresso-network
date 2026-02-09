@@ -907,54 +907,6 @@ impl<
         self.inner().get_leaf_chain(height).await
     }
 
-    #[tracing::instrument(skip(self, instance))]
-    async fn get_reward_accounts_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
-        // Check if we have the desired state in memory.
-        match self
-            .as_ref()
-            .get_reward_accounts_v2(instance, height, view, accounts)
-            .await
-        {
-            Ok(accounts) => return Ok(accounts),
-            Err(err) => {
-                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
-            },
-        }
-
-        // Try storage.
-        let (tree, leaf) = self
-            .inner()
-            .get_reward_accounts_v2(instance, height, view, accounts)
-            .await
-            .context("accounts not in memory, and could not fetch from storage")?;
-
-        // If we successfully fetched accounts from storage, try to add them back into the in-memory
-        // state.
-        let consensus = self
-            .as_ref()
-            .consensus()
-            .await
-            .read()
-            .await
-            .consensus()
-            .clone();
-        if let Err(err) =
-            add_v2_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
-                .await
-        {
-            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
-        }
-        tracing::info!(?view, "updated with fetched account state");
-
-        Ok(tree)
-    }
-
     async fn get_all_reward_accounts(
         &self,
         height: u64,
@@ -1141,28 +1093,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             }
         }
         bail!(format!("leaf chain not available for {height}"))
-    }
-
-    #[tracing::instrument(skip(self, _instance))]
-    async fn get_reward_accounts_v2(
-        &self,
-        _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let state = self
-            .consensus()
-            .await
-            .read()
-            .await
-            .state(view)
-            .await
-            .context(format!(
-                "state not available for height {height}, view {view}"
-            ))?;
-
-        retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
     }
 
     // We can iterate over the in-memory reward merkle tree
