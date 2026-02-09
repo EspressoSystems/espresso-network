@@ -153,8 +153,8 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .context("opening transaction for state update")?;
 
             tx.upsert(
-                "reward_merkle_tree_v2_data",
-                ["height", "balances"],
+                "reward_merkle_tree_v2_bincode",
+                ["height", "serialized_bytes"],
                 ["height"],
                 [(height as i64, merkle_tree)],
             )
@@ -177,8 +177,8 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
             let row = sqlx::query(
                 r#"
-                SELECT balances
-                FROM reward_merkle_tree_v2_data
+                SELECT serialized_bytes
+                FROM reward_merkle_tree_v2_bincode
                 WHERE height = $1
                 "#,
             )
@@ -190,8 +190,8 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 height
             ))?;
 
-            row.try_get::<Vec<u8>, _>("balances")
-                .context("Missing field balances from row; this should never happen")
+            row.try_get::<Vec<u8>, _>("serialized_bytes")
+                .context("Missing field serialized_bytes from row; this should never happen")
         }
     }
 
@@ -310,7 +310,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
                 sqlx::query(
                     r#"
-                  DELETE FROM reward_merkle_tree_v2_data
+                  DELETE FROM reward_merkle_tree_v2_bincode
                   WHERE height < $1
                 "#,
                 )
