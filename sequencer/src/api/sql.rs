@@ -418,48 +418,6 @@ impl CatchupStorage for SqlStorage {
         }
     }
 
-    async fn get_reward_accounts_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
-        let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch reward account {accounts:?}; height {height}"
-        ))?;
-
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
-
-        // Check if we have the desired state snapshot. If so, we can load the desired accounts
-        // directly.
-        if height < block_height {
-            load_reward_merkle_tree_v2(self, height)
-                .await
-                .map(|(permitted_tree, leaf)| (permitted_tree.tree, leaf))
-        } else {
-            // If we do not have the exact snapshot we need, we can try going back to the last
-            // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf) = reconstruct_state(
-                instance,
-                self,
-                &mut tx,
-                block_height - 1,
-                view,
-                &[],
-                accounts,
-            )
-            .await?;
-            Ok((state.reward_merkle_tree_v2, leaf))
-        }
-    }
-
     async fn get_all_reward_accounts(
         &self,
         height: u64,
@@ -755,18 +713,6 @@ impl CatchupStorage for DataSource {
     ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
         self.as_ref()
             .get_accounts(instance, height, view, accounts)
-            .await
-    }
-
-    async fn get_reward_accounts_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
-        self.as_ref()
-            .get_reward_accounts_v2(instance, height, view, accounts)
             .await
     }
 

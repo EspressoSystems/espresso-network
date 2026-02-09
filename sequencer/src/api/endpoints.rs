@@ -736,18 +736,6 @@ where
         }
         .boxed()
     })?
-    .get("reward_account_v2", move |req, state| {
-        async move {
-            let (height, view) = parse_height_view(&req)?;
-            let account = parse_reward_account(&req)?;
-
-            state
-                .get_reward_account_v2(&state.node_state().await, height, view, account)
-                .await
-                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
-        }
-        .boxed()
-    })?
     .get("reward_amounts", move |req, state| {
         async move {
             let height = req
@@ -771,34 +759,6 @@ where
                 .get_all_reward_accounts(height, offset, limit)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
-        }
-        .boxed()
-    })?
-    .at("reward_accounts_v2", move |req, state| {
-        async move {
-            let (height, view) = parse_height_view(&req)?;
-            let accounts = req
-                .body_auto::<Vec<RewardAccountV2>, ApiVer>(ApiVer::instance())
-                .map_err(Error::from_request_error)?;
-
-            state
-                .read(|state| {
-                    async move {
-                        state
-                            .get_reward_accounts_v2(
-                                &state.node_state().await,
-                                height,
-                                view,
-                                &accounts,
-                            )
-                            .await
-                            .map_err(|err| {
-                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
-                            })
-                    }
-                    .boxed()
-                })
-                .await
         }
         .boxed()
     })?
