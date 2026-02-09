@@ -1220,8 +1220,8 @@ impl SequencerPersistence for Persistence {
 
         let mut tx = self.db.write().await?;
         tx.upsert(
-            "reward_merkle_tree_v2_data",
-            ["height", "balances"],
+            "reward_merkle_tree_v2_bincode",
+            ["height", "serialized_bytes"],
             ["height"],
             [(max_height, serialized)],
         )
