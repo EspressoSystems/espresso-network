@@ -265,38 +265,6 @@ pub(crate) trait CatchupDataSource: Sync {
         height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
 
-    /// Get the state of the requested `account`.
-    ///
-    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
-    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
-    /// This function is intended to be used for catchup, so `view` should be no older than the last
-    /// decided view.
-    fn get_reward_account_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        account: RewardAccountV2,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
-        async move {
-            let tree = self
-                .get_reward_accounts_v2(instance, height, view, &[account])
-                .await?;
-            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into()).context(
-                format!("reward account {account} not available for height {height}, view {view}"),
-            )?;
-            Ok(RewardAccountQueryDataV2 { balance, proof })
-        }
-    }
-
-    fn get_reward_accounts_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[RewardAccountV2],
-    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV2>>;
-
     fn get_all_reward_accounts(
         &self,
         height: u64,
