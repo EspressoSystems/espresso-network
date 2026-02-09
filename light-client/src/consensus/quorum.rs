@@ -279,7 +279,7 @@ mod test {
 
     use super::*;
     use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EnableEpochs, EpochChangeQuorum, LegacyVersion, VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain
+        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum, LegacyVersion, VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

@@ -197,7 +197,7 @@ mod test {
     use std::time::Duration;
 
     use committable::Committable;
-    use espresso_types::{EpochVersion, Header, Transaction};
+    use espresso_types::{Header, Transaction};
     use futures::{stream::StreamExt, TryStreamExt};
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData},
@@ -216,6 +216,7 @@ mod test {
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
     use tokio::time::sleep;
+    use versions::EPOCH_VERSION;
 
     use super::*;
     use crate::{
@@ -243,11 +244,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, EPOCH_VERSION).await;
         let client = QueryServiceClient::new(url);
 
         // Check that the block height increases over time.
@@ -285,11 +282,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, EPOCH_VERSION).await;
         let client = QueryServiceClient::new(url);
 
         // Wait for a chain of leaves to be produced.
@@ -369,11 +362,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, EPOCH_VERSION).await;
         let client = QueryServiceClient::new(url);
 
         // Wait for a chain of blocks to be produced.
@@ -454,11 +443,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, EPOCH_VERSION).await;
         let client = QueryServiceClient::new(url);
 
         // Wait for a block to be produced.
@@ -503,11 +488,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let network = TestNetwork::new(config, EPOCH_VERSION).await;
         let client = QueryServiceClient::new(url);
 
         // Submit a couple of transactions to form non-empty blocks.

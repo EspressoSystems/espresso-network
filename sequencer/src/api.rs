@@ -2039,7 +2039,7 @@ mod api_tests {
         Header, Leaf2, MOCK_SEQUENCER_BASE_VERSION, MOCK_SEQUENCER_UPGRADE_VERSION, NamespaceId, NamespaceProofQueryData, ValidatedState, traits::{EventConsumer, PersistenceOptions}
     };
     use futures::{future, stream::StreamExt};
-    use hotshot_example_types::node_types::{TEST_VERSIONS, TestVersions};
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::availability::{
         AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };

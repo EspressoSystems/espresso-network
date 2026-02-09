@@ -196,7 +196,7 @@ where
 mod test {
     use std::time::Duration;
 
-    use espresso_types::{MockSequencerVersions, PubKey};
+    use espresso_types::PubKey;
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
     use portpicker::pick_unused_port;
     use surf_disco::{error::ClientError, Client, Url};

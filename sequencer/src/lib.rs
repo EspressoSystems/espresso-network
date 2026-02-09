@@ -1561,7 +1561,7 @@ mod test {
         let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
-        let handles = config.init_nodes(MockSequencerVersions::new()).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_BASE_VERSION).await;
 
         let handle_0 = &handles[0];
 
