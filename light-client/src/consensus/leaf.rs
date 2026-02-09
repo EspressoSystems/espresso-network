@@ -307,7 +307,7 @@ mod test {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum};
+    use crate::testing::{AlwaysFalseQuorum, AlwaysTrueQuorum, LegacyVersion, leaf_chain};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {

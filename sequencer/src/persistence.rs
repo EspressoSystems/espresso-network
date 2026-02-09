@@ -159,7 +159,8 @@ mod tests {
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
-    use vbs::version::{StaticVersion, Version};
+    use vbs::version::Version;
+    use versions::version;
 
     use crate::{
         api::{
@@ -1395,7 +1396,6 @@ mod tests {
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
         let epoch_height = 20;
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
@@ -1425,13 +1425,13 @@ mod tests {
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, stake_table_version)
+            .pos_hook(DelegationConfig::MultipleDelegators, stake_table_version, version(0, 3), version(0, 0))
             .await
             .expect("Pos deployment failed")
             .build();
 
         //start the network
-        let test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+        let test_network = TestNetwork::new(testnet_config, version(0, 3)).await;
 
         let client: Client<ServerError, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")

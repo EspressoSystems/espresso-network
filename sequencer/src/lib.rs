@@ -1496,7 +1496,7 @@ pub mod testing {
 mod test {
 
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, NamespaceId, Payload, Transaction};
+    use espresso_types::{Header, MOCK_SEQUENCER_BASE_VERSION, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -1523,7 +1523,7 @@ mod test {
 
         config.set_builder_urls(vec1::vec1![builder_url]);
 
-        let handles = config.init_nodes(MockSequencerVersions::new()).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_BASE_VERSION).await;
 
         let handle_0 = &handles[0];
 

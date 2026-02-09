@@ -13,10 +13,7 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    v0_3::{StakeTableEvent, Validator},
-    BlockMerkleTree, EpochVersion, Leaf2, NamespaceId,
-    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, StakeTableHash,
-    StakeTableState, Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NamespaceId, NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, StakeTableHash, StakeTableState, Transaction, ValidatorMap, v0_3::{StakeTableEvent, Validator}
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -63,6 +60,9 @@ use crate::{
 };
 
 pub const ENABLE_EPOCHS: (Version, Version) = (FEE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION);
+
+/// Test without epochs and with legacy HotStuff.
+pub type LegacyVersion = FeeVersion;
 
 /// Extract a chain of QCs from a chain of leaves.
 ///
