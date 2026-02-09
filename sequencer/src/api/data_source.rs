@@ -29,7 +29,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
     },
     PeerConfig,
 };
@@ -89,7 +89,7 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider<V: Versions>(
+pub fn provider(
     peers: impl IntoIterator<Item = Url>,
     bind_version: SequencerApiVersion,
 ) -> Provider {

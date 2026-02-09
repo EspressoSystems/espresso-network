@@ -58,6 +58,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+versions = { workspace = true }
 
 [dev-dependencies]
 blake3 = { workspace = true }

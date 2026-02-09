@@ -14,8 +14,8 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
     v0_3::{StakeTableEvent, Validator},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NamespaceId,
-    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash,
+    BlockMerkleTree, EpochVersion, Leaf2, NamespaceId,
+    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, StakeTableHash,
     StakeTableState, Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
@@ -35,7 +35,7 @@ use hotshot_types::{
     stake_table::{supermajority_threshold, StakeTableEntry},
     traits::{
         block_contents::EncodeBytes,
-        node_implementation::{ConsensusTime, Versions},
+        node_implementation::ConsensusTime,
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
@@ -46,7 +46,8 @@ use jf_merkle_tree_compat::{
     prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
 };
 use rand::RngCore;
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersionType, Version};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, version};
 
 use crate::{
     client::Client,
@@ -61,11 +62,7 @@ use crate::{
     storage::LeafRequest,
 };
 
-/// Upgrade to epochs during testing.
-pub type EnableEpochs = SequencerVersions<LegacyVersion, DrbAndHeaderUpgradeVersion>;
-
-/// Test without epochs and with legacy HotStuff.
-pub type LegacyVersion = FeeVersion;
+pub const ENABLE_EPOCHS: (Version, Version) = (FEE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION);
 
 /// Extract a chain of QCs from a chain of leaves.
 ///
@@ -84,37 +81,43 @@ pub fn qc_chain_from_leaf_chain<'a>(
 pub async fn leaf_chain<V: StaticVersionType + 'static>(
     range: impl IntoIterator<Item = u64>,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_leaf_chain::<SequencerVersions<V, V>>(range, |_| {}).await
+    let base = version(V::MAJOR, V::MINOR);
+    custom_leaf_chain(base, base, range, |_| {}).await
 }
 
 /// Construct a valid leaf chain for the given height range.
 ///
-/// The chain will upgrade from `V::Base` to `V::Upgrade` at height `upgrade_height`.
-pub async fn leaf_chain_with_upgrade<V: Versions>(
+/// The chain will upgrade from `base` to `upgrade` at height `upgrade_height`.
+pub async fn leaf_chain_with_upgrade(
     range: impl IntoIterator<Item = u64>,
     upgrade_height: u64,
+    base: Version,
+    upgrade: Version,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_leaf_chain_with_upgrade::<V>(range, upgrade_height, |_| {}).await
+    custom_leaf_chain_with_upgrade(range, upgrade_height, base, upgrade, |_| {}).await
 }
 
 /// Construct a customized leaf chain for the given height range.
 ///
-/// The chain will upgrade from `V::Base` to `V::Upgrade` at height `upgrade_height`.
-pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
+/// The chain will upgrade from `base` to `upgrade` at height `upgrade_height`.
+pub async fn custom_leaf_chain_with_upgrade(
     range: impl IntoIterator<Item = u64>,
     upgrade_height: u64,
+    base: Version,
+    upgrade: Version,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    let upgrade_leaf: Leaf2 = Leaf2::genesis::<V>(
+    let upgrade_leaf: Leaf2 = Leaf2::genesis(
         &Default::default(),
         &NodeState::mock()
-            .with_genesis_version(V::Upgrade::version())
-            .with_current_version(V::Upgrade::version()),
+            .with_genesis_version(upgrade)
+            .with_current_version(upgrade),
+        base
     )
     .await;
     let upgrade_data = UpgradeProposalData {
-        old_version: V::Base::version(),
-        new_version: V::Upgrade::version(),
+        old_version: base,
+        new_version: upgrade,
         new_version_hash: Default::default(),
         old_version_last_view: ViewNumber::new(upgrade_height - 1),
         new_version_first_view: ViewNumber::new(upgrade_height),
@@ -129,7 +132,7 @@ pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
         Default::default(),
     );
 
-    custom_leaf_chain::<V>(range, |proposal| {
+    custom_leaf_chain(base, upgrade, range, |proposal| {
         let height = proposal.block_header.height();
         if height < upgrade_height {
             // All views leading up to the upgrade get a certificate indicating the coming upgrade.
@@ -147,17 +150,19 @@ pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
 }
 
 /// Construct a customized leaf chain for the given height range.
-pub async fn custom_leaf_chain<V: Versions>(
+pub async fn custom_leaf_chain(
+    base: Version,
+    upgrade: Version,
     range: impl IntoIterator<Item = u64>,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
     let node_state = NodeState::mock()
-        .with_genesis_version(V::Base::version())
-        .with_current_version(V::Base::version());
-    let genesis_leaf: Leaf2 = Leaf2::genesis::<V>(&Default::default(), &node_state).await;
+        .with_genesis_version(base)
+        .with_current_version(base);
+    let genesis_leaf: Leaf2 = Leaf2::genesis(&Default::default(), &node_state, base).await;
     tracing::info!(?genesis_leaf, "leaf chain");
 
-    let mut qc = QuorumCertificate2::genesis::<V>(&Default::default(), &node_state).await;
+    let mut qc = QuorumCertificate2::genesis(&Default::default(), &node_state, base, upgrade).await;
     let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
         proposal: QuorumProposal2::<SeqTypes> {
             epoch: None,
@@ -186,7 +191,7 @@ pub async fn custom_leaf_chain<V: Versions>(
 
         qc.view_number = ViewNumber::new(height);
         qc.data.leaf_commit = Committable::commit(&leaf);
-        if leaf.block_header().version() >= EpochVersion::version() {
+        if leaf.block_header().version() >= EPOCH_VERSION {
             qc.data.block_number = Some(height);
         }
 
@@ -214,7 +219,8 @@ pub async fn custom_epoch_change_leaf_chain<V: StaticVersionType + 'static>(
     epoch_height: u64,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_leaf_chain::<SequencerVersions<V, V>>(range, |proposal| {
+    let base = version(V::MAJOR, V::MINOR);
+    custom_leaf_chain(base, base, range, |proposal| {
         if is_epoch_transition(proposal.block_header.height(), epoch_height) {
             let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.clone().into();
             let commit = data.commit();
@@ -277,7 +283,7 @@ impl Quorum for VersionCheckQuorum {
             .get(&cert.leaf_commit())
             .context(format!("unknown leaf {}", cert.leaf_commit()))?;
         ensure!(
-            leaf.block_header().version() == V::version(),
+            leaf.block_header().version() == version(V::MAJOR, V::MINOR),
             "version mismatch: leaf has version {}, but verifier is using version {}",
             leaf.block_header().version(),
             V::version()
@@ -417,13 +423,11 @@ impl InnerTestClient {
             let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
             let view_number = ViewNumber::new(i as u64);
 
-            let version = DrbAndHeaderUpgradeVersion::version();
+            let version = DRB_AND_HEADER_UPGRADE_VERSION;
             let node_state = NodeState::mock_v3().with_genesis_version(version);
             let (justify_qc, mt) = if i == 0 {
                 (
-                    QuorumCertificate2::genesis::<
-                        SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-                    >(&Default::default(), &node_state)
+                    QuorumCertificate2::genesis(&Default::default(), &node_state, version, version)
                     .await,
                     SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
                 )
@@ -438,13 +442,9 @@ impl InnerTestClient {
             let (payload, ns_table) =
                 Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
             let payload_comm =
-                vid_commitment::<
-                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-                >(&payload.encode(), &ns_table.encode(), quorum.len(), version);
+                vid_commitment(&payload.encode(), &ns_table.encode(), quorum.len(), version);
 
-            let mut block_header = Leaf2::genesis::<
-                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-            >(&Default::default(), &node_state)
+            let mut block_header = Leaf2::genesis(&Default::default(), &node_state, version)
             .await
             .block_header()
             .clone();
@@ -479,10 +479,7 @@ impl InnerTestClient {
             let quorum_data_comm = VersionedVoteData::new_infallible(
                 quorum_data.clone(),
                 view_number,
-                &UpgradeLock::<
-                    SeqTypes,
-                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-                >::new(),
+                &UpgradeLock::<SeqTypes>::new(version, version),
             )
             .await
             .commit();

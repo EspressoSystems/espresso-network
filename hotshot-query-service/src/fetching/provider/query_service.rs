@@ -546,8 +546,7 @@ mod test {
     // for From<Output<H>> impl in jf-merkle-tree
     #[allow(deprecated)]
     use generic_array::GenericArray;
-    use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
-    use hotshot_types::traits::node_implementation::Versions;
+    use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
     use portpicker::pick_unused_port;
     use rand::RngCore;
     use tide_disco::{error::ServerError, App};
@@ -575,7 +574,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{mock_transaction, MockBase, MockTypes},
             sleep,
         },
         types::HeightIndexed,
@@ -583,7 +582,7 @@ mod test {
     };
 
     type Provider = TestProvider<QueryServiceProvider<MockBase>>;
-    type EpochProvider = TestProvider<QueryServiceProvider<<EpochsTestVersions as Versions>::Base>>;
+    type EpochProvider = TestProvider<QueryServiceProvider<EpochVersion>>;
 
     fn ignore<T>(_: T) {}
 
@@ -612,7 +611,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_on_request() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -842,7 +841,7 @@ mod test {
         tracing::info!("Starting test_fetch_on_request_epoch_version");
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -851,7 +850,7 @@ mod test {
             "availability",
             define_api(
                 &Default::default(),
-                <EpochsTestVersions as Versions>::Base::instance(),
+                EpochVersion::instance(),
                 "1.0.0".parse().unwrap(),
             )
             .unwrap(),
@@ -861,7 +860,7 @@ mod test {
             "server",
             app.serve(
                 format!("0.0.0.0:{port}"),
-                <EpochsTestVersions as Versions>::Base::instance(),
+                EpochVersion::instance(),
             ),
         );
 
@@ -870,7 +869,7 @@ mod test {
         let db = TmpDb::init().await;
         let provider = EpochProvider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            <EpochsTestVersions as Versions>::Base::instance(),
+            EpochVersion::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -1071,7 +1070,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_block_and_leaf_concurrently() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1132,7 +1131,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_different_blocks_same_payload() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1197,7 +1196,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_stream() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1259,7 +1258,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_range_start() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1318,7 +1317,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn fetch_transaction() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1397,7 +1396,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_retry() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1487,9 +1486,10 @@ mod test {
         api.get("get_payload", move |_, _| {
             async move {
                 // No matter what data we are asked for, always respond with dummy data.
-                Ok(PayloadQueryData::<MockTypes>::genesis::<TestVersions>(
+                Ok(PayloadQueryData::<MockTypes>::genesis(
                     &Default::default(),
                     &Default::default(),
+                    TEST_VERSIONS.test.base,
                 )
                 .await)
             }
@@ -1499,9 +1499,10 @@ mod test {
         .get("get_vid_common", move |_, _| {
             async move {
                 // No matter what data we are asked for, always respond with dummy data.
-                Ok(VidCommonQueryData::<MockTypes>::genesis::<TestVersions>(
+                Ok(VidCommonQueryData::<MockTypes>::genesis(
                     &Default::default(),
                     &Default::default(),
+                    TEST_VERSIONS.test.base,
                 )
                 .await)
             }
@@ -1545,7 +1546,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_archive_recovery() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1716,7 +1717,7 @@ mod test {
 
     async fn test_fetch_storage_failure_helper(failure: FailureType) {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1822,7 +1823,7 @@ mod test {
 
     async fn test_fetch_storage_failure_retry_helper(failure: FailureType) {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1921,7 +1922,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_on_decide() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1988,7 +1989,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_begin_failure() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -2053,7 +2054,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_load_failure_block() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -2136,7 +2137,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_load_failure_tx() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -2241,7 +2242,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_begin_failure() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -2315,7 +2316,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_load_failure() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -2394,7 +2395,7 @@ mod test {
 
     async fn test_metadata_stream_begin_failure_helper(stream: MetadataType) {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -2509,8 +2510,8 @@ mod test {
     // with v0 and v1 availability query modules,
     // trigger fetches for a datasource from the provider,
     // and asserts that the fetched data is correct
-    async fn run_fallback_deserialization_test_helper<V: Versions>(port: u16, version: &str) {
-        let mut network = MockNetwork::<MockDataSource, V>::init().await;
+    async fn run_fallback_deserialization_test_helper(port: u16, version: &str) {
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
 
@@ -2625,7 +2626,7 @@ mod test {
         // which fails because the v0 provider returns legacy types.
         // It then falls back to deserializing as legacy types,
         // and the fetch passes
-        run_fallback_deserialization_test_helper::<MockVersions>(port, "v0").await;
+        run_fallback_deserialization_test_helper(port, "v0").await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2635,7 +2636,7 @@ mod test {
         // Fetch from the v1 availability API using MockVersions.
         // this one fetches from the v1 provider.
         // which would correctly deserialize the bytes in the first attempt, so no fallback deserialization is needed
-        run_fallback_deserialization_test_helper::<MockVersions>(port, "v1").await;
+        run_fallback_deserialization_test_helper(port, "v1").await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2644,7 +2645,7 @@ mod test {
 
         // Fetch Proof of Stake (PoS) data using the v1 availability API
         // with proof of stake version
-        run_fallback_deserialization_test_helper::<EpochsTestVersions>(port, "v1").await;
+        run_fallback_deserialization_test_helper(port, "v1").await;
     }
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fallback_deserialization_for_fetch_requests_v0_pos() {
@@ -2653,7 +2654,7 @@ mod test {
         // returned by the v0 provider.
         // For example: a PoS Leaf2 commitment will not match the downgraded commitment from a legacy Leaf1.
 
-        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         let port = pick_unused_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));

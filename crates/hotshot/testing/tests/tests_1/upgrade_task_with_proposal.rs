@@ -12,7 +12,7 @@ use futures::StreamExt;
 use hotshot::{tasks::task_state::CreateTaskState, types::SystemContextHandle};
 use hotshot_example_types::{
     block_types::{TestMetadata, TestTransaction},
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes, TestVersions},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_macros::{run_test, test_scripts};
@@ -34,14 +34,14 @@ use hotshot_types::{
     simple_vote::UpgradeProposalData,
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, Versions},
+        node_implementation::ConsensusTime,
         ValidatedState,
     },
     utils::BuilderCommitment,
     vote::HasViewNumber,
 };
 use sha2::Digest;
-use vbs::version::{StaticVersionType, Version};
+use versions::version;
 use vec1::vec1;
 
 const TIMEOUT: Duration = Duration::from_millis(35);
@@ -54,12 +54,12 @@ async fn test_upgrade_task_with_proposal() {
     use hotshot_testing::helpers::build_system_handle;
 
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(3).await;
+        build_system_handle::<TestTypes, MemoryImpl>(3).await;
 
     let other_handles = futures::future::join_all((0..=9).map(build_system_handle)).await;
 
-    let old_version = Version { major: 0, minor: 1 };
-    let new_version = Version { major: 0, minor: 2 };
+    let old_version = version(0,1);
+    let new_version = version(0,2);
 
     let upgrade_data: UpgradeProposalData<TestTypes> = UpgradeProposalData {
         old_version,
@@ -88,7 +88,7 @@ async fn test_upgrade_task_with_proposal() {
     let num_storage_nodes = epoch_1_mem.total_nodes().await;
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
 
     for view in (&mut generator).take(1).collect::<Vec<_>>().await {
         proposals.push(view.quorum_proposal.clone());
@@ -128,10 +128,9 @@ async fn test_upgrade_task_with_proposal() {
 
     let genesis_cert = proposals[0].data.justify_qc().clone();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
-    let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
+    let builder_fee = null_block::builder_fee::<TestTypes>(
         num_storage_nodes,
-        <TestVersions as Versions>::Base::VERSION,
-        
+        TEST_VERSIONS.test.base
     )
     .unwrap();
 
@@ -146,8 +145,8 @@ async fn test_upgrade_task_with_proposal() {
     }
 
     let proposal_state =
-        QuorumProposalTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
-    let upgrade_state = UpgradeTaskState::<TestTypes, TestVersions>::create_from(&handle).await;
+        QuorumProposalTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
+    let upgrade_state = UpgradeTaskState::<TestTypes>::create_from(&handle).await;
 
     let upgrade_vote_recvs: Vec<_> = upgrade_votes.into_iter().map(UpgradeVoteRecv).collect();
 
@@ -160,7 +159,7 @@ async fn test_upgrade_task_with_proposal() {
         random![
             Qc2Formed(either::Left(genesis_cert.clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(1),
                     version_1,
@@ -172,7 +171,7 @@ async fn test_upgrade_task_with_proposal() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -180,7 +179,7 @@ async fn test_upgrade_task_with_proposal() {
             QuorumProposalPreliminarilyValidated(proposals[0].clone()),
             Qc2Formed(either::Left(proposals[1].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(2),
                     version_2,
@@ -190,7 +189,7 @@ async fn test_upgrade_task_with_proposal() {
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -199,7 +198,7 @@ async fn test_upgrade_task_with_proposal() {
             QuorumProposalPreliminarilyValidated(proposals[1].clone()),
             Qc2Formed(either::Left(proposals[2].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(3),
                     version_3,
@@ -209,7 +208,7 @@ async fn test_upgrade_task_with_proposal() {
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],

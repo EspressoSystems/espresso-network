@@ -49,6 +49,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+versions = { workspace = true }
 
 [dev-dependencies]
 test-log = { workspace = true }

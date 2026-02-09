@@ -5,7 +5,7 @@ use async_broadcast::broadcast;
 use committable::{Commitment, Committable};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
-    node_types::{TestTypes, TestVersions},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -19,7 +19,7 @@ use hotshot_types::{
     simple_vote::{QuorumData2, VersionedVoteData},
     traits::{
         block_contents::GENESIS_VID_NUM_STORAGE_NODES,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         BlockPayload, EncodeBytes,
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
@@ -27,7 +27,6 @@ use hotshot_types::{
 };
 use jf_advz::VidScheme;
 use rand::{distributions::Standard, thread_rng, Rng};
-use vbs::version::StaticVersionType;
 
 use super::constants::{TEST_CHANNEL_BUFFER_SIZE, TEST_NUM_NODES_IN_VID_COMPUTATION};
 use crate::{block::ParentBlockReferences, state::BuilderState};
@@ -79,7 +78,7 @@ pub async fn proposals_with_transactions(
 ) -> (DaProposal2<TestTypes>, QuorumProposalWrapper<TestTypes>) {
     let epoch = None;
     let view_number = <TestTypes as NodeType>::View::new(view);
-    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
     let validated_state = TestValidatedState::default();
     let instance_state = TestInstanceState::default();
 
@@ -93,26 +92,29 @@ pub async fn proposals_with_transactions(
     let encoded_transactions = TestTransaction::encode(&transactions);
 
     let header = TestBlockHeader::new(
-        &Leaf::<TestTypes>::genesis::<TestVersions>(&Default::default(), &Default::default())
+        &Leaf::<TestTypes>::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base)
             .await
             .into(),
-        vid_commitment::<TestVersions>(
+        vid_commitment(
             &encoded_transactions,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base
         ),
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&payload, &metadata),
         metadata,
-        <TestVersions as Versions>::Base::VERSION,
+        TEST_VERSIONS.test.base
     );
 
-    let genesis_qc = QuorumCertificate::<TestTypes>::genesis::<TestVersions>(
+    let genesis_qc = QuorumCertificate::<TestTypes>::genesis(
         &TestValidatedState::default(),
         &TestInstanceState::default(),
+        TEST_VERSIONS.test.base,
+        TEST_VERSIONS.test.upgrade
     )
     .await
     .to_qc2();
+
     let parent_proposal = QuorumProposalWrapper {
         proposal: QuorumProposal2 {
             block_header: header,
@@ -134,7 +136,7 @@ pub async fn proposals_with_transactions(
         block_number: Some(leaf.height()),
     };
 
-    let versioned_data = VersionedVoteData::<_, _, _>::new_infallible(
+    let versioned_data = VersionedVoteData::<_, _>::new_infallible(
         quorum_data.clone(),
         view_number,
         &upgrade_lock,

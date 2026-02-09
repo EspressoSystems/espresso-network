@@ -26,14 +26,12 @@ use hotshot_types::{
 use tide_disco::Url;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
+use versions::VERSION_ZERO;
 
 #[cfg(test)]
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_random_block_builder() {
-    use hotshot_example_types::node_types::TestVersions;
-    use vbs::version::Version;
-
     let port = portpicker::pick_unused_port().expect("No free ports");
     let api_url = Url::parse(&format!("http://localhost:{port}")).expect("Valid URL");
     let task: Box<dyn BuilderTask<TestTypes>> = RandomBuilderImplementation::start(
@@ -64,7 +62,7 @@ async fn test_random_block_builder() {
         // Test getting blocks
         let blocks = client
             .available_blocks(
-                vid_commitment::<TestVersions>(&[], &[], 1, Version { major: 0, minor: 0 }),
+                vid_commitment(&[], &[], 1, VERSION_ZERO),
                 dummy_view_number,
                 pub_key,
                 &signature,

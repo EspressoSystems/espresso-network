@@ -6,8 +6,8 @@ use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    Leaf2, NodeState, PubKey, SeqTypes,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -15,12 +15,13 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::{network::ConnectedNetwork, node_implementation::Versions},
+    traits::network::ConnectedNetwork,
     utils::verify_leaf_chain,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
 use tokio::time::timeout;
+use versions::EPOCH_VERSION;
 
 use crate::request_response::{
     request::{Request, Response},
@@ -30,10 +31,9 @@ use crate::request_response::{
 #[async_trait]
 impl<
         I: NodeImplementation<SeqTypes>,
-        V: Versions,
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
-    > StateCatchup for RequestResponseProtocol<I, V, N, P>
+    > StateCatchup for RequestResponseProtocol<I, N, P>
 {
     async fn try_fetch_leaf(
         &self,
@@ -269,7 +269,7 @@ impl<
                     &stake_table_clone,
                     success_threshold,
                     height,
-                    &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+                    &UpgradeLock::<SeqTypes>::new(EPOCH_VERSION, EPOCH_VERSION),
                 )
                 .await
                 .with_context(|| "leaf chain verification failed")?;

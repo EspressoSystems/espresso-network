@@ -1,18 +1,22 @@
+mod external_event_handler;
+mod message_compat_tests;
+mod proposal_fetcher;
+mod request_response;
+
 pub mod api;
 pub mod catchup;
 pub mod context;
 pub mod genesis;
-mod proposal_fetcher;
-mod request_response;
+pub mod network;
+pub mod options;
+pub mod persistence;
+pub mod run;
+pub mod state;
 pub mod state_cert;
+pub mod state_signature;
 pub mod util;
 
-mod external_event_handler;
-pub mod options;
-pub mod state_signature;
-
-mod message_compat_tests;
-
+use std::{fmt::Debug, marker::PhantomData, time::Duration};
 use std::sync::Arc;
 
 use alloy::primitives::U256;
@@ -20,29 +24,14 @@ use anyhow::Context;
 use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
+use derivative::Derivative;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
     v0_3::Fetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
-use genesis::L1Finalized;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use libp2p::Multiaddr;
-use network::libp2p::split_off_peer_id;
-use options::Identity;
-use proposal_fetcher::ProposalFetcherConfig;
-use tokio::select;
-use tracing::info;
-use url::Url;
-
-use crate::request_response::data_source::Storage as RequestResponseStorage;
-pub mod persistence;
-pub mod state;
-use std::{fmt::Debug, marker::PhantomData, time::Duration};
-
-use derivative::Derivative;
 use espresso_types::v0::traits::SequencerPersistence;
-pub use genesis::Genesis;
+use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
         derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
@@ -51,6 +40,7 @@ use hotshot::{
     },
     types::SignatureKey,
 };
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
@@ -60,21 +50,30 @@ use hotshot_types::{
     traits::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         storage::Storage,
     },
     utils::BuilderCommitment,
     ValidatorConfig,
 };
-pub use options::Options;
+use libp2p::Multiaddr;
+use network::libp2p::split_off_peer_id;
+use options::Identity;
+use proposal_fetcher::ProposalFetcherConfig;
+use tokio::select;
+use tracing::info;
+use url::Url;
 use serde::{Deserialize, Serialize};
-use vbs::version::{StaticVersion, StaticVersionType};
-pub mod network;
+use vbs::version::StaticVersion;
 
-pub mod run;
+use crate::request_response::data_source::Storage as RequestResponseStorage;
+
+pub use genesis::Genesis;
+pub use options::Options;
 pub use run::main;
 
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
+
 /// The Sequencer node is generic over the hotshot CommChannel.
 #[derive(Derivative, Serialize, Deserialize)]
 #[derivative(
@@ -196,23 +195,20 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<
-    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
-    V: Versions,
->(
+pub async fn init_node<P>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
     mut persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
-    seq_versions: V,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
-) -> anyhow::Result<SequencerContext<network::Production, P, V>>
+) -> anyhow::Result<SequencerContext<network::Production, P>>
 where
+    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
     Arc<P>: Storage<SeqTypes>,
 {
     // Expose git information via status API.
@@ -410,7 +406,7 @@ where
         },
     };
 
-    if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
+    if let Some(upgrade) = genesis.upgrades.get(&genesis.upgrade_version) {
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
     }
 
@@ -628,7 +624,7 @@ where
         l1_genesis: Some(l1_genesis),
         node_id: node_index,
         upgrades: genesis.upgrades,
-        current_version: V::Base::VERSION,
+        current_version: genesis.base_version,
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
@@ -692,8 +688,9 @@ where
         metrics,
         genesis.stake_table.capacity,
         event_consumer,
-        seq_versions,
         proposal_fetcher_config,
+        genesis.base_version,
+        genesis.upgrade_version
     )
     .await?;
     if wait_for_orchestrator {
@@ -777,7 +774,8 @@ pub mod testing {
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use tokio::spawn;
-    use vbs::version::Version;
+    use vbs::version::{StaticVersionType, Version};
+    use versions::{EPOCH_VERSION, version};
 
     use super::*;
     use crate::{
@@ -959,8 +957,8 @@ pub mod testing {
             self
         }
 
-        pub fn upgrades<V: Versions>(mut self, upgrades: BTreeMap<Version, Upgrade>) -> Self {
-            let upgrade = upgrades.get(&<V as Versions>::Upgrade::VERSION).unwrap();
+        pub fn upgrades(mut self, v: Version, upgrades: BTreeMap<Version, Upgrade>) -> Self {
+            let upgrade = upgrades.get(&v).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
             self.upgrades = upgrades;
             self
@@ -970,7 +968,7 @@ pub mod testing {
         /// by adding a branch to the `match` statement.
         pub async fn set_upgrades(mut self, version: Version) -> Self {
             let upgrade = match version {
-                version if version >= EpochVersion::VERSION => {
+                version if version >= EPOCH_VERSION => {
                     tracing::debug!(?version, "upgrade version");
                     let blocks_per_epoch = self.config.epoch_height;
                     let epoch_start_block = self.config.epoch_start_block;
@@ -1138,6 +1136,8 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
+                base_version: version(0, 1),
+                upgrade_version: version(0, 1)
             };
 
             let anvil = Anvil::new()
@@ -1242,10 +1242,10 @@ pub mod testing {
                 .collect()
         }
 
-        pub async fn init_nodes<V: Versions>(
+        pub async fn init_nodes(
             &self,
-            bind_version: V,
-        ) -> Vec<SequencerContext<network::Memory, NoStorage, V>> {
+            bind_version: Version,
+        ) -> Vec<SequencerContext<network::Memory, NoStorage>> {
             join_all((0..self.num_nodes()).map(|i| async move {
                 self.init_node(
                     i,
@@ -1269,7 +1269,7 @@ pub mod testing {
         }
 
         #[allow(clippy::too_many_arguments)]
-        pub async fn init_node<V: Versions, P: PersistenceOptions>(
+        pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
             mut state: ValidatedState,
@@ -1279,9 +1279,9 @@ pub mod testing {
             metrics: &dyn Metrics,
             stake_table_capacity: usize,
             event_consumer: impl EventConsumer + 'static,
-            bind_version: V,
+            base_version: Version,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<network::Memory, P::Persistence, V> {
+        ) -> SequencerContext<network::Memory, P::Persistence> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
@@ -1381,11 +1381,11 @@ pub mod testing {
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
-                V::Base::VERSION,
+                base_version,
                 coordinator.clone(),
-                V::Base::VERSION,
+                base_version,
             )
-            .with_current_version(V::Base::version())
+            .with_current_version(base_version)
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
@@ -1416,8 +1416,9 @@ pub mod testing {
                 metrics,
                 stake_table_capacity,
                 event_consumer,
-                bind_version,
                 Default::default(),
+                base_version,
+                todo!()
             )
             .await
             .unwrap()
@@ -1581,7 +1582,7 @@ mod test {
                     .unwrap();
 
             let genesis_state = NodeState::mock();
-            Header::genesis::<TestVersions>(&genesis_state, genesis_payload, &genesis_ns_table)
+            Header::genesis(&genesis_state, genesis_payload, &genesis_ns_table, TEST_VERSIONS.test.base)
         };
 
         loop {

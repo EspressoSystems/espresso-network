@@ -19,7 +19,7 @@ use hotshot_types::{
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         EncodeBytes,
     },
     vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon},
@@ -27,6 +27,7 @@ use hotshot_types::{
 use jf_advz::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
+use vbs::version::Version;
 
 use crate::{types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction};
 
@@ -267,13 +268,15 @@ impl<Types: NodeType> LeafQueryDataLegacy<Types> {
         Ok(Self { leaf, qc })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
+        upgrade: Version
     ) -> Self {
         Self {
-            leaf: Leaf::genesis::<HsVer>(validated_state, instance_state).await,
-            qc: QuorumCertificate::genesis::<HsVer>(validated_state, instance_state).await,
+            leaf: Leaf::genesis(validated_state, instance_state, base).await,
+            qc: QuorumCertificate::genesis(validated_state, instance_state, base, upgrade).await,
         }
     }
 
@@ -336,13 +339,15 @@ impl<Types: NodeType> LeafQueryData<Types> {
         Ok(Self { leaf, qc })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
+        upgrade: Version
     ) -> Self {
         Self {
-            leaf: Leaf2::genesis::<HsVer>(validated_state, instance_state).await,
-            qc: QuorumCertificate2::genesis::<HsVer>(validated_state, instance_state).await,
+            leaf: Leaf2::genesis(validated_state, instance_state, base).await,
+            qc: QuorumCertificate2::genesis(validated_state, instance_state, base, upgrade).await,
         }
     }
 
@@ -427,15 +432,16 @@ impl<Types: NodeType> BlockQueryData<Types> {
         }
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
     ) -> Self
     where
         Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
-        let leaf = Leaf2::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let leaf = Leaf2::<Types>::genesis(validated_state, instance_state, base).await;
         Self::new(leaf.block_header().clone(), leaf.block_payload().unwrap())
     }
 
@@ -581,15 +587,16 @@ impl<Types: NodeType> PayloadQueryData<Types> {
         })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version
     ) -> Self
     where
         Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
-        BlockQueryData::genesis::<HsVer>(validated_state, instance_state)
+        BlockQueryData::genesis(validated_state, instance_state, base)
             .await
             .into()
     }
@@ -640,11 +647,12 @@ impl<Types: NodeType> ADVZCommonQueryData<Types> {
         })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
     ) -> anyhow::Result<Self> {
-        let leaf = Leaf::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let leaf = Leaf::<Types>::genesis(validated_state, instance_state, base).await;
         let payload = leaf.block_payload().unwrap();
         let bytes = payload.encode();
         let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
@@ -698,11 +706,12 @@ impl<Types: NodeType> VidCommonQueryData<Types> {
         }
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version
     ) -> Self {
-        let leaf = Leaf::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let leaf = Leaf::<Types>::genesis(validated_state, instance_state, base).await;
         let payload = leaf.block_payload().unwrap();
         let bytes = payload.encode();
         let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)

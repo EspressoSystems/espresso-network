@@ -7,7 +7,7 @@ use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
     ValidatedState,
 };
 use futures::{future::Future, StreamExt};
@@ -23,7 +23,8 @@ use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use tokio::time::sleep;
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
     api::RewardAccountProofDataSource,
@@ -91,7 +92,7 @@ pub(crate) async fn compute_state_update(
         },
     }
 
-    if header.version() >= DrbAndHeaderUpgradeVersion::version() {
+    if header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
         let Some(actual_total) = total_rewards_distributed else {
             bail!(
                 "internal error! total_rewards_distributed is None for version {:?}",
@@ -120,7 +121,7 @@ pub(crate) async fn compute_state_update(
 async fn store_state_update(
     tx: &mut impl SequencerStateUpdate,
     block_number: u64,
-    version: vbs::version::Version,
+    version: Version,
     state: &ValidatedState,
     delta: Delta,
 ) -> anyhow::Result<()> {
@@ -181,7 +182,7 @@ async fn store_state_update(
         .context("failed to store block merkle nodes")?;
     }
 
-    if version <= EpochVersion::version() {
+    if version <= EPOCH_VERSION {
         // Collect reward merkle tree v1 proofs for batch insertion
         let reward_proofs: Vec<_> = rewards_delta
             .iter()

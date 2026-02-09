@@ -9,6 +9,7 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 use vec1::Vec1;
+use vbs::version::Version;
 
 use crate::{PubKey, SeqTypes};
 
@@ -81,6 +82,8 @@ pub struct PublicHotShotConfig {
     drb_difficulty: u64,
     #[serde(default = "default_drb_upgrade_difficulty")]
     drb_upgrade_difficulty: u64,
+    base_version: Version,
+    upgrade_version: Version
 }
 
 fn default_stake_table_capacity() -> usize {
@@ -129,6 +132,8 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
+            base_version,
+            upgrade_version
         } = v;
 
         Self {
@@ -158,6 +163,8 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
+            base_version,
+            upgrade_version
         }
     }
 }
@@ -191,6 +198,8 @@ impl PublicHotShotConfig {
             stake_table_capacity: self.stake_table_capacity,
             drb_difficulty: self.drb_difficulty,
             drb_upgrade_difficulty: self.drb_upgrade_difficulty,
+            base_version: self.base_version,
+            upgrade_version: self.upgrade_version
         }
     }
 

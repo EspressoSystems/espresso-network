@@ -24,11 +24,12 @@ use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, BlockMerkleCommitment,
-    BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
+    BlockSize, FeeMerkleCommitment, L1Client,
 };
 use crate::{
     traits::StateCatchup,
@@ -44,7 +45,7 @@ use crate::{
         Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree,
+    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree,
     Header, Leaf2, NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType,
     BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT,
 };
@@ -775,7 +776,7 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that the total rewards distributed in the proposed header matches the actual distributed amount.
     /// This field is only present in >= V4 version.
     fn validate_total_rewards_distributed(&self) -> Result<(), ProposalValidationError> {
-        if self.version >= DrbAndHeaderUpgradeVersion::version() {
+        if self.version >= DRB_AND_HEADER_UPGRADE_VERSION {
             let Some(actual_total) = self.total_rewards_distributed else {
                 // This should never happen - if version >= V4, total_rewards_distributed must be Some
                 return Err(ProposalValidationError::TotalRewardsMismatch {
@@ -987,7 +988,7 @@ impl ValidatedState {
         )?;
 
         // total_rewards_distributed is only present in >= V4
-        let total_rewards_distributed = if version < EpochVersion::version() {
+        let total_rewards_distributed = if version < EPOCH_VERSION {
             None
         } else if let Some(reward_distributor) = distribute_block_reward(
             instance,
@@ -1175,7 +1176,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
             .await
             .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
-        if version >= DrbAndHeaderUpgradeVersion::version() {
+        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
             validate_next_stake_table_hash(instance, proposed_header).await?;
         }
 
@@ -1408,17 +1409,18 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     use hotshot::traits::BlockPayload;
-    use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
+    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
-    use vbs::version::StaticVersion;
+    use versions::{FEE_VERSION, MAX_SUPPORTED_VERSION, version};
 
     use super::*;
     use crate::{
         eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5,
-        BlockSize, FeeAccountProof, FeeMerkleProof, FeeVersion, Leaf, MaxSupportedVersion, Payload,
-        SequencerVersions, TimestampMillis, Transaction,
+        BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload,
+        TimestampMillis, Transaction,
     };
 
     impl Transaction {
@@ -1429,7 +1431,7 @@ mod test {
                     .await
                     .unwrap();
 
-            let header = Header::genesis::<MockVersions>(&instance, payload.clone(), &metadata);
+            let header = Header::genesis(&instance, payload.clone(), &metadata, MOCK_UPGRADE.base);
 
             let header = header.sign();
 
@@ -1558,7 +1560,7 @@ mod test {
                 parent,
                 proposal,
                 total_rewards_distributed: None,
-                version: Version { major: 0, minor: 1 },
+                version: version(0,1),
                 validation_start_time,
             }
         }
@@ -2074,7 +2076,7 @@ mod test {
         });
 
         let parent: Leaf2 =
-            Leaf::genesis::<MockVersions>(&instance_state.genesis_state, &instance_state)
+            Leaf::genesis(&instance_state.genesis_state, &instance_state, MOCK_UPGRADE.base)
                 .await
                 .into();
         let header = parent.block_header().clone();
@@ -2130,17 +2132,18 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validate_total_rewards_distributed() {
-        let instance = NodeState::mock().with_genesis_version(Version { major: 0, minor: 4 });
+        let instance = NodeState::mock().with_genesis_version(version(0,4));
 
         let (payload, metadata) =
             Payload::from_transactions([], &instance.genesis_state, &instance)
                 .await
                 .unwrap();
 
-        let header = Header::genesis::<SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 4>>>(
+        let header = Header::genesis(
             &instance,
             payload.clone(),
             &metadata,
+            TEST_VERSIONS.da_committee.base
         );
 
         let validated_state = ValidatedState::default();
@@ -2161,7 +2164,7 @@ mod test {
             &header,
             Proposal::new(&proposed_header, block_size),
             Some(actual_total),
-            StaticVersion::<0, 4>::version(),
+            version(0,4),
             validation_start_time,
         );
 
@@ -2183,7 +2186,7 @@ mod test {
             &header,
             Proposal::new(&proposed_header, block_size),
             Some(actual_total),
-            StaticVersion::<0, 4>::version(),
+            version(0,4),
             validation_start_time,
         )
         .validate_total_rewards_distributed()
@@ -2211,7 +2214,7 @@ mod test {
             &parent,
             proposal_without_fix,
             None,
-            MaxSupportedVersion::version(),
+            MAX_SUPPORTED_VERSION,
             OffsetDateTime::now_utc(),
         )
         .validate_timestamp()
@@ -2229,7 +2232,7 @@ mod test {
             &parent,
             proposal,
             None,
-            MaxSupportedVersion::version(),
+            MAX_SUPPORTED_VERSION,
             validation_start_time,
         )
         .validate_timestamp()
@@ -2251,7 +2254,7 @@ mod test {
             .unwrap();
         instance.genesis_state = genesis_state.clone();
 
-        let genesis = Leaf::genesis::<MockVersions>(&genesis_state, &instance).await;
+        let genesis = Leaf::genesis(&genesis_state, &instance, MOCK_UPGRADE.base).await;
         let parent_leaf: Leaf2 = genesis.into();
         let parent_header = parent_leaf.block_header().clone();
 
@@ -2287,7 +2290,7 @@ mod test {
                 &parent_leaf,
                 &proposed_header,
                 0, /* payload_byte_len */
-                FeeVersion::version(),
+                FEE_VERSION,
                 0, /* view_number */
             )
             .await

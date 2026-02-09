@@ -23,7 +23,6 @@ use hotshot_query_service::{
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
-    node_implementation::Versions,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use tide_disco::{listener::RateLimitListener, method::ReadState, Api, App, Url};
@@ -153,10 +152,10 @@ impl Options {
     /// The function `init_context` is used to create a sequencer context from a metrics object and
     /// optional saved consensus state. The metrics object is created from the API data source, so
     /// that consensus will populuate metrics that can then be read and served by the API.
-    pub async fn serve<N, P, F, V: Versions + 'static>(
+    pub async fn serve<N, P, F>(
         mut self,
         init_context: F,
-    ) -> anyhow::Result<SequencerContext<N, P, V>>
+    ) -> anyhow::Result<SequencerContext<N, P>>
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
@@ -164,7 +163,7 @@ impl Options {
             Box<dyn Metrics>,
             Box<dyn EventConsumer>,
             Option<RequestResponseStorage>,
-        ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P, V>>>,
+        ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P>>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
         // allows the web server to start before initialization can complete, since initialization
@@ -268,15 +267,15 @@ impl Options {
         Ok(ctx.with_task_list(tasks))
     }
 
-    async fn init_app_modules<N, P, D, V: Versions>(
+    async fn init_app_modules<N, P, D>(
         &self,
         ds: D,
-        state: ApiState<N, P, V>,
+        state: ApiState<N, P>,
         bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
-        Arc<StorageState<N, P, D, V>>,
-        App<AppState<StorageState<N, P, D, V>>, Error>,
+        Arc<StorageState<N, P, D>>,
+        App<AppState<StorageState<N, P, D>>, Error>,
     )>
     where
         N: ConnectedNetwork<PubKey>,
@@ -285,7 +284,7 @@ impl Options {
     {
         let metrics = ds.populate_metrics();
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
-        let api_state: endpoints::AvailState<N, P, D, V> = ds.clone().into();
+        let api_state: endpoints::AvailState<N, P, D> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);
 
         // Initialize v0 and v1 status API.
@@ -339,11 +338,11 @@ impl Options {
         Ok((metrics, ds, app))
     }
 
-    async fn init_with_query_module_fs<N, P, V: Versions + 'static>(
+    async fn init_with_query_module_fs<N, P>(
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
-        state: ApiState<N, P, V>,
+        state: ApiState<N, P>,
         tasks: &mut TaskList,
         bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
@@ -357,7 +356,7 @@ impl Options {
     {
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
-            provider::<V>(query_opt.peers, bind_version),
+            provider(query_opt.peers, bind_version),
             false,
         )
         .await?;
@@ -382,11 +381,11 @@ impl Options {
         ))
     }
 
-    async fn init_with_query_module_sql<N, P, V: Versions + 'static>(
+    async fn init_with_query_module_sql<N, P>(
         self,
         query_opt: Query,
         mod_opt: persistence::sql::Options,
-        state: ApiState<N, P, V>,
+        state: ApiState<N, P>,
         tasks: &mut TaskList,
         bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
@@ -424,7 +423,7 @@ impl Options {
         // Initialize merklized state module for block merkle tree
 
         register_api("block-state", &mut app, move |ver| {
-            endpoints::merklized_state::<N, P, _, BlockMerkleTree, _, 3>(ver)
+            endpoints::merklized_state::<N, P, _, BlockMerkleTree, 3>(ver)
                 .context("failed to define block-state api")
         })?;
 

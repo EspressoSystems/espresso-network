@@ -3,9 +3,7 @@ use std::{future::Future, sync::Arc};
 use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context, Result};
 use committable::Committable;
-use espresso_types::{
-    EpochVersion, Leaf2, MaxSupportedVersion, PubKey, SeqTypes, SequencerVersions,
-};
+use espresso_types::{Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
@@ -13,9 +11,9 @@ use hotshot_types::{
     stake_table::{supermajority_threshold, HSStakeTable, StakeTableEntries, StakeTableEntry},
     vote::{self, HasViewNumber},
 };
-use static_assertions::assert_type_eq_all;
 use tracing::Instrument;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
+use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
@@ -34,8 +32,10 @@ pub trait Quorum: Sync {
                 (0, 4) => self.verify_static::<StaticVersion<0, 4>>(cert).await,
                 (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
                 _ => {
-                    // Compile-time check that we aren't missing a case for a supported version.
-                    assert_type_eq_all!(MaxSupportedVersion, StaticVersion<0, 5>);
+                    const {
+                        assert!(MAX_SUPPORTED_VERSION.major == 0);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 5);
+                    }
                     bail!("unsupported version {version}");
                 },
             }
@@ -78,9 +78,9 @@ pub trait Quorum: Sync {
             // Enforce that this version of the software supports these protocol versions. If we see
             // a version from the future, we must fail because we don't necessarily know how to
             // treat objects with this version.
-            ensure!(version <= MaxSupportedVersion::version());
+            ensure!(version <= MAX_SUPPORTED_VERSION);
             if let Some(cert) = &upgrade {
-                ensure!(cert.data.new_version <= MaxSupportedVersion::version());
+                ensure!(cert.data.new_version <= MAX_SUPPORTED_VERSION);
             }
             tracing::debug!(
                 %version,
@@ -180,10 +180,11 @@ impl StakeTable {
     where
         V: StaticVersionType + 'static,
     {
-        cert.is_valid_cert::<SequencerVersions<V, V>>(
+        let base = version(V::MAJOR, V::MINOR);
+        cert.is_valid_cert(
             &self.entries,
             self.threshold,
-            &UpgradeLock::new(),
+            &UpgradeLock::new(base, base),
         )
         .await
         .context("invalid threshold signature")
@@ -255,7 +256,7 @@ where
             .await
             .context("verifying QC")?;
 
-        if V::version() >= EpochVersion::version() {
+        if version(V::MAJOR, V::MINOR) >= EPOCH_VERSION {
             // If this certificate is part of an epoch change, also check that the next epoch's
             // quorum has signed.
             if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(self.epoch_height)? {
@@ -278,9 +279,7 @@ mod test {
 
     use super::*;
     use crate::testing::{
-        custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
-        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain, AlwaysFalseQuorum,
-        AlwaysTrueQuorum, EnableEpochs, EpochChangeQuorum, LegacyVersion, VersionCheckQuorum,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EnableEpochs, EpochChangeQuorum, LegacyVersion, VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -334,7 +333,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
-        let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=3, 2).await;
+        let leaves = leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS.0, ENABLE_EPOCHS.1.clone()).await;
         let version = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -347,7 +346,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_illegal_upgrade() {
-        let leaves = custom_leaf_chain_with_upgrade::<EnableEpochs>(1..=3, 2, |proposal| {
+        let leaves = custom_leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS.0, ENABLE_EPOCHS.1.clone(), |proposal| {
             // Don't attach an upgrade certificate, so that the version change that happens within
             // the QC change is actually malicious.
             proposal.upgrade_certificate = None;

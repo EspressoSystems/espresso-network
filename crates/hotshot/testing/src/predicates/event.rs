@@ -13,7 +13,7 @@ use hotshot_types::{
     data::null_block,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
     },
 };
 
@@ -215,19 +215,18 @@ where
     Box::new(EventPredicate { check, info })
 }
 
-pub fn quorum_proposal_send_with_null_block<TYPES, V>(
+pub fn quorum_proposal_send_with_null_block<TYPES>(
     num_storage_nodes: usize,
 ) -> Box<EventPredicate<TYPES>>
 where
     TYPES: NodeType,
-    V: Versions,
 {
     let info = "QuorumProposalSend with null block payload".to_string();
     let check: EventCallback<TYPES> =
         Arc::new(move |e: Arc<HotShotEvent<TYPES>>| match e.as_ref() {
             QuorumProposalSend(proposal, _) => {
                 Some(proposal.data.block_header().payload_commitment())
-                    == null_block::commitment::<V>(num_storage_nodes)
+                    == null_block::commitment(num_storage_nodes)
             },
             _ => false,
         });

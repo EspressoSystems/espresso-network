@@ -385,7 +385,7 @@ mod generic_test {
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
+    use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::{TestInstanceState, TestValidatedState}};
     use hotshot_types::{
         data::{VidCommon, VidShare},
         vid::advz::advz_scheme,
@@ -412,8 +412,6 @@ mod test {
     // storing VID common and later the corresponding share.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_vid_monotonicity() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
 
@@ -421,9 +419,12 @@ mod test {
         let disperse = advz_scheme(2).disperse([]).unwrap();
 
         // Insert test data with VID common but no share.
-        let leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
+            TEST_VERSIONS.test.upgrade,
+
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));

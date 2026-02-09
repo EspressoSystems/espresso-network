@@ -800,7 +800,7 @@ mod test {
     use async_lock::RwLock;
     use committable::Committable;
     use futures::future::FutureExt;
-    use hotshot_example_types::node_types::EpochsTestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
     use portpicker::pick_unused_port;
     use serde::de::DeserializeOwned;
@@ -811,15 +811,10 @@ mod test {
 
     use super::*;
     use crate::{
-        data_source::{storage::AvailabilityStorage, ExtensibleDataSource, VersionedDataSource},
-        status::StatusDataSource,
-        task::BackgroundTask,
-        testing::{
+        ApiState, Error, Header, data_source::{ExtensibleDataSource, VersionedDataSource, storage::AvailabilityStorage}, status::StatusDataSource, task::BackgroundTask, testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MockVersions},
-        },
-        types::HeightIndexed,
-        ApiState, Error, Header,
+            mocks::{MOCK_UPGRADE, MockBase, MockHeader, MockPayload, MockTypes, mock_transaction},
+        }, types::HeightIndexed
     };
 
     /// Get the current ledger height and a list of non-empty leaf/block pairs.
@@ -1111,7 +1106,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1455,7 +1450,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api_epochs() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         let epoch_height = network.epoch_height();
         network.start().await;
 
@@ -1509,7 +1504,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_old_api() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1603,8 +1598,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_extensions() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let dir = TempDir::with_prefix("test_availability_extensions").unwrap();
         let data_source = ExtensibleDataSource::new(
             MockDataSource::create(dir.path(), Default::default())
@@ -1615,10 +1608,10 @@ mod test {
 
         // mock up some consensus data.
         let leaf =
-            Leaf2::<MockTypes>::genesis::<MockVersions>(&Default::default(), &Default::default())
+            Leaf2::<MockTypes>::genesis(&Default::default(), &Default::default(), MOCK_UPGRADE.base)
                 .await;
         let qc =
-            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default())
+            QuorumCertificate2::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade)
                 .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
@@ -1709,7 +1702,7 @@ mod test {
         let small_object_range_limit = 3;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1799,7 +1792,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_endpoint() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1839,7 +1832,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_ds() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init_with_leaf_ds().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init_with_leaf_ds().await;
         network.start().await;
 
         // Start the web server.

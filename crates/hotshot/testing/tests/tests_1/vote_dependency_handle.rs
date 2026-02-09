@@ -3,7 +3,7 @@ use std::time::Duration;
 use async_broadcast::broadcast;
 use futures::StreamExt;
 use hotshot_example_types::{
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     state_types::TestValidatedState,
 };
 use hotshot_task::dependency_task::HandleDepOutput;
@@ -32,9 +32,9 @@ async fn test_vote_dependency_handle() {
     let node_id = 2;
     // Construct the system handle for the node ID to build all of the state objects.
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
 
     // Generate our state for the test
     let mut proposals = Vec::new();
@@ -81,7 +81,7 @@ async fn test_vote_dependency_handle() {
         let view_number = ViewNumber::new(node_id);
 
         let vote_dependency_handle_state =
-            VoteDependencyHandle::<TestTypes, MemoryImpl, TestVersions> {
+            VoteDependencyHandle::<TestTypes, MemoryImpl> {
                 public_key: handle.public_key(),
                 private_key: handle.private_key().clone(),
                 consensus: OuterConsensus::new(consensus.clone()),

@@ -42,7 +42,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
     },
     vid::avidm::{init_avidm_param, AvidMScheme},
     vote::HasViewNumber,
@@ -88,13 +88,13 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
+struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
     // The consensus state is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
+    sequencer_context: BoxLazy<SequencerContext<N, P>>,
 
     // we cache `token_contract_address` for the lifetime of the program, since we do not expect this to ever change
     token_contract_address: Cache<(), Address>,
@@ -103,8 +103,8 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
     token_supply: Cache<(), U256>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState<N, P, V> {
-    fn new(context_init: impl Future<Output = SequencerContext<N, P, V>> + Send + 'static) -> Self {
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
+    fn new(context_init: impl Future<Output = SequencerContext<N, P>> + Send + 'static) -> Self {
         Self {
             sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
             token_contract_address: Cache::builder().max_capacity(1).build(),
@@ -133,7 +133,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
             .event_streamer()
     }
 
-    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
+    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P>>> {
         self.sequencer_context
             .as_ref()
             .get()
@@ -152,12 +152,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
     }
 }
 
-type StorageState<N, P, D, V> = ExtensibleDataSource<D, ApiState<N, P, V>>;
+type StorageState<N, P, D> = ExtensibleDataSource<D, ApiState<N, P>>;
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSource<SeqTypes>
-    for ApiState<N, P, V>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes> for ApiState<N, P> {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
@@ -195,24 +193,24 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
-    TokenDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence>
+    TokenDataSource<SeqTypes> for StorageState<N, P, D>
 {
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_total_supply_l1().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
-    SubmitDataSource<N, P> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence>
+    SubmitDataSource<N, P> for StorageState<N, P, D>
 {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    StakeTableDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
+    StakeTableDataSource<SeqTypes> for StorageState<N, P, D>
 {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
@@ -284,8 +282,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         match self.token_supply.get(&()).await {
@@ -340,8 +338,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDat
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
-    StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    StakeTableDataSource<SeqTypes> for ApiState<N, P>
 {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
@@ -507,8 +505,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
+    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D>
 {
     async fn request_vid_shares(
         &self,
@@ -523,8 +521,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
+    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D>
 {
     async fn request_state_cert(
         &self,
@@ -535,8 +533,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    RequestResponseDataSource<SeqTypes> for ApiState<N, P>
 {
     async fn request_vid_shares(
         &self,
@@ -641,8 +639,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    StateCertFetchingDataSource<SeqTypes> for ApiState<N, P>
 {
     async fn request_state_cert(
         &self,
@@ -737,8 +735,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence> StateCertDataSource
-    for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDataSource
+    for StorageState<N, P, D>
 {
     async fn get_state_cert_by_epoch(
         &self,
@@ -757,8 +755,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCertDataSource
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource
+    for ApiState<N, P>
 {
     async fn get_state_cert_by_epoch(
         &self,
@@ -784,9 +782,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCer
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDataSource<N, P>
-    for ApiState<N, P, V>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P> for ApiState<N, P> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         let handle = self.consensus().await;
 
@@ -822,10 +818,9 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDa
     }
 }
 
-impl<N, P, D, V> NodeStateDataSource for StorageState<N, P, D, V>
+impl<N, P, D> NodeStateDataSource for StorageState<N, P, D>
 where
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
     D: Sync,
 {
@@ -836,10 +831,9 @@ where
 
 impl<
         N: ConnectedNetwork<PubKey>,
-        V: Versions,
         P: SequencerPersistence,
         D: CatchupStorage + Send + Sync,
-    > CatchupDataSource for StorageState<N, P, D, V>
+    > CatchupDataSource for StorageState<N, P, D>
 {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
@@ -879,7 +873,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_fee_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf).await
+            add_fee_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf).await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -973,7 +967,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_v2_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
+            add_v2_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf)
                 .await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
@@ -1032,7 +1026,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_v1_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
+            add_v1_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf)
                 .await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
@@ -1058,10 +1052,9 @@ impl<
     }
 }
 
-impl<N, V, P> NodeStateDataSource for ApiState<N, P, V>
+impl<N, P> NodeStateDataSource for ApiState<N, P>
 where
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
 {
     async fn node_state(&self) -> NodeState {
@@ -1069,8 +1062,8 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupDataSource
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource
+    for ApiState<N, P>
 {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
@@ -1240,16 +1233,16 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    HotShotConfigDataSource for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
+    HotShotConfigDataSource for StorageState<N, P, D>
 {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotConfigDataSource
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSource
+    for ApiState<N, P>
 {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
@@ -1257,8 +1250,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotC
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    StateSignatureDataSource<N> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
+    StateSignatureDataSource<N> for StorageState<N, P, D>
 {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
@@ -1266,8 +1259,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSignatureDataSource<N>
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSource<N>
+    for ApiState<N, P>
 {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
@@ -1345,9 +1338,7 @@ pub mod test_helpers {
         Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
-        v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, MockSequencerVersions, NamespaceId,
-        SequencerVersions, ValidatedState, V0_1,
+        MOCK_SEQUENCER_BASE_VERSION, NamespaceId, ValidatedState, v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup}
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -1359,7 +1350,6 @@ pub mod test_helpers {
         event::LeafInfo,
         light_client::LCV3StateSignatureRequestBody,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
-        HotShotConfig,
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
@@ -1370,7 +1360,8 @@ pub mod test_helpers {
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
-    use vbs::version::{StaticVersion, StaticVersionType};
+    use vbs::version::{StaticVersion, StaticVersionType, Version};
+    use versions::EPOCH_VERSION;
 
     use super::*;
     use crate::{
@@ -1382,9 +1373,9 @@ pub mod test_helpers {
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 
-    pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize, V: Versions> {
-        pub server: SequencerContext<network::Memory, P::Persistence, V>,
-        pub peers: Vec<SequencerContext<network::Memory, P::Persistence, V>>,
+    pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
+        pub server: SequencerContext<network::Memory, P::Persistence>,
+        pub peers: Vec<SequencerContext<network::Memory, P::Persistence>>,
         pub cfg: TestConfig<{ NUM_NODES }>,
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
@@ -1413,6 +1404,7 @@ pub mod test_helpers {
             self.state.clone()
         }
     }
+
     #[derive(Clone)]
     pub struct TestNetworkConfigBuilder<const NUM_NODES: usize, P, C>
     where
@@ -1436,30 +1428,6 @@ pub mod test_helpers {
                 network_config: None,
                 api_config: None,
                 contracts: None,
-            }
-        }
-    }
-
-    pub enum AnyTestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
-        V0_1(TestNetwork<P, NUM_NODES, SequencerVersions<V0_1, V0_1>>),
-        V0_2(TestNetwork<P, NUM_NODES, SequencerVersions<FeeVersion, FeeVersion>>),
-        V0_3(TestNetwork<P, NUM_NODES, SequencerVersions<EpochVersion, EpochVersion>>),
-        V0_4(
-            TestNetwork<
-                P,
-                NUM_NODES,
-                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-            >,
-        ),
-    }
-
-    impl<P: PersistenceOptions, const NUM_NODES: usize> AnyTestNetwork<P, NUM_NODES> {
-        pub fn hotshot_config(&self) -> &HotShotConfig<SeqTypes> {
-            match self {
-                AnyTestNetwork::V0_1(network) => network.cfg.hotshot_config(),
-                AnyTestNetwork::V0_2(network) => network.cfg.hotshot_config(),
-                AnyTestNetwork::V0_3(network) => network.cfg.hotshot_config(),
-                AnyTestNetwork::V0_4(network) => network.cfg.hotshot_config(),
             }
         }
     }
@@ -1536,14 +1504,14 @@ pub mod test_helpers {
 
         /// Setup for POS testing. Deploys contracts and adds the
         /// stake table address to state. Must be called before `build()`.
-        pub async fn pos_hook<V: Versions>(
+        pub async fn pos_hook(
             self,
             delegation_config: DelegationConfig,
             stake_table_version: StakeTableContractVersion,
+            base: Version,
+            upgrade: Version
         ) -> anyhow::Result<Self> {
-            if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
-                && <V as Versions>::Base::VERSION < EpochVersion::VERSION
-            {
+            if base < EPOCH_VERSION && upgrade < EPOCH_VERSION {
                 panic!("given version does not require pos deployment");
             };
 
@@ -1670,10 +1638,10 @@ pub mod test_helpers {
         }
     }
 
-    impl<P: PersistenceOptions, const NUM_NODES: usize, V: Versions> TestNetwork<P, { NUM_NODES }, V> {
+    impl<P: PersistenceOptions, const NUM_NODES: usize> TestNetwork<P, { NUM_NODES }> {
         pub async fn new<C: StateCatchup + 'static>(
             cfg: TestNetworkConfig<{ NUM_NODES }, P, C>,
-            bind_version: V,
+            bind_version: Version,
         ) -> Self {
             let mut cfg = cfg;
             let mut builder_tasks = Vec::new();
@@ -1805,7 +1773,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
@@ -1853,7 +1821,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         let mut events = network.server.event_stream().await;
 
         client.connect(None).await;
@@ -1885,7 +1853,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         let mut height: u64;
         // Wait for block >=2 appears
@@ -1923,7 +1891,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         client.connect(None).await;
 
         // Wait for a few blocks to be decided.
@@ -2068,8 +2036,7 @@ mod api_tests {
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
-        traits::{EventConsumer, PersistenceOptions},
-        Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData, ValidatedState,
+        Header, Leaf2, MOCK_SEQUENCER_BASE_VERSION, NamespaceId, NamespaceProofQueryData, ValidatedState, traits::{EventConsumer, PersistenceOptions}
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TestVersions;
@@ -2152,7 +2119,7 @@ mod api_tests {
             .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         let mut events = network.server.event_stream().await;
 
         // Connect client.
@@ -2313,7 +2280,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _, MockSequencerVersions>> =
+        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -2324,7 +2291,7 @@ mod api_tests {
         // Create two non-consecutive leaf chains.
         let mut chain1 = vec![];
 
-        let genesis = Leaf2::genesis::<TestVersions>(&Default::default(), &NodeState::mock()).await;
+        let genesis = Leaf2::genesis(&Default::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
         let payload = genesis.block_payload().unwrap();
         let payload_bytes_arc = payload.encode();
 
@@ -2339,9 +2306,11 @@ mod api_tests {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: genesis.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate2::genesis::<MockSequencerVersions>(
+                justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    MOCK_SEQUENCER_BASE_VERSION,
+                    MOCK_SEQUENCER_UPGRADE_VERSION
                 )
                 .await,
                 upgrade_certificate: None,
@@ -2352,9 +2321,11 @@ mod api_tests {
                 state_cert: None,
             },
         };
-        let mut qc = QuorumCertificate2::genesis::<MockSequencerVersions>(
+        let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
+            MOCK_SEQUENCER_BASE_VERSION,
+            MOCK_SEQUENCER_UPGRADE_VERSION
         )
         .await;
 
@@ -2522,7 +2493,7 @@ mod api_tests {
     {
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _, MockSequencerVersions>> =
+        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -2531,13 +2502,15 @@ mod api_tests {
             ));
         let consumer = ApiEventConsumer::from(data_source.clone());
 
-        let mut qc = QuorumCertificate2::genesis::<MockSequencerVersions>(
+        let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
+            MOCK_SEQUENCER_BASE_VERSION,
+            MOCK_SEQUENCER_UPGRADE_VERSION
         )
         .await;
         let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+            Leaf2::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
 
         // Append the genesis leaf. We don't use this for the test, because the update function will
         // automatically fill in the missing data for genesis. We just append this to get into a
@@ -2638,17 +2611,9 @@ mod test {
         upgrade_stake_table_v2, Contract, Contracts,
     };
     use espresso_types::{
-        config::PublicHotShotConfig,
-        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
-        v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{
-            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
-        },
-        validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
-        EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
-        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
-        SequencerVersions, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
-        ValidatedState,
+        ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_BASE_VERSION, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor, SequencerVersions, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState, config::PublicHotShotConfig, traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions}, v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1}, v0_4::{
+            REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2
+        }, validators_from_l1_events
     };
     use futures::{
         future::{self, join_all, try_join_all},
@@ -2763,7 +2728,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         client.connect(None).await;
         let health = client.get::<AppHealth>("healthcheck").send().await.unwrap();
@@ -2803,7 +2768,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 
@@ -2897,7 +2862,7 @@ mod test {
                 )
             }))
             .build();
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
@@ -2944,7 +2909,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MockSequencerVersions::new(),
+                MOCK_SEQUENCER_BASE_VERSION,
                 Default::default(),
             )
             .await;
@@ -3001,7 +2966,7 @@ mod test {
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
@@ -3044,7 +3009,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MockSequencerVersions::new(),
+                MOCK_SEQUENCER_BASE_VERSION,
                 Default::default(),
             )
             .await;
@@ -3137,7 +3102,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MockSequencerVersions::new(),
+                MOCK_SEQUENCER_BASE_VERSION,
                 Default::default(),
             )
             .await;
@@ -3201,7 +3166,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
 
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         // Wait for few blocks to be decided.
         network
@@ -3272,7 +3237,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
 
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         // Wait for a few blocks to be decided.
         network
@@ -3420,7 +3385,7 @@ mod test {
             .persistences(persistence.clone())
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         // Connect client.
         let client: Client<ServerError, SequencerApiVersion> =
@@ -3491,7 +3456,7 @@ mod test {
             }))
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         let client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
@@ -3539,7 +3504,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         client.connect(None).await;
 
         // Fetch a network config from the API server. The first peer URL is bogus, to test the
@@ -3585,7 +3550,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
@@ -5693,7 +5658,7 @@ mod test {
             )
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         let mut events = network.server.event_stream().await;
 
         client.connect(None).await;
@@ -5785,7 +5750,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         let mut events = network.server.event_stream().await;
         let start = Instant::now();
         let mut total_transactions = 0;
@@ -5964,7 +5929,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
         let mut events = network.server.event_stream().await;
         let mut all_transactions = HashMap::new();
         let mut namespace_tx: HashMap<_, HashSet<_>> = HashMap::new();
@@ -6880,9 +6845,7 @@ mod test {
         let validated_state = ValidatedState::default();
         let instance_state =
             NodeState::mock().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis::<
-            SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-        >(&validated_state, &instance_state)
+        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, DRB_AND_HEADER_UPGRADE_VERSION, None)
         .await;
 
         let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
@@ -7030,9 +6993,7 @@ mod test {
         let validated_state = ValidatedState::default();
         let instance_state =
             NodeState::mock().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis::<
-            SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-        >(&validated_state, &instance_state)
+        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, DRB_AND_HEADER_UPGRADE_VERSION, None)
         .await;
 
         let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);

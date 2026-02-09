@@ -407,7 +407,7 @@ mod test {
         availability,
         testing::{
             consensus::{MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{mock_transaction, MockBase, MockTypes},
         },
         ApiState, Error,
     };
@@ -863,7 +863,7 @@ mod test {
 
     async fn test_api_helper() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         network.start().await;
 
         // Start the web server.

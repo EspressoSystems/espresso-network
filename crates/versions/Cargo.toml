@@ -1,0 +1,15 @@
+[package]
+name = "versions"
+version.workspace = true
+authors.workspace = true
+edition = "2024"
+
+[dependencies]
+bincode = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+vbs = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

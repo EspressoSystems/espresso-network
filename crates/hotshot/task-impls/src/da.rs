@@ -20,7 +20,7 @@ use hotshot_types::{
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
         BlockPayload, EncodeBytes,
@@ -40,7 +40,7 @@ use crate::{
 };
 
 /// Tracks state of a DA task
-pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
@@ -62,7 +62,7 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     pub network: Arc<I::Network>,
 
     /// A map of `DaVote` collector tasks.
-    pub vote_collectors: VoteCollectorsMap<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>, V>,
+    pub vote_collectors: VoteCollectorsMap<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>>,
 
     /// This Nodes public key
     pub public_key: TYPES::SignatureKey,
@@ -80,10 +80,10 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
     /// main task event handler
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "DA Main Task", level = "error", target = "DaTaskState")]
     pub async fn handle(
@@ -200,7 +200,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let metadata = proposal.data.metadata.encode();
                 let metadata_clone = metadata.clone();
                 let payload_commitment = spawn_blocking(move || {
-                    vid_commitment::<V>(&txns, &metadata, total_weight, version)
+                    vid_commitment(&txns, &metadata, total_weight, version)
                 })
                 .await;
                 let payload_commitment = payload_commitment.unwrap();
@@ -223,7 +223,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     );
 
                     let commit_result = spawn_blocking(move || {
-                        vid_commitment::<V>(
+                        vid_commitment(
                             &txns_clone,
                             &metadata_clone,
                             next_epoch_total_weight,
@@ -325,7 +325,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     let membership = membership.clone();
                     spawn(async move {
                         for target_epoch in target_epochs {
-                            Consensus::calculate_and_update_vid::<V>(
+                            Consensus::calculate_and_update_vid(
                                 OuterConsensus::new(Arc::clone(&consensus.inner_consensus)),
                                 view_number,
                                 target_epoch,
@@ -523,11 +523,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
     }
 }
 
-#[async_trait]
 /// task state implementation for DA Task
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for DaTaskState<TYPES, I, V>
-{
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for DaTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

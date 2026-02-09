@@ -27,6 +27,7 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/versions",
     "espresso-dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
@@ -279,6 +280,7 @@ trait-set = "0.3.0"
 url = { version = "2.3", features = ["serde"] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
+versions = { path = "crates/versions" }
 vergen = { version = "8.3", features = ["git", "gitcl"] }
 zeroize = "1.7"
 

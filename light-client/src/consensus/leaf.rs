@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{bail, ensure, Context, Result};
 use committable::Committable;
-use espresso_types::{EpochVersion, Leaf2, SeqTypes};
+use espresso_types::{Leaf2, SeqTypes};
 use hotshot_query_service::availability::LeafQueryData;
 use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembership, vote::HasViewNumber};
 use serde::{Deserialize, Serialize};
-use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use super::quorum::{Certificate, Quorum};
 use crate::consensus::quorum::StakeTableQuorum;
@@ -157,7 +157,7 @@ impl LeafProof {
 
                 // Check that HotStuff2 is the appropriate commit rule to use. HotStuff2 commit rule
                 // was introduced with the epochs version of HotShot.
-                ensure!(version >= EpochVersion::version());
+                ensure!(version >= EPOCH_VERSION);
 
                 committing_qc.qc().clone()
             },
@@ -180,7 +180,7 @@ impl LeafProof {
 
                 // Check that HotStuff is the appropriate commit rule to use. HotStuff commit rule
                 // was deprecated with the epochs version of HotShot.
-                ensure!(version < EpochVersion::version());
+                ensure!(version < EPOCH_VERSION);
 
                 precommit_qc.qc().clone()
             },
@@ -217,7 +217,7 @@ impl LeafProof {
 
         // Check if the new leaf plus the last saved leaf contain justifying QCs that form a
         // HotStuff2 QC chain for the leaf before.
-        if len >= 2 && self.leaves[len - 2].block_header().version() >= EpochVersion::version() {
+        if len >= 2 && self.leaves[len - 2].block_header().version() >= EPOCH_VERSION {
             let committing_qc = Certificate::for_parent(&self.leaves[len - 1]);
             let deciding_qc = Certificate::for_parent(new_leaf.leaf());
             if committing_qc.view_number() == self.leaves[len - 2].view_number()
@@ -243,7 +243,7 @@ impl LeafProof {
 
         // Check if the new leaf plus the last saved leaf contain QCs that form a legacy HotStuff
         // QC chain for the leaf before.
-        if len >= 3 && self.leaves[len - 3].block_header().version() < EpochVersion::version() {
+        if len >= 3 && self.leaves[len - 3].block_header().version() < EPOCH_VERSION {
             let precommit_qc = Certificate::for_parent(&self.leaves[len - 2]);
             let committing_qc = Certificate::for_parent(&self.leaves[len - 1]);
             let deciding_qc = Certificate::for_parent(new_leaf.leaf());

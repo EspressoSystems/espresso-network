@@ -31,7 +31,7 @@ use crate::{
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::is_epoch_transition,
@@ -138,8 +138,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     type Voteable = DaData;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: TYPES::View,
@@ -154,11 +154,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
@@ -197,10 +197,10 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -215,8 +215,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     type Voteable = DaData2<TYPES>;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData2<TYPES>, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData2<TYPES>>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: TYPES::View,
@@ -231,11 +231,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
@@ -274,10 +274,10 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2<TYPES>, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2<TYPES>>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -295,8 +295,8 @@ impl<
     type Voteable = VOTEABLE;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, VOTEABLE, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, VOTEABLE>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: TYPES::View,
@@ -311,11 +311,11 @@ impl<
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
@@ -355,10 +355,10 @@ impl<
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, VOTEABLE, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, VOTEABLE>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -410,11 +410,11 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
     /// Validate an upgrade certificate.
     /// # Errors
     /// Returns an error when the upgrade certificate is invalid.
-    pub async fn validate<V: Versions>(
+    pub async fn validate(
         upgrade_certificate: &Option<Self>,
         membership: &EpochMembership<TYPES>,
         epoch: Option<TYPES::Epoch>,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         ensure!(epoch == membership.epoch(), "Epochs don't match!");
         if let Some(ref cert) = upgrade_certificate {

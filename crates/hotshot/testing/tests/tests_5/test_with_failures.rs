@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::{
-    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, TestVersions, CliquenetImpl},
+    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, CliquenetImpl, TEST_VERSIONS},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
@@ -22,7 +22,7 @@ cross_tests!(
     TestName: test_with_failures_one,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();

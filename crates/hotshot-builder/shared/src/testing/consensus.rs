@@ -11,7 +11,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TestVersions},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -23,13 +23,12 @@ use hotshot_types::{
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
     traits::{
-        node_implementation::{ConsensusTime, Versions},
+        node_implementation::ConsensusTime,
         EncodeBytes,
     },
     utils::EpochTransitionIndicator,
 };
 use sha2::{Digest, Sha256};
-use vbs::version::StaticVersionType;
 
 use crate::{block::BuilderStateId, testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION};
 
@@ -59,11 +58,11 @@ impl SimulatedChainState {
         let encoded_transactions = TestTransaction::encode(&transactions);
         let block_payload = TestBlockPayload { transactions };
         let metadata = TestMetadata { num_transactions };
-        let block_vid_commitment = vid_commitment::<TestVersions>(
+        let block_vid_commitment = vid_commitment(
             &encoded_transactions,
             &metadata.encode(),
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
         let block_builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
@@ -104,14 +103,16 @@ impl SimulatedChainState {
             timestamp_millis: self.round.u64() * 1_000,
             metadata,
             random: 1, // arbitrary
-            version: <TestVersions as Versions>::Base::VERSION,
+            version: TEST_VERSIONS.test.base
         };
 
         let justify_qc = match self.previous_quorum_proposal.as_ref() {
             None => {
-                QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
+                QuorumCertificate2::<TestTypes>::genesis(
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
+                    TEST_VERSIONS.test.base,
+                    TEST_VERSIONS.test.upgrade.clone()
                 )
                 .await
             },

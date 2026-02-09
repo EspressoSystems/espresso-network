@@ -220,7 +220,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes},
         },
         types::HeightIndexed,
         ApiState, Error,
@@ -231,7 +231,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_first_provider_fails() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();

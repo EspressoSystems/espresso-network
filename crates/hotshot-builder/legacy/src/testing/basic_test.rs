@@ -6,9 +6,9 @@ pub use hotshot_types::{
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     traits::{block_contents::BlockPayload, node_implementation::ConsensusTime},
 };
-use vbs::version::StaticVersionType;
 
 pub use crate::builder_state::{BuilderState, MessageType};
+
 /// The following tests are performed:
 #[cfg(test)]
 mod tests {
@@ -27,13 +27,13 @@ mod tests {
     };
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::{TestTypes, TestVersions},
+        node_types::{TEST_VERSIONS, TestTypes},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
         data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
         simple_vote::QuorumData2,
-        traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
+        traits::{block_contents::BlockHeader, EncodeBytes},
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use sha2::{Digest, Sha256};
@@ -79,11 +79,11 @@ mod tests {
         let (builder_pub_key, builder_private_key) =
             BLSPubKey::generated_from_seed_indexed(seed, 2011_u64);
         // instantiate the global state also
-        let initial_commitment = vid_commitment::<TestVersions>(
+        let initial_commitment = vid_commitment(
             &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base
         );
         let global_state = Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -97,7 +97,7 @@ mod tests {
             TEST_MAX_TX_NUM,
         )));
 
-        let bootstrap_builder_state = BuilderState::<TestTypes, TestVersions>::new(
+        let bootstrap_builder_state = BuilderState::<TestTypes>::new(
             ParentBlockReferences {
                 view_number: ViewNumber::new(0),
                 vid_commitment: initial_commitment,
@@ -135,9 +135,11 @@ mod tests {
         let mut previous_commitment = initial_commitment;
         let mut previous_view = ViewNumber::new(0);
         let mut previous_quorum_proposal = {
-            let previous_jc = QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
+            let previous_jc = QuorumCertificate2::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test.base,
+                TEST_VERSIONS.test.upgrade
             )
             .await;
 
@@ -153,7 +155,7 @@ mod tests {
                             num_transactions: 0,
                         },
                         random: 1, // arbitrary
-                        version: <TestVersions as Versions>::Base::VERSION,
+                        version: TEST_VERSIONS.test.base,
                     },
                     view_number: ViewNumber::new(0),
                     justify_qc: previous_jc.clone(),
@@ -303,11 +305,11 @@ mod tests {
                          nodes:{NUM_NODES_IN_VID_COMPUTATION}"
                     );
 
-                    let block_payload_commitment = vid_commitment::<TestVersions>(
+                    let block_payload_commitment = vid_commitment(
                         &encoded_transactions,
                         &metadata.encode(),
                         NUM_NODES_IN_VID_COMPUTATION,
-                        <TestVersions as Versions>::Base::VERSION,
+                        TEST_VERSIONS.test.base
                     );
 
                     tracing::debug!("Block Payload vid commitment: {block_payload_commitment:?}");
@@ -326,7 +328,7 @@ mod tests {
                         timestamp_millis: round as u64 * 1_000,
                         metadata,
                         random: 1, // arbitrary
-                        version: <TestVersions as Versions>::Base::VERSION,
+                        version: TEST_VERSIONS.test.base,
                     };
 
                     let justify_qc = {
@@ -404,9 +406,10 @@ mod tests {
                 // This may not be necessary for this test
                 let decide_message = {
                     let leaf = match round {
-                        0 => Leaf::genesis::<TestVersions>(
+                        0 => Leaf::genesis(
                             &TestValidatedState::default(),
                             &TestInstanceState::default(),
+                            TEST_VERSIONS.test.base
                         )
                         .await
                         .into(),
@@ -421,10 +424,10 @@ mod tests {
                                 &quorum_certificate_message.proposal.data,
                             );
                             current_leaf
-                                .fill_block_payload::<TestVersions>(
+                                .fill_block_payload(
                                     block_payload,
                                     NUM_NODES_IN_VID_COMPUTATION,
-                                    <TestVersions as Versions>::Base::VERSION,
+                                    TEST_VERSIONS.test.base
                                 )
                                 .unwrap();
                             current_leaf

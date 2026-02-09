@@ -24,7 +24,7 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
     },
     utils::option_epoch_from_block_number,
@@ -45,7 +45,7 @@ mod handlers;
 
 /// The state for the quorum proposal task. Contains all of the information for
 /// handling [`HotShotEvent::QuorumProposalRecv`] events.
-pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -81,7 +81,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -92,7 +92,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
 
 /// all the info we need to validate a proposal.  This makes it easy to spawn an effemeral task to
 /// do all the proposal validation without blocking the long running one
-pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// The node's id
     pub id: u64,
 
@@ -115,7 +115,7 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub(crate) storage: I::Storage,
 
     /// Lock for a decided upgrade
-    pub(crate) upgrade_lock: UpgradeLock<TYPES, V>,
+    pub(crate) upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -124,9 +124,7 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
-    QuorumProposalRecvTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalRecvTaskState<TYPES, I> {
     /// Cancel all tasks the consensus tasks has spawned before the given view
     pub fn cancel_tasks(&mut self, view: TYPES::View) {
         let keep = self.spawned_tasks.split_off(&view);
@@ -173,7 +171,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     tracing::warn!("No Stake table for epoch = {proposal_epoch:?}");
                     return;
                 };
-                let validation_info = ValidationInfo::<TYPES, I, V> {
+                let validation_info = ValidationInfo::<TYPES, I> {
                     id: self.id,
                     public_key: self.public_key.clone(),
                     private_key: self.private_key.clone(),
@@ -222,9 +220,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for QuorumProposalRecvTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for QuorumProposalRecvTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

@@ -243,7 +243,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{mock_transaction, MockBase, MockTypes},
         },
         ApiState, Error, Header,
     };
@@ -253,7 +253,7 @@ mod test {
         let window_limit = 78;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 
@@ -431,7 +431,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_aggregate_ranges() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 

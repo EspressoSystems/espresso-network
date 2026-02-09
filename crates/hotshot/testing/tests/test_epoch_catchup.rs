@@ -13,8 +13,8 @@ use hotshot_example_types::{
         static_committee::StaticStakeTable, two_static_committees::TwoStakeTables,
     },
     node_types::{
-        CombinedImpl, EpochsTestVersions, RandomOverlapQuorumFilterConfig,
-        TestTypesEpochCatchupTypes,
+        CombinedImpl, RandomOverlapQuorumFilterConfig,
+        TestTypesEpochCatchupTypes, TEST_VERSIONS
     },
 };
 use hotshot_macros::cross_tests;
@@ -33,7 +33,7 @@ cross_tests!(
     Types: [
         TestTypesEpochCatchupTypes<StaticStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default().set_num_nodes(14, 7);
@@ -75,7 +75,7 @@ cross_tests!(
     Types: [
         TestTypesEpochCatchupTypes<TwoStakeTables<BLSPubKey, SchnorrPubKey>>,
     ],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
 
@@ -117,7 +117,7 @@ cross_tests!(
     Types: [
         TestTypesEpochCatchupTypes<RandomizedStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default().set_num_nodes(14, 5);
@@ -158,7 +158,7 @@ cross_tests!(
     Types: [
         TestTypesEpochCatchupTypes<RandomizedCommitteeMembers<BLSPubKey, SchnorrPubKey, RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
     ],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default().set_num_nodes(20, 7);

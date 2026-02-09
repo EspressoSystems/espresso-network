@@ -15,7 +15,7 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     traits::{
         network::DataRequest,
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::{View, ViewInner},
@@ -31,7 +31,7 @@ const TXNS_TIMEOUT: Duration = Duration::from_millis(100);
 /// Task state for the Network Request Task. The task is responsible for handling
 /// requests sent to this node by the network.  It will validate the sender,
 /// parse the request, and try to find the data request in the consensus stores.
-pub struct NetworkResponseState<TYPES: NodeType, V: Versions> {
+pub struct NetworkResponseState<TYPES: NodeType> {
     /// Locked consensus state
     consensus: LockedConsensusState<TYPES>,
 
@@ -48,10 +48,10 @@ pub struct NetworkResponseState<TYPES: NodeType, V: Versions> {
     id: u64,
 
     /// Lock for a decided upgrade
-    upgrade_lock: UpgradeLock<TYPES, V>,
+    upgrade_lock: UpgradeLock<TYPES>,
 }
 
-impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
+impl<TYPES: NodeType> NetworkResponseState<TYPES> {
     /// Create the network request state with the info it needs
     pub fn new(
         consensus: LockedConsensusState<TYPES>,
@@ -59,7 +59,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
         pub_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
         id: u64,
-        upgrade_lock: UpgradeLock<TYPES, V>,
+        upgrade_lock: UpgradeLock<TYPES>,
     ) -> Self {
         Self {
             consensus,
@@ -201,7 +201,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
         }
 
         for target_epoch in calc_target_epochs {
-            if Consensus::calculate_and_update_vid::<V>(
+            if Consensus::calculate_and_update_vid(
                 OuterConsensus::new(Arc::clone(&self.consensus)),
                 view,
                 target_epoch,
@@ -214,7 +214,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
             {
                 // Sleep in hope we receive txns in the meantime
                 sleep(TXNS_TIMEOUT).await;
-                Consensus::calculate_and_update_vid::<V>(
+                Consensus::calculate_and_update_vid(
                     OuterConsensus::new(Arc::clone(&self.consensus)),
                     view,
                     target_epoch,
@@ -266,8 +266,8 @@ fn valid_signature<TYPES: NodeType>(
 /// Spawn the network response task to handle incoming request for data
 /// from other nodes.  It will shutdown when it gets `HotshotEvent::Shutdown`
 /// on the `event_stream` arg.
-pub fn run_response_task<TYPES: NodeType, V: Versions>(
-    task_state: NetworkResponseState<TYPES, V>,
+pub fn run_response_task<TYPES: NodeType>(
+    task_state: NetworkResponseState<TYPES>,
     event_stream: Receiver<Arc<HotShotEvent<TYPES>>>,
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
 ) -> JoinHandle<()> {

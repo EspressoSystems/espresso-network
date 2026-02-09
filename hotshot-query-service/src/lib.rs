@@ -436,7 +436,7 @@ pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
 use hotshot_types::traits::{
-    node_implementation::{NodeImplementation, NodeType, Versions},
+    node_implementation::{NodeImplementation, NodeType},
     BlockPayload,
 };
 pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
@@ -515,11 +515,10 @@ pub async fn run_standalone_service<
     I: NodeImplementation<Types>,
     D,
     ApiVer,
-    HsVer: Versions,
 >(
     options: Options,
     data_source: D,
-    hotshot: SystemContextHandle<Types, I, HsVer>,
+    hotshot: SystemContextHandle<Types, I>,
     bind_version: ApiVer,
 ) -> Result<(), Error>
 where
@@ -597,6 +596,7 @@ mod test {
     use async_trait::async_trait;
     use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
     use futures::future::FutureExt;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
     use portpicker::pick_unused_port;
     use surf_disco::Client;
@@ -837,8 +837,6 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_composition() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let dir = TempDir::with_prefix("test_composition").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
         let hotshot_qs = MockDataSource::create_with_store(&mut loader, Default::default())
@@ -847,10 +845,10 @@ mod test {
 
         // Mock up some data and add a block to the store.
         let leaf =
-            Leaf2::<MockTypes>::genesis::<TestVersions>(&Default::default(), &Default::default())
+            Leaf2::<MockTypes>::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base)
                 .await;
         let qc =
-            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default())
+            QuorumCertificate2::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade)
                 .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());

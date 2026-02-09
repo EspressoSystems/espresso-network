@@ -10,10 +10,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    parse::{Parse, ParseStream, Result},
-    parse_macro_input,
-    punctuated::Punctuated,
-    Expr, ExprArray, ExprPath, ExprTuple, Ident, LitBool, PathArguments, Token, TypePath,
+    Expr, ExprArray, ExprField, ExprPath, ExprTuple, Ident, LitBool, PathArguments, Token, TypePath, parse::{Parse, ParseStream, Result}, parse_macro_input, punctuated::Punctuated
 };
 
 /// Bracketed types, e.g. [A, B, `C<D>`]
@@ -76,7 +73,7 @@ struct TestData {
     builder_impl: ExprPath,
 
     /// impl
-    version: ExprPath,
+    version: ExprField,
 
     /// name of test
     test_name: Ident,
@@ -204,7 +201,10 @@ impl TestData {
             #[test_log::test(tokio::test(flavor = "multi_thread"))]
             #[tracing::instrument]
             async fn #test_name() {
-                hotshot_testing::test_builder::TestDescription::<#ty, #imply, #version>::gen_launcher((#metadata)).launch().run_test::<#builder_impl>().await;
+                let mut __metadata = #metadata;
+                __metadata.test_config.base_version = #version.base;
+                __metadata.test_config.upgrade_version = #version.upgrade;
+                hotshot_testing::test_builder::TestDescription::<#ty, #imply>::gen_launcher(__metadata).launch().run_test::<#builder_impl>().await;
             }
         }
     }
@@ -315,10 +315,10 @@ fn cross_tests_internal(test_spec: CrossTestData) -> TokenStream {
     let types = test_spec.types.elems.iter();
 
     let versions = test_spec.versions.elems.iter().map(|t| {
-        let Expr::Path(p) = t else {
-            panic!("Expected Path for Version! Got {t:?}");
+        let Expr::Field(f) = t else {
+            panic!("Expected Field for Version! Got {t:?}");
         };
-        p
+        f
     });
 
     let builder_impls = test_spec.builder_impls.elems.iter().map(|t| {

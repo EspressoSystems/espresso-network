@@ -8,8 +8,8 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CliquenetImpl, CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl,
-        TestTwoStakeTablesTypes, TestTypes,
+        CliquenetImpl, CombinedImpl, Libp2pImpl, PushCdnImpl,
+        TestTwoStakeTablesTypes, TestTypes, TEST_VERSIONS
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
@@ -24,7 +24,7 @@ cross_tests!(
     TestName: test_success_with_async_delay_2_with_epochs,
     Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription {

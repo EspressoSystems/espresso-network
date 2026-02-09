@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{MemoryImpl, PushCdnImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{MemoryImpl, PushCdnImpl, TestTypes, TEST_VERSIONS};
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
@@ -19,7 +19,7 @@ cross_tests!(
     TestName: test_with_builder_failures,
     Impls: [MemoryImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_multiple_rounds();

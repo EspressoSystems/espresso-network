@@ -37,7 +37,7 @@ use crate::{
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
         BlockPayload, ValidatedState,
     },
@@ -1334,13 +1334,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// and updates `vid_shares` map with the signed `VidDisperseShare` proposals.
     /// Returned `Option` indicates whether the update has actually happened or not.
     #[instrument(skip_all, target = "Consensus", fields(view = *view))]
-    pub async fn calculate_and_update_vid<V: Versions>(
+    pub async fn calculate_and_update_vid(
         consensus: OuterConsensus<TYPES>,
         view: <TYPES as NodeType>::View,
         target_epoch: Option<<TYPES as NodeType>::Epoch>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Option<()> {
         let payload_with_metadata = Arc::clone(consensus.read().await.saved_payloads().get(&view)?);
         let epoch = consensus
@@ -1354,7 +1354,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let VidDisperseAndDuration {
             disperse: vid,
             duration: disperse_duration,
-        } = VidDisperse::calculate_vid_disperse::<V>(
+        } = VidDisperse::calculate_vid_disperse(
             &payload_with_metadata.payload,
             &membership_coordinator,
             view,

@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{PushCdnImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{PushCdnImpl, TestTypes};
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -21,7 +21,7 @@ use tracing::instrument;
 #[instrument]
 async fn push_cdn_network() {
 
-    let mut metadata: TestDescription<TestTypes, PushCdnImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, PushCdnImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
             ..Default::default()

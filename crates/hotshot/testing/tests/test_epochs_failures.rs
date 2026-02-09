@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, CombinedImpl, EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl,
-    TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes,
+    CliquenetImpl, CombinedImpl, Libp2pImpl, MemoryImpl, PushCdnImpl,
+    TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes, TEST_VERSIONS
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -22,7 +22,7 @@ cross_tests!(
     TestName: test_with_failures_2_with_epochs,
     Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);
@@ -55,7 +55,7 @@ cross_tests!(
     TestName: test_with_double_leader_failures_with_epochs,
     Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestConsecutiveLeaderTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);
@@ -96,7 +96,7 @@ cross_tests!(
     TestName: test_with_failures_half_f_epochs_1,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();
@@ -130,7 +130,7 @@ cross_tests!(
         TestName: test_with_failures_half_f_epochs_2,
         Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();
@@ -169,7 +169,7 @@ cross_tests!(
     TestName: test_with_failures_f_epochs_1,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();
@@ -216,7 +216,7 @@ cross_tests!(
     TestName: test_with_failures_f_epochs_2,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();
