@@ -43,6 +43,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+versions = { workspace = true }
 
 [[test]]
 name = "integration"

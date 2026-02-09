@@ -2957,7 +2957,7 @@ mod test {
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         data::{
             ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, EpochNumber,
@@ -2968,7 +2968,6 @@ mod test {
         simple_vote::QuorumData,
         traits::{
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-            node_implementation::Versions,
             signature_key::SignatureKey,
             EncodeBytes,
         },
@@ -2979,7 +2978,6 @@ mod test {
         },
     };
     use jf_advz::VidScheme;
-    use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
@@ -2988,7 +2986,7 @@ mod test {
     async fn test_quorum_proposals_leaf_hash_migration() {
         // Create some quorum proposals to test with.
         let leaf: Leaf2 =
-            Leaf::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock())
+            Leaf::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base)
                 .await
                 .into();
         let privkey = BLSPubKey::generated_from_seed_indexed([0; 32], 1).1;
@@ -2998,9 +2996,11 @@ mod test {
                 epoch: None,
                 block_header: leaf.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test.base,
+                    TEST_VERSIONS.test.upgrade,
                 )
                 .await
                 .to_qc2(),
@@ -3070,7 +3070,7 @@ mod test {
 
         // Mock up some data.
         let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+            Leaf2::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -3208,7 +3208,7 @@ mod test {
 
         // Populate some data.
         let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+            Leaf2::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -3243,9 +3243,11 @@ mod test {
                 epoch: None,
                 block_header: leaf.block_header().clone(),
                 view_number: data_view,
-                justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test.base,
+                    TEST_VERSIONS.test.upgrade
                 )
                 .await,
                 upgrade_certificate: None,
@@ -3374,7 +3376,7 @@ mod test {
             let payload_bytes = payload.encode();
 
             let block_header =
-                Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
+                Header::genesis(&instance_state, payload.clone(), &metadata, TEST_VERSIONS.test.base);
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
@@ -3411,10 +3413,10 @@ mod test {
                 .unwrap();
 
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
-            leaf.fill_block_payload::<TestVersions>(
+            leaf.fill_block_payload(
                 payload,
                 GENESIS_VID_NUM_STORAGE_NODES,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base
             )
             .unwrap();
 

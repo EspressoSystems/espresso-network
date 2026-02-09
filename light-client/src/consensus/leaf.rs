@@ -303,10 +303,11 @@ impl LeafProof {
 
 #[cfg(test)]
 mod test {
+    use espresso_types::EpochVersion;
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum, LegacyVersion};
+    use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {

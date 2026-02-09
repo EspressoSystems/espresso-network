@@ -27,8 +27,8 @@ use espresso_dev_node::{
     AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, DrbAndHeaderUpgradeVersion, EpochVersion, L1ClientOptions,
-    SeqTypes, SequencerVersions, ValidatedState,
+    parse_duration, v0_3::ChainConfig, L1ClientOptions,
+    SeqTypes, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
@@ -43,7 +43,7 @@ use sequencer::{
     api::{
         options,
         test_helpers::{
-            AnyTestNetwork, TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST,
+            TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST,
         },
     },
     persistence,
@@ -652,21 +652,12 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     // Start the nodes
-    let network = match version {
-        DevNodeVersion::V0_3 => AnyTestNetwork::V0_3(
-            TestNetwork::new(
-                config,
-                SequencerVersions::<EpochVersion, EpochVersion>::new(),
-            )
-            .await,
-        ),
-        DevNodeVersion::V0_4 => AnyTestNetwork::V0_4(
-            TestNetwork::new(
-                config,
-                SequencerVersions::<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>::new(),
-            )
-            .await,
-        ),
+    let network = {
+        let v = match version {
+            DevNodeVersion::V0_3 => versions::version(0, 3),
+            DevNodeVersion::V0_4 => versions::version(0, 4)
+        };
+        TestNetwork::new(config, v).await
     };
 
     let relay_server_handle = spawn(async move {
@@ -712,7 +703,7 @@ async fn main() -> anyhow::Result<()> {
     let l1_prover_port = prover_ports.remove(0);
 
     let dev_info = DevInfo {
-        builder_url: network.hotshot_config().builder_urls[0].clone(),
+        builder_url: network.cfg.hotshot_config().builder_urls[0].clone(),
         sequencer_api_port,
         l1_prover_port,
         l1_url,

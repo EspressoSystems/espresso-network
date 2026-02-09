@@ -1496,10 +1496,10 @@ pub mod testing {
 mod test {
 
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
+    use espresso_types::{Header, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         event::LeafInfo,
         traits::block_contents::{BlockHeader, BlockPayload},

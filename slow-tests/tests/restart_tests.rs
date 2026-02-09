@@ -32,8 +32,8 @@ use espresso_contract_deployer::{
     Contracts,
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -82,7 +82,7 @@ use tokio::{
 };
 use vbs::version::Version;
 use vec1::vec1;
-type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
+
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     let mut network = TestNetwork::new(network.0, network.1, cdn).await;
 
@@ -259,8 +259,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     context: Option<
         SequencerContext<
             network::Production,
-            <S::Options as PersistenceOptions>::Persistence,
-            MockSequencerVersions,
+            <S::Options as PersistenceOptions>::Persistence
         >,
     >,
     modules: Modules,
@@ -375,7 +374,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
-                    MockSequencerVersions::new(),
                 )
                 .await
                 {

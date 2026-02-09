@@ -197,7 +197,7 @@ mod test {
     use std::time::Duration;
 
     use committable::Committable;
-    use espresso_types::{EpochVersion, Header, SequencerVersions, Transaction};
+    use espresso_types::{EpochVersion, Header, Transaction};
     use futures::{stream::StreamExt, TryStreamExt};
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData},

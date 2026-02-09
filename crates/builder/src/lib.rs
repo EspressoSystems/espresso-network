@@ -78,14 +78,14 @@ pub mod testing {
         light_client::StateKeyPair,
         traits::{
             block_contents::BlockHeader,
-            node_implementation::{ConsensusTime, NodeType, Versions},
+            node_implementation::{ConsensusTime, NodeType},
             signature_key::BuilderSignatureKey as _,
         },
         HotShotConfig, PeerConfig, ValidatorConfig,
     };
     use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
-    use vbs::version::StaticVersion;
+    use vbs::version::{StaticVersion, Version};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -147,6 +147,8 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 0,
                 drb_upgrade_difficulty: 0,
+                base_version: todo!(),
+                upgrade_version: todo!()
             };
 
             Self {
@@ -287,11 +289,11 @@ pub mod testing {
             tokio::spawn(app.serve(url, SequencerApiVersion::instance()));
         }
         // enable hotshot event streaming
-        pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence, V: Versions>(
+        pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence>(
             sequencer_api_url: Url,
             known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
             num_non_staking_nodes: usize,
-            hotshot_context_handle: Arc<Consensus<network::Memory, P, V>>,
+            hotshot_context_handle: Arc<Consensus<network::Memory, P>>,
         ) {
             // create a event streamer
             let events_streamer = Arc::new(RwLock::new(EventsStreamer::new(
@@ -359,10 +361,11 @@ pub mod testing {
     impl NonPermissionedBuilderTestConfig {
         pub const SUBSCRIBED_DA_NODE_ID: usize = 5;
 
-        pub async fn init_non_permissioned_builder<V: Versions>(
+        pub async fn init_non_permissioned_builder(
             hotshot_events_streaming_api_url: Url,
             hotshot_builder_api_url: Url,
             num_nodes: usize,
+            base: Version
         ) -> Self {
             // generate builder keys
             let seed = [201_u8; 32];
@@ -377,13 +380,13 @@ pub mod testing {
 
             let node_count = NonZeroUsize::new(num_nodes).unwrap();
 
-            let builder_config = BuilderConfig::init::<V>(
+            let builder_config = BuilderConfig::init(
                 key_pair,
                 bootstrapped_view,
                 tx_channel_capacity,
                 event_channel_capacity,
                 node_count,
-                NodeState::default().with_current_version(V::Base::VERSION),
+                NodeState::default().with_current_version(base),
                 ValidatedState::default(),
                 hotshot_events_streaming_api_url,
                 hotshot_builder_api_url,
@@ -392,6 +395,7 @@ pub mod testing {
                 Duration::from_millis(500),
                 ChainConfig::default().base_fee,
                 819200,
+                base
             )
             .await
             .unwrap();
