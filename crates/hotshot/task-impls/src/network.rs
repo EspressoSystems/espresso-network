@@ -728,11 +728,8 @@ pub struct NetworkEventTaskState<
 }
 
 #[async_trait]
-impl<
-        TYPES: NodeType,
-        NET: ConnectedNetwork<TYPES::SignatureKey>,
-        S: Storage<TYPES> + 'static,
-    > TaskState for NetworkEventTaskState<TYPES, NET, S>
+impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES> + 'static>
+    TaskState for NetworkEventTaskState<TYPES, NET, S>
 {
     type Event = HotShotEvent<TYPES>;
 
@@ -750,11 +747,8 @@ impl<
     fn cancel_subtasks(&mut self) {}
 }
 
-impl<
-        TYPES: NodeType,
-        NET: ConnectedNetwork<TYPES::SignatureKey>,
-        S: Storage<TYPES> + 'static,
-    > NetworkEventTaskState<TYPES, NET, S>
+impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES> + 'static>
+    NetworkEventTaskState<TYPES, NET, S>
 {
     /// Handle the given event.
     ///
@@ -1722,11 +1716,8 @@ pub mod test {
         fn cancel_subtasks(&mut self) {}
     }
 
-    impl<
-            TYPES: NodeType,
-            NET: ConnectedNetwork<TYPES::SignatureKey>,
-            S: Storage<TYPES>,
-        > Deref for NetworkEventTaskStateModifier<TYPES, NET, S>
+    impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES>> Deref
+        for NetworkEventTaskStateModifier<TYPES, NET, S>
     {
         type Target = NetworkEventTaskState<TYPES, NET, S>;
 
@@ -1735,11 +1726,8 @@ pub mod test {
         }
     }
 
-    impl<
-            TYPES: NodeType,
-            NET: ConnectedNetwork<TYPES::SignatureKey>,
-            S: Storage<TYPES>,
-        > DerefMut for NetworkEventTaskStateModifier<TYPES, NET, S>
+    impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES>> DerefMut
+        for NetworkEventTaskStateModifier<TYPES, NET, S>
     {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.network_event_task_state

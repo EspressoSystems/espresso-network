@@ -42,7 +42,9 @@ where
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for NetworkRequestState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for NetworkRequestState<TYPES, I>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             network: Arc::clone(&handle.hotshot.network),
@@ -61,7 +63,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for UpgradeTaskState<TYPES> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for UpgradeTaskState<TYPES>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         #[cfg(not(feature = "example-upgrade"))]
         return Self {
@@ -112,7 +116,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for VidTaskState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for VidTaskState<TYPES, I>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
@@ -130,7 +136,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for DaTaskState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for DaTaskState<TYPES, I>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
@@ -151,7 +159,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for ViewSyncTaskState<TYPES> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for ViewSyncTaskState<TYPES>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let cur_view = handle.cur_view().await;
 
@@ -179,7 +189,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for TransactionTaskState<TYPES> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for TransactionTaskState<TYPES>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             builder_timeout: handle.builder_timeout(),
@@ -207,7 +219,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for QuorumVoteTaskState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for QuorumVoteTaskState<TYPES, I>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
@@ -239,7 +253,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for QuorumProposalTaskState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for QuorumProposalTaskState<TYPES, I>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
@@ -267,7 +283,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for QuorumProposalRecvTaskState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for QuorumProposalRecvTaskState<TYPES, I>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
@@ -291,7 +309,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for ConsensusTaskState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for ConsensusTaskState<TYPES, I>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
@@ -323,7 +343,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for StatsTaskState<TYPES> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for StatsTaskState<TYPES>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         StatsTaskState::<TYPES>::new(
             handle.cur_view().await,
@@ -336,7 +358,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> fo
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I> for RewindTaskState<TYPES> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for RewindTaskState<TYPES>
+{
     async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             events: Vec::new(),

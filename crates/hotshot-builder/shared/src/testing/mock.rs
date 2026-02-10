@@ -5,7 +5,7 @@ use async_broadcast::broadcast;
 use committable::{Commitment, Committable};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
-    node_types::{TEST_VERSIONS, TestTypes},
+    node_types::{TestTypes, TEST_VERSIONS},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -78,7 +78,8 @@ pub async fn proposals_with_transactions(
 ) -> (DaProposal2<TestTypes>, QuorumProposalWrapper<TestTypes>) {
     let epoch = None;
     let view_number = <TestTypes as NodeType>::View::new(view);
-    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+    let upgrade_lock =
+        UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
     let validated_state = TestValidatedState::default();
     let instance_state = TestInstanceState::default();
 
@@ -92,25 +93,29 @@ pub async fn proposals_with_transactions(
     let encoded_transactions = TestTransaction::encode(&transactions);
 
     let header = TestBlockHeader::new(
-        &Leaf::<TestTypes>::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base)
-            .await
-            .into(),
+        &Leaf::<TestTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await
+        .into(),
         vid_commitment(
             &encoded_transactions,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         ),
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&payload, &metadata),
         metadata,
-        TEST_VERSIONS.test.base
+        TEST_VERSIONS.test.base,
     );
 
     let genesis_qc = QuorumCertificate::<TestTypes>::genesis(
         &TestValidatedState::default(),
         &TestInstanceState::default(),
         TEST_VERSIONS.test.base,
-        TEST_VERSIONS.test.upgrade
+        TEST_VERSIONS.test.upgrade,
     )
     .await
     .to_qc2();
@@ -136,12 +141,9 @@ pub async fn proposals_with_transactions(
         block_number: Some(leaf.height()),
     };
 
-    let versioned_data = VersionedVoteData::<_, _>::new_infallible(
-        quorum_data.clone(),
-        view_number,
-        &upgrade_lock,
-    )
-    .await;
+    let versioned_data =
+        VersionedVoteData::<_, _>::new_infallible(quorum_data.clone(), view_number, &upgrade_lock)
+            .await;
 
     let commitment = Commitment::from_raw(versioned_data.commit().into());
 

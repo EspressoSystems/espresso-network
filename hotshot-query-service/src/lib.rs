@@ -510,12 +510,7 @@ impl<D> From<D> for ApiState<D> {
 }
 
 /// Run an instance of the HotShot Query service with no customization.
-pub async fn run_standalone_service<
-    Types: NodeType,
-    I: NodeImplementation<Types>,
-    D,
-    ApiVer,
->(
+pub async fn run_standalone_service<Types: NodeType, I: NodeImplementation<Types>, D, ApiVer>(
     options: Options,
     data_source: D,
     hotshot: SystemContextHandle<Types, I>,
@@ -844,12 +839,19 @@ mod test {
             .unwrap();
 
         // Mock up some data and add a block to the store.
-        let leaf =
-            Leaf2::<MockTypes>::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base)
-                .await;
-        let qc =
-            QuorumCertificate2::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade)
-                .await;
+        let leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let qc = QuorumCertificate2::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+            TEST_VERSIONS.test.upgrade,
+        )
+        .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         hotshot_qs

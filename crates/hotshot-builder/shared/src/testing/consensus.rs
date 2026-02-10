@@ -11,7 +11,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TEST_VERSIONS, TestTypes},
+    node_types::{TestTypes, TEST_VERSIONS},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -22,10 +22,7 @@ use hotshot_types::{
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
-    traits::{
-        node_implementation::ConsensusTime,
-        EncodeBytes,
-    },
+    traits::{node_implementation::ConsensusTime, EncodeBytes},
     utils::EpochTransitionIndicator,
 };
 use sha2::{Digest, Sha256};
@@ -103,7 +100,7 @@ impl SimulatedChainState {
             timestamp_millis: self.round.u64() * 1_000,
             metadata,
             random: 1, // arbitrary
-            version: TEST_VERSIONS.test.base
+            version: TEST_VERSIONS.test.base,
         };
 
         let justify_qc = match self.previous_quorum_proposal.as_ref() {
@@ -112,7 +109,7 @@ impl SimulatedChainState {
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
                     TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade.clone()
+                    TEST_VERSIONS.test.upgrade.clone(),
                 )
                 .await
             },

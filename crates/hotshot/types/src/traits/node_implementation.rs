@@ -240,4 +240,3 @@ pub trait NodeType:
         + LCV2StateSignatureKey
         + LCV3StateSignatureKey;
 }
-

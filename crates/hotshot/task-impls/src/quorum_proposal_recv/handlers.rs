@@ -83,10 +83,7 @@ fn spawn_fetch_proposal<TYPES: NodeType>(
 
 /// Update states in the event that the parent state is not found for a given `proposal`.
 #[instrument(skip_all)]
-pub async fn validate_proposal_liveness<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
@@ -138,10 +135,7 @@ pub async fn validate_proposal_liveness<
     Ok(())
 }
 
-async fn validate_epoch_transition_block<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+async fn validate_epoch_transition_block<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
@@ -249,10 +243,7 @@ async fn validate_block_height<TYPES: NodeType>(
 /// - The sequencer storage update fails.
 #[allow(clippy::too_many_lines)]
 #[instrument(skip_all)]
-pub(crate) async fn handle_quorum_proposal_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     quorum_proposal_sender_key: &TYPES::SignatureKey,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,

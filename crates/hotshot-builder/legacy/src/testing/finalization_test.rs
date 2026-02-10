@@ -22,18 +22,14 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TEST_VERSIONS, TestTypes},
+    node_types::{TestTypes, TEST_VERSIONS},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
     data::{vid_commitment, DaProposal2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
     simple_certificate::QuorumCertificate2,
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::ConsensusTime,
-        EncodeBytes,
-    },
+    traits::{block_contents::BlockHeader, node_implementation::ConsensusTime, EncodeBytes},
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use sha2::{Digest, Sha256};
@@ -63,7 +59,7 @@ pub fn setup_builder_for_test() -> TestSetup {
         &[],
         &[],
         TEST_NUM_NODES_IN_VID_COMPUTATION,
-        TEST_VERSIONS.test.base
+        TEST_VERSIONS.test.base,
     );
     let bootstrap_builder_state_id = BuilderStateId::<TestTypes> {
         parent_commitment,
@@ -302,7 +298,7 @@ async fn progress_round_with_transactions(
             &encoded_transactions,
             &metadata.encode(),
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
 
         let (block_payload, metadata) =
@@ -327,7 +323,7 @@ async fn progress_round_with_transactions(
             timestamp_millis: round * 1_000,
             metadata,
             random: 0,
-            version: TEST_VERSIONS.test.base
+            version: TEST_VERSIONS.test.base,
         };
 
         let qc_proposal = QuorumProposalWrapper::<TestTypes> {
@@ -399,7 +395,7 @@ async fn test_empty_block_rate() {
             &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         ),
         parent_view: ViewNumber::genesis(),
     };
@@ -455,7 +451,7 @@ async fn test_eager_block_rate() {
             &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         ),
         parent_view: ViewNumber::genesis(),
     };

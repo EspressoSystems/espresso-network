@@ -13,8 +13,7 @@ use hotshot_example_types::{
         static_committee::StaticStakeTable, two_static_committees::TwoStakeTables,
     },
     node_types::{
-        CombinedImpl, RandomOverlapQuorumFilterConfig,
-        TestTypesEpochCatchupTypes, TEST_VERSIONS
+        CombinedImpl, RandomOverlapQuorumFilterConfig, TestTypesEpochCatchupTypes, TEST_VERSIONS,
     },
 };
 use hotshot_macros::cross_tests;

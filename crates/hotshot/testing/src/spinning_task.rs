@@ -172,7 +172,9 @@ where
                                             self.last_decided_leaf.clone(),
                                             (
                                                 TYPES::View::genesis(),
-                                                genesis_epoch_from_version::<TYPES>(config.base_version),
+                                                genesis_epoch_from_version::<TYPES>(
+                                                    config.base_version,
+                                                ),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
                                             TYPES::View::genesis(),
@@ -268,7 +270,7 @@ where
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
                                         config.base_version,
-                                        config.upgrade_version
+                                        config.upgrade_version,
                                     )
                                     .await,
                                 );

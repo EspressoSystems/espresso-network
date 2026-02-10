@@ -16,10 +16,8 @@ use hotshot_query_service::{
     ApiState,
 };
 use hotshot_types::{
-    data::VidShare,
-    simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::network::ConnectedNetwork,
-    vid::avidm::AvidMShare,
+    data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::network::ConnectedNetwork, vid::avidm::AvidMShare,
 };
 use snafu::OptionExt;
 use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};

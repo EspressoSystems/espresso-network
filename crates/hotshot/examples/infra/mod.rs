@@ -536,7 +536,9 @@ pub trait RunDa<
         let num_eligible_leaders = context
             .hotshot
             .membership_coordinator
-            .membership_for_epoch(genesis_epoch_from_version::<TYPES>(context.hotshot.upgrade_lock.base_version))
+            .membership_for_epoch(genesis_epoch_from_version::<TYPES>(
+                context.hotshot.upgrade_lock.base_version,
+            ))
             .await
             .unwrap()
             .stake_table()

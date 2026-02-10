@@ -33,10 +33,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::ConsensusTime,
-    },
+    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;
@@ -817,8 +814,7 @@ where
     Ok(api)
 }
 
-type MerklizedStateApi<N, P, D, ApiVer> =
-    Api<AvailState<N, P, D>, merklized_state::Error, ApiVer>;
+type MerklizedStateApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, merklized_state::Error, ApiVer>;
 pub(super) fn merklized_state<N, P, D, S, const ARITY: usize>(
     api_ver: semver::Version,
 ) -> Result<MerklizedStateApi<N, P, D, SequencerApiVersion>>

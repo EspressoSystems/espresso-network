@@ -27,10 +27,7 @@ use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::NodeType,
-    },
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
     PeerConfig,
 };
 use indexmap::IndexMap;

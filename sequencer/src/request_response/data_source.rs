@@ -23,10 +23,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::ViewNumber,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::ConsensusTime,
-    },
+    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
     vote::HasViewNumber,
 };
 use itertools::Itertools;
@@ -75,11 +72,8 @@ pub struct DataSource<
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<
-        I: NodeImplementation<SeqTypes>,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > DataSourceTrait<Request> for DataSource<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    DataSourceTrait<Request> for DataSource<I, N, P>
 {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {

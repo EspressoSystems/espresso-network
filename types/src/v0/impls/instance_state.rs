@@ -199,9 +199,9 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            version(0,1),
+            version(0, 1),
             coordinator,
-            version(0,1)
+            version(0, 1),
         )
     }
 
@@ -231,9 +231,9 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            version(0,2),
+            version(0, 2),
             coordinator,
-            version(0,2),
+            version(0, 2),
         )
     }
 
@@ -261,9 +261,9 @@ impl NodeState {
             ChainConfig::default(),
             l1,
             mock::MockStateCatchup::default(),
-            version(0,3),
+            version(0, 3),
             coordinator,
-            version(0,3)
+            version(0, 3),
         )
     }
 
@@ -356,9 +356,9 @@ impl Default for NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            version(0,1),
+            version(0, 1),
             coordinator,
-            version(0,1)
+            version(0, 1),
         )
     }
 }

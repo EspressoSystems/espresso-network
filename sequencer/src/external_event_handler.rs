@@ -7,9 +7,7 @@ use espresso_types::{PubKey, SeqTypes};
 use hotshot::types::Message;
 use hotshot_types::{
     message::MessageKind,
-    traits::{
-        network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
-    },
+    traits::network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
 };
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};

@@ -123,7 +123,7 @@ mod tests {
         run_test,
         validation::BuilderValidationConfig,
     };
-    use hotshot_example_types::node_types::{MemoryImpl, TEST_VERSIONS, TestTypes};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TEST_VERSIONS};
     use hotshot_macros::cross_tests;
     use hotshot_testing::{
         overall_safety_task::OverallSafetyPropertiesDescription, test_builder::TestDescription,

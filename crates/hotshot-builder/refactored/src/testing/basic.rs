@@ -12,7 +12,7 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TEST_VERSIONS, TestTypes},
+    node_types::{TestTypes, TEST_VERSIONS},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -193,8 +193,13 @@ async fn test_pruning() {
     // Send a bogus decide event. The only thing we care about is the leaf's view number,
     // everything else is boilerplate.
 
-    let mock_qc =
-        QuorumCertificate2::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade).await;
+    let mock_qc = QuorumCertificate2::genesis(
+        &Default::default(),
+        &Default::default(),
+        TEST_VERSIONS.test.base,
+        TEST_VERSIONS.test.upgrade,
+    )
+    .await;
     let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
         proposal: QuorumProposal2 {
             block_header: <TestBlockHeader as BlockHeader<TestTypes>>::genesis(
@@ -203,7 +208,7 @@ async fn test_pruning() {
                 &TestMetadata {
                     num_transactions: 0,
                 },
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             ),
             view_number: ViewNumber::new(DECIDE_VIEW),
             justify_qc: mock_qc.clone(),

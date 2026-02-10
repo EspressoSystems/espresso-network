@@ -27,8 +27,7 @@ use espresso_dev_node::{
     AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, L1ClientOptions,
-    SeqTypes, ValidatedState,
+    parse_duration, v0_3::ChainConfig, L1ClientOptions, SeqTypes, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
@@ -42,9 +41,7 @@ use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         options,
-        test_helpers::{
-            TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST,
-        },
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
     },
     persistence,
     state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
@@ -655,7 +652,7 @@ async fn main() -> anyhow::Result<()> {
     let network = {
         let v = match version {
             DevNodeVersion::V0_3 => versions::version(0, 3),
-            DevNodeVersion::V0_4 => versions::version(0, 4)
+            DevNodeVersion::V0_4 => versions::version(0, 4),
         };
         TestNetwork::new(config, v).await
     };

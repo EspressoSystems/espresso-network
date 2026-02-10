@@ -48,14 +48,12 @@ async fn main() {
         let builder_address = gen_local_address::<BUILDER_BASE_PORT>(i);
         let orchestrator_url = orchestrator_url.clone();
         let node = spawn(async move {
-            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(
-                ValidatorArgs {
-                    url: orchestrator_url,
-                    advertise_address: Some(advertise_address.to_string()),
-                    builder_address: Some(builder_address),
-                    network_config_file: None,
-                },
-            )
+            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(ValidatorArgs {
+                url: orchestrator_url,
+                advertise_address: Some(advertise_address.to_string()),
+                builder_address: Some(builder_address),
+                network_config_file: None,
+            })
             .await;
         });
         nodes.push(node);

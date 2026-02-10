@@ -13,7 +13,7 @@ use hotshot_types::{
 };
 use tracing::Instrument;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
-use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, version};
+use versions::{version, EPOCH_VERSION, MAX_SUPPORTED_VERSION};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
@@ -181,13 +181,9 @@ impl StakeTable {
         V: StaticVersionType + 'static,
     {
         let base = version(V::MAJOR, V::MINOR);
-        cert.is_valid_cert(
-            &self.entries,
-            self.threshold,
-            &UpgradeLock::new(base, base),
-        )
-        .await
-        .context("invalid threshold signature")
+        cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(base, base))
+            .await
+            .context("invalid threshold signature")
     }
 }
 
@@ -279,7 +275,9 @@ mod test {
 
     use super::*;
     use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum, LegacyVersion, VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain
+        custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
+        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain, AlwaysFalseQuorum,
+        AlwaysTrueQuorum, EpochChangeQuorum, LegacyVersion, VersionCheckQuorum, ENABLE_EPOCHS,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -333,7 +331,8 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
-        let leaves = leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS.0, ENABLE_EPOCHS.1.clone()).await;
+        let leaves =
+            leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS.0, ENABLE_EPOCHS.1.clone()).await;
         let version = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -346,11 +345,17 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_illegal_upgrade() {
-        let leaves = custom_leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS.0, ENABLE_EPOCHS.1.clone(), |proposal| {
-            // Don't attach an upgrade certificate, so that the version change that happens within
-            // the QC change is actually malicious.
-            proposal.upgrade_certificate = None;
-        })
+        let leaves = custom_leaf_chain_with_upgrade(
+            1..=3,
+            2,
+            ENABLE_EPOCHS.0,
+            ENABLE_EPOCHS.1.clone(),
+            |proposal| {
+                // Don't attach an upgrade certificate, so that the version change that happens within
+                // the QC change is actually malicious.
+                proposal.upgrade_certificate = None;
+            },
+        )
         .await;
         VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
             .verify_qc_chain_and_get_version(

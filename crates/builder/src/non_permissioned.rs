@@ -19,10 +19,7 @@ use hotshot_builder_shared::{block::ParentBlockReferences, utils::EventServiceSt
 use hotshot_types::{
     data::{fake_commitment, vid_commitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{
-        block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
-        EncodeBytes,
-    },
+    traits::{block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics, EncodeBytes},
 };
 use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
 use tide_disco::Url;
@@ -103,7 +100,7 @@ impl BuilderConfig {
         maximize_txns_count_timeout_duration: Duration,
         base_fee: FeeAmount,
         tx_status_cache_size: usize,
-        base: Version
+        base: Version,
     ) -> anyhow::Result<Self> {
         tracing::info!(
             address = %builder_key_pair.fee_account(),
@@ -150,7 +147,7 @@ impl BuilderConfig {
                 &payload_bytes,
                 &genesis_ns_table.encode(),
                 GENESIS_VID_NUM_STORAGE_NODES,
-                base
+                base,
             )
         };
 
@@ -297,7 +294,7 @@ mod test {
             event_service_url.clone(),
             builder_api_url.clone(),
             network.cfg.num_nodes(),
-            MOCK_SEQUENCER_BASE_VERSION
+            MOCK_SEQUENCER_BASE_VERSION,
         )
         .await;
 

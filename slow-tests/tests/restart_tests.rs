@@ -32,8 +32,8 @@ use espresso_contract_deployer::{
     Contracts,
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
+    L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -257,10 +257,7 @@ impl NodeParams {
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
     context: Option<
-        SequencerContext<
-            network::Production,
-            <S::Options as PersistenceOptions>::Persistence
-        >,
+        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence>,
     >,
     modules: Modules,
     opt: Options,

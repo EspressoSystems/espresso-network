@@ -16,8 +16,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, time::Duration};
-use std::sync::Arc;
+use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -27,10 +26,11 @@ use context::SequencerContext;
 use derivative::Derivative;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
+    v0::traits::SequencerPersistence,
     v0_3::Fetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
-use espresso_types::v0::traits::SequencerPersistence;
+pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
@@ -59,18 +59,16 @@ use hotshot_types::{
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
+pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
+pub use run::main;
+use serde::{Deserialize, Serialize};
 use tokio::select;
 use tracing::info;
 use url::Url;
-use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
-
-pub use genesis::Genesis;
-pub use options::Options;
-pub use run::main;
 
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
@@ -690,7 +688,7 @@ where
         event_consumer,
         proposal_fetcher_config,
         genesis.base_version,
-        genesis.upgrade_version
+        genesis.upgrade_version,
     )
     .await?;
     if wait_for_orchestrator {
@@ -775,7 +773,7 @@ pub mod testing {
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
-    use versions::{EPOCH_VERSION, version};
+    use versions::{version, EPOCH_VERSION};
 
     use super::*;
     use crate::{
@@ -1137,7 +1135,7 @@ pub mod testing {
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
                 base_version: version(0, 1),
-                upgrade_version: version(0, 1)
+                upgrade_version: version(0, 1),
             };
 
             let anvil = Anvil::new()
@@ -1418,7 +1416,7 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 base_version,
-                todo!()
+                todo!(),
             )
             .await
             .unwrap()
@@ -1496,7 +1494,7 @@ pub mod testing {
 mod test {
 
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, MOCK_SEQUENCER_BASE_VERSION, NamespaceId, Payload, Transaction};
+    use espresso_types::{Header, NamespaceId, Payload, Transaction, MOCK_SEQUENCER_BASE_VERSION};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -1582,7 +1580,12 @@ mod test {
                     .unwrap();
 
             let genesis_state = NodeState::mock();
-            Header::genesis(&genesis_state, genesis_payload, &genesis_ns_table, TEST_VERSIONS.test.base)
+            Header::genesis(
+                &genesis_state,
+                genesis_payload,
+                &genesis_ns_table,
+                TEST_VERSIONS.test.base,
+            )
         };
 
         loop {

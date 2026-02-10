@@ -179,10 +179,7 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 /// Uses the result from `start_drb_task`.
 ///
 /// Returns an error if we should not vote.
-pub(crate) async fn verify_drb_result<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub(crate) async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
     validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
@@ -873,10 +870,7 @@ async fn transition_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         .cloned()
 }
 
-pub(crate) async fn validate_epoch_transition_qc<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub(crate) async fn validate_epoch_transition_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {

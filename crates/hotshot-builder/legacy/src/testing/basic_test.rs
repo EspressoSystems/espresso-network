@@ -27,7 +27,7 @@ mod tests {
     };
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::{TEST_VERSIONS, TestTypes},
+        node_types::{TestTypes, TEST_VERSIONS},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
@@ -83,7 +83,7 @@ mod tests {
             &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
         let global_state = Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -139,7 +139,7 @@ mod tests {
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
                 TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade
+                TEST_VERSIONS.test.upgrade,
             )
             .await;
 
@@ -309,7 +309,7 @@ mod tests {
                         &encoded_transactions,
                         &metadata.encode(),
                         NUM_NODES_IN_VID_COMPUTATION,
-                        TEST_VERSIONS.test.base
+                        TEST_VERSIONS.test.base,
                     );
 
                     tracing::debug!("Block Payload vid commitment: {block_payload_commitment:?}");
@@ -409,7 +409,7 @@ mod tests {
                         0 => Leaf::genesis(
                             &TestValidatedState::default(),
                             &TestInstanceState::default(),
-                            TEST_VERSIONS.test.base
+                            TEST_VERSIONS.test.base,
                         )
                         .await
                         .into(),
@@ -427,7 +427,7 @@ mod tests {
                                 .fill_block_payload(
                                     block_payload,
                                     NUM_NODES_IN_VID_COMPUTATION,
-                                    TEST_VERSIONS.test.base
+                                    TEST_VERSIONS.test.base,
                                 )
                                 .unwrap();
                             current_leaf

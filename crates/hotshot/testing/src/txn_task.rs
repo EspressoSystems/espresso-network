@@ -9,10 +9,7 @@ use std::{sync::Arc, time::Duration};
 use async_broadcast::Receiver;
 use async_lock::RwLock;
 use hotshot::traits::TestableNodeImplementation;
-use hotshot_types::{
-    error::HotShotError,
-    traits::node_implementation::NodeType,
-};
+use hotshot_types::{error::HotShotError, traits::node_implementation::NodeType};
 use rand::thread_rng;
 use tokio::{spawn, task::JoinHandle, time::sleep};
 

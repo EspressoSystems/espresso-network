@@ -13,11 +13,7 @@ use hotshot_types::{
     data::VidDisperseShare,
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
-    traits::{
-        network::DataRequest,
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
-    },
+    traits::{network::DataRequest, node_implementation::NodeType, signature_key::SignatureKey},
     utils::{View, ViewInner},
 };
 use sha2::{Digest, Sha256};

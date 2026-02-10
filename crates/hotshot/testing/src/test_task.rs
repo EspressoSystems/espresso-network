@@ -17,10 +17,7 @@ use hotshot::{
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkMessageTaskState};
 use hotshot_types::{
     message::UpgradeLock,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::NodeType,
-    },
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
 use tokio::{
     spawn,

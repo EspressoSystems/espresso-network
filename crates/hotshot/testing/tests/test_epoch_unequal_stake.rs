@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::{
-    CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes, TEST_VERSIONS
+    CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{

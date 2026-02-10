@@ -109,7 +109,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -124,7 +124,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         instance_state.l1_client.spawn_tasks().await;
 
         // Load saved consensus state from storage.
-        let (initializer, anchor_view) = persistence.load_consensus_state(instance_state.clone(), base, upgrade)
+        let (initializer, anchor_view) = persistence
+            .load_consensus_state(instance_state.clone(), base, upgrade)
             .await?;
 
         tracing::warn!(

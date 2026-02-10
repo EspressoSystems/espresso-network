@@ -7,8 +7,8 @@
 use hotshot_example_types::{
     membership::static_committee::StaticStakeTable,
     node_types::{
-        CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl,
-        TestTypesEpochCatchupTypes, TEST_VERSIONS
+        CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypesEpochCatchupTypes,
+        TEST_VERSIONS,
     },
 };
 use hotshot_macros::cross_tests;

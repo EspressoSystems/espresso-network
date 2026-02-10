@@ -14,8 +14,7 @@ use espresso_types::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, ValidatedState,
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{

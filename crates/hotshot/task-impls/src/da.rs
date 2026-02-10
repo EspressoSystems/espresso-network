@@ -199,10 +199,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 let txns_clone = Arc::clone(&txns);
                 let metadata = proposal.data.metadata.encode();
                 let metadata_clone = metadata.clone();
-                let payload_commitment = spawn_blocking(move || {
-                    vid_commitment(&txns, &metadata, total_weight, version)
-                })
-                .await;
+                let payload_commitment =
+                    spawn_blocking(move || vid_commitment(&txns, &metadata, total_weight, version))
+                        .await;
                 let payload_commitment = payload_commitment.unwrap();
                 let next_epoch_payload_commitment = if matches!(
                     proposal.data.epoch_transition_indicator,

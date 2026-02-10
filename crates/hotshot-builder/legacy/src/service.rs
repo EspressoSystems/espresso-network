@@ -1544,18 +1544,18 @@ mod test {
     };
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::{TEST_VERSIONS, TestTypes},
+        node_types::{TestTypes, TEST_VERSIONS},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
         data::{
-            DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber, vid_commitment
+            vid_commitment, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2,
+            QuorumProposalWrapper, VidCommitment, ViewNumber,
         },
         message::Proposal,
         simple_certificate::QuorumCertificate2,
         traits::{
-            block_contents::Transaction,
-            node_implementation::ConsensusTime,
+            block_contents::Transaction, node_implementation::ConsensusTime,
             signature_key::BuilderSignatureKey,
         },
         utils::{BuilderCommitment, EpochTransitionIndicator},
@@ -2416,7 +2416,7 @@ mod test {
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2436,7 +2436,7 @@ mod test {
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2481,7 +2481,7 @@ mod test {
                 &[10],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             ),
             parent_view: ViewNumber::new(10),
         };
@@ -2534,7 +2534,7 @@ mod test {
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2554,7 +2554,7 @@ mod test {
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2632,7 +2632,7 @@ mod test {
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2652,7 +2652,7 @@ mod test {
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2706,7 +2706,7 @@ mod test {
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2758,7 +2758,7 @@ mod test {
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2778,7 +2778,7 @@ mod test {
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2849,7 +2849,7 @@ mod test {
                     &[i],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    TEST_VERSIONS.test.base
+                    TEST_VERSIONS.test.base,
                 ),
                 parent_view: ViewNumber::new(i as u64),
             };
@@ -2866,7 +2866,7 @@ mod test {
                     &[i],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    TEST_VERSIONS.test.base
+                    TEST_VERSIONS.test.base,
                 ),
                 parent_view: ViewNumber::new(i as u64),
             };
@@ -4000,7 +4000,7 @@ mod test {
             let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             )
             .await
             .into();
@@ -4092,7 +4092,7 @@ mod test {
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
                         TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade
+                        TEST_VERSIONS.test.upgrade,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -4149,7 +4149,7 @@ mod test {
             let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             )
             .await
             .into();
@@ -4162,7 +4162,7 @@ mod test {
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
                         TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade
+                        TEST_VERSIONS.test.upgrade,
                     )
                     .await,
                     upgrade_certificate: None,

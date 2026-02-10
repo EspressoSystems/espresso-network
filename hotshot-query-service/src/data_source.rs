@@ -565,7 +565,10 @@ pub mod availability_tests {
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
     use committable::Committable;
-    use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::{TestInstanceState, TestValidatedState}};
+    use hotshot_example_types::{
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
     use hotshot_types::simple_certificate::QuorumCertificate2;
 
     use crate::{
@@ -598,7 +601,7 @@ pub mod persistence_tests {
             &TestValidatedState::default(),
             &TestInstanceState::default(),
             TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade
+            TEST_VERSIONS.test.upgrade,
         )
         .await;
         let mut leaf = Leaf2::<MockTypes>::genesis(
@@ -649,7 +652,7 @@ pub mod persistence_tests {
             &TestValidatedState::default(),
             &TestInstanceState::default(),
             TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade
+            TEST_VERSIONS.test.upgrade,
         )
         .await;
         let mut leaf = Leaf2::<MockTypes>::genesis(
@@ -711,7 +714,7 @@ pub mod persistence_tests {
             &TestValidatedState::default(),
             &TestInstanceState::default(),
             TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade
+            TEST_VERSIONS.test.upgrade,
         )
         .await;
         let mut mock_leaf = Leaf2::<MockTypes>::genesis(
@@ -787,7 +790,7 @@ pub mod node_tests {
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
-        node_types::{TEST_VERSIONS, TestTypes},
+        node_types::{TestTypes, TEST_VERSIONS},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
@@ -838,7 +841,7 @@ pub mod node_tests {
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
                 TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade
+                TEST_VERSIONS.test.upgrade,
             )
             .await,
         ];
@@ -846,7 +849,7 @@ pub mod node_tests {
             BlockQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             )
             .await,
         ];
@@ -999,12 +1002,8 @@ pub mod node_tests {
                 .await
                 .unwrap();
             let encoded = payload.encode();
-            let payload_commitment = vid_commitment(
-                &encoded,
-                &metadata.encode(),
-                1,
-                TEST_VERSIONS.test.base
-            );
+            let payload_commitment =
+                vid_commitment(&encoded, &metadata.encode(), 1, TEST_VERSIONS.test.base);
             let header = TestBlockHeader {
                 block_number: i,
                 payload_commitment,
@@ -1018,14 +1017,14 @@ pub mod node_tests {
                     num_transactions: 7, // arbitrary
                 },
                 random: 1, // arbitrary
-                version: TEST_VERSIONS.test.base
+                version: TEST_VERSIONS.test.base,
             };
 
             let mut leaf = LeafQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
                 TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade
+                TEST_VERSIONS.test.upgrade,
             )
             .await;
             *leaf.leaf.block_header_mut() = header.clone();
@@ -1110,7 +1109,7 @@ pub mod node_tests {
             &TestValidatedState::default(),
             &TestInstanceState::default(),
             TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade
+            TEST_VERSIONS.test.upgrade,
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
@@ -1433,7 +1432,7 @@ pub mod node_tests {
             let mut leaf = Leaf2::<MockTypes>::genesis(
                 &Default::default(),
                 &Default::default(),
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             )
             .await;
             leaf.block_header_mut().block_number = number;
@@ -1442,7 +1441,7 @@ pub mod node_tests {
                 &Default::default(),
                 &Default::default(),
                 TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade
+                TEST_VERSIONS.test.upgrade,
             )
             .await;
             qc1.view_number = ViewNumber::new(1);

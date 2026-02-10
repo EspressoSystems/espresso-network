@@ -15,7 +15,7 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TEST_VERSIONS, TestTypes},
+    node_types::{TestTypes, TEST_VERSIONS},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -25,10 +25,7 @@ use hotshot_types::{
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
-    traits::{
-        node_implementation::ConsensusTime,
-        EncodeBytes,
-    },
+    traits::{node_implementation::ConsensusTime, EncodeBytes},
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use sha2::{Digest, Sha256};
@@ -47,7 +44,7 @@ pub mod finalization_test;
 pub async fn create_builder_state(
     channel_capacity: usize,
     num_storage_nodes: usize,
-    base: Version
+    base: Version,
 ) -> (
     BroadcastSender<MessageType<TestTypes>>,
     Arc<RwLock<GlobalState<TestTypes>>>,
@@ -115,7 +112,7 @@ pub async fn calc_proposal_msg(
     round: usize,
     prev_quorum_proposal: Option<QuorumProposalWrapper<TestTypes>>,
     transactions: Vec<TestTransaction>,
-    base: Version
+    base: Version,
 ) -> (
     QuorumProposalWrapper<TestTypes>,
     QuorumProposalMessage<TestTypes>,
@@ -132,7 +129,7 @@ pub async fn calc_proposal_msg(
         &encoded_transactions,
         &metadata.encode(),
         num_storage_nodes,
-        base
+        base,
     );
     let block_builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
@@ -190,7 +187,7 @@ pub async fn calc_proposal_msg(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
                 TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade
+                TEST_VERSIONS.test.upgrade,
             )
             .await
         },

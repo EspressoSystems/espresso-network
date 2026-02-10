@@ -1399,7 +1399,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
-        base: Version
+        base: Version,
     ) -> Self {
         let epoch = genesis_epoch_from_version::<TYPES>(base);
 
@@ -1653,10 +1653,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     #[allow(clippy::unused_async)]
     /// Calculate the leaf commitment,
     /// which is gated on the version to include the block header.
-    pub async fn commit(
-        &self,
-        _upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Commitment<Self> {
+    pub async fn commit(&self, _upgrade_lock: &UpgradeLock<TYPES>) -> Commitment<Self> {
         <Self as Committable>::commit(self)
     }
 }
@@ -1735,7 +1732,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
         let upgrade_lock = UpgradeLock::<TYPES>::new(base, upgrade);
@@ -1772,7 +1769,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
         let upgrade_lock = UpgradeLock::<TYPES>::new(base, upgrade);
@@ -1818,7 +1815,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
-        version: Version
+        version: Version,
     ) -> Self {
         let (payload, metadata) =
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
@@ -2131,10 +2128,8 @@ pub mod null_block {
     use crate::{
         data::VidCommitment,
         traits::{
-            block_contents::BuilderFee,
-            node_implementation::NodeType,
-            signature_key::BuilderSignatureKey,
-            BlockPayload,
+            block_contents::BuilderFee, node_implementation::NodeType,
+            signature_key::BuilderSignatureKey, BlockPayload,
         },
         vid::advz::advz_scheme,
     };

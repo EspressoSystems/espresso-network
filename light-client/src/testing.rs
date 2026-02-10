@@ -13,7 +13,10 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NamespaceId, NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, StakeTableHash, StakeTableState, Transaction, ValidatorMap, v0_3::{StakeTableEvent, Validator}
+    v0_3::{StakeTableEvent, Validator},
+    BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NamespaceId, NodeState, NsProof, Payload,
+    PrivKey, PubKey, SeqTypes, StakeTableHash, StakeTableState, Transaction, ValidatorMap,
+    BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -44,7 +47,7 @@ use jf_merkle_tree_compat::{
 };
 use rand::RngCore;
 use vbs::version::{StaticVersionType, Version};
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, version};
+use versions::{version, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
 
 use crate::{
     client::Client,
@@ -112,7 +115,7 @@ pub async fn custom_leaf_chain_with_upgrade(
         &NodeState::mock()
             .with_genesis_version(upgrade)
             .with_current_version(upgrade),
-        base
+        base,
     )
     .await;
     let upgrade_data = UpgradeProposalData {
@@ -428,7 +431,7 @@ impl InnerTestClient {
             let (justify_qc, mt) = if i == 0 {
                 (
                     QuorumCertificate2::genesis(&Default::default(), &node_state, version, version)
-                    .await,
+                        .await,
                     SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
                 )
             } else {
@@ -445,9 +448,9 @@ impl InnerTestClient {
                 vid_commitment(&payload.encode(), &ns_table.encode(), quorum.len(), version);
 
             let mut block_header = Leaf2::genesis(&Default::default(), &node_state, version)
-            .await
-            .block_header()
-            .clone();
+                .await
+                .block_header()
+                .clone();
             *block_header.height_mut() = i as u64;
             *block_header.block_merkle_tree_root_mut() = mt.commitment();
             *block_header.payload_commitment_mut() = payload_comm;

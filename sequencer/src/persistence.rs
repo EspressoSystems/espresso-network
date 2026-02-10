@@ -119,8 +119,7 @@ mod tests {
             PersistenceOptions, SequencerPersistence,
         },
         v0_3::{Fetcher, Validator},
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
-        ValidatedState,
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
     };
     use futures::{future::join_all, StreamExt, TryStreamExt};
     use hotshot::{
@@ -144,11 +143,7 @@ mod tests {
             UpgradeCertificate,
         },
         simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
-        traits::{
-            block_contents::BlockHeader,
-            node_implementation::ConsensusTime,
-            EncodeBytes,
-        },
+        traits::{block_contents::BlockHeader, node_implementation::ConsensusTime, EncodeBytes},
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
@@ -504,8 +499,12 @@ mod tests {
             None
         );
 
-        let leaf: Leaf2 =
-            Leaf2::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
+        let leaf: Leaf2 = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -615,7 +614,7 @@ mod tests {
             &leaf_payload_bytes_arc,
             &leaf.block_header().metadata().encode(),
             2,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
 
         storage
@@ -940,12 +939,17 @@ mod tests {
             None
         );
 
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+        let upgrade_lock =
+            UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
 
         let genesis_view = ViewNumber::genesis();
 
-        let leaf =
-            Leaf2::genesis(&ValidatedState::default(), &NodeState::default(), TEST_VERSIONS.test.base).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
             leaf_commit: leaf.commit(),
             epoch: Some(EpochNumber::new(1)),
@@ -999,10 +1003,13 @@ mod tests {
         // Create a short blockchain.
         let mut chain = vec![];
 
-        let leaf: Leaf2 =
-            Leaf::genesis(&ValidatedState::default(), &NodeState::mock(), MOCK_UPGRADE.base)
-                .await
-                .into();
+        let leaf: Leaf2 = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            MOCK_UPGRADE.base,
+        )
+        .await
+        .into();
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
         let avidm_param = init_avidm_param(2).unwrap();
@@ -1074,7 +1081,7 @@ mod tests {
             &leaf_payload_bytes_arc,
             &leaf.block_header().metadata().encode(),
             2,
-            TEST_VERSIONS.test.base
+            TEST_VERSIONS.test.base,
         );
 
         for i in 0..4 {
@@ -1216,8 +1223,12 @@ mod tests {
         let storage = options.create().await.unwrap();
 
         // Add some "old" data, from view 0.
-        let leaf =
-            Leaf::genesis(&ValidatedState::default(), &NodeState::mock(), MOCK_UPGRADE.base).await;
+        let leaf = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            MOCK_UPGRADE.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
         let avidm_param = init_avidm_param(2).unwrap();
@@ -1425,7 +1436,12 @@ mod tests {
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook(DelegationConfig::MultipleDelegators, stake_table_version, version(0, 3), version(0, 0))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                stake_table_version,
+                version(0, 3),
+                version(0, 0),
+            )
             .await
             .expect("Pos deployment failed")
             .build();
@@ -1850,8 +1866,12 @@ mod tests {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
-        let genesis_leaf: Leaf2 =
-            Leaf2::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
+        let genesis_leaf: Leaf2 = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
                 epoch: None,

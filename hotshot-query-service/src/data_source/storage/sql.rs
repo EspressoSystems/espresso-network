@@ -1469,9 +1469,9 @@ mod test {
     use super::{testing::TmpDb, *};
     use crate::{
         availability::LeafQueryData,
-        data_source::storage::{UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
+        data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
-        testing::mocks::{MOCK_UPGRADE, MockHeader, MockMerkleTree, MockPayload, MockTypes},
+        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MOCK_UPGRADE},
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1570,7 +1570,7 @@ mod test {
             &TestValidatedState::default(),
             &TestInstanceState::default(),
             TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade
+            TEST_VERSIONS.test.upgrade,
         )
         .await;
         // insert some mock data
@@ -1881,7 +1881,7 @@ mod test {
                 &instance_state,
                 payload.clone(),
                 &metadata,
-                MOCK_UPGRADE.base
+                MOCK_UPGRADE.base,
             );
 
             block_header.block_number = i;
@@ -1910,7 +1910,7 @@ mod test {
             leaf.fill_block_payload(
                 payload.clone(),
                 GENESIS_VID_NUM_STORAGE_NODES,
-                MOCK_UPGRADE.base
+                MOCK_UPGRADE.base,
             )
             .unwrap();
             qc.data.leaf_commit = <Leaf<MockTypes> as Committable>::commit(&leaf);

@@ -1725,10 +1725,7 @@ impl StateCatchup for ParallelStateCatchup {
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
 #[allow(clippy::type_complexity)]
-pub async fn add_fee_accounts_to_state<
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
->(
+pub async fn add_fee_accounts_to_state<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
     view: &<SeqTypes as NodeType>::View,
     accounts: &[FeeAccount],

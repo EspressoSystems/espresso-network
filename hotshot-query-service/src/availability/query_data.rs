@@ -272,7 +272,7 @@ impl<Types: NodeType> LeafQueryDataLegacy<Types> {
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> Self {
         Self {
             leaf: Leaf::genesis(validated_state, instance_state, base).await,
@@ -343,7 +343,7 @@ impl<Types: NodeType> LeafQueryData<Types> {
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> Self {
         Self {
             leaf: Leaf2::genesis(validated_state, instance_state, base).await,
@@ -590,7 +590,7 @@ impl<Types: NodeType> PayloadQueryData<Types> {
     pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
-        base: Version
+        base: Version,
     ) -> Self
     where
         Header<Types>: QueryableHeader<Types>,
@@ -709,7 +709,7 @@ impl<Types: NodeType> VidCommonQueryData<Types> {
     pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
-        base: Version
+        base: Version,
     ) -> Self {
         let leaf = Leaf::<Types>::genesis(validated_state, instance_state, base).await;
         let payload = leaf.block_payload().unwrap();

@@ -155,7 +155,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
 type StorageState<N, P, D> = ExtensibleDataSource<D, ApiState<N, P>>;
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes> for ApiState<N, P> {
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes>
+    for ApiState<N, P>
+{
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
@@ -193,24 +195,24 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence>
-    TokenDataSource<SeqTypes> for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> TokenDataSource<SeqTypes>
+    for StorageState<N, P, D>
 {
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_total_supply_l1().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence>
-    SubmitDataSource<N, P> for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> SubmitDataSource<N, P>
+    for StorageState<N, P, D>
 {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    StakeTableDataSource<SeqTypes> for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
+    for StorageState<N, P, D>
 {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
@@ -338,8 +340,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    StakeTableDataSource<SeqTypes> for ApiState<N, P>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
@@ -533,8 +535,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for ApiState<N, P>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     async fn request_vid_shares(
         &self,
@@ -639,8 +641,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for ApiState<N, P>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     async fn request_state_cert(
         &self,
@@ -755,9 +757,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDat
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource for ApiState<N, P> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -782,7 +782,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P> for ApiState<N, P> {
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P>
+    for ApiState<N, P>
+{
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         let handle = self.consensus().await;
 
@@ -829,11 +831,8 @@ where
     }
 }
 
-impl<
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-        D: CatchupStorage + Send + Sync,
-    > CatchupDataSource for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    CatchupDataSource for StorageState<N, P, D>
 {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
@@ -967,8 +966,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_v2_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf)
-                .await
+            add_v2_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf).await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -1026,8 +1024,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_v1_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf)
-                .await
+            add_v1_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf).await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -1062,9 +1059,7 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for ApiState<N, P> {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1233,8 +1228,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    HotShotConfigDataSource for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> HotShotConfigDataSource
+    for StorageState<N, P, D>
 {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
@@ -1250,8 +1245,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSour
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    StateSignatureDataSource<N> for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateSignatureDataSource<N>
+    for StorageState<N, P, D>
 {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
@@ -1338,7 +1333,8 @@ pub mod test_helpers {
         Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
-        MOCK_SEQUENCER_BASE_VERSION, NamespaceId, ValidatedState, v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup}
+        v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
+        NamespaceId, ValidatedState, MOCK_SEQUENCER_BASE_VERSION,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -1509,7 +1505,7 @@ pub mod test_helpers {
             delegation_config: DelegationConfig,
             stake_table_version: StakeTableContractVersion,
             base: Version,
-            upgrade: Version
+            upgrade: Version,
         ) -> anyhow::Result<Self> {
             if base < EPOCH_VERSION && upgrade < EPOCH_VERSION {
                 panic!("given version does not require pos deployment");
@@ -2036,7 +2032,9 @@ mod api_tests {
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
-        Header, Leaf2, MOCK_SEQUENCER_BASE_VERSION, MOCK_SEQUENCER_UPGRADE_VERSION, NamespaceId, NamespaceProofQueryData, ValidatedState, traits::{EventConsumer, PersistenceOptions}
+        traits::{EventConsumer, PersistenceOptions},
+        Header, Leaf2, NamespaceId, NamespaceProofQueryData, ValidatedState,
+        MOCK_SEQUENCER_BASE_VERSION, MOCK_SEQUENCER_UPGRADE_VERSION,
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -2291,7 +2289,12 @@ mod api_tests {
         // Create two non-consecutive leaf chains.
         let mut chain1 = vec![];
 
-        let genesis = Leaf2::genesis(&Default::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
+        let genesis = Leaf2::genesis(
+            &Default::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let payload = genesis.block_payload().unwrap();
         let payload_bytes_arc = payload.encode();
 
@@ -2310,7 +2313,7 @@ mod api_tests {
                     &ValidatedState::default(),
                     &NodeState::mock(),
                     MOCK_SEQUENCER_BASE_VERSION,
-                    MOCK_SEQUENCER_UPGRADE_VERSION
+                    MOCK_SEQUENCER_UPGRADE_VERSION,
                 )
                 .await,
                 upgrade_certificate: None,
@@ -2325,7 +2328,7 @@ mod api_tests {
             &ValidatedState::default(),
             &NodeState::mock(),
             MOCK_SEQUENCER_BASE_VERSION,
-            MOCK_SEQUENCER_UPGRADE_VERSION
+            MOCK_SEQUENCER_UPGRADE_VERSION,
         )
         .await;
 
@@ -2506,11 +2509,15 @@ mod api_tests {
             &ValidatedState::default(),
             &NodeState::mock(),
             MOCK_SEQUENCER_BASE_VERSION,
-            MOCK_SEQUENCER_UPGRADE_VERSION
+            MOCK_SEQUENCER_UPGRADE_VERSION,
         )
         .await;
-        let leaf =
-            Leaf2::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
 
         // Append the genesis leaf. We don't use this for the test, because the update function will
         // automatically fill in the missing data for genesis. We just append this to get into a
@@ -2611,9 +2618,16 @@ mod test {
         upgrade_stake_table_v2, Contract, Contracts,
     };
     use espresso_types::{
-        ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_BASE_VERSION, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState, config::PublicHotShotConfig, traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions}, v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1}, v0_4::{
-            REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2
-        }, validators_from_l1_events
+        config::PublicHotShotConfig,
+        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
+        v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
+        v0_4::{
+            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
+        },
+        validators_from_l1_events, ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client,
+        L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        MOCK_SEQUENCER_BASE_VERSION,
     };
     use futures::{
         future::{self, join_all, try_join_all},
@@ -2672,7 +2686,9 @@ mod test {
     };
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, Version};
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, VERSION_ZERO, version};
+    use versions::{
+        version, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, VERSION_ZERO,
+    };
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -3609,7 +3625,12 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook(DelegationConfig::VariableAmounts, Default::default(), POS_V3, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                POS_V3,
+                VERSION_ZERO,
+            )
             .await
             .expect("Pos Deployment")
             .build();
@@ -3705,7 +3726,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::VariableAmounts, Default::default(), POS_V3, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                POS_V3,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -3802,7 +3828,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), POS_V3, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V3,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -3924,7 +3955,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), POS_V3, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V3,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -4033,7 +4069,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), POS_V3, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V3,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -4258,7 +4299,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), POS_V4, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V4,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -4519,7 +4565,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), base, upgrade)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                base,
+                upgrade,
+            )
             .await
             .unwrap()
             .build();
@@ -4595,7 +4646,12 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), base, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                base,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -4726,7 +4782,12 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), base, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                base,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -4883,7 +4944,7 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 base,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -5109,7 +5170,7 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 pos_version,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -5415,7 +5476,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::VariableAmounts, Default::default(), base, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                base,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -5483,7 +5549,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::VariableAmounts, Default::default(), base, VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                base,
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -6058,7 +6129,7 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 base,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6135,7 +6206,7 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 base,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6265,7 +6336,7 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 base,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6391,7 +6462,7 @@ mod test {
                 DelegationConfig::NoSelfDelegation,
                 StakeTableContractVersion::V1, // upgraded later
                 POS_V4,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6540,7 +6611,7 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 base,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6675,7 +6746,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), version(0,4), VERSION_ZERO)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                version(0, 4),
+                VERSION_ZERO,
+            )
             .await
             .unwrap()
             .build();
@@ -6767,7 +6843,7 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 POS_V4,
-                VERSION_ZERO
+                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6840,9 +6916,13 @@ mod test {
         .await?;
 
         let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(DRB_AND_HEADER_UPGRADE_VERSION);
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, DRB_AND_HEADER_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION)
+        let instance_state = NodeState::mock().with_genesis_version(DRB_AND_HEADER_UPGRADE_VERSION);
+        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
+            &validated_state,
+            &instance_state,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+        )
         .await;
 
         let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
@@ -6988,9 +7068,13 @@ mod test {
         .await?;
 
         let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(DRB_AND_HEADER_UPGRADE_VERSION);
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, DRB_AND_HEADER_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION)
+        let instance_state = NodeState::mock().with_genesis_version(DRB_AND_HEADER_UPGRADE_VERSION);
+        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
+            &validated_state,
+            &instance_state,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+        )
         .await;
 
         let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);

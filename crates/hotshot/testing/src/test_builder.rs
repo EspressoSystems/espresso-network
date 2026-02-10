@@ -18,16 +18,14 @@ use hotshot_example_types::{
     testable_delay::DelayConfig,
 };
 use hotshot_types::{
-    consensus::ConsensusMetricsValue,
-    epoch_membership::EpochMembershipCoordinator,
-    storage_metrics::StorageMetricsValue,
-    traits::node_implementation::NodeType,
-    HotShotConfig, PeerConfig, ValidatorConfig,
+    consensus::ConsensusMetricsValue, epoch_membership::EpochMembershipCoordinator,
+    storage_metrics::StorageMetricsValue, traits::node_implementation::NodeType, HotShotConfig,
+    PeerConfig, ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
-use vec1::Vec1;
 use vbs::version::Version;
+use vec1::Vec1;
 use versions::version;
 
 use super::{
@@ -68,7 +66,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
     epoch_height: u64,
     epoch_start_block: u64,
     base: Version,
-    upgrade: Version
+    upgrade: Version,
 ) -> HotShotConfig<TYPES> {
     HotShotConfig {
         start_threshold: (1, 1),
@@ -99,7 +97,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         drb_difficulty: 10,
         drb_upgrade_difficulty: 20,
         base_version: base,
-        upgrade_version: upgrade
+        upgrade_version: upgrade,
     }
 }
 
@@ -270,7 +268,7 @@ pub async fn create_test_handle<
         metadata.test_config.epoch_start_block,
         vec![],
         config.base_version,
-        config.upgrade_version
+        config.upgrade_version,
     )
     .await
     .unwrap();
@@ -455,7 +453,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 epoch_height,
                 epoch_start_block,
                 version(0, 1),
-                version(0, 1)
+                version(0, 1),
             ),
             // The first 14 (i.e., 20 - f) nodes are in the DA committee and we may shutdown the
             // remaining 6 (i.e., f) nodes. We could remove this restriction after fixing the
@@ -500,7 +498,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 self.test_config.epoch_height,
                 self.test_config.epoch_start_block,
                 version(0, 1),
-                version(0, 1)
+                version(0, 1),
             ),
             ..self
         }
@@ -534,7 +532,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 epoch_height,
                 epoch_start_block,
                 version(0, 1),
-                version(0, 1)
+                version(0, 1),
             ),
             timing_data: TimingData::default(),
             skip_late: false,
@@ -578,10 +576,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> Default for TestDescription<
     }
 }
 
-impl<
-        TYPES: NodeType<InstanceState = TestInstanceState>,
-        I: TestableNodeImplementation<TYPES>,
-    > TestDescription<TYPES, I>
+impl<TYPES: NodeType<InstanceState = TestInstanceState>, I: TestableNodeImplementation<TYPES>>
+    TestDescription<TYPES, I>
 where
     I: NodeImplementation<TYPES>,
 {

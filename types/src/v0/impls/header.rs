@@ -44,9 +44,9 @@ use crate::{
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{self, RewardMerkleCommitmentV2},
-    v0_5, BlockMerkleCommitment, FeeAccount, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
-    NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
+    v0_5, BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
+    L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
+    TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -1133,7 +1133,7 @@ impl BlockHeader<SeqTypes> for Header {
         instance_state: &NodeState,
         payload: <SeqTypes as NodeType>::BlockPayload,
         metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
-        _: Version
+        _: Version,
     ) -> Self {
         let payload_bytes = payload.encode();
         let builder_commitment = payload.builder_commitment(metadata);
@@ -1736,7 +1736,7 @@ mod test_headers {
                 &genesis_state.state_catchup,
                 &parent_leaf,
                 &proposal,
-                version(0,1),
+                version(0, 1),
                 parent_leaf.view_number() + 1,
             )
             .await
@@ -1803,7 +1803,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            version(0,1),
+            version(0, 1),
             None,
         );
 
@@ -1835,7 +1835,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            version(0,2),
+            version(0, 2),
             None,
         );
 
@@ -1867,7 +1867,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            version(0,3),
+            version(0, 3),
             None,
         );
 

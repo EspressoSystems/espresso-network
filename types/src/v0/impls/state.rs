@@ -45,9 +45,9 @@ use crate::{
         Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree,
-    Header, Leaf2, NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType,
-    BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT,
+    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
+    NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
+    FEE_MERKLE_TREE_HEIGHT,
 };
 
 /// This enum is not used in code but functions as an index of
@@ -1410,17 +1410,16 @@ mod test {
 
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
+    use hotshot_query_service::{testing::mocks::MOCK_UPGRADE, Resolvable};
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
-    use versions::{FEE_VERSION, MAX_SUPPORTED_VERSION, version};
+    use versions::{version, FEE_VERSION, MAX_SUPPORTED_VERSION};
 
     use super::*;
     use crate::{
         eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5,
-        BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload,
-        TimestampMillis, Transaction,
+        BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
     };
 
     impl Transaction {
@@ -1560,7 +1559,7 @@ mod test {
                 parent,
                 proposal,
                 total_rewards_distributed: None,
-                version: version(0,1),
+                version: version(0, 1),
                 validation_start_time,
             }
         }
@@ -2075,10 +2074,13 @@ mod test {
             ..validated_state.chain_config.resolve().unwrap()
         });
 
-        let parent: Leaf2 =
-            Leaf::genesis(&instance_state.genesis_state, &instance_state, MOCK_UPGRADE.base)
-                .await
-                .into();
+        let parent: Leaf2 = Leaf::genesis(
+            &instance_state.genesis_state,
+            &instance_state,
+            MOCK_UPGRADE.base,
+        )
+        .await
+        .into();
         let header = parent.block_header().clone();
         let metadata = parent.block_header().metadata();
 
@@ -2132,7 +2134,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validate_total_rewards_distributed() {
-        let instance = NodeState::mock().with_genesis_version(version(0,4));
+        let instance = NodeState::mock().with_genesis_version(version(0, 4));
 
         let (payload, metadata) =
             Payload::from_transactions([], &instance.genesis_state, &instance)
@@ -2143,7 +2145,7 @@ mod test {
             &instance,
             payload.clone(),
             &metadata,
-            TEST_VERSIONS.da_committee.base
+            TEST_VERSIONS.da_committee.base,
         );
 
         let validated_state = ValidatedState::default();
@@ -2164,7 +2166,7 @@ mod test {
             &header,
             Proposal::new(&proposed_header, block_size),
             Some(actual_total),
-            version(0,4),
+            version(0, 4),
             validation_start_time,
         );
 
@@ -2186,7 +2188,7 @@ mod test {
             &header,
             Proposal::new(&proposed_header, block_size),
             Some(actual_total),
-            version(0,4),
+            version(0, 4),
             validation_start_time,
         )
         .validate_total_rewards_distributed()

@@ -101,9 +101,8 @@ pub struct ViewSyncTaskState<TYPES: NodeType> {
         RwLock<RelayMap<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyncCommitCertificate2<TYPES>>>,
 
     /// Map of finalize vote accumulates for the relay
-    pub finalize_relay_map: RwLock<
-        RelayMap<TYPES, ViewSyncFinalizeVote2<TYPES>, ViewSyncFinalizeCertificate2<TYPES>>,
-    >,
+    pub finalize_relay_map:
+        RwLock<RelayMap<TYPES, ViewSyncFinalizeVote2<TYPES>, ViewSyncFinalizeCertificate2<TYPES>>>,
 
     /// Timeout duration for view sync rounds
     pub view_sync_timeout: Duration,

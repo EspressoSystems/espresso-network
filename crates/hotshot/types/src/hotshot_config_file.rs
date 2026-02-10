@@ -118,7 +118,7 @@ impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
             drb_difficulty: val.drb_difficulty,
             drb_upgrade_difficulty: val.drb_upgrade_difficulty,
             base_version: todo!(),
-            upgrade_version: todo!()
+            upgrade_version: todo!(),
         }
     }
 }

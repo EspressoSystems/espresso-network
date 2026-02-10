@@ -12,7 +12,11 @@
 
 use hotshot::traits::{implementations::MemoryNetwork, NodeImplementation};
 use hotshot_example_types::{
-    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction}, membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership}, node_types::TestVersion, state_types::{TestInstanceState, TestValidatedState}, storage_types::TestStorage
+    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+    membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
+    node_types::TestVersion,
+    state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     data::{QuorumProposal, VidCommitment, VidCommon, ViewNumber},
@@ -184,7 +188,7 @@ impl NodeType for MockTypes {
 
 pub const MOCK_UPGRADE: TestVersion = TestVersion {
     base: version(0, 1),
-    upgrade: version(0, 2)
+    upgrade: version(0, 2),
 };
 
 pub type MockBase = StaticVersion<0, 1>;

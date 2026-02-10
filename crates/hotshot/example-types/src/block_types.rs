@@ -356,7 +356,7 @@ impl<
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         payload: TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        version: Version
+        version: Version,
     ) -> Self {
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TYPES>>::builder_commitment(&payload, metadata);
@@ -366,7 +366,7 @@ impl<
             &payload_bytes,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
-            version
+            version,
         );
 
         Self {
@@ -377,7 +377,7 @@ impl<
             timestamp: 0,
             timestamp_millis: 0,
             random: 0,
-            version
+            version,
         }
     }
 

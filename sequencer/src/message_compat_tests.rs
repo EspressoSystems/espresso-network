@@ -89,7 +89,12 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let node_state = NodeState::mock()
         .with_current_version(Ver::VERSION)
         .with_genesis_version(Ver::VERSION);
-    let leaf = Leaf::genesis(&ValidatedState::default(), &node_state, TEST_VERSIONS.test.base).await;
+    let leaf = Leaf::genesis(
+        &ValidatedState::default(),
+        &node_state,
+        TEST_VERSIONS.test.base,
+    )
+    .await;
     let block_header = leaf.block_header().clone();
     let transaction = Transaction::new(1_u32.into(), vec![1, 2, 3]);
     let (payload, metadata) = Payload::from_transactions(

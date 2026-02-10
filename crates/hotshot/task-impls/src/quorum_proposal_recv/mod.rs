@@ -220,7 +220,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalRecvTaskState<
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for QuorumProposalRecvTaskState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
+    for QuorumProposalRecvTaskState<TYPES, I>
+{
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

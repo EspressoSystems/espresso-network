@@ -34,11 +34,7 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
-    traits::{
-        election::Membership,
-        node_implementation::NodeType,
-        EncodeBytes,
-    },
+    traits::{election::Membership, node_implementation::NodeType, EncodeBytes},
     utils::{option_epoch_from_block_number, View, ViewInner},
     vote::{Certificate, HasViewNumber, Vote},
     ValidatorConfig,
@@ -113,7 +109,7 @@ where
         launcher.metadata.test_config.epoch_start_block,
         vec![],
         hotshot_config.base_version,
-        hotshot_config.upgrade_version
+        hotshot_config.upgrade_version,
     )
     .await
     .unwrap();

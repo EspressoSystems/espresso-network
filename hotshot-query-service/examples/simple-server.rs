@@ -29,10 +29,15 @@ use hotshot::{
 };
 use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_query_service::{
-    Error, data_source, fetching::provider::NoFetching, run_standalone_service, status::UpdateStatusData, testing::{
+    data_source,
+    fetching::provider::NoFetching,
+    run_standalone_service,
+    status::UpdateStatusData,
+    testing::{
         consensus::DataSourceLifeCycle,
-        mocks::{MOCK_UPGRADE, MockBase, MockMembership, MockNodeImpl, MockTypes},
-    }
+        mocks::{MockBase, MockMembership, MockNodeImpl, MockTypes, MOCK_UPGRADE},
+    },
+    Error,
 };
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
@@ -214,7 +219,7 @@ async fn init_consensus(
         drb_difficulty: 0,
         drb_upgrade_difficulty: 0,
         base_version: MOCK_UPGRADE.base,
-        upgrade_version: MOCK_UPGRADE.upgrade
+        upgrade_version: MOCK_UPGRADE.upgrade,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -267,7 +272,7 @@ async fn init_consensus(
                         0,
                         vec![],
                         MOCK_UPGRADE.base,
-                        MOCK_UPGRADE.upgrade
+                        MOCK_UPGRADE.upgrade,
                     )
                     .await
                     .unwrap(),

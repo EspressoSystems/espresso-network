@@ -35,9 +35,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
     traits::{
-        election::Membership,
-        network::Topic,
-        node_implementation::ConsensusTime,
+        election::Membership, network::Topic, node_implementation::ConsensusTime,
         signature_key::SignatureKey as _,
     },
     HotShotConfig, PeerConfig,
@@ -159,7 +157,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             drb_difficulty: DIFFICULTY_LEVEL,
             drb_upgrade_difficulty: DIFFICULTY_LEVEL,
             base_version: VERSION_ZERO,
-            upgrade_version: VERSION_ZERO
+            upgrade_version: VERSION_ZERO,
         };
         update_config(&mut config);
 
@@ -215,17 +213,16 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                             &hs_storage.clone(),
                         );
 
-                        let init =
-                            HotShotInitializer::from_genesis(
-                                TestInstanceState::default(),
-                                0,
-                                0,
-                                vec![],
-                                config.base_version,
-                                config.upgrade_version
-                            )
-                            .await
-                            .unwrap();
+                        let init = HotShotInitializer::from_genesis(
+                            TestInstanceState::default(),
+                            0,
+                            0,
+                            vec![],
+                            config.base_version,
+                            config.upgrade_version,
+                        )
+                        .await
+                        .unwrap();
 
                         let hotshot = SystemContext::init(
                             pub_keys[node_id],

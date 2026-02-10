@@ -186,7 +186,7 @@ pub trait BlockHeader<TYPES: NodeType>:
         instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         payload: TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        version: Version
+        version: Version,
     ) -> Self;
 
     /// Get the block number.

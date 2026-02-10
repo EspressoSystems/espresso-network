@@ -823,7 +823,8 @@ mod tests {
     use futures::{channel::mpsc, SinkExt, StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
-        availability::{BlockQueryData, Leaf1QueryData}, testing::mocks::MOCK_UPGRADE,
+        availability::{BlockQueryData, Leaf1QueryData},
+        testing::mocks::MOCK_UPGRADE,
     };
     use hotshot_types::{
         data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
@@ -902,7 +903,8 @@ mod tests {
         };
         let instance_state = NodeState::mock();
 
-        let sample_leaf = Leaf2::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base).await;
+        let sample_leaf =
+            Leaf2::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base).await;
         let sample_block_query_data =
             BlockQueryData::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
 

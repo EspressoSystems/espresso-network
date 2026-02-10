@@ -1618,7 +1618,8 @@ pub mod tests {
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
-        availability::{BlockQueryData, Leaf1QueryData}, testing::mocks::MOCK_UPGRADE,
+        availability::{BlockQueryData, Leaf1QueryData},
+        testing::mocks::MOCK_UPGRADE,
     };
     use hotshot_types::{
         data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
@@ -2075,8 +2076,12 @@ pub mod tests {
         let validated_state = ValidatedState::default();
         let instance_state = NodeState::mock();
 
-        let leaf =
-            Leaf2::genesis(&ValidatedState::default(), &NodeState::mock(), TEST_VERSIONS.test.base).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let block_query_data =
             BlockQueryData::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
         let expected_block = create_block_detail_from_block(&block_query_data);

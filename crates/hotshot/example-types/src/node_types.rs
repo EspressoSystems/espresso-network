@@ -20,7 +20,7 @@ use hotshot_types::{
     upgrade_config::UpgradeConstants,
 };
 use serde::{Deserialize, Serialize};
-use vbs::version::{Version, StaticVersion};
+use vbs::version::{StaticVersion, Version};
 use versions::version;
 
 pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
@@ -335,39 +335,39 @@ pub struct TestVersions {
     pub da_committee: TestVersion,
     pub vid2: TestVersion,
     pub epoch_upgrade: TestVersion,
-    pub vid2_upgrade: TestVersion
+    pub vid2_upgrade: TestVersion,
 }
 
 pub struct TestVersion {
     pub base: Version,
-    pub upgrade: Version
+    pub upgrade: Version,
 }
 
 pub const TEST_VERSIONS: TestVersions = TestVersions {
     epoch: TestVersion {
-        base: version(0,3),
-        upgrade: version(0,3),
+        base: version(0, 3),
+        upgrade: version(0, 3),
     },
     da_committee: TestVersion {
-        base: version(0,4),
-        upgrade: version(0,4),
+        base: version(0, 4),
+        upgrade: version(0, 4),
     },
     vid2: TestVersion {
-        base: version(0,6),
-        upgrade: version(0,6),
+        base: version(0, 6),
+        upgrade: version(0, 6),
     },
     test: TestVersion {
-        base: version(0,1),
-        upgrade: version(0,2)
+        base: version(0, 1),
+        upgrade: version(0, 2),
     },
     epoch_upgrade: TestVersion {
-        base: version(0,3),
-        upgrade: version(0,4)
+        base: version(0, 3),
+        upgrade: version(0, 4),
     },
     vid2_upgrade: TestVersion {
-        base: version(0,5),
-        upgrade: version(0,6)
-    }
+        base: version(0, 5),
+        upgrade: version(0, 6),
+    },
 };
 
 pub type EpochVersion = StaticVersion<0, 3>;
@@ -385,7 +385,7 @@ mod tests {
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
-    use versions::{EPOCH_VERSION, version};
+    use versions::{version, EPOCH_VERSION};
 
     use crate::node_types::{NodeType, TestTypes};
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -408,7 +408,7 @@ mod tests {
     /// Test that the view number affects the commitment post-marketplace
     #[tokio::test(flavor = "multi_thread")]
     async fn test_versioned_commitment_includes_view() {
-        let upgrade_lock = UpgradeLock::new(version(0,1), version(0,2));
+        let upgrade_lock = UpgradeLock::new(version(0, 1), version(0, 2));
 
         let data = TestData {
             data: 10,
@@ -419,21 +419,13 @@ mod tests {
         let view_1 = <TestTypes as NodeType>::View::new(1);
 
         let versioned_data_0 =
-            VersionedVoteData::<TestTypes, TestData<TestTypes>>::new(
-                data,
-                view_0,
-                &upgrade_lock,
-            )
-            .await
-            .unwrap();
+            VersionedVoteData::<TestTypes, TestData<TestTypes>>::new(data, view_0, &upgrade_lock)
+                .await
+                .unwrap();
         let versioned_data_1 =
-            VersionedVoteData::<TestTypes, TestData<TestTypes>>::new(
-                data,
-                view_1,
-                &upgrade_lock,
-            )
-            .await
-            .unwrap();
+            VersionedVoteData::<TestTypes, TestData<TestTypes>>::new(data, view_1, &upgrade_lock)
+                .await
+                .unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();
@@ -477,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_genesis_epoch_from_version() {
-        let epoch = genesis_epoch_from_version::<TestTypes>(version(0,1));
+        let epoch = genesis_epoch_from_version::<TestTypes>(version(0, 1));
         assert_eq!(None, epoch);
 
         let epoch = genesis_epoch_from_version::<TestTypes>(EPOCH_VERSION);

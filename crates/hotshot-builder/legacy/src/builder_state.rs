@@ -1146,7 +1146,7 @@ mod test {
     use hotshot_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use hotshot_example_types::{
         block_types::TestTransaction,
-        node_types::{TEST_VERSIONS, TestTypes},
+        node_types::{TestTypes, TEST_VERSIONS},
     };
     use hotshot_types::{
         data::{Leaf2, QuorumProposalWrapper, ViewNumber},
@@ -1179,13 +1179,20 @@ mod test {
 
         // create builder_state without entering event loop
         let (_senders, global_state, mut builder_state) =
-            create_builder_state(CHANNEL_CAPACITY, NUM_STORAGE_NODES, TEST_VERSIONS.test.base).await;
+            create_builder_state(CHANNEL_CAPACITY, NUM_STORAGE_NODES, TEST_VERSIONS.test.base)
+                .await;
 
         // randomly generate a transaction
         let transactions = vec![TestTransaction::new(vec![1, 2, 3]); 3];
         let (_quorum_proposal, _quorum_proposal_msg, da_proposal_msg, builder_state_id) =
-            calc_proposal_msg(NUM_STORAGE_NODES, 0, None, transactions.clone(), TEST_VERSIONS.test.base)
-                .await;
+            calc_proposal_msg(
+                NUM_STORAGE_NODES,
+                0,
+                None,
+                transactions.clone(),
+                TEST_VERSIONS.test.base,
+            )
+            .await;
 
         // sub-test one
         // call process_da_proposal without matching quorum proposal message
@@ -1230,7 +1237,14 @@ mod test {
         // we should skip the process and everything should be the same
         let transactions_1 = transactions.clone();
         let (_quorum_proposal_1, _quorum_proposal_msg_1, da_proposal_msg_1, builder_state_id_1) =
-            calc_proposal_msg(NUM_STORAGE_NODES, 0, None, transactions_1, TEST_VERSIONS.test.base).await;
+            calc_proposal_msg(
+                NUM_STORAGE_NODES,
+                0,
+                None,
+                transactions_1,
+                TEST_VERSIONS.test.base,
+            )
+            .await;
         builder_state
             .process_da_proposal(da_proposal_msg_1.clone())
             .await;
@@ -1258,7 +1272,14 @@ mod test {
         // and check whether global_state has correct BuilderStateId
         let transactions_2 = vec![TestTransaction::new(vec![1, 2, 3, 4]); 2];
         let (_quorum_proposal_2, quorum_proposal_msg_2, da_proposal_msg_2, builder_state_id_2) =
-            calc_proposal_msg(NUM_STORAGE_NODES, 0, None, transactions_2, TEST_VERSIONS.test.base).await;
+            calc_proposal_msg(
+                NUM_STORAGE_NODES,
+                0,
+                None,
+                transactions_2,
+                TEST_VERSIONS.test.base,
+            )
+            .await;
 
         // process quorum proposal first, so that later when process_da_proposal we can directly call `build_block` and skip storage
         builder_state
@@ -1311,13 +1332,20 @@ mod test {
 
         // create builder_state without entering event loop
         let (_senders, global_state, mut builder_state) =
-            create_builder_state(CHANNEL_CAPACITY, NUM_STORAGE_NODES, TEST_VERSIONS.test.base).await;
+            create_builder_state(CHANNEL_CAPACITY, NUM_STORAGE_NODES, TEST_VERSIONS.test.base)
+                .await;
 
         // randomly generate a transaction
         let transactions = vec![TestTransaction::new(vec![1, 2, 3]); 3];
         let (_quorum_proposal, quorum_proposal_msg, _da_proposal_msg, builder_state_id) =
-            calc_proposal_msg(NUM_STORAGE_NODES, 0, None, transactions.clone(), TEST_VERSIONS.test.base)
-                .await;
+            calc_proposal_msg(
+                NUM_STORAGE_NODES,
+                0,
+                None,
+                transactions.clone(),
+                TEST_VERSIONS.test.base,
+            )
+            .await;
 
         // sub-test one
         // call process_quorum_proposal without matching da proposal message
@@ -1364,7 +1392,14 @@ mod test {
         // and check whether global_state has correct BuilderStateId
         let transactions_2 = vec![TestTransaction::new(vec![2, 3, 4]); 2];
         let (_quorum_proposal_2, quorum_proposal_msg_2, da_proposal_msg_2, builder_state_id_2) =
-            calc_proposal_msg(NUM_STORAGE_NODES, 0, None, transactions_2, TEST_VERSIONS.test.base).await;
+            calc_proposal_msg(
+                NUM_STORAGE_NODES,
+                0,
+                None,
+                transactions_2,
+                TEST_VERSIONS.test.base,
+            )
+            .await;
 
         // process da proposal message first, so that later when process_da_proposal we can directly call `build_block` and skip storage
         builder_state
@@ -1421,7 +1456,8 @@ mod test {
 
         // create builder_state without entering event loop
         let (_senders, global_state, mut builder_state) =
-            create_builder_state(CHANNEL_CAPACITY, NUM_STORAGE_NODES, TEST_VERSIONS.test.base).await;
+            create_builder_state(CHANNEL_CAPACITY, NUM_STORAGE_NODES, TEST_VERSIONS.test.base)
+                .await;
 
         // Transactions to send
         let all_transactions = (0..NUM_ROUNDS)
@@ -1442,7 +1478,7 @@ mod test {
                     round,
                     prev_quorum_proposal,
                     transactions,
-                    TEST_VERSIONS.test.base
+                    TEST_VERSIONS.test.base,
                 )
                 .await;
             prev_quorum_proposal = Some(quorum_proposal.clone());

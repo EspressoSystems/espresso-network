@@ -87,7 +87,12 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .api_config(SqlDataSource::options(&storage[0], api_options))
         .network_config(network_config)
         .persistences(persistence.clone())
-        .pos_hook(DelegationConfig::default(), StakeTableContractVersion::V2, DRB_AND_HEADER_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION)
+        .pos_hook(
+            DelegationConfig::default(),
+            StakeTableContractVersion::V2,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+        )
         .await?
         .build();
 

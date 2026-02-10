@@ -564,7 +564,8 @@ mod test {
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            AlwaysTrueQuorum, ENABLE_EPOCHS, LegacyVersion, TestClient, VersionCheckQuorum, leaf_chain, leaf_chain_with_upgrade
+            leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, LegacyVersion, TestClient,
+            VersionCheckQuorum, ENABLE_EPOCHS,
         },
     };
     use tide_disco::Error;

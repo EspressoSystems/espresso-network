@@ -65,11 +65,8 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES>,
 
     /// A map of `QuorumVote` collector tasks. They collect votes from the nodes in the next epoch.
-    pub next_epoch_vote_collectors: VoteCollectorsMap<
-        TYPES,
-        NextEpochQuorumVote2<TYPES>,
-        NextEpochQuorumCertificate2<TYPES>,
-    >,
+    pub next_epoch_vote_collectors:
+        VoteCollectorsMap<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>>,
 
     /// A map of `TimeoutVote` collector tasks.
     pub timeout_vote_collectors:

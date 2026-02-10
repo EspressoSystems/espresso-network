@@ -148,7 +148,7 @@ pub mod testing {
                 drb_difficulty: 0,
                 drb_upgrade_difficulty: 0,
                 base_version: todo!(),
-                upgrade_version: todo!()
+                upgrade_version: todo!(),
             };
 
             Self {
@@ -365,7 +365,7 @@ pub mod testing {
             hotshot_events_streaming_api_url: Url,
             hotshot_builder_api_url: Url,
             num_nodes: usize,
-            base: Version
+            base: Version,
         ) -> Self {
             // generate builder keys
             let seed = [201_u8; 32];
@@ -395,7 +395,7 @@ pub mod testing {
                 Duration::from_millis(500),
                 ChainConfig::default().base_fee,
                 819200,
-                base
+                base,
             )
             .await
             .unwrap();

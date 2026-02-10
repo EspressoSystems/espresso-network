@@ -112,7 +112,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub cancel_receiver: Receiver<()>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> HandleDepOutput for VoteDependencyHandle<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> HandleDepOutput
+    for VoteDependencyHandle<TYPES, I>
+{
     type Output = Vec<Arc<HotShotEvent<TYPES>>>;
 
     #[allow(clippy::too_many_lines)]

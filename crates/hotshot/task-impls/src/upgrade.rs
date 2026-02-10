@@ -28,7 +28,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use versions::{EPOCH_VERSION, upgrade_hash};
+use versions::{upgrade_hash, EPOCH_VERSION};
 
 use crate::{
     events::HotShotEvent,

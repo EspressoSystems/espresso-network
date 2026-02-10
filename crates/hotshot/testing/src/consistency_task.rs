@@ -62,9 +62,7 @@ fn sanitize_node_map<TYPES: NodeType>(
 }
 
 /// For a NodeMapSanitized, we validate that each leaf extends the preceding leaf.
-async fn validate_node_map<TYPES: NodeType>(
-    node_map: &NodeMapSanitized<TYPES>,
-) -> Result<()> {
+async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) -> Result<()> {
     // We first scan 3-chains to find an upgrade certificate that has reached a decide.
     let leaf_triples = node_map
         .values()

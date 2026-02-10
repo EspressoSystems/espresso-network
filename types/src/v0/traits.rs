@@ -637,7 +637,7 @@ pub trait SequencerPersistence:
         &self,
         state: NodeState,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self
@@ -697,7 +697,8 @@ pub trait SequencerPersistence:
                 (
                     hotshot_types::data::Leaf2::genesis(&genesis_validated_state, &state, base)
                         .await,
-                    QuorumCertificate2::genesis(&genesis_validated_state, &state, base, upgrade).await,
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, base, upgrade)
+                        .await,
                     None,
                 )
             },

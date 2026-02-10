@@ -811,10 +811,15 @@ mod test {
 
     use super::*;
     use crate::{
-        ApiState, Error, Header, data_source::{ExtensibleDataSource, VersionedDataSource, storage::AvailabilityStorage}, status::StatusDataSource, task::BackgroundTask, testing::{
+        data_source::{storage::AvailabilityStorage, ExtensibleDataSource, VersionedDataSource},
+        status::StatusDataSource,
+        task::BackgroundTask,
+        testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{MOCK_UPGRADE, MockBase, MockHeader, MockPayload, MockTypes, mock_transaction},
-        }, types::HeightIndexed
+            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MOCK_UPGRADE},
+        },
+        types::HeightIndexed,
+        ApiState, Error, Header,
     };
 
     /// Get the current ledger height and a list of non-empty leaf/block pairs.
@@ -1607,12 +1612,19 @@ mod test {
         );
 
         // mock up some consensus data.
-        let leaf =
-            Leaf2::<MockTypes>::genesis(&Default::default(), &Default::default(), MOCK_UPGRADE.base)
-                .await;
-        let qc =
-            QuorumCertificate2::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade)
-                .await;
+        let leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            MOCK_UPGRADE.base,
+        )
+        .await;
+        let qc = QuorumCertificate2::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+            TEST_VERSIONS.test.upgrade,
+        )
+        .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         data_source

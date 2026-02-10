@@ -858,10 +858,7 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(
-                format!("0.0.0.0:{port}"),
-                EpochVersion::instance(),
-            ),
+            app.serve(format!("0.0.0.0:{port}"), EpochVersion::instance()),
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.

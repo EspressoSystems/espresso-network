@@ -29,10 +29,7 @@ use crate::{
 };
 
 /// Handle a `QuorumVoteRecv` event.
-pub(crate) async fn handle_quorum_vote_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub(crate) async fn handle_quorum_vote_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     vote: &QuorumVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
@@ -159,10 +156,7 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
 }
 
 /// Handle a `TimeoutVoteRecv` event.
-pub(crate) async fn handle_timeout_vote_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub(crate) async fn handle_timeout_vote_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     vote: &TimeoutVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
@@ -341,10 +335,7 @@ pub async fn send_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
 /// Handle a `ViewChange` event.
 #[instrument(skip_all)]
-pub(crate) async fn handle_view_change<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     new_view_number: TYPES::View,
     epoch_number: Option<TYPES::Epoch>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,

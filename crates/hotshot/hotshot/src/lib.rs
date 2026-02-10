@@ -283,7 +283,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             .set_external_channel(external_rx.clone())
             .await;
 
-
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
             config.base_version,
@@ -294,8 +293,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             initializer.decided_upgrade_certificate
         );
 
-        let upgrade_lock =
-            UpgradeLock::<TYPES>::from_certificate(config.base_version, config.upgrade_version, &initializer.decided_upgrade_certificate);
+        let upgrade_lock = UpgradeLock::<TYPES>::from_certificate(
+            config.base_version,
+            config.upgrade_version,
+            &initializer.decided_upgrade_certificate,
+        );
 
         let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
             cert.data.new_version
@@ -882,10 +884,7 @@ where
         consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
         storage_metrics: StorageMetricsValue,
-    ) -> (
-        SystemContextHandle<TYPES, I>,
-        SystemContextHandle<TYPES, I>,
-    ) {
+    ) -> (SystemContextHandle<TYPES, I>, SystemContextHandle<TYPES, I>) {
         let epoch_height = config.epoch_height;
         let left_system_context = SystemContext::new(
             public_key.clone(),
@@ -1003,7 +1002,9 @@ where
 pub struct RandomTwinsHandler;
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I> for RandomTwinsHandler {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
+    for RandomTwinsHandler
+{
     async fn send_handler(
         &mut self,
         event: &HotShotEvent<TYPES>,
@@ -1033,7 +1034,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I> 
 pub struct DoubleTwinsHandler;
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I> for DoubleTwinsHandler {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
+    for DoubleTwinsHandler
+{
     async fn send_handler(
         &mut self,
         event: &HotShotEvent<TYPES>,
@@ -1052,7 +1055,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I> 
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusApi<TYPES, I> for SystemContextHandle<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusApi<TYPES, I>
+    for SystemContextHandle<TYPES, I>
+{
     fn total_nodes(&self) -> NonZeroUsize {
         self.hotshot.config.num_nodes_with_stake
     }
@@ -1161,10 +1166,11 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         epoch_start_block: u64,
         start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> Result<Self, HotShotError<TYPES>> {
         let (validated_state, state_delta) = TYPES::ValidatedState::genesis(&instance_state);
-        let high_qc = QuorumCertificate2::genesis(&validated_state, &instance_state, base, upgrade).await;
+        let high_qc =
+            QuorumCertificate2::genesis(&validated_state, &instance_state, base, upgrade).await;
 
         Ok(Self {
             anchor_leaf: Leaf2::genesis(&validated_state, &instance_state, base).await,

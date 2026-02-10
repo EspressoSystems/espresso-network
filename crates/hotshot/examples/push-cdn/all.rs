@@ -149,14 +149,12 @@ async fn main() {
         let orchestrator_url = orchestrator_url.clone();
         let builder_address = gen_local_address::<BUILDER_BASE_PORT>(i);
         let node = spawn(async move {
-            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(
-                ValidatorArgs {
-                    url: orchestrator_url,
-                    advertise_address: None,
-                    builder_address: Some(builder_address),
-                    network_config_file: None,
-                },
-            )
+            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(ValidatorArgs {
+                url: orchestrator_url,
+                advertise_address: None,
+                builder_address: Some(builder_address),
+                network_config_file: None,
+            })
             .await;
         });
         nodes.push(node);

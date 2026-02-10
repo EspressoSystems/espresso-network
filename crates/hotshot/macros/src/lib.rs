@@ -10,7 +10,11 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    Expr, ExprArray, ExprField, ExprPath, ExprTuple, Ident, LitBool, PathArguments, Token, TypePath, parse::{Parse, ParseStream, Result}, parse_macro_input, punctuated::Punctuated
+    parse::{Parse, ParseStream, Result},
+    parse_macro_input,
+    punctuated::Punctuated,
+    Expr, ExprArray, ExprField, ExprPath, ExprTuple, Ident, LitBool, PathArguments, Token,
+    TypePath,
 };
 
 /// Bracketed types, e.g. [A, B, `C<D>`]

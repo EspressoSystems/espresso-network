@@ -334,9 +334,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
     }
 }
 
-impl<TYPES: NodeType, DATA: Voteable<TYPES>> Committable
-    for VersionedVoteData<TYPES, DATA>
-{
+impl<TYPES: NodeType, DATA: Voteable<TYPES>> Committable for VersionedVoteData<TYPES, DATA> {
     fn commit(&self) -> Commitment<Self> {
         committable::RawCommitmentBuilder::new("Vote")
             .var_size_bytes(self.data.commit().as_ref())

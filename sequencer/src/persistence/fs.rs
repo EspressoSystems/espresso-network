@@ -2214,10 +2214,7 @@ mod test {
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
-        traits::{
-            block_contents::GENESIS_VID_NUM_STORAGE_NODES,
-            EncodeBytes,
-        },
+        traits::{block_contents::GENESIS_VID_NUM_STORAGE_NODES, EncodeBytes},
         vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
@@ -2384,8 +2381,12 @@ mod test {
 
             let payload_bytes = payload.encode();
 
-            let block_header =
-                Header::genesis(&instance_state, payload.clone(), &metadata, TEST_VERSIONS.test.base);
+            let block_header = Header::genesis(
+                &instance_state,
+                payload.clone(),
+                &metadata,
+                TEST_VERSIONS.test.base,
+            );
 
             let state_cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
                 epoch: EpochNumber::new(i),
@@ -2434,7 +2435,7 @@ mod test {
             leaf.fill_block_payload(
                 payload,
                 GENESIS_VID_NUM_STORAGE_NODES,
-                TEST_VERSIONS.test.base
+                TEST_VERSIONS.test.base,
             )
             .unwrap();
 
@@ -2609,7 +2610,7 @@ mod test {
                         &Default::default(),
                         &NodeState::mock(),
                         TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade
+                        TEST_VERSIONS.test.upgrade,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -2674,7 +2675,7 @@ mod test {
                         &Default::default(),
                         &NodeState::mock(),
                         TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade
+                        TEST_VERSIONS.test.upgrade,
                     )
                     .await,
                     upgrade_certificate: None,

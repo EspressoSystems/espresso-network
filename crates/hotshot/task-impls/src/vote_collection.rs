@@ -300,14 +300,10 @@ where
 type QuorumVoteState<TYPES> =
     VoteCollectionTaskState<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>;
 /// Alias for Quorum vote accumulator
-type NextEpochQuorumVoteState<TYPES> = VoteCollectionTaskState<
-    TYPES,
-    NextEpochQuorumVote2<TYPES>,
-    NextEpochQuorumCertificate2<TYPES>,
->;
+type NextEpochQuorumVoteState<TYPES> =
+    VoteCollectionTaskState<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>>;
 /// Alias for DA vote accumulator
-type DaVoteState<TYPES> =
-    VoteCollectionTaskState<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>>;
+type DaVoteState<TYPES> = VoteCollectionTaskState<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>>;
 /// Alias for Timeout vote accumulator
 type TimeoutVoteState<TYPES> =
     VoteCollectionTaskState<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>>;
@@ -321,11 +317,8 @@ type ViewSyncPreCommitState<TYPES> = VoteCollectionTaskState<
     ViewSyncPreCommitCertificate2<TYPES>,
 >;
 /// Alias for View Sync Commit vote accumulator
-type ViewSyncCommitVoteState<TYPES> = VoteCollectionTaskState<
-    TYPES,
-    ViewSyncCommitVote2<TYPES>,
-    ViewSyncCommitCertificate2<TYPES>,
->;
+type ViewSyncCommitVoteState<TYPES> =
+    VoteCollectionTaskState<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyncCommitCertificate2<TYPES>>;
 /// Alias for View Sync Finalize vote accumulator
 type ViewSyncFinalizeVoteState<TYPES> = VoteCollectionTaskState<
     TYPES,
@@ -478,7 +471,9 @@ impl<TYPES: NodeType>
 
 // Handlers for all vote accumulators
 #[async_trait]
-impl<TYPES: NodeType> HandleVoteEvent<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>> for QuorumVoteState<TYPES> {
+impl<TYPES: NodeType> HandleVoteEvent<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>
+    for QuorumVoteState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -496,7 +491,10 @@ impl<TYPES: NodeType> HandleVoteEvent<TYPES, QuorumVote2<TYPES>, QuorumCertifica
 
 // Handlers for all vote accumulators
 #[async_trait]
-impl<TYPES: NodeType> HandleVoteEvent<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>> for NextEpochQuorumVoteState<TYPES> {
+impl<TYPES: NodeType>
+    HandleVoteEvent<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>>
+    for NextEpochQuorumVoteState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -517,8 +515,9 @@ impl<TYPES: NodeType> HandleVoteEvent<TYPES, NextEpochQuorumVote2<TYPES>, NextEp
 
 // Handlers for all vote accumulators
 #[async_trait]
-impl<TYPES: NodeType>
-    HandleVoteEvent<TYPES, UpgradeVote<TYPES>, UpgradeCertificate<TYPES>> for UpgradeVoteState<TYPES> {
+impl<TYPES: NodeType> HandleVoteEvent<TYPES, UpgradeVote<TYPES>, UpgradeCertificate<TYPES>>
+    for UpgradeVoteState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -535,7 +534,9 @@ impl<TYPES: NodeType>
 }
 
 #[async_trait]
-impl<TYPES: NodeType> HandleVoteEvent<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>> for DaVoteState<TYPES> {
+impl<TYPES: NodeType> HandleVoteEvent<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>>
+    for DaVoteState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -552,7 +553,9 @@ impl<TYPES: NodeType> HandleVoteEvent<TYPES, DaVote2<TYPES>, DaCertificate2<TYPE
 }
 
 #[async_trait]
-impl<TYPES: NodeType> HandleVoteEvent<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>> for TimeoutVoteState<TYPES> {
+impl<TYPES: NodeType> HandleVoteEvent<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>>
+    for TimeoutVoteState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -570,7 +573,9 @@ impl<TYPES: NodeType> HandleVoteEvent<TYPES, TimeoutVote2<TYPES>, TimeoutCertifi
 
 #[async_trait]
 impl<TYPES: NodeType>
-    HandleVoteEvent<TYPES, ViewSyncPreCommitVote2<TYPES>, ViewSyncPreCommitCertificate2<TYPES>> for ViewSyncPreCommitState<TYPES> {
+    HandleVoteEvent<TYPES, ViewSyncPreCommitVote2<TYPES>, ViewSyncPreCommitCertificate2<TYPES>>
+    for ViewSyncPreCommitState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -589,7 +594,10 @@ impl<TYPES: NodeType>
 }
 
 #[async_trait]
-impl<TYPES: NodeType> HandleVoteEvent<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyncCommitCertificate2<TYPES>> for ViewSyncCommitVoteState<TYPES> {
+impl<TYPES: NodeType>
+    HandleVoteEvent<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyncCommitCertificate2<TYPES>>
+    for ViewSyncCommitVoteState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -606,7 +614,10 @@ impl<TYPES: NodeType> HandleVoteEvent<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyn
 }
 
 #[async_trait]
-impl<TYPES: NodeType> HandleVoteEvent<TYPES, ViewSyncFinalizeVote2<TYPES>, ViewSyncFinalizeCertificate2<TYPES>> for ViewSyncFinalizeVoteState<TYPES> {
+impl<TYPES: NodeType>
+    HandleVoteEvent<TYPES, ViewSyncFinalizeVote2<TYPES>, ViewSyncFinalizeCertificate2<TYPES>>
+    for ViewSyncFinalizeVoteState<TYPES>
+{
     async fn handle_vote_event(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -636,8 +647,7 @@ pub struct EpochRootVoteCollectionTaskState<TYPES: NodeType> {
     pub membership: EpochMembership<TYPES>,
 
     /// accumulator for quorum votes
-    pub accumulator:
-        Option<VoteAccumulator<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>>,
+    pub accumulator: Option<VoteAccumulator<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>>,
 
     /// accumulator for light client state update votes
     pub state_vote_accumulator: Option<LightClientStateUpdateVoteAccumulator<TYPES>>,
@@ -728,13 +738,12 @@ async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType>(
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     upgrade_lock: UpgradeLock<TYPES>,
 ) -> Result<EpochRootVoteCollectionTaskState<TYPES>> {
-    let new_accumulator =
-        VoteAccumulator::<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>> {
-            vote_outcomes: HashMap::new(),
-            signers: HashMap::new(),
-            phantom: PhantomData,
-            upgrade_lock: upgrade_lock.clone(),
-        };
+    let new_accumulator = VoteAccumulator::<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>> {
+        vote_outcomes: HashMap::new(),
+        signers: HashMap::new(),
+        phantom: PhantomData,
+        upgrade_lock: upgrade_lock.clone(),
+    };
     let state_vote_accumulator = LightClientStateUpdateVoteAccumulator {
         vote_outcomes: HashMap::new(),
         upgrade_lock,

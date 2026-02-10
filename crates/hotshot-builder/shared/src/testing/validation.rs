@@ -13,10 +13,7 @@ use hotshot_testing::{
     test_runner::Node,
     test_task::{AnyTestTaskState, TestResult, TestTaskState, TestTaskStateSeed},
 };
-use hotshot_types::traits::{
-    block_contents::BlockHeader,
-    node_implementation::NodeType,
-};
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::TransactionPayload;
 

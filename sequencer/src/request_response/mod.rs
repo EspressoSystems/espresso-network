@@ -49,11 +49,8 @@ pub struct RequestResponseProtocol<
     private_key: BLSPrivKey,
 }
 
-impl<
-        I: NodeImplementation<SeqTypes>,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > RequestResponseProtocol<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    RequestResponseProtocol<I, N, P>
 {
     /// Create a new RequestResponseProtocol from the inner
     pub fn new(
@@ -89,11 +86,8 @@ impl<
     }
 }
 
-impl<
-        I: NodeImplementation<SeqTypes>,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > RequestResponseProtocol<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    RequestResponseProtocol<I, N, P>
 {
     pub async fn request_indefinitely<F, Fut, O>(
         &self,

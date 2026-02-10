@@ -152,10 +152,7 @@ impl Options {
     /// The function `init_context` is used to create a sequencer context from a metrics object and
     /// optional saved consensus state. The metrics object is created from the API data source, so
     /// that consensus will populuate metrics that can then be read and served by the API.
-    pub async fn serve<N, P, F>(
-        mut self,
-        init_context: F,
-    ) -> anyhow::Result<SequencerContext<N, P>>
+    pub async fn serve<N, P, F>(mut self, init_context: F) -> anyhow::Result<SequencerContext<N, P>>
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,

@@ -30,13 +30,7 @@ pub async fn main() -> anyhow::Result<()> {
         run_with_storage(genesis, modules, opt, storage).await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            persistence::fs::Options::default(),
-        )
-        .await
+        run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
     }
 }
 
@@ -265,13 +259,8 @@ mod test {
         // populate some metrics.
         tracing::info!(port, "starting sequencer");
         let task = spawn(async move {
-            if let Err(err) = init_with_storage(
-                genesis,
-                modules,
-                opt,
-                fs::Options::new(tmp.path().into()),
-            )
-            .await
+            if let Err(err) =
+                init_with_storage(genesis, modules, opt, fs::Options::new(tmp.path().into())).await
             {
                 tracing::error!("failed to start sequencer: {err:#}");
             }

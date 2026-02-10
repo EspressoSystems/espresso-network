@@ -385,7 +385,10 @@ mod generic_test {
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::{TestInstanceState, TestValidatedState}};
+    use hotshot_example_types::{
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
     use hotshot_types::{
         data::{VidCommon, VidShare},
         vid::advz::advz_scheme,
@@ -424,7 +427,6 @@ mod test {
             &TestInstanceState::default(),
             TEST_VERSIONS.test.base,
             TEST_VERSIONS.test.upgrade,
-
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));

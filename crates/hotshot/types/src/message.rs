@@ -627,7 +627,7 @@ where
 pub struct UpgradeLock<TYPES: NodeType> {
     pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
     pub base_version: Version,
-    pub upgrade_version: Version
+    pub upgrade_version: Version,
 }
 
 impl<TYPES: NodeType> UpgradeLock<TYPES> {
@@ -636,16 +636,20 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(None)),
             base_version: base,
-            upgrade_version: upgrade
+            upgrade_version: upgrade,
         }
     }
 
     /// Create a new `UpgradeLock` from an optional upgrade certificate
-    pub fn from_certificate(base: Version, upgrade: Version, certificate: &Option<UpgradeCertificate<TYPES>>) -> Self {
+    pub fn from_certificate(
+        base: Version,
+        upgrade: Version,
+        certificate: &Option<UpgradeCertificate<TYPES>>,
+    ) -> Self {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(certificate.clone())),
             base_version: base,
-            upgrade_version: upgrade
+            upgrade_version: upgrade,
         }
     }
 
@@ -675,7 +679,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
                     self.base_version
                 }
             },
-            None => self.base_version
+            None => self.base_version,
         };
 
         Ok(version)
@@ -695,7 +699,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
                     cert.data.old_version
                 }
             },
-            None => self.base_version
+            None => self.base_version,
         }
     }
 
@@ -736,12 +740,13 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
 
         let version = self.version(view).await?;
 
-        let serialized_message = if version == self.base_version || version == self.upgrade_version {
+        let serialized_message = if version == self.base_version || version == self.upgrade_version
+        {
             versions::encode(version, &message)
         } else {
             bail!(
-                "Attempted to serialize with version {version}, which is incompatible. This should \
-                 be impossible."
+                "Attempted to serialize with version {version}, which is incompatible. This \
+                 should be impossible."
             );
         };
 
@@ -764,9 +769,13 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
             .wrap()
             .context(info!("Failed to read version and message!"))?;
 
-        if EXTERNAL_MESSAGE_VERSION != version && self.base_version != version && self.upgrade_version != version {
+        if EXTERNAL_MESSAGE_VERSION != version
+            && self.base_version != version
+            && self.upgrade_version != version
+        {
             bail!(warn!(
-                "Received a message with state version {version} which is invalid for its view: {:?}",
+                "Received a message with state version {version} which is invalid for its view: \
+                 {:?}",
                 deserialized_message
             ));
         }

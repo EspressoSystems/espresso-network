@@ -861,10 +861,7 @@ impl<TYPES: NodeType> HandleDepOutput for ProposalDependencyHandle<TYPES> {
     }
 }
 
-pub(super) async fn handle_eqc_formed<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
->(
+pub(super) async fn handle_eqc_formed<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     cert_view: TYPES::View,
     leaf_commit: Commitment<Leaf2<TYPES>>,
     block_number: Option<u64>,

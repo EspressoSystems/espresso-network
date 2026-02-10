@@ -1,11 +1,7 @@
-
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::{
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
-    },
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
 use serde::{Deserialize, Serialize};
 

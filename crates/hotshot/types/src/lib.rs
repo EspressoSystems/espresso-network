@@ -254,7 +254,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     /// number of iterations in the DRB calculation
     pub drb_upgrade_difficulty: u64,
     pub base_version: Version,
-    pub upgrade_version: Version
+    pub upgrade_version: Version,
 }
 
 fn default_epoch_start_block() -> u64 {

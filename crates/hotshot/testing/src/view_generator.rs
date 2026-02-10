@@ -99,7 +99,7 @@ impl TestView {
         membership: &EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> Self {
         let genesis_view = ViewNumber::new(1);
         let genesis_epoch = genesis_epoch_from_version::<TestTypes>(base);
@@ -168,7 +168,7 @@ impl TestView {
             &Leaf2::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                base
+                base,
             )
             .await,
             payload_commitment,
@@ -186,7 +186,7 @@ impl TestView {
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
                     upgrade_lock.base_version,
-                    upgrade_lock.upgrade_version
+                    upgrade_lock.upgrade_version,
                 )
                 .await,
                 next_epoch_justify_qc: None,
@@ -496,7 +496,10 @@ impl TestView {
             _pd: PhantomData,
         };
 
-        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.base_version, self.upgrade_lock.upgrade_version);
+        let upgrade_lock = UpgradeLock::new(
+            self.upgrade_lock.base_version,
+            self.upgrade_lock.upgrade_version,
+        );
 
         TestView {
             quorum_proposal,
@@ -585,7 +588,7 @@ pub struct TestViewGenerator {
     pub node_key_map: Arc<TestNodeKeyMap>,
     pub task: Option<BoxFuture<'static, TestView>>,
     pub base: Version,
-    pub upgrade: Version
+    pub upgrade: Version,
 }
 
 impl TestViewGenerator {
@@ -593,7 +596,7 @@ impl TestViewGenerator {
         membership: EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
         base: Version,
-        upgrade: Version
+        upgrade: Version,
     ) -> Self {
         TestViewGenerator {
             current_view: None,
@@ -601,7 +604,7 @@ impl TestViewGenerator {
             node_key_map,
             task: None,
             base,
-            upgrade
+            upgrade,
         }
     }
 
@@ -687,7 +690,8 @@ impl Stream for TestViewGenerator {
             } else {
                 let epoch_membership = self.membership.clone();
                 let nkm = Arc::clone(&self.node_key_map);
-                async move { TestView::genesis(&epoch_membership, nkm, base, upgrade).await }.boxed()
+                async move { TestView::genesis(&epoch_membership, nkm, base, upgrade).await }
+                    .boxed()
             });
         }
 
