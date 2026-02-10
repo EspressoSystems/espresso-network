@@ -155,7 +155,7 @@ mod tests {
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
     use vbs::version::Version;
-    use versions::{Upgrade, version};
+    use versions::{version, Upgrade};
 
     use crate::{
         api::{
@@ -1436,7 +1436,7 @@ mod tests {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 stake_table_version,
-                upgrade
+                upgrade,
             )
             .await
             .expect("Pos deployment failed")

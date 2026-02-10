@@ -193,12 +193,9 @@ async fn test_pruning() {
     // Send a bogus decide event. The only thing we care about is the leaf's view number,
     // everything else is boilerplate.
 
-    let mock_qc = QuorumCertificate2::genesis(
-        &Default::default(),
-        &Default::default(),
-        TEST_VERSIONS.test,
-    )
-    .await;
+    let mock_qc =
+        QuorumCertificate2::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test)
+            .await;
     let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
         proposal: QuorumProposal2 {
             block_header: <TestBlockHeader as BlockHeader<TestTypes>>::genesis(

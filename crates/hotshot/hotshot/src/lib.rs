@@ -33,7 +33,7 @@ pub mod types;
 
 pub mod tasks;
 use hotshot_types::data::QuorumProposalWrapper;
-use versions::{EPOCH_VERSION, Upgrade};
+use versions::{Upgrade, EPOCH_VERSION};
 
 /// Contains helper functions for the crate
 pub mod helpers;
@@ -1165,8 +1165,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         upgrade: Upgrade,
     ) -> Result<Self, HotShotError<TYPES>> {
         let (validated_state, state_delta) = TYPES::ValidatedState::genesis(&instance_state);
-        let high_qc =
-            QuorumCertificate2::genesis(&validated_state, &instance_state, upgrade).await;
+        let high_qc = QuorumCertificate2::genesis(&validated_state, &instance_state, upgrade).await;
 
         Ok(Self {
             anchor_leaf: Leaf2::genesis(&validated_state, &instance_state, upgrade.base).await,

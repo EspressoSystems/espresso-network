@@ -47,7 +47,7 @@ use jf_merkle_tree_compat::{
 };
 use rand::RngCore;
 use vbs::version::StaticVersionType;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade, version};
+use versions::{version, Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
 
 use crate::{
     client::Client,
@@ -427,8 +427,7 @@ impl InnerTestClient {
             let node_state = NodeState::mock_v3().with_genesis_version(upgrade.base);
             let (justify_qc, mt) = if i == 0 {
                 (
-                    QuorumCertificate2::genesis(&Default::default(), &node_state, upgrade)
-                        .await,
+                    QuorumCertificate2::genesis(&Default::default(), &node_state, upgrade).await,
                     SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
                 )
             } else {
@@ -441,8 +440,12 @@ impl InnerTestClient {
             let transactions = vec![Transaction::random(&mut rand::thread_rng())];
             let (payload, ns_table) =
                 Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
-            let payload_comm =
-                vid_commitment(&payload.encode(), &ns_table.encode(), quorum.len(), upgrade.base);
+            let payload_comm = vid_commitment(
+                &payload.encode(),
+                &ns_table.encode(),
+                quorum.len(),
+                upgrade.base,
+            );
 
             let mut block_header = Leaf2::genesis(&Default::default(), &node_state, upgrade.base)
                 .await

@@ -63,7 +63,7 @@ where
 #[non_exhaustive]
 pub struct Upgrade {
     pub base: Version,
-    pub target: Version
+    pub target: Version,
 }
 
 impl Upgrade {

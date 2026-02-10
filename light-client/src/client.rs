@@ -216,7 +216,7 @@ mod test {
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
     use tokio::time::sleep;
-    use versions::{EPOCH_VERSION, Upgrade};
+    use versions::{Upgrade, EPOCH_VERSION};
 
     use super::*;
     use crate::{

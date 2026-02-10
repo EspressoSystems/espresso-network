@@ -86,7 +86,7 @@ pub mod testing {
     use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
     use vbs::version::{StaticVersion, Version};
-    use versions::{Upgrade, version};
+    use versions::{version, Upgrade};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -148,7 +148,7 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 0,
                 drb_upgrade_difficulty: 0,
-                upgrade: Upgrade::trivial(version(0, 1))
+                upgrade: Upgrade::trivial(version(0, 1)),
             };
 
             Self {

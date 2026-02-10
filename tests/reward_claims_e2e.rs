@@ -35,7 +35,7 @@ use staking_cli::demo::DelegationConfig;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const BLOCKS_PER_EPOCH: u64 = 7;

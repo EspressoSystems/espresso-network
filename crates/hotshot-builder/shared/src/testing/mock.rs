@@ -78,8 +78,7 @@ pub async fn proposals_with_transactions(
 ) -> (DaProposal2<TestTypes>, QuorumProposalWrapper<TestTypes>) {
     let epoch = None;
     let view_number = <TestTypes as NodeType>::View::new(view);
-    let upgrade_lock =
-        UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let validated_state = TestValidatedState::default();
     let instance_state = TestInstanceState::default();
 

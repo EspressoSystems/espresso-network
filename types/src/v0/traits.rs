@@ -694,10 +694,13 @@ pub trait SequencerPersistence:
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
                 (
-                    hotshot_types::data::Leaf2::genesis(&genesis_validated_state, &state, upgrade.base)
-                        .await,
-                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade)
-                        .await,
+                    hotshot_types::data::Leaf2::genesis(
+                        &genesis_validated_state,
+                        &state,
+                        upgrade.base,
+                    )
+                    .await,
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await,
                     None,
                 )
             },

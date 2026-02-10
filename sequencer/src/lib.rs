@@ -1413,7 +1413,7 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                upgrade
+                upgrade,
             )
             .await
             .unwrap()

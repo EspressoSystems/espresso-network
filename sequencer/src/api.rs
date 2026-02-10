@@ -1357,7 +1357,7 @@ pub mod test_helpers {
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
     use vbs::version::{StaticVersion, StaticVersionType};
-    use versions::{EPOCH_VERSION, Upgrade};
+    use versions::{Upgrade, EPOCH_VERSION};
 
     use super::*;
     use crate::{
@@ -2682,9 +2682,7 @@ mod test {
     };
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{
-        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade, version
-    };
+    use versions::{version, Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -4884,7 +4882,9 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_catchup_on_restart(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_merklized_state_catchup_on_restart(
+        #[case] upgrade: Upgrade,
+    ) -> anyhow::Result<()> {
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
         //
@@ -6729,7 +6729,7 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                POS_V4
+                POS_V4,
             )
             .await
             .unwrap()

@@ -29,7 +29,7 @@ use jf_merkle_tree_compat::{
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
-use versions::{Upgrade, version};
+use versions::{version, Upgrade};
 
 use crate::{
     availability::{

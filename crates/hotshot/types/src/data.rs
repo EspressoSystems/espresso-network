@@ -28,7 +28,7 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+use versions::{Upgrade, EPOCH_VERSION, VID2_UPGRADE_VERSION};
 
 use crate::{
     drb::DrbResult,

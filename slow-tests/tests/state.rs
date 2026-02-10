@@ -38,7 +38,7 @@ use sequencer::{
 use surf_disco::Client;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
-use versions::{EPOCH_VERSION, Upgrade};
+use versions::{Upgrade, EPOCH_VERSION};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {

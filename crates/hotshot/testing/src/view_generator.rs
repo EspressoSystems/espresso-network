@@ -681,8 +681,7 @@ impl Stream for TestViewGenerator {
             } else {
                 let epoch_membership = self.membership.clone();
                 let nkm = Arc::clone(&self.node_key_map);
-                async move { TestView::genesis(&epoch_membership, nkm, upgrade).await }
-                    .boxed()
+                async move { TestView::genesis(&epoch_membership, nkm, upgrade).await }.boxed()
             });
         }
 

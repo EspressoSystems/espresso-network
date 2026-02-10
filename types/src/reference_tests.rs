@@ -579,12 +579,9 @@ async fn test_leaf_query_data_legacy_v2() {
 async fn test_leaf_query_data_v3() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
-    let leaf = LeafQueryData::<SeqTypes>::genesis(
-        &validated_state,
-        &instance_state,
-        TEST_VERSIONS.test,
-    )
-    .await;
+    let leaf =
+        LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, TEST_VERSIONS.test)
+            .await;
     reference_test_without_committable("v3", "leaf_query_data", &leaf);
 }
 

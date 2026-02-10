@@ -28,7 +28,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use versions::{EPOCH_VERSION};
+use versions::EPOCH_VERSION;
 
 use crate::{
     events::HotShotEvent,
@@ -161,7 +161,9 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     proposal.data.view_number()
                 );
 
-                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION && upgrade.base < EPOCH_VERSION {
+                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION
+                    && upgrade.base < EPOCH_VERSION
+                {
                     let consensus_reader = self.consensus.read().await;
 
                     let Some((_, last_proposal)) =
@@ -338,7 +340,9 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
                 let decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
 
-                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION && upgrade.base < EPOCH_VERSION {
+                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION
+                    && upgrade.base < EPOCH_VERSION
+                {
                     let consensus_reader = self.consensus.read().await;
 
                     let Some((_, last_proposal)) =

@@ -25,7 +25,7 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
 use vec1::Vec1;
-use versions::{Upgrade, version};
+use versions::{version, Upgrade};
 
 use super::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
