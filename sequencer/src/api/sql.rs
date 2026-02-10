@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
@@ -46,7 +43,6 @@ use jf_merkle_tree_compat::{
 };
 use serde_json::Value;
 use sqlx::{Encode, Row, Type};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -408,7 +404,7 @@ impl CatchupStorage for SqlStorage {
                 .collect();
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf, permit) = reconstruct_state(
+            let (state, leaf) = reconstruct_state(
                 instance,
                 self,
                 &mut tx,
@@ -539,7 +535,7 @@ impl CatchupStorage for SqlStorage {
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf, permit) = reconstruct_state(
+            let (state, leaf) = reconstruct_state(
                 instance,
                 self,
                 &mut tx,
@@ -578,7 +574,7 @@ impl CatchupStorage for SqlStorage {
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, _, permit) =
+            let (state, _) =
                 reconstruct_state(instance, self, &mut tx, block_height - 1, view, &[], &[])
                     .await?;
             match state.block_merkle_tree.lookup(height - 1) {
@@ -999,7 +995,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     to_view: ViewNumber,
     fee_accounts: &[FeeAccount],
     reward_accounts: &[RewardAccountV2],
-) -> anyhow::Result<(ValidatedState, Leaf2, Arc<OwnedSemaphorePermit>)> {
+) -> anyhow::Result<(ValidatedState, Leaf2)> {
     tracing::info!("attempting to reconstruct fee state");
     let from_leaf = tx
         .get_leaf((from_height as usize).into())
@@ -1011,10 +1007,6 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
         "state reconstruction: starting state {:?} must be before ending state {to_view:?}",
         from_leaf.view_number(),
     );
-
-    let mut permit = Arc::new(Arc::new(Semaphore::new(1)).acquire_owned().await.context(
-        "Failed to acquire permit for newly created semaphore; this should never happen",
-    )?);
 
     // Get the sequence of headers we will be applying to compute the latest state.
     let mut leaves = VecDeque::new();
@@ -1097,15 +1089,14 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             );
         },
         either::Either::Right(expected_root) => {
-            let permitted_tree = load_reward_merkle_tree_v2(db, from_height)
+            state.reward_merkle_tree_v2 = load_reward_merkle_tree_v2(db, from_height)
                 .await
                 .context(
                     "unable to reconstruct state because RewardMerkleTreeV2 not available at \
                      origin",
                 )?
-                .0;
-            permit = permitted_tree.permit.clone();
-            state.reward_merkle_tree_v2 = permitted_tree.tree;
+                .0
+                .tree;
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
                 "loaded reward state does not match parent header"
@@ -1142,7 +1133,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     }
 
     tracing::info!(from_height, ?to_view, "successfully reconstructed state");
-    Ok((state, to_leaf, permit))
+    Ok((state, to_leaf))
 }
 
 /// Get the dependencies needed to apply the STF to the given list of headers.
