@@ -600,7 +600,9 @@ impl L1Persistence for Persistence {
     #[instrument(skip(self, updates))]
     async fn apply_updates(&mut self, updates: Vec<Update>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        for update in updates {
+
+        let mut latest_l1_block = None;
+        for update in &updates {
             // In rare cases, this update or a later one may have already been processed. This can
             // only happen outside the control of this program, since we do have an exclusive lock
             // on the database here. For example, in some cases AWS may briefly run two instances of
@@ -656,38 +658,44 @@ impl L1Persistence for Persistence {
 
             tracing::debug!(
                 block_number = update.block.number(),
+                node_set_diffs = update.node_set_diffs.len(),
+                wallet_diffs = update.wallet_diffs.len(),
                 "applying events to database"
             );
 
-            // Update L1 block info
-            sqlx::query(
-                "UPDATE l1_block SET
-                 hash = $1,
-                 number = $2,
-                 parent_hash = $3,
-                 timestamp = $4,
-                 exit_escrow_period = $5",
-            )
-            .bind(update.block.hash().to_string())
-            .bind(update.block.number() as i64)
-            .bind(update.block.parent().to_string())
-            .bind(update.block.timestamp() as i64)
-            .bind(update.block.exit_escrow_period as i64)
-            .execute(&mut *tx)
-            .await?;
-
             // Apply node set diffs
-            for diff in update.node_set_diffs {
-                self.apply_node_set_diff(&mut tx, &diff).await?;
+            for diff in &update.node_set_diffs {
+                self.apply_node_set_diff(&mut tx, diff).await?;
             }
 
             // Apply wallet diffs
-            for (address, diffs) in update.wallet_diffs {
+            for (address, diffs) in &update.wallet_diffs {
+                tracing::debug!(%address, num = diffs.len(), "applying diffs for wallet");
                 for diff in diffs {
-                    self.apply_wallet_diff(&mut tx, address, &diff).await?;
+                    self.apply_wallet_diff(&mut tx, *address, diff).await?;
                 }
             }
             tracing::debug!("events applied successfully");
+            latest_l1_block = Some(update.block);
+        }
+
+        // Update L1 block info to that of the latest new update.
+        if let Some(block) = latest_l1_block {
+            sqlx::query(
+                "UPDATE l1_block SET
+             hash = $1,
+             number = $2,
+             parent_hash = $3,
+             timestamp = $4,
+             exit_escrow_period = $5",
+            )
+            .bind(block.hash().to_string())
+            .bind(block.number() as i64)
+            .bind(block.parent().to_string())
+            .bind(block.timestamp() as i64)
+            .bind(block.exit_escrow_period as i64)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
