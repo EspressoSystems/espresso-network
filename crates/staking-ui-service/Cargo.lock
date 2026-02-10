@@ -10420,6 +10420,7 @@ dependencies = [
  "espresso-contract-deployer",
  "espresso-types",
  "futures",
+ "hickory-resolver",
  "hotshot-contract-adapter",
  "hotshot-query-service",
  "hotshot-state-prover",

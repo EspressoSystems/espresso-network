@@ -42,6 +42,7 @@ derivative = "2"
 derive_more = "2.0"
 espresso-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 futures = "0.3"
+hickory-resolver = "0.25"
 hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 hotshot-query-service = { git = "https://github.com/EspressoSystems/espresso-network.git" }
 hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
