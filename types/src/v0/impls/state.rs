@@ -1,5 +1,5 @@
 use std::ops::Add;
-
+use std::sync::Arc;
 use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
@@ -1136,6 +1136,25 @@ impl HotShotState<SeqTypes> for ValidatedState {
     type Time = ViewNumber;
 
     type Delta = Delta;
+
+    fn forget_reward_merkle_tree_v2(state: Arc<Self>) -> Arc<Self> {
+      let block_merkle_tree = state.block_merkle_tree.clone();
+      let fee_merkle_tree = state.fee_merkle_tree.clone();
+      let reward_merkle_tree_v1 = state.reward_merkle_tree_v1.clone();
+      let chain_config = state.chain_config.clone();
+
+      let reward_merkle_tree_v2 = RewardMerkleTreeV2::from_commitment(state.reward_merkle_tree_v2.commitment());
+      let state = ValidatedState { 
+        block_merkle_tree,
+        fee_merkle_tree,
+        reward_merkle_tree_v1,
+        reward_merkle_tree_v2,
+        chain_config,
+      };
+
+      state.into()
+    }
+
     fn on_commit(&self) {}
     /// Validate parent against known values (from state) and validate
     /// proposal descends from parent. Returns updated `ValidatedState`.
