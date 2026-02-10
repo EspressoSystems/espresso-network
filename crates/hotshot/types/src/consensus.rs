@@ -731,11 +731,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &self.validated_state_map
     }
 
-    /// Get a mutable reference to the validated state map.
-    pub fn validated_state_map_mut(&mut self) -> &mut BTreeMap<TYPES::View, View<TYPES>> {
-        &mut self.validated_state_map
-    }
-
     /// Get the saved leaves.
     pub fn saved_leaves(&self) -> &CommitmentMap<Leaf2<TYPES>> {
         &self.saved_leaves
@@ -1039,12 +1034,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                     );
                 }
             }
-        }
-        for view in self.validated_state_map_mut().range_mut(..view_number) {
-          if let ViewInner::Leaf { state, .. } = &mut view.1.view_inner {
-            *state = 
-            <TYPES::ValidatedState as ValidatedState<TYPES>>::forget_reward_merkle_tree_v2(state.clone());
-          }
         }
         self.validated_state_map.insert(view_number, new_view);
         Ok(())

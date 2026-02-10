@@ -6,7 +6,6 @@
 
 //! Implementations for examples and tests only
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -99,10 +98,6 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
     type Delta = TestStateDelta;
 
     type Time = ViewNumber;
-
-    fn forget_reward_merkle_tree_v2(state: Arc<Self>) -> Arc<Self> {
-      state
-    }
 
     async fn validate_and_apply_header(
         &self,
