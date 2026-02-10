@@ -5441,7 +5441,7 @@ mod test {
         .unwrap();
         let mut tx = ds.read().await?;
 
-        let (state, leaf, _) = reconstruct_state(
+        let (state, leaf) = reconstruct_state(
             &instance,
             &ds,
             &mut tx,
@@ -5463,7 +5463,7 @@ mod test {
         );
 
         // Reconstruct fee state
-        let (state, leaf, _) = reconstruct_state(
+        let (state, leaf) = reconstruct_state(
             &instance,
             &ds,
             &mut tx,
@@ -5491,7 +5491,7 @@ mod test {
 
         // Reconstruct reward state
 
-        let (state, leaf, _) = reconstruct_state(
+        let (state, leaf) = reconstruct_state(
             &instance,
             &ds,
             &mut tx,
@@ -5536,7 +5536,7 @@ mod test {
         );
         // Reconstruct reward and fee state
 
-        let (state, leaf, _) = reconstruct_state(
+        let (state, leaf) = reconstruct_state(
             &instance,
             &ds,
             &mut tx,
