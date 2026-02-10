@@ -1266,7 +1266,7 @@ impl EpochRewardsCalculator {
             // Fetch all reward accounts from peers (paginated)
             let mut all_accounts = Vec::new();
             let mut offset = 0u64;
-            let limit = 10_000u64;
+            let limit = 1_000u64;
 
             loop {
                 let accounts = instance_state
