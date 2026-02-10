@@ -37,7 +37,7 @@ pub type RewardMerkleTreeV2 = UniversalMerkleTree<
 #[derive(Clone)]
 pub struct PermittedRewardMerkleTreeV2 {
     pub tree: RewardMerkleTreeV2,
-    pub permit: Arc<OwnedSemaphorePermit>,
+    _permit: Arc<OwnedSemaphorePermit>,
 }
 
 impl std::ops::Deref for PermittedRewardMerkleTreeV2 {
@@ -64,7 +64,7 @@ impl PermittedRewardMerkleTreeV2 {
 
         Ok(PermittedRewardMerkleTreeV2 {
             tree,
-            permit: Arc::new(permit),
+            _permit: Arc::new(permit),
         })
     }
 }
