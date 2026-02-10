@@ -737,7 +737,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         let version = self.version(view).await?;
 
         let serialized_message = if version == self.upgrade.base || version == self.upgrade.target {
-            versions::encode(version, &message)
+            versions::encode(version, message)
         } else {
             bail!(
                 "Attempted to serialize with version {version}, which is incompatible. This \

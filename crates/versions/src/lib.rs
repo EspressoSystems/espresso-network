@@ -34,8 +34,8 @@ pub fn decode_version(bytes: &[u8]) -> Result<Version, VersionError> {
 
 pub fn encode_version(v: Version) -> [u8; 4] {
     let mut buf = [0; 4];
-    (&mut buf[0..2]).copy_from_slice(&v.major.to_le_bytes());
-    (&mut buf[2..4]).copy_from_slice(&v.minor.to_le_bytes());
+    buf[0..2].copy_from_slice(&v.major.to_le_bytes());
+    buf[2..4].copy_from_slice(&v.minor.to_le_bytes());
     buf
 }
 
