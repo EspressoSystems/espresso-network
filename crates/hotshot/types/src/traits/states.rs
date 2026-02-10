@@ -11,7 +11,7 @@
 //! within blocks.
 
 use std::{error::Error, fmt::Debug, future::Future};
-use std::sync::Arc;
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::version::Version;
 
@@ -74,10 +74,6 @@ pub trait ValidatedState<TYPES: NodeType>:
         version: Version,
         view_number: u64,
     ) -> impl Future<Output = Result<(Self, Self::Delta), Self::Error>> + Send;
-
-    fn forget_reward_merkle_tree_v2(
-      tree: Arc<Self>,
-    ) -> Arc<Self>;
 
     /// Construct the state with the given block header.
     ///
