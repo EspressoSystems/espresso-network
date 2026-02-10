@@ -635,6 +635,18 @@ pub mod mock {
             Ok(ChainConfig::default())
         }
 
+        async fn try_fetch_reward_accounts_v2(
+            &self,
+            _retry: usize,
+            _instance: &NodeState,
+            _height: u64,
+            _view: ViewNumber,
+            _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+            _accounts: &[RewardAccountV2],
+        ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
+            anyhow::bail!("unimplemented")
+        }
+
         async fn try_fetch_reward_merkle_tree_v2(
             &self,
             _retry: usize,

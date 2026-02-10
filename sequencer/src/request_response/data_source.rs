@@ -234,6 +234,15 @@ impl<
 
                 // Fall back to storage
                 let (merkle_tree, leaf) = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_reward_accounts_v2(
+                            &self.node_state,
+                            *height,
+                            ViewNumber::new(*view),
+                            accounts,
+                        )
+                        .await
+                        .with_context(|| "failed to get accounts from sql storage")?,
                     Some(Storage::Fs(_)) => {
                         bail!("fs storage not supported for reward accounts")
                     },
