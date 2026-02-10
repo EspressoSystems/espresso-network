@@ -218,8 +218,7 @@ async fn init_consensus(
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         drb_difficulty: 0,
         drb_upgrade_difficulty: 0,
-        base_version: MOCK_UPGRADE.base,
-        upgrade_version: MOCK_UPGRADE.upgrade,
+        upgrade: MOCK_UPGRADE,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -271,8 +270,7 @@ async fn init_consensus(
                         0,
                         0,
                         vec![],
-                        MOCK_UPGRADE.base,
-                        MOCK_UPGRADE.upgrade,
+                        MOCK_UPGRADE,
                     )
                     .await
                     .unwrap(),

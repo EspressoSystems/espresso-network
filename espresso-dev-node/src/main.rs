@@ -56,6 +56,7 @@ use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
+use versions::Upgrade;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum L1Deployment {
@@ -650,11 +651,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Start the nodes
     let network = {
-        let v = match version {
-            DevNodeVersion::V0_3 => versions::version(0, 3),
-            DevNodeVersion::V0_4 => versions::version(0, 4),
+        let u = match version {
+            DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
+            DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
         };
-        TestNetwork::new(config, v).await
+        TestNetwork::new(config, u).await
     };
 
     let relay_server_handle = spawn(async move {

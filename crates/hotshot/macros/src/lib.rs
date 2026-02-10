@@ -206,8 +206,7 @@ impl TestData {
             #[tracing::instrument]
             async fn #test_name() {
                 let mut __metadata = #metadata;
-                __metadata.test_config.base_version = #version.base;
-                __metadata.test_config.upgrade_version = #version.upgrade;
+                __metadata.test_config.upgrade = #version;
                 hotshot_testing::test_builder::TestDescription::<#ty, #imply>::gen_launcher(__metadata).launch().run_test::<#builder_impl>().await;
             }
         }

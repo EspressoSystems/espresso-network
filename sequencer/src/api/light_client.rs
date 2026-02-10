@@ -751,7 +751,7 @@ mod test {
         // Upgrade to epochs (and enabling HotStuff2) in the middle of a leaf chain, so that the
         // last leaf in the chain only requires 2 QCs to verify, even though at the start of the
         // chain we would have required 3.
-        let leaves = leaf_chain_with_upgrade(1..=4, 2, ENABLE_EPOCHS.0, ENABLE_EPOCHS.1).await;
+        let leaves = leaf_chain_with_upgrade(1..=4, 2, ENABLE_EPOCHS).await;
         assert_eq!(leaves[0].header().version(), LegacyVersion::version());
         assert_eq!(
             leaves[1].header().version(),

@@ -44,7 +44,7 @@ use hotshot_types::{
 };
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
-use vbs::version::Version;
+use versions::Upgrade;
 
 use crate::helpers::{
     build_cert, build_da_certificate, build_vid_proposal, da_payload_commitment, TestNodeKeyMap,
@@ -98,12 +98,11 @@ impl TestView {
     pub async fn genesis(
         membership: &EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> Self {
         let genesis_view = ViewNumber::new(1);
-        let genesis_epoch = genesis_epoch_from_version::<TestTypes>(base);
-        let upgrade_lock = UpgradeLock::new(base, upgrade);
+        let genesis_epoch = genesis_epoch_from_version::<TestTypes>(upgrade.base);
+        let upgrade_lock = UpgradeLock::new(upgrade);
 
         let transactions = Vec::new();
 
@@ -168,7 +167,7 @@ impl TestView {
             &Leaf2::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                base,
+                upgrade.base,
             )
             .await,
             payload_commitment,
@@ -185,8 +184,7 @@ impl TestView {
                 justify_qc: QuorumCertificate2::genesis(
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
-                    upgrade_lock.base_version,
-                    upgrade_lock.upgrade_version,
+                    upgrade,
                 )
                 .await,
                 next_epoch_justify_qc: None,
@@ -496,10 +494,7 @@ impl TestView {
             _pd: PhantomData,
         };
 
-        let upgrade_lock = UpgradeLock::new(
-            self.upgrade_lock.base_version,
-            self.upgrade_lock.upgrade_version,
-        );
+        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade);
 
         TestView {
             quorum_proposal,
@@ -587,23 +582,20 @@ pub struct TestViewGenerator {
     pub membership: EpochMembershipCoordinator<TestTypes>,
     pub node_key_map: Arc<TestNodeKeyMap>,
     pub task: Option<BoxFuture<'static, TestView>>,
-    pub base: Version,
-    pub upgrade: Version,
+    pub upgrade: Upgrade,
 }
 
 impl TestViewGenerator {
     pub fn generate(
         membership: EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> Self {
         TestViewGenerator {
             current_view: None,
             membership,
             node_key_map,
             task: None,
-            base,
             upgrade,
         }
     }
@@ -683,14 +675,13 @@ impl Stream for TestViewGenerator {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.task.is_none() {
             let cur_view = self.current_view.clone();
-            let base = self.base;
             let upgrade = self.upgrade;
             self.task = Some(if let Some(view) = cur_view {
                 async move { TestView::next_view(&view).await }.boxed()
             } else {
                 let epoch_membership = self.membership.clone();
                 let nkm = Arc::clone(&self.node_key_map);
-                async move { TestView::genesis(&epoch_membership, nkm, base, upgrade).await }
+                async move { TestView::genesis(&epoch_membership, nkm, upgrade).await }
                     .boxed()
             });
         }

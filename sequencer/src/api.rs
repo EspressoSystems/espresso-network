@@ -1334,7 +1334,7 @@ pub mod test_helpers {
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        NamespaceId, ValidatedState, MOCK_SEQUENCER_BASE_VERSION,
+        NamespaceId, ValidatedState, MOCK_SEQUENCER_VERSIONS,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -1356,8 +1356,8 @@ pub mod test_helpers {
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
-    use vbs::version::{StaticVersion, StaticVersionType, Version};
-    use versions::EPOCH_VERSION;
+    use vbs::version::{StaticVersion, StaticVersionType};
+    use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
     use crate::{
@@ -1504,10 +1504,9 @@ pub mod test_helpers {
             self,
             delegation_config: DelegationConfig,
             stake_table_version: StakeTableContractVersion,
-            base: Version,
-            upgrade: Version,
+            upgrade: Upgrade,
         ) -> anyhow::Result<Self> {
-            if base < EPOCH_VERSION && upgrade < EPOCH_VERSION {
+            if upgrade.base < EPOCH_VERSION && upgrade.target < EPOCH_VERSION {
                 panic!("given version does not require pos deployment");
             };
 
@@ -1637,7 +1636,7 @@ pub mod test_helpers {
     impl<P: PersistenceOptions, const NUM_NODES: usize> TestNetwork<P, { NUM_NODES }> {
         pub async fn new<C: StateCatchup + 'static>(
             cfg: TestNetworkConfig<{ NUM_NODES }, P, C>,
-            bind_version: Version,
+            upgrade: versions::Upgrade,
         ) -> Self {
             let mut cfg = cfg;
             let mut builder_tasks = Vec::new();
@@ -1690,7 +1689,7 @@ pub mod test_helpers {
                                                 &*metrics,
                                                 STAKE_TABLE_CAPACITY_FOR_TEST,
                                                 consumer,
-                                                bind_version,
+                                                upgrade,
                                                 upgrades_map,
                                             )
                                             .await)
@@ -1709,7 +1708,7 @@ pub mod test_helpers {
                                     &NoMetrics,
                                     STAKE_TABLE_CAPACITY_FOR_TEST,
                                     NullEventConsumer,
-                                    bind_version,
+                                    upgrade,
                                     upgrades_map,
                                 )
                                 .await
@@ -1769,7 +1768,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
@@ -1817,7 +1816,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
 
         client.connect(None).await;
@@ -1849,7 +1848,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         let mut height: u64;
         // Wait for block >=2 appears
@@ -1887,7 +1886,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // Wait for a few blocks to be decided.
@@ -2034,7 +2033,7 @@ mod api_tests {
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, NamespaceId, NamespaceProofQueryData, ValidatedState,
-        MOCK_SEQUENCER_BASE_VERSION, MOCK_SEQUENCER_UPGRADE_VERSION,
+        MOCK_SEQUENCER_VERSIONS,
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -2117,7 +2116,7 @@ mod api_tests {
             .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
 
         // Connect client.
@@ -2312,8 +2311,7 @@ mod api_tests {
                 justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
-                    MOCK_SEQUENCER_BASE_VERSION,
-                    MOCK_SEQUENCER_UPGRADE_VERSION,
+                    MOCK_SEQUENCER_VERSIONS,
                 )
                 .await,
                 upgrade_certificate: None,
@@ -2327,8 +2325,7 @@ mod api_tests {
         let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
-            MOCK_SEQUENCER_BASE_VERSION,
-            MOCK_SEQUENCER_UPGRADE_VERSION,
+            MOCK_SEQUENCER_VERSIONS,
         )
         .await;
 
@@ -2508,8 +2505,7 @@ mod api_tests {
         let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
-            MOCK_SEQUENCER_BASE_VERSION,
-            MOCK_SEQUENCER_UPGRADE_VERSION,
+            MOCK_SEQUENCER_VERSIONS,
         )
         .await;
         let leaf = Leaf2::genesis(
@@ -2627,7 +2623,7 @@ mod test {
         validators_from_l1_events, ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client,
         L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
         StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
-        MOCK_SEQUENCER_BASE_VERSION,
+        MOCK_SEQUENCER_VERSIONS,
     };
     use futures::{
         future::{self, join_all, try_join_all},
@@ -2685,9 +2681,9 @@ mod test {
         app::AppHealth, error::ServerError, healthcheck::HealthStatus, Error, StatusCode, Url,
     };
     use tokio::time::sleep;
-    use vbs::version::{StaticVersion, Version};
+    use vbs::version::StaticVersion;
     use versions::{
-        version, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, VERSION_ZERO,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade, version
     };
 
     use self::{
@@ -2730,8 +2726,8 @@ mod test {
         testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
 
-    const POS_V3: Version = version(0, 3);
-    const POS_V4: Version = version(0, 4);
+    const POS_V3: Upgrade = Upgrade::trivial(version(0, 3));
+    const POS_V4: Upgrade = Upgrade::trivial(version(0, 4));
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_healthcheck() {
@@ -2744,7 +2740,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         client.connect(None).await;
         let health = client.get::<AppHealth>("healthcheck").send().await.unwrap();
@@ -2784,7 +2780,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 
@@ -2878,7 +2874,7 @@ mod test {
                 )
             }))
             .build();
-        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
@@ -2925,7 +2921,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MOCK_SEQUENCER_BASE_VERSION,
+                MOCK_SEQUENCER_VERSIONS,
                 Default::default(),
             )
             .await;
@@ -2982,7 +2978,7 @@ mod test {
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
@@ -3025,7 +3021,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MOCK_SEQUENCER_BASE_VERSION,
+                MOCK_SEQUENCER_VERSIONS,
                 Default::default(),
             )
             .await;
@@ -3072,7 +3068,7 @@ mod test {
             .api_config(Options::with_port(port))
             .network_config(network_config)
             .build();
-        let mut network = TestNetwork::new(config, EPOCH_VERSION).await;
+        let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
 
         // Wait for replica 0 to decide in the third epoch.
         let mut events = network.peers[0].event_stream().await;
@@ -3118,7 +3114,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MOCK_SEQUENCER_BASE_VERSION,
+                MOCK_SEQUENCER_VERSIONS,
                 Default::default(),
             )
             .await;
@@ -3182,7 +3178,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
 
-        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for few blocks to be decided.
         network
@@ -3253,7 +3249,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
 
-        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for a few blocks to be decided.
         network
@@ -3277,10 +3273,10 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_upgrade_view_based() {
-        test_upgrade_helper(FEE_VERSION, EPOCH_VERSION).await;
+        test_upgrade_helper(Upgrade::new(FEE_VERSION, EPOCH_VERSION)).await;
     }
 
-    async fn test_upgrade_helper(base: Version, upgrade_version: Version) {
+    async fn test_upgrade_helper(upgrade: Upgrade) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
@@ -3291,12 +3287,12 @@ mod test {
         let test_config = TestConfigBuilder::default()
             .epoch_height(200)
             .epoch_start_block(321)
-            .set_upgrades(upgrade_version)
+            .set_upgrades(upgrade.target)
             .await
             .build();
 
         let chain_config_genesis = ValidatedState::default().chain_config.resolve().unwrap();
-        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
+        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade.target);
         assert_ne!(chain_config_genesis, chain_config_upgrade);
         tracing::debug!(?chain_config_genesis, ?chain_config_upgrade);
 
@@ -3315,8 +3311,10 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
+
+        let target = upgrade.target;
 
         // First loop to get an `UpgradeProposal`. Note that the
         // actual upgrade will take several to many subsequent views for
@@ -3329,7 +3327,7 @@ mod test {
                     let upgrade = proposal.data.upgrade_proposal;
                     let new_version = upgrade.new_version;
                     tracing::info!(?new_version, "upgrade proposal new version");
-                    assert_eq!(new_version, upgrade_version);
+                    assert_eq!(new_version, target);
                     break upgrade;
                 },
                 _ => continue,
@@ -3369,7 +3367,7 @@ mod test {
                     assert_eq!(config, chain_config_upgrade);
                 }
                 for leaf in leaves {
-                    assert_eq!(leaf.block_header().version(), upgrade_version);
+                    assert_eq!(leaf.block_header().version(), target);
                 }
                 break;
             }
@@ -3399,7 +3397,7 @@ mod test {
             .persistences(persistence.clone())
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Connect client.
         let client: Client<ServerError, SequencerApiVersion> =
@@ -3470,7 +3468,7 @@ mod test {
             }))
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
@@ -3518,7 +3516,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // Fetch a network config from the API server. The first peer URL is bogus, to test the
@@ -3564,7 +3562,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
@@ -3629,7 +3627,6 @@ mod test {
                 DelegationConfig::VariableAmounts,
                 Default::default(),
                 POS_V3,
-                VERSION_ZERO,
             )
             .await
             .expect("Pos Deployment")
@@ -3730,7 +3727,6 @@ mod test {
                 DelegationConfig::VariableAmounts,
                 Default::default(),
                 POS_V3,
-                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -3832,7 +3828,6 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
                 POS_V3,
-                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -3959,7 +3954,6 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
                 POS_V3,
-                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -4073,7 +4067,6 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
                 POS_V3,
-                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -4303,7 +4296,6 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
                 POS_V4,
-                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -4529,10 +4521,10 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3, VERSION_ZERO)]
-    #[case(POS_V4, VERSION_ZERO)]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_node_stake_table_api(#[case] base: Version, #[case] upgrade: Version) {
+    async fn test_node_stake_table_api(#[case] upgrade: Upgrade) {
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -4568,14 +4560,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                base,
                 upgrade,
             )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, base).await;
+        let _network = TestNetwork::new(config, upgrade).await;
 
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -4610,7 +4601,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup(#[case] base: Version) {
+    async fn test_epoch_stake_table_catchup(#[case] upgrade: Upgrade) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -4649,15 +4640,14 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
@@ -4705,7 +4695,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                base,
+                upgrade,
                 Default::default(),
             )
             .await;
@@ -4746,7 +4736,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup_stress(#[case] base: Version) {
+    async fn test_epoch_stake_table_catchup_stress(#[case] upgrade: Upgrade) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -4785,15 +4775,14 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
@@ -4844,7 +4833,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                base,
+                upgrade,
                 Default::default(),
             )
             .await;
@@ -4895,7 +4884,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_catchup_on_restart(#[case] base: Version) -> anyhow::Result<()> {
+    async fn test_merklized_state_catchup_on_restart(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
         //
@@ -4943,14 +4932,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
@@ -4992,7 +4980,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            base,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -5031,7 +5019,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            base,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -5055,7 +5043,7 @@ mod test {
             sleep(Duration::from_secs(1)).await;
             let state = node_0.decided_state().await;
 
-            let leaves = if base == EPOCH_VERSION {
+            let leaves = if upgrade.base == EPOCH_VERSION {
                 // Use legacy tree for V3
                 state.reward_merkle_tree_v1.num_leaves()
             } else {
@@ -5117,7 +5105,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_reconstruction(#[case] pos_version: Version) -> anyhow::Result<()> {
+    async fn test_state_reconstruction(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         // This test verifies that a query node can successfully reconstruct its state
         // after being shut down from the database
         //
@@ -5169,14 +5157,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
-                pos_version,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, pos_version).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
@@ -5214,7 +5201,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            pos_version,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -5240,7 +5227,7 @@ mod test {
             .into_iter()
             .map(|(acct, _)| acct)
             .collect::<Vec<_>>();
-        let reward_accounts = match pos_version {
+        let reward_accounts = match upgrade.base {
             EPOCH_VERSION => state
                 .reward_merkle_tree_v1
                 .clone()
@@ -5355,7 +5342,7 @@ mod test {
         .await
         .unwrap();
 
-        match pos_version {
+        match upgrade.base {
             EPOCH_VERSION => {
                 for account in reward_accounts.clone() {
                     state
@@ -5410,7 +5397,7 @@ mod test {
         );
         assert_eq!(leaf.view_number(), to_view);
 
-        match pos_version {
+        match upgrade.base {
             EPOCH_VERSION => {
                 for account in reward_accounts.clone() {
                     state
@@ -5443,7 +5430,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_block_reward_api(#[case] base: Version) -> anyhow::Result<()> {
+    async fn test_block_reward_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5479,14 +5466,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, base).await;
+        let _network = TestNetwork::new(config, upgrade).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5516,7 +5502,7 @@ mod test {
     #[rstest]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api(#[case] base: Version) -> anyhow::Result<()> {
+    async fn test_token_supply_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5552,14 +5538,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, base).await;
+        let _network = TestNetwork::new(config, upgrade).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5722,7 +5707,7 @@ mod test {
             )
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
 
         client.connect(None).await;
@@ -5814,7 +5799,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
         let start = Instant::now();
         let mut total_transactions = 0;
@@ -5993,7 +5978,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
         let mut all_transactions = HashMap::new();
         let mut namespace_tx: HashMap<_, HashSet<_>> = HashMap::new();
@@ -6082,7 +6067,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_v3_and_v4_reward_tree_updates(#[case] base: Version) -> anyhow::Result<()> {
+    async fn test_v3_and_v4_reward_tree_updates(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         // This test checks that the correct merkle tree is updated based on version
         //
         // When the protocol version is v3:
@@ -6128,20 +6113,19 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         let mut events = network.peers[2].event_stream().await;
         // wait for 4 epochs
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
         let validated_state = network.server.decided_state().await;
-        if base == EPOCH_VERSION {
+        if upgrade.base == EPOCH_VERSION {
             let v1_tree = &validated_state.reward_merkle_tree_v1;
             assert!(v1_tree.num_leaves() > 0, "v1 reward tree tree is empty");
             let v2_tree = &validated_state.reward_merkle_tree_v2;
@@ -6167,7 +6151,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_query(#[case] base: Version) {
+    pub(crate) async fn test_state_cert_query(#[case] upgrade: Upgrade) {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 5;
 
@@ -6205,14 +6189,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, base).await;
+        let network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
 
         // Wait until 5 epochs have passed.
@@ -6298,7 +6281,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_catchup(#[case] base: Version) {
+    pub(crate) async fn test_state_cert_catchup(#[case] upgrade: Upgrade) {
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -6335,14 +6318,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         let mut events = network.peers[2].event_stream().await;
         // Wait until at least 5 epochs have passed
@@ -6388,7 +6370,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            base,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -6462,7 +6444,6 @@ mod test {
                 DelegationConfig::NoSelfDelegation,
                 StakeTableContractVersion::V1, // upgraded later
                 POS_V4,
-                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6574,7 +6555,7 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_proof_endpoint(#[case] base: Version) -> anyhow::Result<()> {
+    async fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
@@ -6610,14 +6591,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
-                base,
-                VERSION_ZERO,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // wait for 4 epochs
         let mut events = network.server.event_stream().await;
@@ -6631,7 +6611,7 @@ mod test {
         let height = decided_leaf.height();
 
         // validate proof returned from the api
-        if base == EPOCH_VERSION {
+        if upgrade.base == EPOCH_VERSION {
             // V1 case
             wait_until_block_height(&client, "reward-state/block-height", height).await;
 
@@ -6749,8 +6729,7 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                version(0, 4),
-                VERSION_ZERO,
+                POS_V4
             )
             .await
             .unwrap()
@@ -6843,7 +6822,6 @@ mod test {
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
                 POS_V4,
-                VERSION_ZERO,
             )
             .await
             .unwrap()
@@ -6920,8 +6898,7 @@ mod test {
         let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
             &validated_state,
             &instance_state,
-            DRB_AND_HEADER_UPGRADE_VERSION,
-            DRB_AND_HEADER_UPGRADE_VERSION,
+            versions::Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
         )
         .await;
 
@@ -7072,8 +7049,7 @@ mod test {
         let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
             &validated_state,
             &instance_state,
-            DRB_AND_HEADER_UPGRADE_VERSION,
-            DRB_AND_HEADER_UPGRADE_VERSION,
+            versions::Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
         )
         .await;
 
@@ -7145,15 +7121,15 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_namespace_query_compat_v0_2() {
-        test_namespace_query_compat_helper(FEE_VERSION).await;
+        test_namespace_query_compat_helper(Upgrade::trivial(FEE_VERSION)).await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_namespace_query_compat_v0_3() {
-        test_namespace_query_compat_helper(EPOCH_VERSION).await;
+        test_namespace_query_compat_helper(Upgrade::trivial(EPOCH_VERSION)).await;
     }
 
-    async fn test_namespace_query_compat_helper(base: Version) {
+    async fn test_namespace_query_compat_helper(upgrade: Upgrade) {
         // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
 
@@ -7176,7 +7152,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, base).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
 
         // Submit a transaction.

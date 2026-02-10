@@ -1569,8 +1569,7 @@ mod test {
         let mut leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         // insert some mock data
@@ -1753,8 +1752,7 @@ mod test {
         let mut leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         // insert some mock data

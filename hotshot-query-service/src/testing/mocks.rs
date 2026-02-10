@@ -14,7 +14,6 @@ use hotshot::traits::{implementations::MemoryNetwork, NodeImplementation};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
-    node_types::TestVersion,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
@@ -30,7 +29,7 @@ use jf_merkle_tree_compat::{
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
-use versions::version;
+use versions::{Upgrade, version};
 
 use crate::{
     availability::{
@@ -186,10 +185,7 @@ impl NodeType for MockTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-pub const MOCK_UPGRADE: TestVersion = TestVersion {
-    base: version(0, 1),
-    upgrade: version(0, 2),
-};
+pub const MOCK_UPGRADE: Upgrade = Upgrade::new(version(0, 1), version(0, 2));
 
 pub type MockBase = StaticVersion<0, 1>;
 

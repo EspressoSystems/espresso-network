@@ -24,9 +24,8 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
-use vbs::version::Version;
 use vec1::Vec1;
-use versions::version;
+use versions::{Upgrade, version};
 
 use super::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -65,8 +64,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
     num_bootstrap_nodes: usize,
     epoch_height: u64,
     epoch_start_block: u64,
-    base: Version,
-    upgrade: Version,
+    upgrade: Upgrade,
 ) -> HotShotConfig<TYPES> {
     HotShotConfig {
         start_threshold: (1, 1),
@@ -96,8 +94,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         drb_difficulty: 10,
         drb_upgrade_difficulty: 20,
-        base_version: base,
-        upgrade_version: upgrade,
+        upgrade,
     }
 }
 
@@ -267,8 +264,7 @@ pub async fn create_test_handle<
         metadata.test_config.epoch_height,
         metadata.test_config.epoch_start_block,
         vec![],
-        config.base_version,
-        config.upgrade_version,
+        config.upgrade,
     )
     .await
     .unwrap();
@@ -452,8 +448,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
                 epoch_start_block,
-                version(0, 1),
-                version(0, 1),
+                Upgrade::trivial(version(0, 1)),
             ),
             // The first 14 (i.e., 20 - f) nodes are in the DA committee and we may shutdown the
             // remaining 6 (i.e., f) nodes. We could remove this restriction after fixing the
@@ -497,8 +492,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 self.test_config.num_bootstrap,
                 self.test_config.epoch_height,
                 self.test_config.epoch_start_block,
-                version(0, 1),
-                version(0, 1),
+                Upgrade::trivial(version(0, 1)),
             ),
             ..self
         }
@@ -531,8 +525,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
                 epoch_start_block,
-                version(0, 1),
-                version(0, 1),
+                Upgrade::trivial(version(0, 1)),
             ),
             timing_data: TimingData::default(),
             skip_late: false,

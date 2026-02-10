@@ -34,7 +34,7 @@ async fn test_vote_dependency_handle() {
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     // Generate our state for the test
     let mut proposals = Vec::new();

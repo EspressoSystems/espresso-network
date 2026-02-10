@@ -155,7 +155,7 @@ mod tests {
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
     use vbs::version::Version;
-    use versions::version;
+    use versions::{Upgrade, version};
 
     use crate::{
         api::{
@@ -539,8 +539,7 @@ mod tests {
                     justify_qc: QuorumCertificate2::genesis(
                         &ValidatedState::default(),
                         &NodeState::mock(),
-                        TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade,
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -939,8 +938,7 @@ mod tests {
             None
         );
 
-        let upgrade_lock =
-            UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
 
         let genesis_view = ViewNumber::genesis();
 
@@ -1042,8 +1040,7 @@ mod tests {
                 justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade,
+                    TEST_VERSIONS.test,
                 )
                 .await
                 .to_qc2(),
@@ -1058,8 +1055,7 @@ mod tests {
         let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
 
@@ -1265,8 +1261,7 @@ mod tests {
                 justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade,
+                    TEST_VERSIONS.test,
                 )
                 .await
                 .to_qc2(),
@@ -1432,6 +1427,8 @@ mod tests {
         // Build the config with PoS hook
         let l1_url = network_config.l1_url();
 
+        let upgrade = Upgrade::trivial(version(0, 3));
+
         let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(query_api_options)
             .network_config(network_config.clone())
@@ -1439,15 +1436,14 @@ mod tests {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 stake_table_version,
-                version(0, 3),
-                version(0, 0),
+                upgrade
             )
             .await
             .expect("Pos deployment failed")
             .build();
 
         //start the network
-        let test_network = TestNetwork::new(testnet_config, version(0, 3)).await;
+        let test_network = TestNetwork::new(testnet_config, upgrade).await;
 
         let client: Client<ServerError, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")
@@ -1880,8 +1876,7 @@ mod tests {
                 justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade,
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: None,

@@ -333,8 +333,7 @@ async fn progress_round_with_transactions(
                 justify_qc: QuorumCertificate2::<TestTypes>::genesis(
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade,
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: None,

@@ -36,7 +36,7 @@ use request_response::RequestResponseConfig;
 use tokio::{spawn, sync::mpsc::channel, task::JoinHandle};
 use tracing::{Instrument, Level};
 use url::Url;
-use vbs::version::Version;
+use versions::Upgrade;
 
 use crate::{
     catchup::ParallelStateCatchup,
@@ -108,8 +108,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -125,7 +124,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Load saved consensus state from storage.
         let (initializer, anchor_view) = persistence
-            .load_consensus_state(instance_state.clone(), base, upgrade)
+            .load_consensus_state(instance_state.clone(), upgrade)
             .await?;
 
         tracing::warn!(

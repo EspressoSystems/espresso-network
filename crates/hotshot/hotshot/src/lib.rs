@@ -33,8 +33,7 @@ pub mod types;
 
 pub mod tasks;
 use hotshot_types::data::QuorumProposalWrapper;
-use vbs::version::Version;
-use versions::EPOCH_VERSION;
+use versions::{EPOCH_VERSION, Upgrade};
 
 /// Contains helper functions for the crate
 pub mod helpers;
@@ -285,8 +284,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
-            config.base_version,
-            config.upgrade_version
+            config.upgrade.base,
+            config.upgrade.target
         );
         tracing::warn!(
             "Loading previously decided upgrade certificate from storage: {:?}",
@@ -294,15 +293,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         );
 
         let upgrade_lock = UpgradeLock::<TYPES>::from_certificate(
-            config.base_version,
-            config.upgrade_version,
+            config.upgrade,
             &initializer.decided_upgrade_certificate,
         );
 
         let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
             cert.data.new_version
         } else {
-            config.base_version
+            config.upgrade.base
         };
 
         debug!("Setting DRB difficulty selector in membership");
@@ -473,7 +471,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         let consensus = self.consensus.read().await;
 
         let first_epoch = option_epoch_from_block_number::<TYPES>(
-            self.upgrade_lock.base_version >= EPOCH_VERSION,
+            self.upgrade_lock.upgrade.base >= EPOCH_VERSION,
             self.config.epoch_start_block,
             self.config.epoch_height,
         );
@@ -538,8 +536,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 let qc = QuorumCertificate2::genesis(
                     &validated_state,
                     self.instance_state.as_ref(),
-                    self.upgrade_lock.base_version,
-                    self.upgrade_lock.upgrade_version,
+                    self.upgrade_lock.upgrade,
                 )
                 .await;
 
@@ -1165,19 +1162,18 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         epoch_height: u64,
         epoch_start_block: u64,
         start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> Result<Self, HotShotError<TYPES>> {
         let (validated_state, state_delta) = TYPES::ValidatedState::genesis(&instance_state);
         let high_qc =
-            QuorumCertificate2::genesis(&validated_state, &instance_state, base, upgrade).await;
+            QuorumCertificate2::genesis(&validated_state, &instance_state, upgrade).await;
 
         Ok(Self {
-            anchor_leaf: Leaf2::genesis(&validated_state, &instance_state, base).await,
+            anchor_leaf: Leaf2::genesis(&validated_state, &instance_state, upgrade.base).await,
             anchor_state: Arc::new(validated_state),
             anchor_state_delta: Some(Arc::new(state_delta)),
             start_view: TYPES::View::new(0),
-            start_epoch: genesis_epoch_from_version::<TYPES>(base),
+            start_epoch: genesis_epoch_from_version::<TYPES>(upgrade.base),
             last_actioned_view: TYPES::View::new(0),
             saved_proposals: BTreeMap::new(),
             high_qc,

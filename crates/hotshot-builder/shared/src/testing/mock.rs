@@ -79,7 +79,7 @@ pub async fn proposals_with_transactions(
     let epoch = None;
     let view_number = <TestTypes as NodeType>::View::new(view);
     let upgrade_lock =
-        UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+        UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let validated_state = TestValidatedState::default();
     let instance_state = TestInstanceState::default();
 
@@ -114,8 +114,7 @@ pub async fn proposals_with_transactions(
     let genesis_qc = QuorumCertificate::<TestTypes>::genesis(
         &TestValidatedState::default(),
         &TestInstanceState::default(),
-        TEST_VERSIONS.test.base,
-        TEST_VERSIONS.test.upgrade,
+        TEST_VERSIONS.test,
     )
     .await
     .to_qc2();

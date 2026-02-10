@@ -198,7 +198,7 @@ pub fn add_network_event_task<
     let network_state: NetworkEventTaskState<_, _, _> = NetworkEventTaskState {
         network,
         view: TYPES::View::genesis(),
-        epoch: genesis_epoch_from_version::<TYPES>(handle.hotshot.upgrade_lock.base_version),
+        epoch: genesis_epoch_from_version::<TYPES>(handle.hotshot.upgrade_lock.upgrade.base),
         membership_coordinator: handle.membership_coordinator.clone(),
         storage: handle.storage(),
         storage_metrics: handle.storage_metrics(),
@@ -225,8 +225,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     handle.add_task(DaTaskState::<TYPES, I>::create_from(handle).await);
     handle.add_task(TransactionTaskState::<TYPES>::create_from(handle).await);
 
-    let base = handle.hotshot.upgrade_lock.base_version;
-    let upgrade = handle.hotshot.upgrade_lock.upgrade_version;
+    let upgrade = handle.hotshot.upgrade_lock.upgrade;
 
     {
         let mut upgrade_certificate_lock = handle
@@ -239,7 +238,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         // clear the loaded certificate if it's now outdated
         if upgrade_certificate_lock
             .as_ref()
-            .is_some_and(|cert| base >= cert.data.new_version)
+            .is_some_and(|cert| upgrade.base >= cert.data.new_version)
         {
             tracing::warn!("Discarding loaded upgrade certificate due to version configuration.");
             *upgrade_certificate_lock = None;
@@ -247,7 +246,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     }
 
     // only spawn the upgrade task if we are actually configured to perform an upgrade.
-    if base < upgrade {
+    if upgrade.base < upgrade.target {
         tracing::warn!("Consensus was started with an upgrade configured. Spawning upgrade task.");
         handle.add_task(UpgradeTaskState::<TYPES>::create_from(handle).await);
     }

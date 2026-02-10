@@ -65,7 +65,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     .await;
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -155,7 +155,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
     let num_storage_node = epoch_1_mem.total_nodes().await;
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -344,7 +344,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -441,7 +441,7 @@ async fn test_quorum_proposal_task_view_sync() {
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -524,7 +524,7 @@ async fn test_quorum_proposal_task_liveness_check() {
         .unwrap();
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -691,7 +691,7 @@ async fn test_quorum_proposal_task_with_incomplete_events() {
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl>(2).await;
     let membership = handle.hotshot.membership_coordinator.clone();
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();

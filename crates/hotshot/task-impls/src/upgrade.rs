@@ -28,7 +28,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use versions::{upgrade_hash, EPOCH_VERSION};
+use versions::{EPOCH_VERSION};
 
 use crate::{
     events::HotShotEvent,
@@ -116,8 +116,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
         event: Arc<HotShotEvent<TYPES>>,
         tx: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
-        let base = self.upgrade_lock.base_version;
-        let upgr = self.upgrade_lock.upgrade_version;
+        let upgrade = self.upgrade_lock.upgrade;
         match event.as_ref() {
             HotShotEvent::UpgradeProposalRecv(proposal, sender) => {
                 tracing::info!("Received upgrade proposal: {proposal:?}");
@@ -127,7 +126,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 // Skip voting if the version has already been upgraded.
                 ensure!(
                     !self.upgraded().await,
-                    info!("Already upgraded to {upgr}; not voting.")
+                    info!("Already upgraded to {upgrade:?}; not voting.")
                 );
 
                 let time = SystemTime::now()
@@ -150,9 +149,9 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
 
                 // If the proposal does not match our upgrade target, we immediately exit.
                 ensure!(
-                    proposal.data.upgrade_proposal.new_version_hash == *upgrade_hash(base, upgr)
-                        && proposal.data.upgrade_proposal.old_version == base
-                        && proposal.data.upgrade_proposal.new_version == upgr,
+                    proposal.data.upgrade_proposal.new_version_hash == *upgrade.hash()
+                        && proposal.data.upgrade_proposal.old_version == upgrade.base
+                        && proposal.data.upgrade_proposal.new_version == upgrade.target,
                     "Proposal does not match our upgrade target"
                 );
 
@@ -162,7 +161,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     proposal.data.view_number()
                 );
 
-                let epoch_upgrade_checks = if upgr >= EPOCH_VERSION && base < EPOCH_VERSION {
+                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION && upgrade.base < EPOCH_VERSION {
                     let consensus_reader = self.consensus.read().await;
 
                     let Some((_, last_proposal)) =
@@ -339,7 +338,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
                 let decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
 
-                let epoch_upgrade_checks = if upgr >= EPOCH_VERSION && base < EPOCH_VERSION {
+                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION && upgrade.base < EPOCH_VERSION {
                     let consensus_reader = self.consensus.read().await;
 
                     let Some((_, last_proposal)) =
@@ -385,9 +384,9 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     && leader == self.public_key
                 {
                     let upgrade_proposal_data = UpgradeProposalData {
-                        old_version: base,
-                        new_version: upgr,
-                        new_version_hash: upgrade_hash(base, upgr).into(),
+                        old_version: upgrade.base,
+                        new_version: upgrade.target,
+                        new_version_hash: upgrade.hash().into(),
                         old_version_last_view: TYPES::View::new(old_version_last_view),
                         new_version_first_view: TYPES::View::new(new_version_first_view),
                         decide_by: TYPES::View::new(decide_by),

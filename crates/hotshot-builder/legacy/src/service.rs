@@ -4012,8 +4012,7 @@ mod test {
                     justify_qc: QuorumCertificate2::genesis(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
-                        TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade,
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -4091,8 +4090,7 @@ mod test {
                     justify_qc: QuorumCertificate2::genesis(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
-                        TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade,
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -4161,8 +4159,7 @@ mod test {
                     justify_qc: QuorumCertificate2::genesis(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
-                        TEST_VERSIONS.test.base,
-                        TEST_VERSIONS.test.upgrade,
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,

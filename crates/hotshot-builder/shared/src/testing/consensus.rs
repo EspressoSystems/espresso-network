@@ -108,8 +108,7 @@ impl SimulatedChainState {
                 QuorumCertificate2::<TestTypes>::genesis(
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade.clone(),
+                    TEST_VERSIONS.test,
                 )
                 .await
             },

@@ -1621,8 +1621,7 @@ mod test {
         let qc = QuorumCertificate2::genesis(
             &Default::default(),
             &Default::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();

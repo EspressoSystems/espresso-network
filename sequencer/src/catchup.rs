@@ -382,7 +382,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             &stake_table,
             success_threshold,
             height,
-            &UpgradeLock::<SeqTypes>::new(EPOCH_VERSION, EPOCH_VERSION),
+            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
         )
         .await
         .with_context(|| format!("failed to verify leaf chain at height {height}"))
@@ -711,7 +711,7 @@ where
             &stake_table,
             success_threshold,
             height,
-            &UpgradeLock::<SeqTypes>::new(EPOCH_VERSION, EPOCH_VERSION),
+            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
         )
         .await
         .with_context(|| "failed to verify leaf chain")?;

@@ -3,9 +3,8 @@ use std::{borrow::Cow, ops::Deref};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
-const VERSION_SIZE: usize = 4;
-
 pub const VERSION_ZERO: Version = version(0, 0);
+pub const VERSION_0_1: Version = version(0, 1);
 pub const FEE_VERSION: Version = version(0, 2);
 pub const EPOCH_VERSION: Version = version(0, 3);
 pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);
@@ -21,10 +20,6 @@ pub const fn version(major: u16, minor: u16) -> Version {
     Version { major, minor }
 }
 
-pub const fn upgrade_hash<'a>(_base: Version, _upgrade: Version) -> UpgradeHash<'a> {
-    UPGRADE_HASH
-}
-
 pub fn decode_version(bytes: &[u8]) -> Result<Version, VersionError> {
     let major = bytes
         .get(0..2)
@@ -37,8 +32,8 @@ pub fn decode_version(bytes: &[u8]) -> Result<Version, VersionError> {
     Ok(version(major, minor))
 }
 
-pub fn encode_version(v: Version) -> [u8; VERSION_SIZE] {
-    let mut buf = [0; VERSION_SIZE];
+pub fn encode_version(v: Version) -> [u8; 4] {
+    let mut buf = [0; 4];
     (&mut buf[0..2]).copy_from_slice(&v.major.to_le_bytes());
     (&mut buf[2..4]).copy_from_slice(&v.minor.to_le_bytes());
     buf
@@ -60,8 +55,32 @@ where
     T: DeserializeOwned,
 {
     let version = decode_version(bytes)?;
-    let value = bincode::deserialize(&bytes[VERSION_SIZE..])?;
+    let value = bincode::deserialize(&bytes[4..])?;
     Ok((version, value))
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Upgrade {
+    pub base: Version,
+    pub target: Version
+}
+
+impl Upgrade {
+    pub const fn new(base: Version, target: Version) -> Self {
+        debug_assert! {
+            base.major < target.major || (base.major == target.major && base.minor <= target.minor)
+        }
+        Self { base, target }
+    }
+
+    pub const fn trivial(base: Version) -> Self {
+        Self { base, target: base }
+    }
+
+    pub const fn hash(&self) -> UpgradeHash<'_> {
+        UPGRADE_HASH
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

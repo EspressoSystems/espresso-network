@@ -55,7 +55,7 @@ async fn test_da_task() {
     );
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -171,7 +171,7 @@ async fn test_da_task_storage_failure() {
     );
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut dacs = Vec::new();
     let mut vids = Vec::new();

@@ -131,8 +131,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                 justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &node_state,
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade,
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: Some(UpgradeCertificate::new(

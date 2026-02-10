@@ -196,8 +196,7 @@ async fn test_pruning() {
     let mock_qc = QuorumCertificate2::genesis(
         &Default::default(),
         &Default::default(),
-        TEST_VERSIONS.test.base,
-        TEST_VERSIONS.test.upgrade,
+        TEST_VERSIONS.test,
     )
     .await;
     let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper {

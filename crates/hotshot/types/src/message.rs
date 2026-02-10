@@ -20,7 +20,7 @@ use committable::Committable;
 use hotshot_utils::anytrace::*;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, VID2_UPGRADE_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
@@ -626,30 +626,26 @@ where
 #[non_exhaustive]
 pub struct UpgradeLock<TYPES: NodeType> {
     pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    pub base_version: Version,
-    pub upgrade_version: Version,
+    pub upgrade: Upgrade,
 }
 
 impl<TYPES: NodeType> UpgradeLock<TYPES> {
     /// Create a new `UpgradeLock` for a fresh instance of HotShot
-    pub fn new(base: Version, upgrade: Version) -> Self {
+    pub fn new(upgrade: Upgrade) -> Self {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(None)),
-            base_version: base,
-            upgrade_version: upgrade,
+            upgrade
         }
     }
 
     /// Create a new `UpgradeLock` from an optional upgrade certificate
     pub fn from_certificate(
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
         certificate: &Option<UpgradeCertificate<TYPES>>,
     ) -> Self {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(certificate.clone())),
-            base_version: base,
-            upgrade_version: upgrade,
+            upgrade
         }
     }
 
@@ -670,16 +666,16 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         let version = match *upgrade_certificate {
             Some(ref cert) => {
                 if view >= cert.data.new_version_first_view {
-                    if cert.data.new_version == self.upgrade_version {
-                        self.upgrade_version
+                    if cert.data.new_version == self.upgrade.target {
+                        self.upgrade.target
                     } else {
                         bail!("The network has upgraded to a new version that we do not support!");
                     }
                 } else {
-                    self.base_version
+                    self.upgrade.base
                 }
             },
-            None => self.base_version,
+            None => self.upgrade.base,
         };
 
         Ok(version)
@@ -699,7 +695,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
                     cert.data.old_version
                 }
             },
-            None => self.base_version,
+            None => self.upgrade.base,
         }
     }
 
@@ -740,7 +736,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
 
         let version = self.version(view).await?;
 
-        let serialized_message = if version == self.base_version || version == self.upgrade_version
+        let serialized_message = if version == self.upgrade.base || version == self.upgrade.target
         {
             versions::encode(version, &message)
         } else {
@@ -770,8 +766,8 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
             .context(info!("Failed to read version and message!"))?;
 
         if EXTERNAL_MESSAGE_VERSION != version
-            && self.base_version != version
-            && self.upgrade_version != version
+            && self.upgrade.base != version
+            && self.upgrade.target != version
         {
             bail!(warn!(
                 "Received a message with state version {version} which is invalid for its view: \

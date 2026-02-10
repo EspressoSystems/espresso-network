@@ -55,7 +55,7 @@ async fn test_quorum_proposal_recv_task() {
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
     let mut votes = Vec::new();
@@ -127,7 +127,7 @@ async fn test_quorum_proposal_recv_task_liveness_check() {
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
     let mut votes = Vec::new();

@@ -28,7 +28,7 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{EPOCH_VERSION, VID2_UPGRADE_VERSION};
+use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
 
 use crate::{
     drb::DrbResult,
@@ -1399,9 +1399,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
-        base: Version,
+        version: Version,
     ) -> Self {
-        let epoch = genesis_epoch_from_version::<TYPES>(base);
+        let epoch = genesis_epoch_from_version::<TYPES>(version);
 
         let (payload, metadata) =
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
@@ -1411,9 +1411,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let genesis_view = TYPES::View::genesis();
 
         let block_header =
-            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, base);
+            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
 
-        let block_number = if base < EPOCH_VERSION {
+        let block_number = if version < EPOCH_VERSION {
             None
         } else {
             Some(0u64)
@@ -1731,16 +1731,15 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
     pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
-        let upgrade_lock = UpgradeLock::<TYPES>::new(base, upgrade);
+        let upgrade_lock = UpgradeLock::<TYPES>::new(upgrade);
 
         let genesis_view = <TYPES::View as ConsensusTime>::genesis();
 
         let data = QuorumData {
-            leaf_commit: Leaf::genesis(validated_state, instance_state, base)
+            leaf_commit: Leaf::genesis(validated_state, instance_state, upgrade.base)
                 .await
                 .commit(&upgrade_lock)
                 .await,
@@ -1768,15 +1767,14 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
     pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
-        let upgrade_lock = UpgradeLock::<TYPES>::new(base, upgrade);
+        let upgrade_lock = UpgradeLock::<TYPES>::new(upgrade);
 
         let genesis_view = <TYPES::View as ConsensusTime>::genesis();
 
-        let genesis_leaf = Leaf2::genesis(validated_state, instance_state, base).await;
+        let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
         let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
             Some(genesis_leaf.height())
         } else {
@@ -1784,7 +1782,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
         let data = QuorumData2 {
             leaf_commit: genesis_leaf.commit(),
-            epoch: genesis_epoch_from_version::<TYPES>(base), // #3967 make sure this is enough of a gate for epochs
+            epoch: genesis_epoch_from_version::<TYPES>(upgrade.base), // #3967 make sure this is enough of a gate for epochs
             block_number,
         };
 

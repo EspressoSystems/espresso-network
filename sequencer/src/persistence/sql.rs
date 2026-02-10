@@ -3002,8 +3002,7 @@ mod test {
                 justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade,
+                    TEST_VERSIONS.test,
                 )
                 .await
                 .to_qc2(),
@@ -3257,8 +3256,7 @@ mod test {
                 justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
-                    TEST_VERSIONS.test.base,
-                    TEST_VERSIONS.test.upgrade,
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: None,

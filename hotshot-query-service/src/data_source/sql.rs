@@ -425,8 +425,7 @@ mod test {
         let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));

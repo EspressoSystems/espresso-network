@@ -600,8 +600,7 @@ pub mod persistence_tests {
         let mut qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         let mut leaf = Leaf2::<MockTypes>::genesis(
@@ -651,8 +650,7 @@ pub mod persistence_tests {
         let mut qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         let mut leaf = Leaf2::<MockTypes>::genesis(
@@ -713,8 +711,7 @@ pub mod persistence_tests {
         let mut mock_qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         let mut mock_leaf = Leaf2::<MockTypes>::genesis(
@@ -840,8 +837,7 @@ pub mod node_tests {
             LeafQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade,
+                TEST_VERSIONS.test,
             )
             .await,
         ];
@@ -1023,8 +1019,7 @@ pub mod node_tests {
             let mut leaf = LeafQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade,
+                TEST_VERSIONS.test,
             )
             .await;
             *leaf.leaf.block_header_mut() = header.clone();
@@ -1108,8 +1103,7 @@ pub mod node_tests {
         let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-            TEST_VERSIONS.test.upgrade,
+            TEST_VERSIONS.test,
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
@@ -1440,8 +1434,7 @@ pub mod node_tests {
             let mut qc1 = QuorumCertificate2::<MockTypes>::genesis(
                 &Default::default(),
                 &Default::default(),
-                TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade,
+                TEST_VERSIONS.test,
             )
             .await;
             qc1.view_number = ViewNumber::new(1);

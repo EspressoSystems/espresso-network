@@ -242,7 +242,7 @@ impl BuilderConfig {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::MOCK_SEQUENCER_BASE_VERSION;
+    use espresso_types::MOCK_SEQUENCER_VERSIONS;
     use futures::StreamExt;
     use portpicker::pick_unused_port;
     use sequencer::{
@@ -288,13 +288,13 @@ mod test {
             )
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_BASE_VERSION).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         let builder_config = NonPermissionedBuilderTestConfig::init_non_permissioned_builder(
             event_service_url.clone(),
             builder_api_url.clone(),
             network.cfg.num_nodes(),
-            MOCK_SEQUENCER_BASE_VERSION,
+            MOCK_SEQUENCER_VERSIONS.base,
         )
         .await;
 

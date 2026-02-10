@@ -49,7 +49,7 @@ async fn test_vid_task() {
         .total_nodes()
         .await;
 
-    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let transactions = vec![TestTransaction::new(vec![0])];
 
     let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(

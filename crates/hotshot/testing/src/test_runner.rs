@@ -181,14 +181,13 @@ where
             last_decided_leaf: Leaf2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.base_version,
+                launcher.metadata.test_config.upgrade.base,
             )
             .await,
             high_qc: QuorumCertificate2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.base_version,
-                launcher.metadata.test_config.upgrade_version,
+                launcher.metadata.test_config.upgrade,
             )
             .await,
             next_epoch_high_qc: None,
@@ -432,8 +431,7 @@ where
                             drb_result: INITIAL_DRB_RESULT,
                             block_header: None,
                         }],
-                        config.base_version,
-                        config.upgrade_version,
+                        config.upgrade,
                     )
                     .await
                     .unwrap();

@@ -79,7 +79,7 @@ async fn test_certificate2_validity() {
     let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();

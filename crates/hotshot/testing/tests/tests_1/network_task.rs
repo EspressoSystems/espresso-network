@@ -43,7 +43,7 @@ async fn test_network_task() {
 
     let builder: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default_multiple_rounds();
-    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let node_id = 1;
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
@@ -91,7 +91,7 @@ async fn test_network_task() {
     let task = Task::new(network_state, tx.clone(), rx);
     task_reg.run_task(task);
 
-    let mut generator = TestViewGenerator::generate(coordinator, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(coordinator, node_key_map, TEST_VERSIONS.test);
     let view = generator.next().await.unwrap();
 
     let (out_tx_internal, mut out_rx_internal) = async_broadcast::broadcast(10);
@@ -237,7 +237,7 @@ async fn test_network_storage_fail() {
     let validator_config = (launcher.resource_generators.validator_config)(node_id);
     let public_key = validator_config.public_key;
     let all_nodes = config.known_nodes_with_stake.clone();
-    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
 
     let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
         MemoryImpl,
@@ -271,7 +271,7 @@ async fn test_network_storage_fail() {
     let task = Task::new(network_state, tx.clone(), rx);
     task_reg.run_task(task);
 
-    let mut generator = TestViewGenerator::generate(coordinator, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(coordinator, node_key_map, TEST_VERSIONS.test);
     let view = generator.next().await.unwrap();
 
     let (out_tx_internal, mut out_rx_internal): (Sender<Arc<HotShotEvent<TestTypes>>>, _) =

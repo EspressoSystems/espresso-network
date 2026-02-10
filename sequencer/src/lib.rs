@@ -687,8 +687,7 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        genesis.base_version,
-        genesis.upgrade_version,
+        versions::Upgrade::new(genesis.base_version, genesis.upgrade_version),
     )
     .await?;
     if wait_for_orchestrator {
@@ -1134,8 +1133,7 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
-                base_version: version(0, 1),
-                upgrade_version: version(0, 1),
+                upgrade: versions::Upgrade::trivial(version(0, 1)),
             };
 
             let anvil = Anvil::new()
@@ -1242,7 +1240,7 @@ pub mod testing {
 
         pub async fn init_nodes(
             &self,
-            bind_version: Version,
+            upgrade: versions::Upgrade,
         ) -> Vec<SequencerContext<network::Memory, NoStorage>> {
             join_all((0..self.num_nodes()).map(|i| async move {
                 self.init_node(
@@ -1254,7 +1252,7 @@ pub mod testing {
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
                     NullEventConsumer,
-                    bind_version,
+                    upgrade,
                     Default::default(),
                 )
                 .await
@@ -1277,7 +1275,7 @@ pub mod testing {
             metrics: &dyn Metrics,
             stake_table_capacity: usize,
             event_consumer: impl EventConsumer + 'static,
-            base_version: Version,
+            upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
         ) -> SequencerContext<network::Memory, P::Persistence> {
             let config = self.config.clone();
@@ -1379,11 +1377,11 @@ pub mod testing {
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
-                base_version,
+                upgrade.base,
                 coordinator.clone(),
-                base_version,
+                upgrade.base,
             )
-            .with_current_version(base_version)
+            .with_current_version(upgrade.base)
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
@@ -1415,8 +1413,7 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                base_version,
-                todo!(),
+                upgrade
             )
             .await
             .unwrap()
@@ -1492,9 +1489,8 @@ pub mod testing {
 
 #[cfg(test)]
 mod test {
-
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, NamespaceId, Payload, Transaction, MOCK_SEQUENCER_BASE_VERSION};
+    use espresso_types::{Header, NamespaceId, Payload, Transaction, MOCK_SEQUENCER_VERSIONS};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -1521,7 +1517,7 @@ mod test {
 
         config.set_builder_urls(vec1::vec1![builder_url]);
 
-        let handles = config.init_nodes(MOCK_SEQUENCER_BASE_VERSION).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
 
         let handle_0 = &handles[0];
 
@@ -1559,7 +1555,7 @@ mod test {
         let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
-        let handles = config.init_nodes(MOCK_SEQUENCER_BASE_VERSION).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
 
         let handle_0 = &handles[0];
 

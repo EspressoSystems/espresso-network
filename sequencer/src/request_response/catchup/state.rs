@@ -263,7 +263,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                     &stake_table_clone,
                     success_threshold,
                     height,
-                    &UpgradeLock::<SeqTypes>::new(EPOCH_VERSION, EPOCH_VERSION),
+                    &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
                 )
                 .await
                 .with_context(|| "leaf chain verification failed")?;

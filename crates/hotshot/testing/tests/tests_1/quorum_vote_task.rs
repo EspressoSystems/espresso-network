@@ -44,7 +44,7 @@ async fn test_quorum_vote_task_success() {
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaves = Vec::new();
@@ -108,7 +108,7 @@ async fn test_quorum_vote_task_miss_dependency() {
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -189,7 +189,7 @@ async fn test_quorum_vote_task_incorrect_dependency() {
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaves = Vec::new();

@@ -130,7 +130,6 @@ reexport_unchanged_types!(
 pub use v0_3::StateCertQueryDataV1;
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 pub use v0_4::StateCertQueryDataV2;
-use vbs::version::Version;
 use versions::version;
 
 #[derive(
@@ -152,8 +151,8 @@ impl NodeType for SeqTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-pub const MOCK_SEQUENCER_BASE_VERSION: Version = version(0, 1);
-pub const MOCK_SEQUENCER_UPGRADE_VERSION: Version = version(0, 2);
+pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
+    versions::Upgrade::new(version(0, 1), version(0, 2));
 
 pub type V0_0 = StaticVersion<0, 0>;
 pub type V0_1 = StaticVersion<0, 1>;

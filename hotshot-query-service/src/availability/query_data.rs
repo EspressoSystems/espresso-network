@@ -28,6 +28,7 @@ use jf_advz::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
 use vbs::version::Version;
+use versions::Upgrade;
 
 use crate::{types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction};
 
@@ -271,12 +272,11 @@ impl<Types: NodeType> LeafQueryDataLegacy<Types> {
     pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> Self {
         Self {
-            leaf: Leaf::genesis(validated_state, instance_state, base).await,
-            qc: QuorumCertificate::genesis(validated_state, instance_state, base, upgrade).await,
+            leaf: Leaf::genesis(validated_state, instance_state, upgrade.base).await,
+            qc: QuorumCertificate::genesis(validated_state, instance_state, upgrade).await,
         }
     }
 
@@ -342,12 +342,11 @@ impl<Types: NodeType> LeafQueryData<Types> {
     pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
-        base: Version,
-        upgrade: Version,
+        upgrade: Upgrade,
     ) -> Self {
         Self {
-            leaf: Leaf2::genesis(validated_state, instance_state, base).await,
-            qc: QuorumCertificate2::genesis(validated_state, instance_state, base, upgrade).await,
+            leaf: Leaf2::genesis(validated_state, instance_state, upgrade.base).await,
+            qc: QuorumCertificate2::genesis(validated_state, instance_state, upgrade).await,
         }
     }
 

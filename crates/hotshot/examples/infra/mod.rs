@@ -368,8 +368,7 @@ pub trait RunDa<
             self.config().config.epoch_height,
             self.config().config.epoch_start_block,
             vec![],
-            self.config().config.base_version,
-            self.config().config.upgrade_version,
+            self.config().config.upgrade,
         )
         .await
         .expect("Couldn't generate genesis block");
@@ -537,7 +536,7 @@ pub trait RunDa<
             .hotshot
             .membership_coordinator
             .membership_for_epoch(genesis_epoch_from_version::<TYPES>(
-                context.hotshot.upgrade_lock.base_version,
+                context.hotshot.upgrade_lock.upgrade.base,
             ))
             .await
             .unwrap()

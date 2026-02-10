@@ -69,7 +69,7 @@ async fn test_upgrade_task_with_vote() {
     let mut consensus_writer = consensus.write().await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
-    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     for view in (&mut generator).take(2).collect::<Vec<_>>().await {
         proposals.push(view.quorum_proposal.clone());

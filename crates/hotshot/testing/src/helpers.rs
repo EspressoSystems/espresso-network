@@ -108,8 +108,7 @@ where
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
         vec![],
-        hotshot_config.base_version,
-        hotshot_config.upgrade_version,
+        hotshot_config.upgrade,
     )
     .await
     .unwrap();

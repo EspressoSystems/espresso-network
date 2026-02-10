@@ -20,8 +20,8 @@ use hotshot_types::{
     upgrade_config::UpgradeConstants,
 };
 use serde::{Deserialize, Serialize};
-use vbs::version::{StaticVersion, Version};
-use versions::version;
+use vbs::version::StaticVersion;
+use versions::{Upgrade, version};
 
 pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
 use crate::{
@@ -330,44 +330,21 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for CliquenetImpl {
 
 #[non_exhaustive]
 pub struct TestVersions {
-    pub test: TestVersion,
-    pub epoch: TestVersion,
-    pub da_committee: TestVersion,
-    pub vid2: TestVersion,
-    pub epoch_upgrade: TestVersion,
-    pub vid2_upgrade: TestVersion,
-}
-
-pub struct TestVersion {
-    pub base: Version,
-    pub upgrade: Version,
+    pub test: Upgrade,
+    pub epoch: Upgrade,
+    pub da_committee: Upgrade,
+    pub vid2: Upgrade,
+    pub epoch_upgrade: Upgrade,
+    pub vid2_upgrade: Upgrade,
 }
 
 pub const TEST_VERSIONS: TestVersions = TestVersions {
-    epoch: TestVersion {
-        base: version(0, 3),
-        upgrade: version(0, 3),
-    },
-    da_committee: TestVersion {
-        base: version(0, 4),
-        upgrade: version(0, 4),
-    },
-    vid2: TestVersion {
-        base: version(0, 6),
-        upgrade: version(0, 6),
-    },
-    test: TestVersion {
-        base: version(0, 1),
-        upgrade: version(0, 2),
-    },
-    epoch_upgrade: TestVersion {
-        base: version(0, 3),
-        upgrade: version(0, 4),
-    },
-    vid2_upgrade: TestVersion {
-        base: version(0, 5),
-        upgrade: version(0, 6),
-    },
+    epoch: Upgrade::trivial(version(0, 3)),
+    da_committee: Upgrade::trivial(version(0, 4)),
+    vid2: Upgrade::trivial(version(0, 6)),
+    test: Upgrade::new(version(0, 1), version(0, 2)),
+    epoch_upgrade: Upgrade::new(version(0, 3), version(0, 4)),
+    vid2_upgrade: Upgrade::new(version(0, 5), version(0, 6)),
 };
 
 pub type EpochVersion = StaticVersion<0, 3>;
@@ -385,7 +362,7 @@ mod tests {
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
-    use versions::{version, EPOCH_VERSION};
+    use versions::{EPOCH_VERSION, Upgrade, version};
 
     use crate::node_types::{NodeType, TestTypes};
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -408,7 +385,7 @@ mod tests {
     /// Test that the view number affects the commitment post-marketplace
     #[tokio::test(flavor = "multi_thread")]
     async fn test_versioned_commitment_includes_view() {
-        let upgrade_lock = UpgradeLock::new(version(0, 1), version(0, 2));
+        let upgrade_lock = UpgradeLock::new(Upgrade::new(version(0, 1), version(0, 2)));
 
         let data = TestData {
             data: 10,

@@ -186,8 +186,7 @@ pub async fn calc_proposal_msg(
             QuorumCertificate2::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                TEST_VERSIONS.test.base,
-                TEST_VERSIONS.test.upgrade,
+                TEST_VERSIONS.test,
             )
             .await
         },

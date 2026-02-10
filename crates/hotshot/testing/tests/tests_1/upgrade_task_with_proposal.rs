@@ -88,7 +88,7 @@ async fn test_upgrade_task_with_proposal() {
     let num_storage_nodes = epoch_1_mem.total_nodes().await;
 
     let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test.base, TEST_VERSIONS.test.upgrade.clone());
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     for view in (&mut generator).take(1).collect::<Vec<_>>().await {
         proposals.push(view.quorum_proposal.clone());

@@ -555,8 +555,7 @@ async fn test_leaf_query_data_legacy_v1() {
     let leaf = LeafQueryDataLegacy::<SeqTypes>::genesis(
         &validated_state,
         &instance_state,
-        TEST_VERSIONS.test.base,
-        TEST_VERSIONS.test.upgrade,
+        TEST_VERSIONS.test,
     )
     .await;
     reference_test_without_committable("v1", "leaf_query_data_legacy", &leaf);
@@ -569,8 +568,7 @@ async fn test_leaf_query_data_legacy_v2() {
     let leaf = LeafQueryDataLegacy::<SeqTypes>::genesis(
         &validated_state,
         &instance_state,
-        TEST_VERSIONS.test.base,
-        TEST_VERSIONS.test.upgrade,
+        TEST_VERSIONS.test,
     )
     .await;
     reference_test_without_committable("v2", "leaf_query_data_legacy", &leaf);
@@ -584,8 +582,7 @@ async fn test_leaf_query_data_v3() {
     let leaf = LeafQueryData::<SeqTypes>::genesis(
         &validated_state,
         &instance_state,
-        TEST_VERSIONS.test.base,
-        TEST_VERSIONS.test.upgrade,
+        TEST_VERSIONS.test,
     )
     .await;
     reference_test_without_committable("v3", "leaf_query_data", &leaf);

@@ -13,7 +13,7 @@ use hotshot_types::{
 };
 use tracing::Instrument;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
-use versions::{version, EPOCH_VERSION, MAX_SUPPORTED_VERSION};
+use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, Upgrade, version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
@@ -180,8 +180,8 @@ impl StakeTable {
     where
         V: StaticVersionType + 'static,
     {
-        let base = version(V::MAJOR, V::MINOR);
-        cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(base, base))
+        let upgrade = Upgrade::trivial(version(V::MAJOR, V::MINOR));
+        cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(upgrade))
             .await
             .context("invalid threshold signature")
     }
@@ -332,7 +332,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
         let leaves =
-            leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS.0, ENABLE_EPOCHS.1.clone()).await;
+            leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS).await;
         let version = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -348,8 +348,7 @@ mod test {
         let leaves = custom_leaf_chain_with_upgrade(
             1..=3,
             2,
-            ENABLE_EPOCHS.0,
-            ENABLE_EPOCHS.1.clone(),
+            ENABLE_EPOCHS,
             |proposal| {
                 // Don't attach an upgrade certificate, so that the version change that happens within
                 // the QC change is actually malicious.
