@@ -14,7 +14,7 @@ use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::Stream;
 use hotshot_task::task::{ConsensusTaskRegistry, NetworkTaskRegistry, Task, TaskState};
-use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
+use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event, reconstruct::BlockReady};
 use hotshot_types::{
     consensus::Consensus,
     data::{Leaf2, QuorumProposalWrapper},
@@ -71,6 +71,13 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Channel for block ready notifications - used to notify vote tasks that a block is available
+    /// without polling the main event stream
+    pub block_ready_stream: (
+        tokio_broadcast::Sender<BlockReady<TYPES>>,
+        tokio_broadcast::Receiver<BlockReady<TYPES>>,
+    ),
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>

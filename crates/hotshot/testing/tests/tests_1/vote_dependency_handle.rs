@@ -92,7 +92,7 @@ async fn test_vote_dependency_handle() {
                 storage_metrics: handle.storage_metrics(),
                 view_number,
                 sender: event_sender.clone(),
-                receiver: event_receiver.clone(),
+                receiver: event_receiver.clone().deactivate(),
                 upgrade_lock: handle.hotshot.upgrade_lock.clone(),
                 id: handle.hotshot.id,
                 epoch_height: handle.hotshot.config.epoch_height,
@@ -100,6 +100,7 @@ async fn test_vote_dependency_handle() {
                 first_epoch: None,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 cancel_receiver,
+                block_ready_receiver: handle.block_ready_stream.0.clone(),
             };
 
         vote_dependency_handle_state

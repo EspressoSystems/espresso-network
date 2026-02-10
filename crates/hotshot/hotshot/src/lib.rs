@@ -768,6 +768,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let output_event_stream = self.external_event_stream.clone();
         let internal_event_stream = self.internal_event_stream.clone();
 
+        let block_ready_stream = tokio::sync::broadcast::channel(1000);
+
         let mut handle = SystemContextHandle {
             consensus_registry,
             network_registry,
@@ -778,6 +780,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             network: Arc::clone(&self.network),
             membership_coordinator: self.membership_coordinator.clone(),
             epoch_height: self.config.epoch_height,
+            block_ready_stream,
         };
 
         add_network_tasks::<TYPES, I, V>(&mut handle).await;
@@ -955,6 +958,7 @@ where
         );
 
         // create each handle
+        let left_block_ready_channel = tokio::sync::broadcast::channel(1000);
         let mut left_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: left_consensus_registry,
             network_registry: left_network_registry,
@@ -965,8 +969,10 @@ where
             network: Arc::clone(&left_system_context.network),
             membership_coordinator: left_system_context.membership_coordinator.clone(),
             epoch_height,
+            block_ready_channel: left_block_ready_channel,
         };
 
+        let right_block_ready_channel = tokio::sync::broadcast::channel(1000);
         let mut right_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: right_consensus_registry,
             network_registry: right_network_registry,
@@ -977,6 +983,7 @@ where
             network: Arc::clone(&right_system_context.network),
             membership_coordinator: right_system_context.membership_coordinator.clone(),
             epoch_height,
+            block_ready_channel: right_block_ready_channel,
         };
 
         // add consensus tasks to each handle, using their individual internal event streams

@@ -22,12 +22,20 @@ use hotshot_types::{
     vid::avidm_gf2::AvidmGf2Scheme,
     vote::HasViewNumber,
 };
-use tokio::{spawn, sync::mpsc};
+use tokio::{
+    spawn,
+    sync::{broadcast as tokio_broadcast, mpsc},
+};
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
 };
+
+#[derive(Clone, Debug)]
+pub struct BlockReady<TYPES: NodeType> {
+    pub view: TYPES::View,
+}
 
 pub struct ReconstructTaskState<TYPES: NodeType> {
     pub id: u64,
@@ -37,6 +45,7 @@ pub struct ReconstructTaskState<TYPES: NodeType> {
     pub proposals: BTreeMap<TYPES::View, QuorumProposal2<TYPES>>,
     pub vid_shares:
         Arc<RwLock<BTreeMap<(TYPES::View, TYPES::Epoch), Vec<VidDisperseShare2<TYPES>>>>>,
+    pub block_ready_sender: tokio_broadcast::Sender<BlockReady<TYPES>>,
 }
 
 async fn try_reconstruct_block<TYPES: NodeType>(
@@ -47,6 +56,7 @@ async fn try_reconstruct_block<TYPES: NodeType>(
     epoch: Option<TYPES::Epoch>,
     vid_shares: Arc<RwLock<BTreeMap<(TYPES::View, TYPES::Epoch), Vec<VidDisperseShare2<TYPES>>>>>,
     event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
+    block_ready_sender: tokio_broadcast::Sender<BlockReady<TYPES>>,
     metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     mut signal_rx: mpsc::Receiver<()>,
 ) -> Option<()> {
@@ -112,6 +122,7 @@ async fn try_reconstruct_block<TYPES: NodeType>(
             &event_stream,
         )
         .await;
+        let _ = block_ready_sender.send(BlockReady { view });
         let _ = consensus
             .write()
             .await
@@ -152,6 +163,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     epoch,
                     self.vid_shares.clone(),
                     self.event_stream.clone(),
+                    self.block_ready_sender.clone(),
                     metadata,
                     rx,
                 ));

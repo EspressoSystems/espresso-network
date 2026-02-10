@@ -33,12 +33,14 @@ use hotshot_types::{
     VersionedDaCommittee,
 };
 use hotshot_utils::anytrace::*;
+use tokio::sync::broadcast as tokio_broadcast;
 use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
     helpers::{broadcast_event, broadcast_view_change},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
+    reconstruct::BlockReady,
 };
 
 /// Event handlers for `QuorumProposalValidated`.
@@ -83,7 +85,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub sender: Sender<Arc<HotShotEvent<TYPES>>>,
 
     /// Event receiver.
-    pub receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    pub receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -107,6 +109,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub stake_table_capacity: usize,
 
     pub cancel_receiver: Receiver<()>,
+
+    /// Receiver for block ready notifications
+    pub block_ready_receiver: tokio_broadcast::Sender<BlockReady<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -345,7 +350,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         update_shared_state::<TYPES, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
-            self.receiver.clone().deactivate(),
+            self.receiver.clone(),
             self.membership_coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
@@ -401,8 +406,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                 .update_validator_participation(leader_key, cur_epoch, true);
         }
 
-        self.wait_for_previous_block(parent_view_number, self.receiver.clone())
-            .await?;
+        self.wait_for_previous_block(parent_view_number).await?;
 
         submit_vote::<TYPES, I, V>(
             self.sender.clone(),
@@ -423,11 +427,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         )
         .await
     }
-    async fn wait_for_previous_block(
-        &self,
-        parent_view: Option<TYPES::View>,
-        mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
-    ) -> Result<()> {
+    async fn wait_for_previous_block(&self, parent_view: Option<TYPES::View>) -> Result<()> {
         let Some(parent_view) = parent_view else {
             bail!(error!("No parent view"));
         };
@@ -442,32 +442,51 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             .get(&parent_view)
             .is_some()
         {
-            // tracing::error!("Block already reconstructed for parent view {parent_view}");
             return Ok(());
         }
 
-        tracing::error!("Waiting for previous block for parent view {parent_view}");
+        tracing::info!("Waiting for previous block for parent view {parent_view}");
         let now = Instant::now();
-        // TODO: Handle the case where the block is received before this call
-        while let Ok(event) = receiver.recv_direct().await {
-            if let HotShotEvent::BlockReconstructed(_, _, _, view) = event.as_ref() {
-                if *view == parent_view {
-                    tracing::error!("Block reconstructed for parent view {parent_view}");
-                    let elapsed = now.elapsed();
-                    tracing::error!("Waited for previous block in {elapsed:?}");
-                    return Ok(());
-                }
+
+        // Subscribe to block ready notifications using the dedicated channel
+        // This avoids cloning the main event receiver which causes queue overflow issues
+        let mut block_ready_rx = self.block_ready_receiver.subscribe();
+
+        loop {
+            // Check again in case block was reconstructed while we were setting up
+            if self
+                .consensus
+                .read()
+                .await
+                .saved_payloads()
+                .get(&parent_view)
+                .is_some()
+            {
+                let elapsed = now.elapsed();
+                tracing::info!("Block ready for parent view {parent_view} (waited {elapsed:?})");
+                return Ok(());
             }
-            if let HotShotEvent::BlockRecv(block_recv) = event.as_ref() {
-                if block_recv.view_number == parent_view {
-                    tracing::error!("Block received for parent view {parent_view}");
-                    let elapsed = now.elapsed();
-                    tracing::error!("Waited for previous block in {elapsed:?}");
-                    return Ok(());
-                }
+
+            match block_ready_rx.recv().await {
+                Ok(block_ready) => {
+                    if block_ready.view == parent_view {
+                        let elapsed = now.elapsed();
+                        tracing::info!(
+                            "Block reconstructed for parent view {parent_view} (waited \
+                             {elapsed:?})"
+                        );
+                        return Ok(());
+                    }
+                },
+                Err(tokio_broadcast::error::RecvError::Closed) => {
+                    bail!(error!("Block ready channel closed"));
+                },
+                Err(tokio_broadcast::error::RecvError::Lagged(_)) => {
+                    // We missed some messages, check if our block is ready
+                    continue;
+                },
             }
         }
-        Err(hotshot_utils::anytrace::error!("No block received"))
     }
 }
 
@@ -531,6 +550,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// DA committees from HotShotConfig, to apply when an upgrade is decided
     pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
+
+    /// Receiver for block ready notifications - used to wait for blocks without polling main event stream
+    pub block_ready_receiver: tokio_broadcast::Sender<BlockReady<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -644,7 +666,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 storage_metrics: Arc::clone(&self.storage_metrics),
                 view_number,
                 sender: event_sender.clone(),
-                receiver: event_receiver.clone(),
+                receiver: event_receiver.clone().deactivate(),
                 upgrade_lock: self.upgrade_lock.clone(),
                 id: self.id,
                 epoch_height: self.epoch_height,
@@ -653,6 +675,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 first_epoch: self.first_epoch,
                 stake_table_capacity: self.stake_table_capacity,
                 cancel_receiver,
+                block_ready_receiver: self.block_ready_receiver.clone(),
             },
         );
         self.vote_dependencies.insert(view_number, cancel_sender);
