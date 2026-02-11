@@ -143,7 +143,7 @@ contract StakeTableV2CommissionTest is Test {
 
     function test_CommissionUpdate_DecreaseMaxDelta() public {
         address validator = makeAddr("validator");
-        uint16 maxCommission = 10000;
+        uint16 maxCommission = proxy.MAX_COMMISSION_BPS();
         stakeTableUpgradeTest.registerValidatorOnStakeTableV2(
             validator, "123", maxCommission, proxy
         );
@@ -218,6 +218,7 @@ contract StakeTableV2CommissionTest is Test {
         // should fail
         assertEq(proxy.minCommissionIncreaseInterval(), 7 days);
         assertEq(proxy.maxCommissionIncrease(), 500);
+        assertEq(proxy.MAX_COMMISSION_BPS(), 10000);
     }
 
     function test_InitializeV2_RevertWhenInitialValidatorNotRegistered() public {

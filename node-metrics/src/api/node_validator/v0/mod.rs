@@ -615,9 +615,7 @@ where
         let self_mut = self.get_mut();
 
         // Next, do we already have a connection?
-        if self_mut.connection.is_some() {
-            // Alright, then we'll want to retrieve the next entry
-            let connection_mut = self_mut.connection.as_mut().expect("unreachable");
+        if let Some(connection_mut) = &mut self_mut.connection {
             pin_mut!(connection_mut);
 
             return match connection_mut.poll_next(cx) {
@@ -667,9 +665,8 @@ where
         }
 
         // Do we have an attempt to retrieve a connection in progress?
-        if self_mut.connection_future.is_some() {
+        if let Some(connection_future) = &mut self_mut.connection_future {
             tracing::debug!("waiting for connection to be established");
-            let connection_future = self_mut.connection_future.as_mut().expect("unreachable");
             pin_mut!(connection_future);
             match connection_future.poll(cx) {
                 std::task::Poll::Pending => {

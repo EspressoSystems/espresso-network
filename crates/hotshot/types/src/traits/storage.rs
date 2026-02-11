@@ -18,7 +18,6 @@ use futures::future::BoxFuture;
 use super::node_implementation::NodeType;
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
         VidCommitment, VidDisperseShare,
     },
@@ -35,35 +34,8 @@ use crate::{
 #[async_trait]
 pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
-    async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
-    /// Add a proposal to the stored VID proposals.
-    async fn append_vid2(&self, proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>)
-        -> Result<()>;
+    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()>;
 
-    async fn append_vid_general(
-        &self,
-        proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>,
-    ) -> Result<()> {
-        let signature = proposal.signature.clone();
-        match &proposal.data {
-            VidDisperseShare::V0(share) => {
-                self.append_vid(&Proposal {
-                    data: share.clone(),
-                    signature,
-                    _pd: std::marker::PhantomData,
-                })
-                .await
-            },
-            VidDisperseShare::V1(share) => {
-                self.append_vid2(&Proposal {
-                    data: share.clone(),
-                    signature,
-                    _pd: std::marker::PhantomData,
-                })
-                .await
-            },
-        }
-    }
     /// Add a proposal to the stored DA proposals.
     async fn append_da(
         &self,

@@ -19,13 +19,16 @@ contract MockStakeTableV2 is StakeTableV2 {
 
         ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
-        ensureNewKey(blsVK);
+        ensureNewKeys(blsVK, schnorrVK);
 
-        if (commission > 10000) {
+        if (commission > MAX_COMMISSION_BPS) {
             revert InvalidCommission();
         }
 
+        validateMetadataUri(metadataUri);
+
         blsKeys[_hashBlsKey(blsVK)] = true;
+        schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
         validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
         // Store the initial commission for this validator

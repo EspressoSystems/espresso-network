@@ -10,6 +10,7 @@
 - [Safe Multisig Proposals](#safe-multisig-proposals)
 - [Troubleshooting](#troubleshooting)
 - [POS Deployment](#pos-deployment)
+  - [Automated Deployment Verification](#automated-deployment-verification)
 
 ## Prerequisites
 
@@ -52,7 +53,7 @@ unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
 unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
 
 # Execute the deployment command
-RUST_LOG=info cargo run --bin deploy -- --deploy-fee --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-fee-v1 --rpc-url=$RPC_URL
 ```
 
 ### Transfer Ownership with Cargo
@@ -129,7 +130,7 @@ set +a
 unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
 
 # Deploy the fee contract with a multisig owner (requires ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS to be set which occurs in the step above)
-RUST_LOG=info cargo run --bin deploy -- --deploy-fee --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-fee-v1 --rpc-url=$RPC_URL
 ```
 
 ## Timelock Owner
@@ -145,7 +146,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
 ### Deploying Fee Contract with Docker compose
@@ -170,7 +171,7 @@ docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+  deploy --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 # Token
@@ -199,7 +200,7 @@ source .env
 set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
 unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
 
 ## Multisig Owner
@@ -211,7 +212,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
 
 ## Timelock Owner
@@ -227,7 +228,7 @@ set -a
 source .env
 set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL
+RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
 ### Deploying Token with Docker compose
@@ -252,7 +253,7 @@ docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-safe-exit-timelock --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+  deploy --deploy-safe-exit-timelock --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 Example output file (.env.mydemo) contents after a successful run
@@ -266,7 +267,80 @@ ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS=0xe1da8919f262ee86f9be05059c9280142cf23f
 
 # Timelock Proposals
 
-These are demonstration commands and should not be used in production environments
+## Overview
+
+Timelock operations can be performed via two execution paths:
+
+1. **EOA Path**: Direct execution using a private key/mnemonic
+   - Use for: Local development, testing, or when you control the proposer/executor accounts
+   - Requires: No multisig address needed
+   - Execution: Immediate transaction submission
+
+2. **Multisig Path** (Safe Multisig): Operations are proposed via Safe multisig wallet
+   - Use for: Production environments requiring multiple signatures
+   - Requires: `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
+   - Execution: Creates a Safe proposal that requires multisig approval before execution
+
+The deployer automatically routes to the appropriate path based on whether `--multisig-address` or
+`ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` is set.
+
+## Execution Paths
+
+### EOA Path (Direct Execution)
+
+When no multisig address is provided, operations execute directly via EOA:
+
+```bash
+# Example: Schedule operation via EOA
+RUST_LOG=info cargo run --bin deploy -- \
+  --rpc-url=$RPC_URL \
+  --perform-timelock-operation \
+  --timelock-operation-type schedule \
+  --target-contract FeeContract \
+  --function-signature "transferOwnership(address)" \
+  --function-values "0xNEWOWNERADDRESS" \
+  --timelock-operation-salt 0x \
+  --timelock-operation-delay 0 \
+  --timelock-operation-value 0
+```
+
+**Requirements:**
+
+- The deployer account must have proposer/executor roles on the timelock
+- No multisig address needed
+- Operations execute immediately
+
+**Multisig Path (Safe Proposal)** When a multisig address is set, operations are proposed via Safe:
+
+```bash
+# Set multisig address
+export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
+
+# Example: Schedule operation via multisig
+RUST_LOG=info cargo run --bin deploy -- \
+  --rpc-url=$RPC_URL \
+  --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+  --perform-timelock-operation \
+  --timelock-operation-type schedule \
+  --target-contract FeeContract \
+  --function-signature "transferOwnership(address)" \
+  --function-values "0xNEWOWNERADDRESS" \
+  --timelock-operation-salt 0x \
+  --timelock-operation-delay 0 \
+  --timelock-operation-value 0
+```
+
+**Requirements:**
+
+- `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
+- The deployer account must have proposal rights on the Safe multisig
+- Operations create a Safe proposal requiring multisig approval
+- After approval, the proposal can be executed **Note:** After creating a multisig proposal, you'll receive a link to
+  the Safe UI where signers can approve the proposal:
+
+```
+Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=0xMULTISIG_ADDRESS
+```
 
 ## Transfer Ownership
 
@@ -283,7 +357,7 @@ export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPORESS_OPS_TIMELOCK_DELAY=0
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 The deployed contracts will be written to `.env.mydemo`
@@ -383,6 +457,41 @@ docker compose run --rm \
 cast call $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rpc-url http://127.0.0.1:8545
 ```
 
+## Cancel Operation
+
+Cancelling a timelock operation allows you to prevent a scheduled operation from being executed. This is useful if you
+need to abort a pending operation.
+
+### Prerequisites
+
+- The operation must be in a `Pending` state (scheduled but not yet executed)
+- You must have proposer privileges on the timelock
+- You need the operation ID from when the operation was scheduled
+
+### Getting the Operation ID
+
+The operation ID is returned when you schedule an operation. Save it for later use.
+
+```bash
+# Set the operation ID from the scheduled operation
+export ESPRESSO_TIMELOCK_OPERATION_ID=0xOPERATION_ID_HERE
+
+# Cancel the operation
+RUST_LOG=info cargo run --bin deploy -- \
+  --rpc-url=$RPC_URL \
+  --perform-timelock-operation \
+  --timelock-operation-type cancel \
+  --target-contract FeeContract \
+  --timelock-operation-id $ESPRESSO_TIMELOCK_OPERATION_ID
+```
+
+**Note:** For cancel operations, you only need:
+
+- --timelock-operation-type cancel
+- --target-contract (to identify which timelock to use)
+- --timelock-operation-id (the operation ID to cancel) The other operation parameters (--function-signature,
+  --function-values, etc.) are not required for cancel operations.
+
 ## Upgrade To And Call
 
 ### Execute via Cargo
@@ -398,7 +507,7 @@ export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPORESS_OPS_TIMELOCK_DELAY=0
-RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
+RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
 The deployed contracts will be written to `.env.mydemo`
@@ -576,7 +685,7 @@ set +a
 unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
 # If doing a real run then, export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- \
-  --deploy-esp-token \
+  --deploy-esp-token-v1 \
   --upgrade-esp-token-v2 \
   --rpc-url=$RPC_URL \
   --use-multisig
@@ -592,7 +701,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
-  deploy --deploy-esp-token --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
+  deploy --deploy-esp-token-v1 --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
   # to simulate, add --dry-run
 ```
 
@@ -653,7 +762,6 @@ export RPC_URL=""
 cargo run --bin deploy -- \
     --propose-transfer-ownership-to-timelock \
     --target-contract FeeContract \
-    --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
     --fee-contract-proxy $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
     --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
     --rpc-url $RPC_URL \
@@ -677,7 +785,6 @@ export RPC_URL=""
 docker-compose run --rm deploy-sequencer-contracts \
     --propose-transfer-ownership-to-timelock \
     --target-contract lightclient \
-    --timelock-address $ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS \
     --light-client-proxy $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
     --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
     --rpc-url $RPC_URL
@@ -1116,7 +1223,7 @@ docker compose run --rm \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-sequencer-contracts \
-  deploy --deploy-esp-token --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
+  deploy --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
   # to simulate, add --dry-run
 ```
 
@@ -1225,7 +1332,7 @@ docker compose run --rm \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-sequencer-contracts \
-  deploy --deploy-stake-table --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
+  deploy --deploy-stake-table-v1 --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
   # to simulate, add --dry-run
 ```
 
@@ -1285,6 +1392,32 @@ After completing all steps, verify:
 3. **EspToken**: Deployed with SafeExitTimelock as owner, correct supply, correct initial recipient
 4. **StakeTable**: Upgraded to V2, owned by OpsTimelock, EspressoSys multisig has pauser role
 5. **All proxies**: Point to correct implementation addresses
+
+### Automated Deployment Verification
+
+The `scripts/verify-pos-deployment.sh` script automates the verification of your deployment configuration. It checks
+timelock delays, roles, contract ownership, versions, and cross-contract references.
+
+#### Prerequisites
+
+- Foundry installed (for `cast` command)
+- Environment variables set (see below)
+- Access to the RPC endpoint where contracts are deployed
+
+#### Usage
+
+##### Source environment variables from your deployment output file
+
+source .env.eth.mainnet.staketable # or your deployment output file
+
+##### Run verification
+
+./scripts/verify-pos-deployment.sh --rpc-url $RPC_URL#### Environment Variables
+
+For a complete list of required and optional environment variables, run:
+
+./scripts/verify-pos-deployment.sh --helpThe script will skip checks for any unset variables and show warnings. At
+minimum, you should set the contract proxy addresses you want to verify.
 
 ## Arbitrum Mainnet
 

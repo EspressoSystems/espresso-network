@@ -226,6 +226,7 @@ async fn test_register_validator_with_pre_signed_payload(
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .arg("--node-signatures")
         .arg(&payload_path);
 
@@ -312,6 +313,7 @@ async fn test_address_validation_mismatch_error() -> Result<()> {
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .arg("--node-signatures")
         .arg(&payload_file)
         .assert()
@@ -380,6 +382,7 @@ async fn test_signature_verification_failure(
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .arg("--node-signatures")
         .arg(&payload_file);
 

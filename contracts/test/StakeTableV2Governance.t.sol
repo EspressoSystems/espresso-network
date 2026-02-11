@@ -12,6 +12,7 @@ import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
 import { StakeTable_register_Test } from "./StakeTable.t.sol";
+import { ILightClient } from "../src/interfaces/ILightClient.sol";
 
 /// @title StakeTableV2 Governance Tests
 /// @notice Comprehensive tests for governance functions: transferOwnership, grantRole, revokeRole
@@ -91,12 +92,12 @@ contract StakeTableV2GovernanceTest is Test {
             )
         );
         vm.expectEmit(true, true, true, true, address(proxy));
-        emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
-        proxy.updateExitEscrowPeriod(200 seconds);
+        emit StakeTableV2.ExitEscrowPeriodUpdated(2 days);
+        proxy.updateExitEscrowPeriod(2 days);
         vm.stopPrank();
 
         vm.prank(initialOwner);
-        proxy.updateExitEscrowPeriod(200 seconds);
+        proxy.updateExitEscrowPeriod(2 days);
     }
 
     function test_TransferOwnership_Success() public {
@@ -170,7 +171,7 @@ contract StakeTableV2GovernanceTest is Test {
         vm.stopPrank();
 
         vm.prank(initialOwner);
-        proxy.updateExitEscrowPeriod(200 seconds);
+        proxy.updateExitEscrowPeriod(2 days);
     }
 
     function test_TransferOwnership_RevertsWhenNotAdmin() public {
@@ -196,7 +197,7 @@ contract StakeTableV2GovernanceTest is Test {
 
         vm.startPrank(newOwner);
 
-        uint64 newPeriod = 200 seconds;
+        uint64 newPeriod = 2 days;
         proxy.updateExitEscrowPeriod(newPeriod);
 
         proxy.grantRole(proxy.PAUSER_ROLE(), newOwner);
@@ -221,7 +222,7 @@ contract StakeTableV2GovernanceTest is Test {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, initialOwner, adminRole
             )
         );
-        proxy.updateExitEscrowPeriod(200 seconds);
+        proxy.updateExitEscrowPeriod(2 days);
         vm.stopPrank();
     }
 

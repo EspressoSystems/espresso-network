@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml)
 [![Test](https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml)
-[![Docs rust](https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml)
+[![Docs](https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml)
 [![Contracts](https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml)
 [![Lint](https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml)
 [![Audit](https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml)
@@ -15,7 +15,9 @@ The Espresso Network is the global confirmation layer for rollups in the Ethereu
 composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
 confirmations in return.
 
-[Official Documentation](https://docs.espressosys.com/network/)
+- [Official Documentation](https://docs.espressosys.com/network/)
+- [Rust Documentation](https://sequencer.docs.espressosys.com/sequencer/)
+- [Smart Contract Documentation](https://sequencer.docs.espressosys.com/contracts/)
 
 ### Architecture
 
@@ -38,7 +40,7 @@ a dockerized Espresso Sequencer network with an example Layer 2 rollup applicati
 
 - Obtain code: `git clone git@github.com:EspressoSystems/espresso-network`.
 - Make sure [nix](https://nixos.org/download.html) is installed.
-- Activate the environment with `nix-shell`, or `nix develop`, or `direnv allow` if using [direnv](https://direnv.net/).
+- Activate the environment with `nix-shell`, or `nix develop`. If using [direnv](https://direnv.net/), copy `.envrc.example` to `.envrc.local` (or create your own `.envrc.local` file) and run `direnv allow`.
 - For installation without nix please see [ubuntu.md](./doc/ubuntu.md).
 
 ## Documentation

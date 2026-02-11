@@ -1,15 +1,17 @@
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
+use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context, Result};
 use committable::Committable;
-use derivative::Derivative;
-use espresso_types::{EpochVersion, Leaf2, MaxSupportedVersion, SeqTypes, SequencerVersions};
+use espresso_types::{
+    EpochVersion, Leaf2, MaxSupportedVersion, PubKey, SeqTypes, SequencerVersions,
+};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
-    stake_table::StakeTableEntries,
-    vote::{Certificate as _, HasViewNumber},
+    stake_table::{supermajority_threshold, HSStakeTable, StakeTableEntries, StakeTableEntry},
+    vote::{self, HasViewNumber},
 };
 use static_assertions::assert_type_eq_all;
 use tracing::Instrument;
@@ -17,9 +19,13 @@ use vbs::version::{StaticVersion, StaticVersionType, Version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
-pub trait Quorum {
+pub trait Quorum: Sync {
     /// Check a threshold signature on a quorum certificate.
-    fn verify(&self, cert: &Certificate, version: Version) -> impl Future<Output = Result<()>> {
+    fn verify(
+        &self,
+        cert: &Certificate,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
         async move {
             match (version.major, version.minor) {
                 (0, 1) => self.verify_static::<StaticVersion<0, 1>>(cert).await,
@@ -40,7 +46,7 @@ pub trait Quorum {
     fn verify_static<V: StaticVersionType + 'static>(
         &self,
         qc: &Certificate,
-    ) -> impl Future<Output = Result<()>>;
+    ) -> impl Send + Future<Output = Result<()>>;
 
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
     /// version.
@@ -49,8 +55,8 @@ pub trait Quorum {
     fn verify_qc_chain_and_get_version<'a>(
         &self,
         leaf: &Leaf2,
-        certs: impl IntoIterator<Item = &'a Certificate>,
-    ) -> impl Future<Output = Result<Version>> {
+        certs: impl Send + IntoIterator<Item = &'a Certificate, IntoIter: Send>,
+    ) -> impl Send + Future<Output = Result<Version>> {
         let span = tracing::trace_span!(
             "verify_qc_chain_and_get_version",
             height = leaf.block_header().height()
@@ -122,45 +128,142 @@ pub trait Quorum {
     }
 }
 
-#[derive(Clone, Derivative)]
-#[derivative(Debug)]
-pub struct StakeTableQuorum {
-    #[derivative(Debug = "ignore")]
-    membership: EpochMembership<SeqTypes>,
+/// A stake table representing a particular quorum.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StakeTable {
+    entries: Vec<StakeTableEntry<PubKey>>,
+    threshold: U256,
+}
+
+impl From<HSStakeTable<SeqTypes>> for StakeTable {
+    fn from(table: HSStakeTable<SeqTypes>) -> Self {
+        StakeTableEntries::from(table).into()
+    }
+}
+
+impl From<Vec<StakeTableEntry<PubKey>>> for StakeTable {
+    fn from(entries: Vec<StakeTableEntry<PubKey>>) -> Self {
+        StakeTableEntries(entries).into()
+    }
+}
+
+impl From<StakeTableEntries<SeqTypes>> for StakeTable {
+    fn from(entries: StakeTableEntries<SeqTypes>) -> Self {
+        Self::from_iter(entries.0)
+    }
+}
+
+impl FromIterator<StakeTableEntry<PubKey>> for StakeTable {
+    fn from_iter<T: IntoIterator<Item = StakeTableEntry<PubKey>>>(entries: T) -> Self {
+        let mut total_stake = U256::ZERO;
+        let entries = entries
+            .into_iter()
+            .inspect(|entry| {
+                total_stake += entry.stake_amount;
+            })
+            .collect();
+        Self {
+            entries,
+            threshold: supermajority_threshold(total_stake),
+        }
+    }
+}
+
+impl StakeTable {
+    /// Get a stake table from a particular epoch's quorum membership.
+    pub async fn from_membership(membership: &EpochMembership<SeqTypes>) -> Self {
+        membership.stake_table().await.into()
+    }
+
+    /// Verify that a certificate is signed by a quorum of this stake table.
+    pub async fn verify_cert<V, T>(&self, cert: &impl vote::Certificate<SeqTypes, T>) -> Result<()>
+    where
+        V: StaticVersionType + 'static,
+    {
+        cert.is_valid_cert::<SequencerVersions<V, V>>(
+            &self.entries,
+            self.threshold,
+            &UpgradeLock::new(),
+        )
+        .await
+        .context("invalid threshold signature")
+    }
+}
+
+/// Getters for the current epoch's stake table and the next.
+///
+/// The current [`stake_table`](StakeTablePair::stake_table) is always needed to verify a
+/// [`Certificate`] from this epoch. Depending on the [`Certificate`], the next epoch's stake table
+/// may also need to be fetched (in the case where the certificate is part of an epoch transition).
+pub trait StakeTablePair {
+    /// Get the stake table for the current epoch.
+    fn stake_table(&self) -> impl Send + Future<Output = Result<Arc<StakeTable>>>;
+
+    /// Get the stake table for the next epoch.
+    fn next_epoch_stake_table(&self) -> impl Send + Future<Output = Result<Arc<StakeTable>>>;
+}
+
+impl StakeTablePair for EpochMembership<SeqTypes> {
+    async fn stake_table(&self) -> Result<Arc<StakeTable>> {
+        Ok(Arc::new(StakeTable::from_membership(self).await))
+    }
+
+    async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
+        let membership = self.next_epoch_stake_table().await?;
+        Ok(Arc::new(StakeTable::from_membership(&membership).await))
+    }
+}
+
+impl StakeTablePair for (Arc<StakeTable>, Arc<StakeTable>) {
+    async fn stake_table(&self) -> Result<Arc<StakeTable>> {
+        Ok(self.0.clone())
+    }
+
+    async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
+        Ok(self.1.clone())
+    }
+}
+
+/// A quorum based on a [`StakeTablePair`] for a particular epoch.
+#[derive(Clone, Debug)]
+pub struct StakeTableQuorum<T> {
+    membership: T,
     epoch_height: u64,
 }
 
-impl Quorum for StakeTableQuorum {
+impl<T> StakeTableQuorum<T> {
+    /// Construct a quorum given a [`StakeTablePair`] and the epoch height.
+    pub fn new(membership: T, epoch_height: u64) -> Self {
+        Self {
+            membership,
+            epoch_height,
+        }
+    }
+}
+
+impl<T> Quorum for StakeTableQuorum<T>
+where
+    T: StakeTablePair + Sync,
+{
     async fn verify_static<V: StaticVersionType + 'static>(
         &self,
         cert: &Certificate,
     ) -> Result<()> {
-        let stake_table = self.membership.stake_table().await;
-        let threshold = self.membership.success_threshold().await;
-        cert.qc()
-            .is_valid_cert::<SequencerVersions<V, V>>(
-                &StakeTableEntries::<SeqTypes>::from(stake_table).0,
-                threshold,
-                &UpgradeLock::new(),
-            )
+        let stake_table = self.membership.stake_table().await?;
+        stake_table
+            .verify_cert::<V, _>(cert.qc())
             .await
-            .context("invalid QC threshold signature")?;
+            .context("verifying QC")?;
 
         if V::version() >= EpochVersion::version() {
             // If this certificate is part of an epoch change, also check that the next epoch's
             // quorum has signed.
             if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(self.epoch_height)? {
-                let membership = self.membership.next_epoch_stake_table().await?;
-                let stake_table = membership.stake_table().await;
-                let threshold = membership.success_threshold().await;
-                next_epoch_qc
-                    .is_valid_cert::<SequencerVersions<V, V>>(
-                        &StakeTableEntries::<SeqTypes>::from(stake_table).0,
-                        threshold,
-                        &UpgradeLock::new(),
-                    )
+                let stake_table = self.membership.next_epoch_stake_table().await?;
+                stake_table
+                    .verify_cert::<V, _>(next_epoch_qc)
                     .await
-                    .context("invalid next epoch QC threshold signature")?;
+                    .context("verifying next epoch QC")?;
             }
         }
 
@@ -171,6 +274,7 @@ impl Quorum for StakeTableQuorum {
 #[cfg(test)]
 mod test {
     use espresso_types::EpochVersion;
+    use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::testing::{

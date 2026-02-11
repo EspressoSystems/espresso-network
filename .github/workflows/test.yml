@@ -150,7 +150,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/free-disk-space
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -179,7 +181,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/free-disk-space
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -211,6 +215,7 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk-space
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: taiki-e/install-action@nextest
 

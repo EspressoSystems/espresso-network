@@ -12,7 +12,6 @@ use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use serde_inline_default::serde_inline_default;
 use thiserror::Error;
-use tracing::error;
 
 use crate::{
     constants::{

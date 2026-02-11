@@ -70,6 +70,14 @@ func (c *MultipleNodesClient) FetchTransactionByHash(ctx context.Context, hash *
 	return res, nil
 }
 
+func (c *MultipleNodesClient) FetchNamespaceTransactionsInRange(ctx context.Context, fromBlock uint64, toBlock uint64, namespace uint64) ([]types.NamespaceTransactionsRangeData, error) {
+	var res []types.NamespaceTransactionsRangeData
+	if err := c.getWithMajority(ctx, &res, "availability/block/%d/%d/namespace/%d", fromBlock, toBlock, namespace); err != nil {
+		return []types.NamespaceTransactionsRangeData{}, err
+	}
+	return res, nil
+}
+
 func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error) {
 	if hash == nil {
 		return types.ExplorerTransactionQueryData{}, fmt.Errorf("hash is nil")

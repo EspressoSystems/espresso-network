@@ -12,9 +12,9 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
-    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
-    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
-    StakeTableV2,
+    EspToken, EspTokenV2, FeeContract, LightClient, LightClientV2, LightClientV2Mock,
+    LightClientV3, LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3,
+    StakeTable, StakeTableV2,
 };
 use url::Url;
 
@@ -29,6 +29,10 @@ pub struct TransferOwnershipParams {
     pub dry_run: bool,
 }
 
+const TRANSFER_OWNERSHIP_SCRIPT: &str = "transferOwnership.ts";
+const UPGRADE_PROXY_SCRIPT: &str = "upgradeProxy.ts";
+const PROPOSE_TRANSACTION_GENERIC_SCRIPT: &str = "proposeTransactionGeneric.ts";
+
 /// Call the transfer ownership script to transfer ownership of a contract to a new owner
 ///
 /// Parameters:
@@ -41,7 +45,7 @@ pub async fn call_transfer_ownership_script(
 ) -> Result<Output, anyhow::Error> {
     let script_path = find_script_path()?;
     let output = Command::new(script_path)
-        .arg("transferOwnership.ts")
+        .arg(TRANSFER_OWNERSHIP_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -176,7 +180,7 @@ pub async fn call_upgrade_proxy_script(
     let script_path = find_script_path()?;
 
     let output = Command::new(script_path)
-        .arg("upgradeProxy.ts")
+        .arg(UPGRADE_PROXY_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -530,9 +534,10 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 
     if !dry_run {
         tracing::info!("Checking if owner is a contract");
-        assert!(
+        anyhow::ensure!(
             crate::is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
+            "Owner {:#x} is not a contract so not a multisig wallet",
+            owner_addr
         );
     }
 
@@ -652,4 +657,150 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     tracing::info!("StakeTableProxy upgrade proposal sent");
 
     Ok(())
+}
+
+/// Call the generic proposal script to create a Safe multisig proposal
+#[allow(clippy::too_many_arguments)]
+pub async fn call_propose_transaction_generic_script(
+    target: Address,
+    function_signature: String,
+    function_args: Vec<String>,
+    rpc_url: String,
+    safe_address: Address,
+    use_hardware_wallet: bool,
+    value: Option<String>,
+    dry_run: bool,
+) -> Result<Output> {
+    let script_path = find_script_path()?;
+
+    let mut cmd = Command::new(script_path);
+    cmd.arg(PROPOSE_TRANSACTION_GENERIC_SCRIPT)
+        .arg("--from-rust")
+        .arg("--target")
+        .arg(target.to_string())
+        .arg("--function-signature")
+        .arg(&function_signature)
+        .arg("--function-args");
+
+    for arg in &function_args {
+        cmd.arg(arg);
+    }
+
+    cmd.arg("--value")
+        .arg(value.unwrap_or_else(|| "0".to_string()))
+        .arg("--rpc-url")
+        .arg(&rpc_url)
+        .arg("--safe-address")
+        .arg(safe_address.to_string())
+        .arg("--use-hardware-wallet")
+        .arg(use_hardware_wallet.to_string())
+        .arg("--dry-run")
+        .arg(dry_run.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd.output().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to execute {PROPOSE_TRANSACTION_GENERIC_SCRIPT} script: {}",
+            e
+        )
+    })?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "{PROPOSE_TRANSACTION_GENERIC_SCRIPT} script failed:\nSTDOUT: {}\nSTDERR: {}",
+            stdout,
+            stderr
+        );
+    }
+
+    Ok(output)
+}
+/// Upgrade the FeeContract proxy to a new implementation (patch upgrade).
+/// Internally, first detect existence of proxy, then deploy new FeeContract implementation, then upgrade.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_fee_contract_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    rpc_url: String,
+    dry_run: bool,
+) -> Result<String> {
+    let proxy_addr = contracts
+        .address(Contract::FeeContractProxy)
+        .ok_or_else(|| anyhow!("FeeContractProxy (multisig owner) not found, can't upgrade"))?;
+    tracing::info!("FeeContractProxy found at {proxy_addr:#x}");
+    let proxy = FeeContract::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?;
+
+    // Verify current version before upgrading
+    let curr_version = proxy.getVersion().call().await?;
+    if curr_version.majorVersion != 1 {
+        anyhow::bail!(
+            "Expected FeeContract V1.x for upgrade to V1.0.1, found V{}.{}.{}",
+            curr_version.majorVersion,
+            curr_version.minorVersion,
+            curr_version.patchVersion
+        );
+    }
+
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+    }
+
+    // Deploy new implementation (with patch version)
+    let fee_contract_addr = if !dry_run {
+        let cached_fee_contract_addr = contracts.address(Contract::FeeContract);
+
+        // For patch upgrades, we need to deploy a fresh implementation contract.
+        // If FeeContract is already in the cache, the caller must unset it first
+        // to make the redeployment requirement explicit.
+        if let Some(cached_fee_contract_addr) = cached_fee_contract_addr {
+            anyhow::bail!(
+                "FeeContract implementation address is already set in cache ({:#x}). For patch \
+                 upgrades, the implementation must be redeployed. Please unset \
+                 ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first.",
+                cached_fee_contract_addr
+            );
+        }
+
+        let new_fee_contract_addr = contracts
+            .deploy(
+                Contract::FeeContract,
+                FeeContract::deploy_builder(&provider),
+            )
+            .await?;
+
+        new_fee_contract_addr
+    } else {
+        // Use dummy address for dry run
+        Address::random()
+    };
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_upgrade_proxy_script(
+        proxy_addr,
+        fee_contract_addr,
+        "0x".to_string(),
+        rpc_url,
+        owner_addr,
+        dry_run,
+    )
+    .await?;
+
+    if !dry_run {
+        tracing::info!(
+            "FeeContractProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            owner_addr
+        );
+    }
+
+    Ok(result)
 }

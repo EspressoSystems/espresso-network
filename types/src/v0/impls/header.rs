@@ -410,6 +410,16 @@ impl Header {
             _ => None,
         }
     }
+
+    pub fn set_next_stake_table_hash(&mut self, hash: StakeTableHash) -> bool {
+        match self {
+            Self::V4(fields) | Self::V5(fields) => {
+                fields.next_stake_table_hash = Some(hash);
+                true
+            },
+            _ => false,
+        }
+    }
 }
 
 // Getter for a field which is the same across all versions.
@@ -828,6 +838,10 @@ impl Header {
         field!(self.ns_table)
     }
 
+    pub fn ns_table_mut(&mut self) -> &mut NsTable {
+        &mut *field_mut!(self.ns_table)
+    }
+
     /// Root Commitment of Block Merkle Tree
     pub fn block_merkle_tree_root(&self) -> BlockMerkleCommitment {
         *field!(self.block_merkle_tree_root)
@@ -1075,8 +1089,8 @@ impl BlockHeader<SeqTypes> for Header {
 
                 let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
 
-                // first 2 epochs don't have stake table hash because they are configured.
-                if epoch > first_epoch + 1 {
+                // first 2 epochs don't have a stake table hash because they are configured.
+                if epoch > first_epoch {
                     let epoch_membership = coordinator
                         .stake_table_for_epoch(Some(epoch + 1))
                         .await

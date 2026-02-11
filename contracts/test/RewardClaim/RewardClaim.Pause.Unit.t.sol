@@ -11,9 +11,11 @@ contract RewardClaimPauseTest is RewardClaimMockTest {
         vm.prank(pauser);
         rewardClaim.pause();
 
+        uint256 totalClaimedBefore = rewardClaim.totalClaimed();
         vm.prank(claimer);
         vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
         rewardClaim.claimRewards(1, "");
+        assertEq(rewardClaim.totalClaimed(), totalClaimedBefore);
     }
 
     function test_claim_SucceedsIfUnpaused() public {

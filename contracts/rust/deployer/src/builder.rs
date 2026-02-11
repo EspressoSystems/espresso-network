@@ -2,7 +2,7 @@
 
 use alloy::{
     hex::FromHex,
-    primitives::{Address, B256, U256},
+    primitives::{Address, Bytes, B256, U256},
     providers::{Provider, WalletProvider},
 };
 use anyhow::{Context, Result};
@@ -15,17 +15,18 @@ use crate::{
     encode_function_call,
     proposals::{
         multisig::{
-            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+            call_propose_transaction_generic_script, transfer_ownership_from_multisig_to_timelock,
+            upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
             upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
             upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
             StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
-            cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-            TimelockOperationData, TimelockOperationType,
+            derive_timelock_address_from_contract_type, perform_timelock_operation,
+            TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
         },
     },
-    Contract, Contracts,
+    Contract, Contracts, OwnableContract,
 };
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
@@ -115,7 +116,7 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     timelock_operation_type: Option<TimelockOperationType>,
     #[builder(default)]
-    target_contract: Option<String>,
+    target_contract: Option<OwnableContract>,
     #[builder(default)]
     timelock_operation_value: Option<U256>,
     #[builder(default)]
@@ -133,7 +134,17 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     transfer_ownership_new_owner: Option<Address>,
     #[builder(default)]
-    timelock_address: Option<Address>,
+    timelock_operation_id: Option<String>,
+    #[builder(default)]
+    multisig_transaction_target: Option<Address>,
+    #[builder(default)]
+    multisig_transaction_function_signature: Option<String>,
+    #[builder(default)]
+    multisig_transaction_function_args: Option<Vec<String>>,
+    #[builder(default)]
+    multisig_transaction_value: Option<String>,
+    #[builder(default)]
+    ledger: bool,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -143,27 +154,61 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let admin = provider.default_signer_address();
         match target {
             Contract::FeeContractProxy => {
-                let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
+                if contracts.address(Contract::FeeContractProxy).is_some() {
+                    // Upgrade path
+                    let use_multisig = self.use_multisig;
+                    let dry_run = self.dry_run;
+                    let rpc_url = self.rpc_url.clone();
 
-                if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    // FeeContract uses OpsTimelock because:
-                    // - It handles critical fee collection and distribution logic
-                    // - May require emergency updates for security or functionality
-                    // - OpsTimelock provides a shorter delay for critical operations
-                    tracing::info!(
-                        "Transferring ownership to OpsTimelock: {:?}",
-                        use_timelock_owner
-                    );
-                    // deployer is the timelock owner
-                    if use_timelock_owner {
-                        let timelock_addr = contracts
-                            .address(Contract::OpsTimelock)
-                            .expect("fail to get OpsTimelock address");
-                        crate::transfer_ownership(provider, target, addr, timelock_addr).await?;
+                    tracing::info!(?dry_run, ?use_multisig, "Upgrading FeeContract to V1.0.1");
+                    if use_multisig {
+                        upgrade_fee_contract_multisig_owner(
+                            provider,
+                            contracts,
+                            rpc_url.to_string(),
+                            dry_run,
+                        )
+                        .await?;
+                    } else {
+                        crate::upgrade_fee_v1(provider, contracts).await?;
                     }
-                } else if let Some(multisig) = self.multisig {
-                    tracing::info!("Transferring ownership to multisig: {:?}", multisig);
-                    crate::transfer_ownership(provider, target, addr, multisig).await?;
+                } else {
+                    // Deploy path
+                    let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
+
+                    if let Some(use_timelock_owner) = self.use_timelock_owner {
+                        // FeeContract uses OpsTimelock because:
+                        // - It handles critical fee collection and distribution logic
+                        // - May require emergency updates for security or functionality
+                        // - OpsTimelock provides a shorter delay for critical operations
+                        tracing::info!(
+                            "Transferring ownership to OpsTimelock: {:?}",
+                            use_timelock_owner
+                        );
+                        // deployer is the timelock owner
+                        if use_timelock_owner {
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                OwnableContract::FeeContractProxy,
+                                contracts,
+                            )?;
+                            crate::transfer_ownership(
+                                provider,
+                                Contract::FeeContractProxy,
+                                addr,
+                                timelock_addr,
+                            )
+                            .await?;
+                        }
+                    } else if let Some(multisig) = self.multisig {
+                        tracing::info!("Transferring ownership to multisig: {:?}", multisig);
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::FeeContractProxy,
+                            addr,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::EspTokenProxy => {
@@ -217,11 +262,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             // - No emergency updates are expected for token functionality
                             // - SafeExitTimelock provides sufficient security for token operations
                             tracing::info!("Transferring ownership to SafeExitTimelock");
-                            let timelock_addr = contracts
-                                .address(Contract::SafeExitTimelock)
-                                .expect("fail to get SafeExitTimelock address");
-                            crate::transfer_ownership(provider, target, addr, timelock_addr)
-                                .await?;
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                OwnableContract::EspTokenProxy,
+                                contracts,
+                            )?;
+                            crate::transfer_ownership(
+                                provider,
+                                Contract::EspTokenProxy,
+                                addr,
+                                timelock_addr,
+                            )
+                            .await?;
                         }
                     } else if let Some(multisig) = self.multisig {
                         let token_proxy = contracts
@@ -340,20 +391,23 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         tracing::info!("Transferring ownership to OpsTimelock");
                         // deployer is the timelock owner
                         if use_timelock_owner {
-                            let timelock_addr = contracts
-                                .address(Contract::OpsTimelock)
-                                .expect("fail to get OpsTimelock address");
-                            crate::transfer_ownership(provider, target, addr, timelock_addr)
-                                .await?;
+                            let timelock_addr = derive_timelock_address_from_contract_type(
+                                OwnableContract::LightClientProxy,
+                                contracts,
+                            )?;
+                            crate::transfer_ownership(
+                                provider,
+                                Contract::LightClientProxy,
+                                addr,
+                                timelock_addr,
+                            )
+                            .await?;
                         }
                     } else if let Some(multisig) = self.multisig {
-                        let lc_proxy = contracts
-                            .address(Contract::LightClientProxy)
-                            .expect("fail to get LightClientProxy address");
                         crate::transfer_ownership(
                             provider,
                             Contract::LightClientProxy,
-                            lc_proxy,
+                            addr,
                             multisig,
                         )
                         .await?;
@@ -367,7 +421,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let lc_addr = contracts
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
-                let escrow_period = self.exit_escrow_period.unwrap_or(U256::from(250));
+                let escrow_period = self
+                    .exit_escrow_period
+                    .unwrap_or(U256::from(crate::DEFAULT_EXIT_ESCROW_PERIOD_SECONDS));
                 crate::deploy_stake_table_proxy(
                     provider,
                     contracts,
@@ -406,18 +462,19 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 } else {
                     // Pick admin from config. StakeTable uses OpsTimelock for faster
                     // emergency updates since it handles critical staking ops.
-                    let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
-                        if use_timelock_owner {
-                            contracts
-                                .address(Contract::OpsTimelock)
-                                .expect("fail to get OpsTimelock address")
-                        } else {
-                            admin // deployer
-                        }
-                    } else if let Some(multisig) = self.multisig {
-                        multisig
-                    } else {
-                        admin // deployer
+                    let admin = match self.use_timelock_owner {
+                        Some(true) => derive_timelock_address_from_contract_type(
+                            OwnableContract::StakeTableProxy,
+                            contracts,
+                        )?,
+                        Some(false) => admin, // deployer
+                        None => {
+                            if let Some(multisig) = self.multisig {
+                                multisig
+                            } else {
+                                admin // deployer
+                            }
+                        },
                     };
 
                     tracing::info!("Upgrading StakeTableV2 with admin: {:?}", admin);
@@ -497,21 +554,19 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                 // RewardClaim uses SafeExitTimelock (longer delay) since it can mint tokens
                 // and users need time to react to upgrades. Can be paused in emergencies.
-                let admin = if let Some(use_timelock_owner) = self.use_timelock_owner {
-                    if use_timelock_owner {
-                        contracts
-                            .address(Contract::SafeExitTimelock)
-                            .expect("fail to get SafeExitTimelock address")
-                    } else {
-                        self.ops_timelock_admin.context(
-                            "SafeExitTimelock contract address must be set when using \
-                             --use-timelock-owner flag",
-                        )?
-                    }
-                } else if let Some(multisig) = self.multisig {
-                    multisig
-                } else {
-                    admin
+                let admin = match self.use_timelock_owner {
+                    Some(true) => derive_timelock_address_from_contract_type(
+                        OwnableContract::RewardClaimProxy,
+                        contracts,
+                    )?,
+                    Some(false) => admin, // deployer
+                    None => {
+                        if let Some(multisig) = self.multisig {
+                            multisig
+                        } else {
+                            admin // deployer
+                        }
+                    },
                 };
 
                 tracing::info!("Deploying RewardClaimProxy with admin: {:?}", admin);
@@ -557,117 +612,126 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
     // Perform a timelock operation
     ///
+    /// This function can perform timelock operations via two paths:
+    /// - **Multisig path**: If `multisig` field from DeployerArgs is set, the operation will be proposed via Safe multisig
+    /// - **EOA path**: If `multisig` field from DeployerArgs is not set, the operation will be executed directly via EOA (useful for tests/local development)
+    ///
     /// Parameters:
     /// - `contracts`: ref to deployed contracts
     ///
-    pub async fn perform_timelock_operation_on_contract(
+    pub async fn propose_timelock_operation_for_contract(
         &self,
         contracts: &mut Contracts,
     ) -> Result<()> {
         let timelock_operation_type = self
             .timelock_operation_type
             .context("Timelock operation type not found")?;
-        let target_contract = self
-            .target_contract
-            .clone()
-            .context("Timelock target not found")?;
-        let value = self
-            .timelock_operation_value
-            .context("Timelock operation value not found")?;
-        let function_signature = self
-            .timelock_operation_function_signature
-            .as_ref()
-            .context("Timelock operation function signature not found")?;
-        let function_values = self
-            .timelock_operation_function_values
-            .clone()
-            .context("Timelock operation function values not found")?;
-        let salt = self
-            .timelock_operation_salt
-            .clone()
-            .context("Timelock operation salt not found")?;
-        let delay = self
-            .timelock_operation_delay
-            .context("Timelock operation delay not found")?;
+        let target_contract = self.target_contract.context("Timelock target not found")?;
+        let contract_type: Contract = target_contract.into();
+        let target_addr = contracts
+            .address(contract_type)
+            .context(format!("{:?} address not found", contract_type))?;
 
-        let (target_addr, contract_type) = match target_contract.as_str() {
-            "FeeContract" => (
-                contracts
-                    .address(Contract::FeeContractProxy)
-                    .context("FeeContractProxy address not found")?,
-                Contract::FeeContractProxy,
-            ),
-            "EspToken" => (
-                contracts
-                    .address(Contract::EspTokenProxy)
-                    .context("EspTokenProxy address not found")?,
-                Contract::EspTokenProxy,
-            ),
-            "LightClient" => (
-                contracts
-                    .address(Contract::LightClientProxy)
-                    .context("LightClientProxy address not found")?,
-                Contract::LightClientProxy,
-            ),
-            "StakeTable" => (
-                contracts
-                    .address(Contract::StakeTableProxy)
-                    .context("StakeTableProxy address not found")?,
-                Contract::StakeTableProxy,
-            ),
-            _ => anyhow::bail!("Invalid target contract: {}", target_contract),
-        };
+        let (timelock_operation_data, operation_id) = if timelock_operation_type
+            == TimelockOperationType::Cancel
+            && self.timelock_operation_id.is_some()
+        {
+            // Cancel operation with explicit operation_id - use minimal payload
+            let op_id_str = self
+                .timelock_operation_id
+                .as_ref()
+                .context("Operation ID not found")?;
+            let op_id = if let Some(stripped) = op_id_str.strip_prefix("0x") {
+                B256::from_hex(stripped).context("Invalid operation ID hex format")?
+            } else {
+                B256::from_hex(op_id_str).context("Invalid operation ID hex format")?
+            };
 
-        let function_calldata = encode_function_call(function_signature, function_values.clone())
-            .context("Failed to encode function data")?;
-
-        // Parse salt from string to B256
-        let salt_bytes = if salt == "0x" || salt.is_empty() {
-            B256::ZERO // Use zero salt if empty
-        } else if let Some(stripped) = salt.strip_prefix("0x") {
-            B256::from_hex(stripped).context("Invalid salt hex format")?
+            let minimal_payload = TimelockOperationPayload {
+                target: target_addr,
+                value: U256::ZERO,
+                data: Bytes::new(),
+                predecessor: B256::ZERO,
+                salt: B256::ZERO,
+                delay: U256::ZERO,
+            };
+            (minimal_payload, Some(op_id))
         } else {
-            B256::from_hex(&salt).context("Invalid salt hex format")?
+            // Schedule or Execute operation - we need full operation details
+            let value = self
+                .timelock_operation_value
+                .context("Timelock operation value not found")?;
+            let function_signature = self
+                .timelock_operation_function_signature
+                .as_ref()
+                .context("Timelock operation function signature not found")?;
+            let function_values = self
+                .timelock_operation_function_values
+                .clone()
+                .context("Timelock operation function values not found")?;
+            let salt = self
+                .timelock_operation_salt
+                .clone()
+                .context("Timelock operation salt not found")?;
+            let delay = self
+                .timelock_operation_delay
+                .context("Timelock operation delay not found")?;
+
+            let function_calldata =
+                encode_function_call(function_signature, function_values.clone())
+                    .context("Failed to encode function data")?;
+
+            // Parse salt from string to B256
+            let salt_trimmed = salt.trim();
+            let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
+                B256::ZERO
+            } else {
+                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+                B256::from_hex(hex_str).context("Invalid salt hex format")?
+            };
+
+            let operation = TimelockOperationPayload {
+                target: target_addr,
+                value,
+                data: function_calldata,
+                predecessor: B256::ZERO, // Default to no predecessor
+                salt: salt_bytes,
+                delay,
+            };
+            (operation, None)
         };
 
-        let timelock_operation_data = TimelockOperationData {
-            target: target_addr,
-            value,
-            data: function_calldata,
-            predecessor: B256::ZERO, // Default to no predecessor
-            salt: salt_bytes,
-            delay,
+        let params = if let Some(multisig_proposer) = self.multisig {
+            // Multisig path
+            let rpc_url = self.rpc_url.to_string();
+            let use_hardware_wallet = self.ledger;
+            TimelockOperationParams {
+                multisig_proposer: Some(multisig_proposer),
+                rpc_url: Some(rpc_url),
+                use_hardware_wallet,
+                operation_id,
+                dry_run: self.dry_run,
+            }
+        } else {
+            // EOA path (for tests/local development)
+            TimelockOperationParams {
+                multisig_proposer: None,
+                rpc_url: None,
+                use_hardware_wallet: false,
+                operation_id,
+                dry_run: self.dry_run,
+            }
         };
 
-        match timelock_operation_type {
-            TimelockOperationType::Schedule => {
-                let operation_id = schedule_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation scheduled with ID: {}", operation_id);
-            },
-            TimelockOperationType::Execute => {
-                let tx_id = execute_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation executed with ID: {}", tx_id);
-            },
-            TimelockOperationType::Cancel => {
-                let tx_id = cancel_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation cancelled with ID: {}", tx_id);
-            },
-        }
+        perform_timelock_operation(
+            &self.deployer,
+            contract_type,
+            timelock_operation_data,
+            timelock_operation_type,
+            params,
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -680,7 +744,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             "Multisig address must be set when proposing ownership transfer. Use \
              --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
         );
-        let target_contract = self.target_contract.clone().ok_or_else(|| {
+        let ownable_contract = self.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide target_contract when using \
                  --propose-transfer-ownership-to-timelock. Use --target-contract or \
@@ -688,35 +752,18 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             )
         })?;
 
-        let timelock_address = self.timelock_address.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Timelock address must be set when proposing ownership transfer. Use \
-                 --timelock-address or ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS"
-            )
-        })?;
+        let timelock_address =
+            derive_timelock_address_from_contract_type(ownable_contract, contracts)?;
 
-        // Parse the contract type from string
-        let contract_type = match target_contract.to_lowercase().as_str() {
-            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
-            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
-            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
-            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
-            _ => anyhow::bail!(
-                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-                 staketable",
-                target_contract
-            ),
-        };
-
+        let contract: Contract = ownable_contract.into();
         tracing::info!(
-            "Proposing transfer of ownership from multisig to timelock for {}",
-            target_contract
+            "Proposing transfer of ownership from multisig to timelock for {:?} (timelock: {:?})",
+            contract,
+            timelock_address
         );
-
-        let contract = contract_type;
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
-        let use_hardware_wallet = false;
+        let use_hardware_wallet = self.ledger;
         let result = transfer_ownership_from_multisig_to_timelock(
             &self.deployer,
             contracts,
@@ -755,7 +802,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             return Ok(());
         }
 
-        let target_contract = self.target_contract.clone().ok_or_else(|| {
+        let ownable_contract = self.target_contract.ok_or_else(|| {
             anyhow::anyhow!("Must provide target_contract when using transfer_ownership_from_eoa")
         })?;
         let new_owner = self.transfer_ownership_new_owner.ok_or_else(|| {
@@ -764,44 +811,77 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             )
         })?;
 
-        // Parse the contract type from string
-        let contract_type = match target_contract.to_lowercase().as_str() {
-            "lightclient" | "lightclientproxy" => Contract::LightClientProxy,
-            "feecontract" | "feecontractproxy" => Contract::FeeContractProxy,
-            "esptoken" | "esptokenproxy" => Contract::EspTokenProxy,
-            "staketable" | "staketableproxy" => Contract::StakeTableProxy,
-            _ => anyhow::bail!(
-                "Unknown contract type: {}. Supported types: lightclient, feecontract, esptoken, \
-                 staketable",
-                target_contract
-            ),
-        };
-
-        // Get the contract address from the contracts map
+        let contract_type: Contract = ownable_contract.into();
         let contract_address = contracts.address(contract_type).ok_or_else(|| {
             anyhow::anyhow!(
-                "Contract {} not found in deployed contracts",
-                target_contract
+                "Contract {:?} not found in deployed contracts",
+                contract_type
             )
         })?;
 
-        tracing::info!(
-            "Transferring ownership of {} from EOA to {}",
-            target_contract,
-            new_owner
-        );
-
-        // Use the existing transfer_ownership function from lib.rs
-        let receipt =
+        // RewardClaim uses AccessControl instead of Ownable, so we need to grant the admin role
+        // instead of transferring ownership
+        let receipt = if contract_type == Contract::RewardClaimProxy {
+            tracing::info!(
+                "Granting DEFAULT_ADMIN_ROLE for {:?} to {} (RewardClaim uses AccessControl, not \
+                 Ownable)",
+                contract_type,
+                new_owner
+            );
+            crate::grant_admin_role(&self.deployer, contract_type, contract_address, new_owner)
+                .await?
+        } else {
+            tracing::info!(
+                "Transferring ownership of {:?} from EOA to {}",
+                contract_type,
+                new_owner
+            );
             crate::transfer_ownership(&self.deployer, contract_type, contract_address, new_owner)
-                .await?;
+                .await?
+        };
 
         tracing::info!(
-            "Successfully transferred ownership of {} to {}. Transaction: {}",
-            target_contract,
+            "Successfully transferred admin control of {:?} to {}. Transaction: {}",
+            contract_type,
             new_owner,
             receipt.transaction_hash
         );
+
+        Ok(())
+    }
+
+    /// Propose a transaction via Safe multisig
+    pub async fn propose_multisig_transaction(&self) -> Result<()> {
+        let target = self
+            .multisig_transaction_target
+            .context("Multisig transaction target address not found")?;
+        let function_signature = self
+            .multisig_transaction_function_signature
+            .as_ref()
+            .context("Multisig transaction function signature not found")?;
+        let function_args = self
+            .multisig_transaction_function_args
+            .clone()
+            .unwrap_or_default();
+        let value = self
+            .multisig_transaction_value
+            .clone()
+            .unwrap_or_else(|| "0".to_string());
+        let multisig = self
+            .multisig
+            .context("Multisig address required for multisig transaction proposal")?;
+
+        call_propose_transaction_generic_script(
+            target,
+            function_signature.clone(),
+            function_args,
+            self.rpc_url.to_string(),
+            multisig,
+            self.ledger,
+            Some(value),
+            self.dry_run,
+        )
+        .await?;
 
         Ok(())
     }

@@ -9,7 +9,7 @@ use alloy::{
 use anyhow::Result;
 use espresso_contract_deployer::{
     builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
-    Contracts,
+    Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
 };
 use espresso_types::{
     v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
@@ -105,7 +105,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .blocks_per_epoch(100)
         .epoch_start_block(1)
         .multisig_pauser(deployer_address)
-        .exit_escrow_period(U256::from(250))
+        .exit_escrow_period(U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS))
         .token_name("Espresso".to_string())
         .token_symbol("ESP".to_string())
         .initial_token_supply(U256::from(3590000000u64))

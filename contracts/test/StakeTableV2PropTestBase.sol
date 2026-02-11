@@ -359,7 +359,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         uint256 balance = token.balanceOf(actor);
         if (balance == 0) return;
 
-        amount = boundRange(amount, 1, balance);
+        uint256 minAmount = stakeTable.minDelegateAmount();
+
+        if (balance < minAmount) return;
+
+        amount = boundRange(amount, minAmount, balance);
 
         stakeTable.delegate(validator, amount);
         trackDelegate(actor, validator, amount);

@@ -11,7 +11,6 @@ use std::{
 
 use hotshot_types::traits::node_implementation::NodeType;
 use thiserror::Error;
-use tracing::error;
 
 /// convenience type alias for state and block
 pub type StateAndBlock<S, B> = (Vec<S>, Vec<B>);

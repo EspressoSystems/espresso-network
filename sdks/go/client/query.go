@@ -31,6 +31,8 @@ type QueryService interface {
 	StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error)
 	// Stream transactions starting from the given height, filtered by namespace.
 	StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error)
+	// Fetch Namespace transactions in a range
+	FetchNamespaceTransactionsInRange(ctx context.Context, fromHeight uint64, toHeight uint64, namespace uint64) ([]types.NamespaceTransactionsRangeData, error)
 }
 
 // Interface representing a pollable stream of JSON-encoded objects

@@ -11,7 +11,8 @@ contract RewardClaimAdminTest is RewardClaimTest {
     function test_SetDailyLimit_Success() public {
         uint256 currentLimit = rewardClaim.dailyLimitWei();
         uint256 basisPoints = 200; // 2%
-        uint256 expectedLimit = (espToken.totalSupply() * basisPoints) / 10000;
+        uint256 expectedLimit =
+            (espToken.totalSupply() * basisPoints) / rewardClaim.BPS_DENOMINATOR();
 
         vm.prank(owner);
         vm.expectEmit();
@@ -50,7 +51,8 @@ contract RewardClaimAdminTest is RewardClaimTest {
     function test_SetDailyLimit_SuccessAtMaxBound() public {
         uint256 currentLimit = rewardClaim.dailyLimitWei();
         uint256 maxBasisPoints = rewardClaim.MAX_DAILY_LIMIT_BASIS_POINTS();
-        uint256 expectedLimit = (espToken.totalSupply() * maxBasisPoints) / 10000;
+        uint256 expectedLimit =
+            (espToken.totalSupply() * maxBasisPoints) / rewardClaim.BPS_DENOMINATOR();
 
         vm.prank(owner);
         vm.expectEmit();
@@ -148,6 +150,7 @@ contract RewardClaimAdminTest is RewardClaimTest {
 
         assertTrue(rewardClaim.hasRole(adminRole, newAdmin), "new admin should hold role");
         assertFalse(rewardClaim.hasRole(adminRole, owner), "old admin should lose role");
+        assertEq(rewardClaim.currentAdmin(), newAdmin);
     }
 
     function test_GrantRole_DefaultAdminRole_SelfGrantNoOp() public {
@@ -157,5 +160,6 @@ contract RewardClaimAdminTest is RewardClaimTest {
         rewardClaim.grantRole(adminRole, owner);
 
         assertTrue(rewardClaim.hasRole(adminRole, owner), "owner should still have role");
+        assertEq(rewardClaim.currentAdmin(), owner);
     }
 }

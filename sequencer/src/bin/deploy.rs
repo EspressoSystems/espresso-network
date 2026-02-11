@@ -15,7 +15,7 @@ use espresso_contract_deployer::{
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
     proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
     provider::connect_ledger,
-    Contract, Contracts, DeployStep, DeployedContracts, DeploymentState,
+    Contract, Contracts, DeployStep, DeployedContracts, DeploymentState, OwnableContract,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
@@ -74,7 +74,7 @@ struct Options {
     /// Mnemonic for an L1 wallet.
     ///
     /// This wallet is used to deploy the contracts, so the account indicated by ACCOUNT_INDEX must
-    /// be funded with with ETH.
+    /// be funded with ETH.
     #[clap(
         long,
         name = "MNEMONIC",
@@ -128,45 +128,85 @@ struct Options {
     ledger: bool,
 
     /// Option to deploy fee contracts
+    // (backward compatibility: --deploy-fee is an alias for --deploy-fee-v1)
     #[clap(long, default_value = "false")]
     deploy_fee: bool,
+
+    /// Option to deploy fee contracts
+    #[clap(long, default_value = "false")]
+    deploy_fee_v1: bool,
+
     /// Option to deploy LightClient V1 and proxy
     #[clap(long, default_value = "false")]
     deploy_light_client_v1: bool,
+
     /// Option to upgrade to LightClient V2
     #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
+
     /// Option to upgrade to LightClient V3
     #[clap(long, default_value = "false")]
     upgrade_light_client_v3: bool,
+
     /// Option to deploy esp token
+    // (backward compatibility: --deploy-esp-token is an alias for --deploy-esp-token-v1)
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
+
+    /// Option to deploy esp token v1
     #[clap(long, default_value = "false")]
-    deploy_reward_claim: bool,
+    deploy_esp_token_v1: bool,
+
     /// Option to upgrade esp token v2
     #[clap(long, default_value = "false")]
     upgrade_esp_token_v2: bool,
     /// Option to deploy StakeTable V1 and proxy
+    // (backward compatibility: --deploy-stake-table is an alias for --deploy-stake-table-v1)
     #[clap(long, default_value = "false")]
     deploy_stake_table: bool,
+
+    /// Option to deploy StakeTable V1
+    #[clap(long, default_value = "false")]
+    deploy_stake_table_v1: bool,
+
     /// Option to upgrade to StakeTable V2
     #[clap(long, default_value = "false")]
     upgrade_stake_table_v2: bool,
+
+    /// Option to deploy RewardClaimV1 proxy
+    #[clap(long, default_value = "false")]
+    deploy_reward_claim_v1: bool,
+
     /// Option to deploy ops timelock
     #[clap(long, default_value = "false")]
     deploy_ops_timelock: bool,
+
     /// Option to deploy safe exit timelock
     #[clap(long, default_value = "false")]
     deploy_safe_exit_timelock: bool,
+
     /// Option to use timelock as the owner of the proxy
+    /// Transfer contract ownership to a timelock during deployment/upgrade.
+    /// Which timelock is used depends on the contract:
+    /// - FeeContract, LightClient, StakeTable → OpsTimelock (shorter delay for critical ops)
+    /// - EspToken, RewardClaim → SafeExitTimelock (longer delay for token operations)
+    ///
+    /// Requires timelocks to be deployed first (--deploy-ops-timelock, --deploy-safe-exit-timelock).
+    /// If not set, ownership goes to multisig (if --use-multisig) or deployer account.
     #[clap(long, default_value = "false")]
     use_timelock_owner: bool,
+
     /// Option to transfer ownership from multisig
+    /// Propose ownership transfer from multisig to timelock via Safe transaction service.
+    /// This creates a transaction proposal in the Safe multisig that requires approval
+    /// before execution. The actual transfer happens after multisig members approve.
+    /// Requires: --multisig-address, --target-contract
+    /// Note: Only works on networks where Safe transaction service is available.
     #[clap(long, default_value = "false")]
     propose_transfer_ownership_to_timelock: bool,
 
     /// Option to transfer ownership directly from EOA to a new owner
+    /// Requires: --transfer-ownership-new-owner
     #[clap(long, default_value = "false")]
     transfer_ownership_from_eoa: bool,
 
@@ -180,19 +220,32 @@ struct Options {
     #[clap(short, long, name = "OUT", env = "ESPRESSO_DEPLOYER_OUT_PATH")]
     out: Option<PathBuf>,
 
+    /// Suppress stdout output when writing to file
+    #[clap(long, short = 'q')]
+    quiet: bool,
+
     #[clap(flatten)]
     contracts: DeployedContracts,
 
     /// If toggled, launch a mock LightClient contract with a smaller verification key for testing.
-    /// Applies to both V1 and V2 of LightClient.
+    /// Applies to both V1, V2 and V3 of LightClient.
     #[clap(short, long)]
     pub use_mock: bool,
 
-    /// Option to deploy contracts owned by multisig
+    /// Option to deploy contracts owned by multisig.
+    ///
+    /// DEPLOYMENT: Directly sets multisig as owner (immediate transfer).
+    /// UPGRADES: Creates Safe multisig proposal (requires approval before execution).
+    ///
+    /// For upgrades, uses Safe transaction service to create proposals that
+    /// multisig members must approve. This adds a governance layer.
+    ///
+    /// Requires: --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
     #[clap(long, default_value = "false")]
     pub use_multisig: bool,
 
     /// Option to test upgrade stake table v2 multisig owner dry run
+    /// TODO: have dry-runs handle all operations
     #[clap(long, default_value = "false")]
     pub dry_run: bool,
 
@@ -200,13 +253,22 @@ struct Options {
     #[clap(long, default_value = "false")]
     pub mock_espresso_live_network: bool,
 
-    /// Option to verify node js files access to upgrade stake table v2 multisig owner dry run
+    /// Option to verify access to Node.js files required for Safe multisig operations.
     #[clap(long, default_value = "false")]
     pub verify_node_js_files: bool,
 
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
+
+    /// Option to upgrade fee contract v1 patch version
+    #[clap(long, default_value = "false")]
+    pub upgrade_fee_v1: bool,
+
+    /// Option to propose a transaction via Safe multisig
+    /// This allows calling any contract function via multisig proposal
+    #[clap(long, default_value = "false")]
+    pub propose_multisig_transaction: bool,
     ///
     /// If the light client contract is being deployed and this is set, the prover will be
     /// permissioned so that only this address can update the light client state. Otherwise, proving
@@ -231,13 +293,14 @@ struct Options {
     #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
     initial_token_grant_recipient: Option<Address>,
 
-    /// The blocks per epoch    
+    /// The number of blocks per epoch for the HotShot consensus protocol.
     #[clap(long, env = "ESPRESSO_SEQUENCER_BLOCKS_PER_EPOCH")]
     blocks_per_epoch: Option<u64>,
 
     /// The epoch start block
     #[clap(long, env = "ESPRESSO_SEQUENCER_EPOCH_START_BLOCK")]
     epoch_start_block: Option<u64>,
+
     /// The initial supply of the tokens.
     #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY")]
     initial_token_supply: Option<U256>,
@@ -295,10 +358,11 @@ struct Options {
     )]
     timelock_operation_type: Option<TimelockOperationType>,
 
-    /// The target contract of the timelock operation
-    /// The timelock is the owner of this contract and can perform the timelock operation on it
-    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT")]
-    target_contract: Option<String>,
+    /// The target contract for timelock operations or ownership transfers.
+    /// Valid values: fee-contract-proxy, light-client-proxy, stake-table-proxy, esp-token-proxy, reward-claim-proxy
+    /// Aliases: feecontract, lightclient, staketable, esptoken, rewardclaim (case-insensitive)
+    #[clap(long, env = "ESPRESSO_TARGET_CONTRACT", value_enum, ignore_case = true)]
+    target_contract: Option<OwnableContract>,
 
     /// The value to send with the timelock operation
     #[clap(
@@ -322,7 +386,8 @@ struct Options {
     #[clap(
         long,
         env = "ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES",
-        requires = "perform_timelock_operation"
+        requires = "perform_timelock_operation",
+        num_args = 0..
     )]
     function_values: Option<Vec<String>>,
 
@@ -341,12 +406,60 @@ struct Options {
         requires = "perform_timelock_operation"
     )]
     timelock_operation_delay: Option<u64>,
-    /// The address of the timelock controller
-    #[clap(long, env = "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS")]
-    timelock_address: Option<Address>,
+
+    /// The operation ID for cancel operations (optional, can be used instead of reconstructing from parameters)
+    #[clap(
+        long,
+        env = "ESPRESSO_TIMELOCK_OPERATION_ID",
+        requires = "perform_timelock_operation"
+    )]
+    timelock_operation_id: Option<String>,
+
+    /// Target contract address for multisig transaction proposal
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_TARGET",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_target: Option<Address>,
+
+    /// Function signature for multisig transaction (e.g., "transfer(address,uint256)")
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_FUNCTION_SIGNATURE",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_function_signature: Option<String>,
+
+    /// Function arguments for multisig transaction
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_FUNCTION_ARGS",
+        requires = "propose_multisig_transaction"
+    )]
+    multisig_transaction_function_args: Option<Vec<String>>,
+
+    /// Value to send with multisig transaction (in wei, as string)
+    #[clap(
+        long,
+        env = "ESPRESSO_MULTISIG_TRANSACTION_VALUE",
+        requires = "propose_multisig_transaction",
+        default_value = "0"
+    )]
+    multisig_transaction_value: Option<String>,
 
     #[clap(flatten)]
     logging: logging::Config,
+
+    /// Cooldown after each contract deployment to avoid outdated state during post deployment
+    /// verification steps.
+    #[clap(
+        long,
+        env = "ESPRESSO_POST_DEPLOYMENT_COOLDOWN",
+        default_value = "1s",
+        value_parser = parse_duration,
+    )]
+    post_deployment_cooldown: Duration,
 
     /// Deploy one step then exit (for incremental deployment)
     #[clap(long)]
@@ -691,6 +804,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let mut contracts = Contracts::from(opt.contracts);
+    contracts.set_cooldown(opt.post_deployment_cooldown);
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
@@ -699,7 +813,8 @@ async fn main() -> anyhow::Result<()> {
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
-        .rpc_url(opt.rpc_url.clone());
+        .rpc_url(opt.rpc_url.clone())
+        .ledger(opt.ledger);
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
     }
@@ -839,47 +954,51 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
         args_builder.timelock_operation_type(timelock_operation_type);
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract or ESPRESSO_TARGET_CONTRACT env var when \
                  scheduling timelock operation"
             )
         })?;
         args_builder.target_contract(target_contract);
-        let function_signature = opt.function_signature.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --function-signature or \
-                 ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing timelock \
-                 operation"
-            )
-        })?;
-        args_builder.timelock_operation_function_signature(function_signature);
-        let function_values = opt.function_values.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --function-values or ESPRESSO_TIMELOCK_OPERATION_FUNCTION_VALUES \
-                 env var when performing timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_function_values(function_values);
-        let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env \
-                 var when scheduling timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_salt(timelock_operation_salt);
-        let timelock_operation_delay = opt.timelock_operation_delay.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY env \
-                 var when scheduling timelock operation"
-            )
-        })?;
-        args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
+
+        // Only require these fields if operation_id is not provided
+        // (for cancel with operation_id, we don't need to reconstruct the operation)
+        if opt.timelock_operation_id.is_none() {
+            let function_signature = opt.function_signature.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --function-signature or \
+                     ESPRESSO_TIMELOCK_OPERATION_FUNCTION_SIGNATURE env var when performing \
+                     timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_function_signature(function_signature);
+            // allow empty function_values for functions with no parameters
+            let function_values = opt.function_values.unwrap_or_default();
+            args_builder.timelock_operation_function_values(function_values);
+            let timelock_operation_salt = opt.timelock_operation_salt.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT \
+                     env var when scheduling timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_salt(timelock_operation_salt);
+            let timelock_operation_delay = opt.timelock_operation_delay.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY \
+                     env var when scheduling timelock operation"
+                )
+            })?;
+            args_builder.timelock_operation_delay(U256::from(timelock_operation_delay));
+        } else if let Some(operation_id) = opt.timelock_operation_id {
+            args_builder.timelock_operation_id(operation_id);
+        }
+
         let timelock_operation_value = opt.timelock_operation_value.unwrap_or_default();
         args_builder.timelock_operation_value(timelock_operation_value);
     }
 
-    if opt.deploy_esp_token {
+    if opt.deploy_esp_token || opt.deploy_esp_token_v1 {
         let token_recipient = opt
             .initial_token_grant_recipient
             .expect("Must provide --initial-token-grant-recipient when deploying esp token");
@@ -900,7 +1019,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Add EOA ownership transfer parameters to builder
     if opt.transfer_ownership_from_eoa {
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract when using --transfer-ownership-from-eoa"
             )
@@ -918,20 +1037,28 @@ async fn main() -> anyhow::Result<()> {
 
     // Add multisig to timelock transfer parameters to builder
     if opt.propose_transfer_ownership_to_timelock {
-        let target_contract = opt.target_contract.clone().ok_or_else(|| {
+        let target_contract = opt.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
                 "Must provide --target-contract when using \
                  --propose-transfer-ownership-to-timelock"
             )
         })?;
-        let timelock_address = opt.timelock_address.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Must provide --timelock-address when using \
-                 --propose-transfer-ownership-to-timelock"
-            )
-        })?;
         args_builder.target_contract(target_contract);
-        args_builder.timelock_address(timelock_address);
+    }
+
+    if opt.propose_multisig_transaction {
+        if let Some(target) = opt.multisig_transaction_target {
+            args_builder.multisig_transaction_target(target);
+        }
+        if let Some(sig) = opt.multisig_transaction_function_signature {
+            args_builder.multisig_transaction_function_signature(sig);
+        }
+        if let Some(args) = opt.multisig_transaction_function_args {
+            args_builder.multisig_transaction_function_args(args);
+        }
+        if let Some(val) = opt.multisig_transaction_value {
+            args_builder.multisig_transaction_value(val);
+        }
     }
 
     // then deploy specified contracts
@@ -947,19 +1074,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Then deploy other contracts
-    if opt.deploy_fee {
+    if opt.deploy_fee || opt.deploy_fee_v1 {
         args.deploy(&mut contracts, Contract::FeeContractProxy)
             .await?;
     }
-    if opt.deploy_esp_token {
+    if opt.deploy_esp_token || opt.deploy_esp_token_v1 {
         args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
-    }
-    if opt.deploy_reward_claim {
-        args.deploy(&mut contracts, Contract::RewardClaimProxy)
-            .await?;
-    }
-    if opt.upgrade_esp_token_v2 {
-        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
     }
     if opt.deploy_light_client_v1 {
         args.deploy(&mut contracts, Contract::LightClientProxy)
@@ -971,7 +1091,15 @@ async fn main() -> anyhow::Result<()> {
     if opt.upgrade_light_client_v3 {
         args.deploy(&mut contracts, Contract::LightClientV3).await?;
     }
-    if opt.deploy_stake_table {
+    // Deploy RewardClaimProxy before upgrading EspTokenV2, as the upgrade requires it
+    if opt.deploy_reward_claim_v1 {
+        args.deploy(&mut contracts, Contract::RewardClaimProxy)
+            .await?;
+    }
+    if opt.upgrade_esp_token_v2 {
+        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
+    }
+    if opt.deploy_stake_table || opt.deploy_stake_table_v1 {
         args.deploy(&mut contracts, Contract::StakeTableProxy)
             .await?;
     }
@@ -981,7 +1109,7 @@ async fn main() -> anyhow::Result<()> {
 
     // then perform the timelock operation if any
     if opt.perform_timelock_operation {
-        args.perform_timelock_operation_on_contract(&mut contracts)
+        args.propose_timelock_operation_for_contract(&mut contracts)
             .await?;
     }
 
@@ -996,6 +1124,15 @@ async fn main() -> anyhow::Result<()> {
         args.transfer_ownership_from_eoa(&mut contracts).await?;
     }
 
+    if opt.upgrade_fee_v1 {
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+    }
+
+    if opt.propose_multisig_transaction {
+        args.propose_multisig_transaction().await?;
+    }
+
     // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()
@@ -1004,6 +1141,10 @@ async fn main() -> anyhow::Result<()> {
             .write(true)
             .open(out)?;
         contracts.write(file)?;
+        // Also write to stdout so users can see output immediately
+        if !opt.quiet {
+            contracts.write(stdout())?;
+        }
     } else {
         contracts.write(stdout())?;
     }

@@ -5,6 +5,37 @@ default:
 
 doc *args:
     cargo doc --no-deps --document-private-items {{args}}
+    echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/sequencer/index.html"
+
+doc-contracts:
+    #!/usr/bin/env bash
+    set -e
+    rm -rf docs
+    forge doc
+    # Flatten structure: remove nested contracts/ directory
+    sed -i 's|contracts/src/|src/|g' docs/src/SUMMARY.md
+    mv docs/src/contracts/* docs/src/
+    rmdir docs/src/contracts
+    # Copy README and transform links from .sol files to generated docs
+    sed -e 's|\](src/interfaces/\([^)]*\)\.sol)|\](src/interfaces/\1.sol/interface.\1.md)|g' \
+        -e 's|\](src/libraries/\([^)]*\)\.sol)|\](src/libraries/\1.sol/library.\1.md)|g' \
+        -e 's|\](src/\([^/)]*\)\.sol)|\](src/\1.sol/contract.\1.md)|g' \
+        contracts/README.md > docs/src/README.md
+    mdbook build docs
+    echo "file://$(pwd)/docs/book/index.html"
+
+# Preview all docs locally with the same structure as the published GitHub Pages site
+doc-all-serve: doc doc-contracts
+    #!/usr/bin/env bash
+    rm -rf ./public
+    mkdir -p ./public/contracts
+    cp -r "${CARGO_TARGET_DIR:-target}"/doc/* ./public/
+    cp -r docs/book/* ./public/contracts/
+    echo '<meta http-equiv="refresh" content="0; url=sequencer">' > ./public/index.html
+    echo "Serving at http://localhost:8000"
+    echo "  Rust docs: http://localhost:8000/sequencer"
+    echo "  Contract docs: http://localhost:8000/contracts"
+    python3 -m http.server 8000 --directory ./public
 
 demo *args:
     #!/usr/bin/env bash
@@ -33,7 +64,7 @@ fix *args:
     just clippy --fix {{args}}
 
 lint *args:
-    just clippy -- -D warnings
+    just clippy {{args}} -- -D warnings
 
 clippy *args:
     # check all targets in default workspace members
@@ -224,7 +255,7 @@ build-docker-images:
 
 # generate rust bindings for contracts
 VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
-EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|IRewardClaim|IPlonkVerifier"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules
@@ -248,7 +279,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken IRewardClaim; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken{,V2} IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 

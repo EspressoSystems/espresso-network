@@ -1,0 +1,38 @@
+[package]
+name = "light-client-query-service"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+default-run = "light-client-query-service"
+
+[[bin]]
+name = "genesis"
+required-features = ["decaf", "genesis"]
+
+[features]
+default = ["decaf", "genesis"]
+decaf = ["light-client/decaf"]
+genesis = ["hotshot-types", "surf-disco"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+espresso-types = { path = "../types" }
+hotshot-query-service = { path = "../hotshot-query-service" }
+light-client = { path = "../light-client", features = ["clap"] }
+log-panics = { workspace = true }
+semver = { workspace = true }
+sequencer = { path = "../sequencer", default-features = false }
+tide-disco = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+vbs = { workspace = true }
+
+# Optional dependencies for genesis utility.
+hotshot-types = { path = "../crates/hotshot/types", optional = true }
+surf-disco = { workspace = true, optional = true }
+
+[lints]
+workspace = true

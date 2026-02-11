@@ -239,6 +239,10 @@ pub struct Options {
     )]
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
 
+    /// The URL of the builders to use for submitting transactions
+    #[clap(long, env = "ESPRESSO_SEQUENCER_BUILDER_URLS", value_delimiter = ',')]
+    pub builder_urls: Vec<Url>,
+
     /// URL of the Light Client State Relay Server
     #[clap(
         long,
@@ -404,6 +408,8 @@ pub struct Identity {
 
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME")]
     pub node_name: Option<String>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_DESCRIPTION")]
+    pub node_description: Option<String>,
 
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME")]
     pub company_name: Option<String>,
@@ -415,6 +421,19 @@ pub struct Identity {
     pub node_type: Option<String>,
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NETWORK_TYPE")]
     pub network_type: Option<String>,
+
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_1x")]
+    pub icon_14x14_1x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_2x")]
+    pub icon_14x14_2x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_3x")]
+    pub icon_14x14_3x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_1x")]
+    pub icon_24x24_1x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_2x")]
+    pub icon_24x24_2x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_3x")]
+    pub icon_24x24_3x: Option<Url>,
 }
 
 /// get_default_node_type returns the current public facing binary name and

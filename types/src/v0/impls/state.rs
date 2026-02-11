@@ -169,6 +169,8 @@ pub enum ProposalValidationError {
     NextStakeTableNotFound,
     #[error("Next stake table hash missing")]
     NextStakeTableHashNotFound,
+    #[error("Next stake table hash was not `None`")]
+    NextStakeTableHashNotNone,
     #[error("No Epoch Height")]
     NoEpochHeight,
     #[error("No First Epoch Configured")]
@@ -1101,11 +1103,14 @@ async fn validate_next_stake_table_hash(
         return Err(ProposalValidationError::NoFirstEpoch);
     };
 
-    // Rewards are distributed only if the current epoch is not the first or second epoch
-    // this is because we don't have stake table from the contract for the first two epochs
-    if epoch <= first_epoch + 1 {
-        return Ok(());
-    }
+    // We only require a `stake_table_hash` for epochs past the second
+    let Some(proposed_next_stake_table_hash) = proposed_header.next_stake_table_hash() else {
+        if epoch <= first_epoch {
+            return Ok(());
+        } else {
+            return Err(ProposalValidationError::NextStakeTableHashNotNone);
+        }
+    };
 
     let epoch_membership = instance
         .coordinator
@@ -1116,9 +1121,6 @@ async fn validate_next_stake_table_hash(
         .stake_table_hash()
         .await
         .ok_or(ProposalValidationError::NextStakeTableHashNotFound)?;
-    let Some(proposed_next_stake_table_hash) = proposed_header.next_stake_table_hash() else {
-        return Err(ProposalValidationError::NextStakeTableHashNotFound);
-    };
     if next_stake_table_hash != proposed_next_stake_table_hash {
         return Err(ProposalValidationError::NextStakeTableHashMismatch {
             expected: next_stake_table_hash,

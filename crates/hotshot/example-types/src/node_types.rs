@@ -9,7 +9,7 @@ use std::{
 };
 
 use hotshot::traits::{
-    implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
+    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
     NodeImplementation,
 };
 use hotshot_types::{
@@ -290,6 +290,10 @@ pub struct MemoryImpl;
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct Libp2pImpl;
 
+/// Cliquenet network implementation
+#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
+pub struct CliquenetImpl;
+
 /// Web server network implementation
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct WebImpl;
@@ -318,6 +322,11 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
     type Storage = TestStorage<TYPES>;
 }
 
+impl<TYPES: NodeType> NodeImplementation<TYPES> for CliquenetImpl {
+    type Network = Cliquenet<TYPES>;
+    type Storage = TestStorage<TYPES>;
+}
+
 #[derive(Clone, Debug, Copy)]
 pub struct TestVersions {}
 
@@ -331,6 +340,7 @@ impl Versions for TestVersions {
 
     type Epochs = StaticVersion<0, 4>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -346,6 +356,7 @@ impl Versions for EpochsTestVersions {
 
     type Epochs = StaticVersion<0, 3>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -361,6 +372,7 @@ impl Versions for EpochUpgradeTestVersions {
 
     type Epochs = StaticVersion<0, 4>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -376,6 +388,40 @@ impl Versions for DaCommitteeTestVersions {
 
     type Epochs = StaticVersion<0, 1>;
     type DrbAndHeaderUpgrade = StaticVersion<0, 1>;
+    // TODO(Chengyu): tweak this version
+    type Vid2Upgrade = StaticVersion<0, 6>;
+}
+
+#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Vid2TestVersions {}
+
+impl Versions for Vid2TestVersions {
+    type Base = StaticVersion<0, 6>;
+    type Upgrade = StaticVersion<0, 6>;
+    const UPGRADE_HASH: [u8; 32] = [
+        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    type Epochs = StaticVersion<0, 3>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
+}
+
+#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Vid2UpgradeTestVersions {}
+
+impl Versions for Vid2UpgradeTestVersions {
+    type Base = StaticVersion<0, 5>;
+    type Upgrade = StaticVersion<0, 6>;
+    const UPGRADE_HASH: [u8; 32] = [
+        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    type Epochs = StaticVersion<0, 3>;
+    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+    type Vid2Upgrade = StaticVersion<0, 6>;
 }
 
 #[cfg(test)]
