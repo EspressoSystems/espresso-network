@@ -13,7 +13,6 @@ use crate::{
     data::Leaf2,
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
     event::Event,
-    simple_certificate::Threshold,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,

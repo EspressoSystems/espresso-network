@@ -6,7 +6,6 @@
 
 use std::{sync::Arc, time::Instant};
 
-use alloy::primitives::U256;
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use handlers::handle_epoch_root_quorum_vote_recv;
@@ -18,7 +17,6 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
-    stake_table::HSStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
