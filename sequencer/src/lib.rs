@@ -964,6 +964,11 @@ pub mod testing {
             self
         }
 
+        pub fn version_upgrade(mut self, u: versions::Upgrade) -> Self {
+            self.config.upgrade = u;
+            self
+        }
+
         /// Version specific upgrade setup. Extend to future upgrades
         /// by adding a branch to the `match` statement.
         pub async fn set_upgrades(mut self, version: Version) -> Self {
