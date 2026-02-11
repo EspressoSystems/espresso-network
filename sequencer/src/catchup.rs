@@ -142,17 +142,16 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     where
         Fut: TryFuture<Error: Display>,
     {
-        // Since we have generally have multiple peers we can catch up from, we want a fairly
+        // Since we generally have multiple peers we can catch up from, we want a fairly
         // aggressive timeout for requests: if a peer is not responding quickly, we're better off
         // just trying the next one rather than waiting, and this prevents a malicious peer from
         // delaying catchup for a long time.
         //
         // However, if we set the timeout _too_ aggressively, we might fail to catch up even from an
-        // honest peer, and thus never make progress. Thus, we start with a timeout of 500ms, which
-        // is aggressive but still very reasonable for an HTTP request. If that fails with all of
-        // our peers, we increase the timeout by 1 second for each successive retry, until we
-        // eventually succeed.
-        let timeout_dur = Duration::from_millis(500) * (retry as u32 + 1);
+        // honest peer, and thus never make progress. Thus, we start with a timeout of 1s, which
+        // is reasonable for an HTTP request. If that fails with all of our peers, we increase the
+        // timeout by 1 second for each successive retry, until we eventually succeed.
+        let timeout_dur = Duration::from_secs(1) * (retry as u32 + 1);
 
         // Keep track of which peers we make requests to and which succeed (`true`) or fail (`false`),
         // so we can update reliability scores at the end.
