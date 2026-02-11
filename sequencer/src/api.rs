@@ -2599,7 +2599,7 @@ mod test {
             leaf::{LeafProof, LeafProofHint},
             payload::PayloadProof,
         },
-        testing::EpochChangeQuorum,
+        testing::{EpochChangeQuorum, LEGACY_VERSION},
     };
     use alloy::{
         eips::BlockId,
@@ -7341,14 +7341,14 @@ mod test {
         const NUM_NODES: usize = 1;
         const EPOCH_HEIGHT: u64 = 200;
 
-        let upgrade_version = EPOCH_VERSION;
+        let upgrade = Upgrade::new(LEGACY_VERSION, EPOCH_VERSION);
         let port = pick_unused_port().expect("No ports free");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(321)
-            .set_upgrades(upgrade_version)
+            .set_upgrades(upgrade.target)
             .await
             .build();
 
@@ -7376,7 +7376,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, Upgrade::trivial(FEE_VERSION)).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
