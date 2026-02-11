@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ops::Deref};
+use std::{borrow::Cow, fmt, ops::Deref};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
@@ -72,6 +72,12 @@ impl Upgrade {
         // be a `match (base, target) { ... }` here that returns a unique
         // hash per combination, or else some default hash.
         UPGRADE_HASH
+    }
+}
+
+impl fmt::Display for Upgrade {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} -> {}", self.base, self.target)
     }
 }
 
