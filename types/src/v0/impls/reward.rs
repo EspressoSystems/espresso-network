@@ -1000,6 +1000,13 @@ pub async fn get_leader_and_fetch_missing_rewards(
                 )
                 .await?
                 .tree;
+
+            tracing::warn!(
+                parent_height,
+                ?parent_view,
+                %reward_merkle_tree_root,
+                "successfully fetched reward merkle tree from peers"
+            );
         }
     }
 
