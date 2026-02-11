@@ -1096,7 +1096,7 @@ impl ParallelStateCatchup {
     pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
         Self {
             providers: Arc::new(Mutex::new(providers.to_vec())),
-            backoff: BackoffParams::disabled(),
+            backoff: BackoffParams::default(),
         }
     }
 
