@@ -53,6 +53,7 @@ pub fn build_instance_state<V: Versions>(
     let peers = Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
         state_peers,
         Default::default(),
+        Duration::from_secs(2),
         &NoMetrics,
     ));
 
