@@ -1060,9 +1060,9 @@ impl BlockHeader<SeqTypes> for Header {
 
         let mut rewards = None;
         if version >= EpochVersion::version() {
-            rewards = distribute_block_reward(
+            (rewards, validated_state) = distribute_block_reward(
                 instance_state,
-                &mut validated_state,
+                validated_state,
                 parent_leaf,
                 ViewNumber::new(view_number),
                 version,
