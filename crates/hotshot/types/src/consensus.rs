@@ -1035,10 +1035,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 }
             }
         }
+        let is_da_view = matches!(new_view.view_inner, ViewInner::Da { .. });
         self.validated_state_map.insert(view_number, new_view);
+        if is_da_view {
+            return Ok(());
+        }
         let max_view = self
             .validated_state_map
-            .keys()
+            .iter()
+            .filter(|(_, view)| matches!(view.view_inner, ViewInner::Leaf { .. }))
+            .map(|(view, _)| view)
             .max()
             .copied()
             .unwrap_or(TYPES::View::genesis());
