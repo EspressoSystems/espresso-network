@@ -31,7 +31,7 @@ use crate::{
         display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
         StakeTableContractVersion,
     },
-    metadata::{validate_metadata_uri, MetadataUri},
+    metadata::{fetch_metadata, validate_metadata_uri, MetadataUri},
     output::{
         format_esp, output_calldata, output_error, output_success, output_warn, CalldataInfo,
     },
@@ -314,6 +314,15 @@ pub async fn run() -> Result<()> {
             payload.handle_output(destination)?;
             return Ok(());
         },
+        Commands::PreviewMetadata { metadata_uri } => {
+            let url = url::Url::parse(&metadata_uri)
+                .with_context(|| format!("Invalid URL: {metadata_uri}"))?;
+            let metadata = fetch_metadata(&url)
+                .await
+                .with_context(|| format!("from {url}"))?;
+            output_success(serde_json::to_string_pretty(&metadata)?);
+            return Ok(());
+        },
         _ => {}, // Other commands handled after shared setup.
     }
 
@@ -471,7 +480,7 @@ pub async fn run() -> Result<()> {
 
             // Validate metadata URI if present and validation not skipped
             if let Some(url) = metadata_uri.url() {
-                if !config.skip_metadata_validation {
+                if !metadata_uri_args.skip_metadata_validation {
                     validate_metadata_uri(url, &payload.bls_vk)
                         .await
                         .context("use --skip-metadata-validation to skip")?;
@@ -525,7 +534,7 @@ pub async fn run() -> Result<()> {
 
             // Validate metadata URI if present and validation not skipped
             if let Some(url) = metadata_uri.url() {
-                if !config.skip_metadata_validation {
+                if !metadata_uri_args.skip_metadata_validation {
                     let bls_vk = consensus_public_key.ok_or_else(|| {
                         anyhow::anyhow!(
                             "--consensus-public-key is required for metadata validation (use \
@@ -611,6 +620,7 @@ pub async fn run() -> Result<()> {
         | Commands::TokenBalance { .. }
         | Commands::TokenAllowance { .. }
         | Commands::ExportNodeSignatures { .. }
+        | Commands::PreviewMetadata { .. }
         | Commands::StakeForDemo { .. } => {
             unreachable!("Non-state-change commands are handled earlier in the function")
         },

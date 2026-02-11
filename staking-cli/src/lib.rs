@@ -5,7 +5,7 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
 };
 use anyhow::{bail, Result};
-use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
@@ -14,7 +14,7 @@ pub(crate) use hotshot_types::{
     signature_key::{BLSPrivKey, BLSPubKey},
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
-use metadata::MetadataUri;
+use metadata::MetadataUriArgs;
 use parse::Commission;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,13 @@ pub mod demo;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
+
+// Re-exported for integration tests (test_real_mainnet_node_metadata)
+pub use metadata::fetch_metadata;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod metadata_types;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod openmetrics;
 pub(crate) mod output;
 pub(crate) mod parse;
 pub(crate) mod receipt;
@@ -107,11 +114,6 @@ pub struct Config {
     #[clap(long, env = "SKIP_SIMULATION", action = ArgAction::SetTrue, requires = "export_calldata")]
     #[serde(skip)]
     pub skip_simulation: bool,
-
-    /// Skip metadata URI validation (fetch and schema check).
-    #[clap(long, env = "SKIP_METADATA_VALIDATION", action = ArgAction::SetTrue)]
-    #[serde(skip)]
-    pub skip_metadata_validation: bool,
 
     #[clap(flatten)]
     #[serde(skip)]
@@ -208,30 +210,6 @@ impl ValidSignerConfig {
                 let signer = connect_ledger(*account_index).await?;
                 Ok(EthereumWallet::from(signer))
             },
-        }
-    }
-}
-
-#[derive(ClapArgs, Debug, Clone)]
-#[group(required = true, multiple = false)]
-pub struct MetadataUriArgs {
-    #[clap(long, env = "METADATA_URI")]
-    metadata_uri: Option<String>,
-
-    #[clap(long, env = "NO_METADATA_URI")]
-    no_metadata_uri: bool,
-}
-
-impl TryFrom<MetadataUriArgs> for MetadataUri {
-    type Error = anyhow::Error;
-
-    fn try_from(args: MetadataUriArgs) -> Result<Self> {
-        if args.no_metadata_uri {
-            Ok(MetadataUri::empty())
-        } else if let Some(uri_str) = args.metadata_uri {
-            uri_str.parse()
-        } else {
-            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
         }
     }
 }
@@ -453,5 +431,14 @@ pub enum Commands {
 
         #[clap(flatten)]
         output_args: signature::OutputArgs,
+    },
+    /// Preview metadata from a URL without registering.
+    ///
+    /// Fetches and displays validator metadata from a URL. Useful for verifying
+    /// your metadata endpoint before registration.
+    PreviewMetadata {
+        /// URL where validator metadata is hosted (JSON or OpenMetrics format).
+        #[clap(long, env = "METADATA_URI")]
+        metadata_uri: String,
     },
 }
