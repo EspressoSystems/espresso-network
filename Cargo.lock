@@ -3822,8 +3822,6 @@ dependencies = [
  "clap 4.5.53",
  "dotenvy",
  "espresso-contract-deployer",
- "espresso-types",
- "hotshot-contract-adapter",
  "hotshot-state-prover",
  "humantime",
  "serde",
@@ -3832,7 +3830,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber 0.3.22",
- "tracing-test",
  "url",
 ]
 

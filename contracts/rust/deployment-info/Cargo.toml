@@ -14,7 +14,6 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 dotenvy = { workspace = true }
-hotshot-contract-adapter = { workspace = true }
 humantime = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
@@ -25,10 +24,8 @@ url = { workspace = true }
 
 [dev-dependencies]
 espresso-contract-deployer = { path = "../deployer" }
-espresso-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 test-log = { workspace = true }
-tracing-test = { workspace = true }
 
 [lints]
 workspace = true

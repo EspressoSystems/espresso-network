@@ -12,7 +12,6 @@ use alloy::{
 };
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use hotshot_contract_adapter::sol_types::{ISafe, IVersioned};
 use humantime::format_duration;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -41,6 +40,18 @@ sol! {
     #[sol(rpc)]
     interface ITimelock {
         function getMinDelay() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface ISafe {
+        function VERSION() external view returns (string memory);
+        function getOwners() external view returns (address[] memory);
+        function getThreshold() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IVersioned {
+        function getVersion() external view returns (uint8, uint8, uint8);
     }
 }
 
