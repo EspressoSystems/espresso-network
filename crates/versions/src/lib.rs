@@ -20,7 +20,6 @@ const UPGRADE_HASH: UpgradeHash<'static> = UpgradeHash::borrowed(&[
     1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
 ]);
 
-
 /// Version constructor.
 pub const fn version(major: u16, minor: u16) -> Version {
     Version { major, minor }
