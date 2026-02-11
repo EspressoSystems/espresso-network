@@ -12,7 +12,6 @@ use alloy::{
 };
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use humantime::format_duration;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -246,7 +245,11 @@ struct MultisigDeployment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 enum TimelockDeployment {
-    Deployed { address: Address, min_delay: String },
+    Deployed {
+        address: Address,
+        #[serde(with = "humantime_serde")]
+        min_delay: Duration,
+    },
     NotYetDeployed,
 }
 
@@ -473,7 +476,7 @@ async fn get_timelock_info<P: Provider>(provider: &P, addr: Address) -> Result<T
         .await?
         .try_into()
         .context("min_delay exceeds u64")?;
-    let min_delay = format_duration(Duration::from_secs(min_delay_secs)).to_string();
+    let min_delay = Duration::from_secs(min_delay_secs);
 
     Ok(TimelockDeployment::Deployed {
         address: addr,
@@ -732,6 +735,9 @@ mod tests {
         )
         .unwrap();
 
+        let ops_delay = Duration::from_secs(100);
+        let safe_exit_delay = Duration::from_secs(200);
+
         let mut contracts = Contracts::new();
         let args = DeployerArgsBuilder::default()
             .deployer(provider.clone())
@@ -746,11 +752,11 @@ mod tests {
             .token_name("Espresso".to_string())
             .token_symbol("ESP".to_string())
             .initial_token_supply(U256::from(3590000000u64))
-            .ops_timelock_delay(U256::from(100))
+            .ops_timelock_delay(U256::from(ops_delay.as_secs()))
             .ops_timelock_admin(deployer_address)
             .ops_timelock_proposers(vec![deployer_address])
             .ops_timelock_executors(vec![deployer_address])
-            .safe_exit_timelock_delay(U256::from(200))
+            .safe_exit_timelock_delay(U256::from(safe_exit_delay.as_secs()))
             .safe_exit_timelock_admin(deployer_address)
             .safe_exit_timelock_proposers(vec![deployer_address])
             .safe_exit_timelock_executors(vec![deployer_address])
@@ -871,7 +877,7 @@ mod tests {
             ops_tl,
             TimelockDeployment::Deployed {
                 address: ops_timelock_addr,
-                min_delay: "1m 40s".to_string()
+                min_delay: ops_delay,
             }
         );
 
@@ -880,7 +886,7 @@ mod tests {
             safe_tl,
             TimelockDeployment::Deployed {
                 address: safe_exit_timelock_addr,
-                min_delay: "3m 20s".to_string()
+                min_delay: safe_exit_delay,
             }
         );
 
