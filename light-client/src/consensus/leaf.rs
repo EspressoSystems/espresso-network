@@ -303,18 +303,17 @@ impl LeafProof {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::EpochVersion;
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum, LegacyVersion};
+    use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {
         let mut proof = LeafProof::default();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(proof.push(leaves[2].clone()));
@@ -332,7 +331,7 @@ mod test {
         let mut proof = LeafProof::default();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(proof.push(leaves[2].clone()));
@@ -358,7 +357,7 @@ mod test {
 
         // Insert a single leaf. We will not be able to provide proofs ending in a leaf chain, but
         // we can return a leaf if the leaf after it is already known to be finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
+        let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert_eq!(
             proof
@@ -375,7 +374,7 @@ mod test {
 
         // Insert multiple leaves that don't chain. We will not be able to prove these are
         // finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=4).await;
+        let leaves = leaf_chain(1..=4, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[2].clone()));
 
@@ -393,7 +392,7 @@ mod test {
         let mut proof = LeafProof::default();
 
         // Insert a single leaf, plus an extra QC chain proving it finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         proof.add_qc_chain(
             Arc::new(Certificate::for_parent(leaves[1].leaf())),
@@ -413,7 +412,7 @@ mod test {
         let mut proof = LeafProof::default();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<LegacyVersion>(1..=4).await;
+        let leaves = leaf_chain(1..=4, LEGACY_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));
@@ -433,7 +432,7 @@ mod test {
 
         // Insert some leaves, forming a 2-chain but not the 3-chain required to decide in legacy
         // HotStuff.
-        let leaves = leaf_chain::<LegacyVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, LEGACY_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));

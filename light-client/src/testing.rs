@@ -14,8 +14,8 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
     v0_3::{StakeTableEvent, Validator},
-    BlockMerkleTree, EpochVersion, FeeVersion, Leaf2, NamespaceId, NodeState, NsProof, Payload,
-    PrivKey, PubKey, SeqTypes, StakeTableHash, StakeTableState, Transaction, ValidatorMap,
+    BlockMerkleTree, EpochVersion, Leaf2, NamespaceId, NodeState, NsProof, Payload, PrivKey,
+    PubKey, SeqTypes, StakeTableHash, StakeTableState, Transaction, ValidatorMap,
     BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
@@ -46,7 +46,7 @@ use jf_merkle_tree_compat::{
     prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
 };
 use rand::RngCore;
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersionType, Version};
 use versions::{version, Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
 
 use crate::{
@@ -64,8 +64,7 @@ use crate::{
 
 pub const ENABLE_EPOCHS: Upgrade = Upgrade::new(FEE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION);
 
-/// Test without epochs and with legacy HotStuff.
-pub type LegacyVersion = FeeVersion;
+pub const LEGACY_VERSION: Version = FEE_VERSION;
 
 /// Extract a chain of QCs from a chain of leaves.
 ///
@@ -81,10 +80,10 @@ pub fn qc_chain_from_leaf_chain<'a>(
 }
 
 /// Construct a valid leaf chain for the given height range.
-pub async fn leaf_chain<V: StaticVersionType + 'static>(
+pub async fn leaf_chain(
     range: impl IntoIterator<Item = u64>,
+    base: Version,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    let base = version(V::MAJOR, V::MINOR);
     custom_leaf_chain(Upgrade::trivial(base), range, |_| {}).await
 }
 
@@ -206,21 +205,22 @@ pub async fn custom_leaf_chain(
 }
 
 /// Construct a valid leaf chain during which the epoch advances.
-pub async fn epoch_change_leaf_chain<V: StaticVersionType + 'static>(
+pub async fn epoch_change_leaf_chain(
     range: impl IntoIterator<Item = u64>,
     epoch_height: u64,
+    version: Version,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_epoch_change_leaf_chain::<V>(range, epoch_height, |_| {}).await
+    custom_epoch_change_leaf_chain(range, epoch_height, version, |_| {}).await
 }
 
 /// Construct a customized leaf chain during which the epoch advances.
-pub async fn custom_epoch_change_leaf_chain<V: StaticVersionType + 'static>(
+pub async fn custom_epoch_change_leaf_chain(
     range: impl IntoIterator<Item = u64>,
     epoch_height: u64,
+    version: Version,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    let base = version(V::MAJOR, V::MINOR);
-    custom_leaf_chain(Upgrade::trivial(base), range, |proposal| {
+    custom_leaf_chain(Upgrade::trivial(version), range, |proposal| {
         if is_epoch_transition(proposal.block_header.height(), epoch_height) {
             let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.clone().into();
             let commit = data.commit();

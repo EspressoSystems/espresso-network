@@ -3,7 +3,9 @@ use std::{borrow::Cow, ops::Deref};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
-pub const VERSION_ZERO: Version = version(0, 0);
+// Known versions:
+
+pub const VERSION_0_0: Version = version(0, 0);
 pub const VERSION_0_1: Version = version(0, 1);
 pub const FEE_VERSION: Version = version(0, 2);
 pub const EPOCH_VERSION: Version = version(0, 3);
@@ -12,53 +14,39 @@ pub const DA_UPGRADE_VERSION: Version = version(0, 5);
 pub const VID2_UPGRADE_VERSION: Version = version(0, 6);
 pub const MAX_SUPPORTED_VERSION: Version = DA_UPGRADE_VERSION;
 
+// Known upgrade hashes:
+
 const UPGRADE_HASH: UpgradeHash<'static> = UpgradeHash::borrowed(&[
     1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
 ]);
 
+
+/// Version constructor.
 pub const fn version(major: u16, minor: u16) -> Version {
     Version { major, minor }
 }
 
-pub fn decode_version(bytes: &[u8]) -> Result<Version, VersionError> {
-    let major = bytes
-        .get(0..2)
-        .map(|s| u16::from_le_bytes(s.try_into().expect("2 bytes")))
-        .ok_or(VersionError::Decode)?;
-    let minor = bytes
-        .get(2..4)
-        .map(|s| u16::from_le_bytes(s.try_into().expect("2 bytes")))
-        .ok_or(VersionError::Decode)?;
-    Ok(version(major, minor))
-}
-
-pub fn encode_version(v: Version) -> [u8; 4] {
-    let mut buf = [0; 4];
-    buf[0..2].copy_from_slice(&v.major.to_le_bytes());
-    buf[2..4].copy_from_slice(&v.minor.to_le_bytes());
-    buf
-}
-
+/// Serialize a `Version` and a value.
 pub fn encode<T>(v: Version, val: T) -> Result<Vec<u8>, VersionError>
 where
     T: Serialize,
 {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&v.major.to_le_bytes()[..]);
-    buf.extend_from_slice(&v.minor.to_le_bytes()[..]);
+    let mut buf = Version::serialize(&v);
     bincode::serialize_into(&mut buf, &val)?;
     Ok(buf)
 }
 
+/// Deserialize a `Version` and a value.
 pub fn decode<T>(bytes: &[u8]) -> Result<(Version, T), VersionError>
 where
     T: DeserializeOwned,
 {
-    let version = decode_version(bytes)?;
-    let value = bincode::deserialize(&bytes[4..])?;
+    let (version, bytes) = Version::deserialize(bytes).map_err(|_| VersionError::Decode)?;
+    let value = bincode::deserialize(bytes)?;
     Ok((version, value))
 }
 
+/// A version upgrade from some base to some target version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Upgrade {
@@ -74,11 +62,16 @@ impl Upgrade {
         Self { base, target }
     }
 
+    /// A version upgrade where `base` == `target`.
     pub const fn trivial(base: Version) -> Self {
         Self { base, target: base }
     }
 
+    /// Get the upgrade hash of this `base`, `target` pair.
     pub const fn hash(&self) -> UpgradeHash<'_> {
+        // Currently only one upgrade hash is used. Eventually there could
+        // be a `match (base, target) { ... }` here that returns a unique
+        // hash per combination, or else some default hash.
         UPGRADE_HASH
     }
 }

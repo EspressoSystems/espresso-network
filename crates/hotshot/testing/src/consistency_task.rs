@@ -20,7 +20,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
-use versions::{Upgrade, VERSION_ZERO};
+use versions::{Upgrade, VERSION_0_0};
 
 use crate::{
     overall_safety_task::OverallSafetyPropertiesDescription,
@@ -88,7 +88,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
     // we cannot immediately put the upgrade certificate in the lock.
     //
     // Instead, we initialize an empty lock and add the certificate in the appropriate view.
-    let upgrade_lock = UpgradeLock::<TYPES>::new(Upgrade::trivial(VERSION_ZERO));
+    let upgrade_lock = UpgradeLock::<TYPES>::new(Upgrade::trivial(VERSION_0_0));
 
     let leaf_pairs = node_map.values().zip(node_map.values().skip(1));
 

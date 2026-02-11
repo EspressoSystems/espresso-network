@@ -1,8 +1,6 @@
 use anyhow::Context;
 use clap::Parser;
-use espresso_types::traits::SequencerPersistence;
-#[allow(unused_imports)]
-use espresso_types::{traits::NullEventConsumer, FeeVersion, V0_0};
+use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 

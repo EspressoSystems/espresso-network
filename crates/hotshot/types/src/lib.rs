@@ -254,6 +254,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub drb_difficulty: u64,
     /// number of iterations in the DRB calculation
     pub drb_upgrade_difficulty: u64,
+    /// Configured version upgrade.
     pub upgrade: Upgrade,
 }
 

@@ -772,7 +772,7 @@ pub mod testing {
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
-    use versions::{version, EPOCH_VERSION};
+    use versions::{EPOCH_VERSION, VERSION_0_1};
 
     use super::*;
     use crate::{
@@ -1133,7 +1133,7 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
-                upgrade: versions::Upgrade::trivial(version(0, 1)),
+                upgrade: versions::Upgrade::trivial(VERSION_0_1),
             };
 
             let anvil = Anvil::new()

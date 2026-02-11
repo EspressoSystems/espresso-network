@@ -26,7 +26,7 @@ use hotshot_types::{
 use tide_disco::Url;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
-use versions::VERSION_ZERO;
+use versions::VERSION_0_0;
 
 #[cfg(test)]
 #[tokio::test(flavor = "multi_thread")]
@@ -62,7 +62,7 @@ async fn test_random_block_builder() {
         // Test getting blocks
         let blocks = client
             .available_blocks(
-                vid_commitment(&[], &[], 1, VERSION_ZERO),
+                vid_commitment(&[], &[], 1, VERSION_0_0),
                 dummy_view_number,
                 pub_key,
                 &signature,

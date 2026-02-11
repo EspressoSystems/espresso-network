@@ -154,16 +154,11 @@ impl NodeType for SeqTypes {
 pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
     versions::Upgrade::new(version(0, 1), version(0, 2));
 
-pub type V0_0 = StaticVersion<0, 0>;
-pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type DaUpgradeVersion = StaticVersion<0, 5>;
 pub type Vid2UpgradeVersion = StaticVersion<0, 6>;
-
-/// The highest protocol version supported by this version of the software.
-pub type MaxSupportedVersion = DaUpgradeVersion;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;

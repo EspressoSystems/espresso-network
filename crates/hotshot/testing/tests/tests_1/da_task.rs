@@ -26,7 +26,7 @@ use hotshot_types::{
     simple_vote::DaData2,
     traits::node_implementation::{ConsensusTime},
 };
-use versions::VERSION_ZERO;
+use versions::VERSION_0_0;
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_da_task() {
@@ -35,7 +35,7 @@ async fn test_da_task() {
         build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
-    let default_version = VERSION_ZERO;
+    let default_version = VERSION_0_0;
 
     // Make some empty encoded transactions, we just care about having a commitment handy for the
     // later calls. We need the VID commitment to be able to propose later.
@@ -151,7 +151,7 @@ async fn test_da_task_storage_failure() {
     // Set the error flag here for the system handle. This causes it to emit an error on append.
     handle.storage().should_return_err.store( true, Ordering::Relaxed);
     let membership = handle.hotshot.membership_coordinator.clone();
-    let default_version = VERSION_ZERO;
+    let default_version = VERSION_0_0;
 
     // Make some empty encoded transactions, we just care about having a commitment handy for the
     // later calls. We need the VID commitment to be able to propose later.
