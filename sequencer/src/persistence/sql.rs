@@ -3658,7 +3658,7 @@ mod test {
 #[cfg(not(feature = "embedded-db"))]
 mod postgres_tests {
     use espresso_types::{FeeAccount, Header, Leaf, NodeState, Transaction as Tx};
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
         availability::BlockQueryData, data_source::storage::UpdateAvailabilityStorage,
     };
@@ -3696,9 +3696,9 @@ mod postgres_tests {
 
         let validated_state = Default::default();
         let justify_qc =
-            QuorumCertificate::genesis::<TestVersions>(&validated_state, &instance_state).await;
+            QuorumCertificate::genesis(&validated_state, &instance_state, TEST_VERSIONS.test).await;
         let view_number: ViewNumber = justify_qc.view_number + 1;
-        let parent_leaf = Leaf::genesis::<TestVersions>(&validated_state, &instance_state)
+        let parent_leaf = Leaf::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base)
             .await
             .into();
 
@@ -3707,7 +3707,7 @@ mod postgres_tests {
                 .await
                 .unwrap();
         let payload_bytes = payload.encode();
-        let payload_commitment = vid_commitment::<TestVersions>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &ns_table.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,

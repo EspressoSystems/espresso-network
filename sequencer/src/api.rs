@@ -7374,7 +7374,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, FEE_VERSION).await;
+        let mut network = TestNetwork::new(config, Upgrade::trivial(FEE_VERSION)).await;
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
