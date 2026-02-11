@@ -1184,7 +1184,11 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
                 "state not available for height {height}, view {view}"
             ))?;
 
-        retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
+        let accounts = accounts.to_vec();
+        tokio::task::spawn_blocking(move || {
+            retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
+        })
+        .await?
     }
 
     #[tracing::instrument(skip(self, _instance))]
