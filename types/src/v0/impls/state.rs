@@ -986,28 +986,33 @@ impl ValidatedState {
         )?;
 
         // total_rewards_distributed is only present in >= V4
-        let total_rewards_distributed = if version < EpochVersion::version() {
-            None
-        } else if let Some(reward_distributor) = distribute_block_reward(
-            instance,
-            &mut validated_state,
-            parent_leaf,
-            view_number,
-            version,
-        )
-        .await?
-        {
-            reward_distributor
-                .update_rewards_delta(&mut delta)
-                .context("failed to update rewards delta")?;
-
-            Some(reward_distributor.total_distributed())
+        let (total_rewards_distributed, state) = if version < EpochVersion::version() {
+            (None, validated_state)
         } else {
-            // Version >= V4 but no rewards were distributed because epoch <= first epoch + 1
-            Some(Default::default())
+            let (reward_distributor, new_validated_state) = distribute_block_reward(
+                instance,
+                validated_state,
+                parent_leaf,
+                view_number,
+                version,
+            )
+            .await?;
+            if let Some(reward_distributor) = reward_distributor {
+                reward_distributor
+                    .update_rewards_delta(&mut delta)
+                    .context("failed to update rewards delta")?;
+
+                (
+                    Some(reward_distributor.total_distributed()),
+                    new_validated_state,
+                )
+            } else {
+                // Version >= V4 but no rewards were distributed because epoch <= first epoch + 1
+                (Some(Default::default()), new_validated_state)
+            }
         };
 
-        Ok((validated_state, delta, total_rewards_distributed))
+        Ok((state, delta, total_rewards_distributed))
     }
 
     /// Updates the `ValidatedState` if a protocol upgrade has occurred.
