@@ -3814,6 +3814,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "deployment-info"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap 4.5.53",
+ "dotenvy",
+ "espresso-contract-deployer",
+ "espresso-types",
+ "hotshot-contract-adapter",
+ "hotshot-state-prover",
+ "serde",
+ "serde_json",
+ "test-log",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+ "tracing-test",
+ "url",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4374,6 +4396,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-trait",
  "clap 4.5.53",
  "derive_builder",
  "derive_more 2.1.0",
@@ -4383,6 +4406,7 @@ dependencies = [
  "hotshot-types",
  "rand 0.8.5",
  "sequencer-utils",
+ "serde",
  "serde_json",
  "surf-disco",
  "test-log",
@@ -10641,6 +10665,7 @@ dependencies = [
  "anyhow",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
+ "assert_cmd",
  "async-channel 2.5.0",
  "async-lock 3.4.1",
  "async-once-cell",
@@ -10661,6 +10686,7 @@ dependencies = [
  "espresso-contract-deployer",
  "espresso-macros",
  "espresso-types",
+ "flate2",
  "futures",
  "generic-tests",
  "hotshot",
@@ -10689,6 +10715,7 @@ dependencies = [
  "num_enum",
  "parking_lot",
  "portpicker",
+ "predicates",
  "pretty_assertions",
  "priority-queue",
  "rand 0.8.5",

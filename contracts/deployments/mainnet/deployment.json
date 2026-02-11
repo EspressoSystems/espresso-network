@@ -1,0 +1,40 @@
+{
+  "light_client": {
+    "version": "1",
+    "proxy_address": "0x95ca91cea73239b15e5d2e5a74d02d6b5e0ae458",
+    "implementation_address": "0xbe0aa3c41a906abdc48ce21a0960e8311535ca4b",
+    "owner": "0x34f5af5158171ffd2475d21db5fc3b311f221982",
+    "genesis_state": {
+      "viewNum": 0,
+      "blockHeight": 0,
+      "blockCommRoot": "0x0"
+    },
+    "genesis_stake_table_state": {
+      "threshold": "0x22",
+      "blsKeyComm": "0x373da4a156d763498b94a3e0d16a7cf30aac68a84a9bdaa6499ca1d29b2b1d7",
+      "schnorrKeyComm": "0x2c8b1d72c559f2658defbc10312d4ebfe90da3d9c4a2a66cdaae1ddaf97c9116",
+      "amountComm": "0xc5dcfcbf351b8264a4e1afbb3ee46c4801fed73713484f4077dd55d6d886c3"
+    },
+    "state_history_retention_period": 864000
+  },
+  "stake_table": null,
+  "esp_token": null,
+  "fee_contract": {
+    "proxy_address": "0x9fce21c3f7600aa63392a5f5713986b39bb98884",
+    "implementation_address": "0x8fa732a46735c99df2dd7c0d99ca97cc8a35cfbc",
+    "owner": "0x34f5af5158171ffd2475d21db5fc3b311f221982"
+  },
+  "reward_claim": null,
+  "multisig": {
+    "address": "0x34f5af5158171ffd2475d21db5fc3b311f221982",
+    "owners": [
+      "0x389b5c80a1dbe24f96beb50002cb5fbe2536e1cc",
+      "0xf4b7676d9ec86d2011ab87855424219a97deb40c",
+      "0x84ef523696eee7bc7fe102eccc8508895cd2c37e"
+    ],
+    "threshold": 2
+  },
+  "ops_timelock": null,
+  "safe_exit_timelock": null,
+  "chain_id": 1
+}
