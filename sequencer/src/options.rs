@@ -347,6 +347,12 @@ pub struct Options {
     #[clap(flatten)]
     pub catchup_backoff: BackoffParams,
 
+    /// Base timeout for catchup requests to peers.
+    ///
+    /// This is the initial per peer timeout for HTTP requests during state catchup
+    #[clap(long, env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT", default_value = "2s", value_parser = parse_duration)]
+    pub catchup_base_timeout: Duration,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 

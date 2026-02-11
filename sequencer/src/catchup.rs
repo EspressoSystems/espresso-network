@@ -132,6 +132,8 @@ pub struct StatePeers<ApiVer: StaticVersionType> {
     scores: Arc<RwLock<PriorityQueue<usize, PeerScore>>>,
     clients: Vec<Client<ServerError, ApiVer>>,
     backoff: BackoffParams,
+    /// Base timeout for per peer catchup request
+    base_timeout: Duration,
 }
 
 impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
@@ -149,11 +151,11 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // delaying catchup for a long time.
         //
         // However, if we set the timeout _too_ aggressively, we might fail to catch up even from an
-        // honest peer, and thus never make progress. Thus, we start with a timeout of 500ms, which
-        // is aggressive but still very reasonable for an HTTP request. If that fails with all of
-        // our peers, we increase the timeout by 1 second for each successive retry, until we
-        // eventually succeed.
-        let timeout_dur = Duration::from_millis(500) * (retry as u32 + 1);
+        // honest peer, and thus never make progress. Thus, we start with a base timeout (default
+        // 2s), which is reasonable for an HTTP request. If that fails with all of our peers, we
+        // increase the timeout by the base amount for each successive retry, until we eventually
+        // succeed. The base timeout is configurable via ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT.
+        let timeout_dur = self.base_timeout * (retry as u32 + 1);
 
         // Keep track of which peers we make requests to and which succeed (`true`) or fail (`false`),
         // so we can update reliability scores at the end.
@@ -218,6 +220,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     pub fn from_urls(
         urls: Vec<Url>,
         backoff: BackoffParams,
+        base_timeout: Duration,
         metrics: &(impl Metrics + ?Sized),
     ) -> Self {
         if urls.is_empty() {
@@ -242,6 +245,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
             clients,
             scores: Arc::new(RwLock::new(scores)),
             backoff,
+            base_timeout,
         }
     }
 

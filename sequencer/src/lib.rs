@@ -116,6 +116,8 @@ pub struct NetworkParams {
     pub state_peers: Vec<Url>,
     pub config_peers: Option<Vec<Url>>,
     pub catchup_backoff: BackoffParams,
+    /// Base timeout for catchup requests to peers.
+    pub catchup_base_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
 
@@ -364,6 +366,7 @@ where
             let peers = StatePeers::<SequencerApiVersion>::from_urls(
                 peers,
                 network_params.catchup_backoff,
+                network_params.catchup_base_timeout,
                 &NoMetrics,
             );
             let config = peers.fetch_config(validator_config.clone()).await?;
@@ -562,6 +565,7 @@ where
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
         network_params.state_peers,
         network_params.catchup_backoff,
+        network_params.catchup_base_timeout,
         metrics,
     );
     state_catchup_providers.add_provider(Arc::new(state_peers));

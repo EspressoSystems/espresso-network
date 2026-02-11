@@ -79,6 +79,7 @@ where
         state_peers: opt.state_peers,
         config_peers: opt.config_peers,
         catchup_backoff: opt.catchup_backoff,
+        catchup_base_timeout: opt.catchup_base_timeout,
         libp2p_history_gossip: opt.libp2p_history_gossip,
         libp2p_history_length: opt.libp2p_history_length,
         libp2p_max_ihave_length: opt.libp2p_max_ihave_length,

@@ -3,52 +3,86 @@
 use std::{fmt, str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
+use clap::{ArgAction, Args as ClapArgs};
 use hotshot_types::signature_key::BLSPubKey;
+use thiserror::Error;
 use url::Url;
 
 // Re-export types from submodules for convenience
 pub use crate::metadata_types::NodeMetadataContent;
 pub use crate::openmetrics::parse_openmetrics;
 
+/// Errors that can occur when fetching or parsing metadata.
+///
+/// Error variants indicate what was attempted:
+/// - `SchemaError`: Content was valid JSON syntax but didn't match our schema.
+///   OpenMetrics parsing was not attempted because JSON syntax was valid.
+/// - `BothFormatsFailed`: Content had invalid JSON syntax, so both JSON and
+///   OpenMetrics parsing were attempted and both failed.
+#[derive(Debug, Error)]
+pub enum MetadataError {
+    /// Valid JSON syntax but doesn't match the expected schema.
+    ///
+    /// This means the content parsed as JSON but was missing required fields
+    /// (like `pub_key`) or had incorrect types. OpenMetrics parsing was not
+    /// attempted because the content was valid JSON.
+    #[error("valid JSON but incorrect schema: {0}")]
+    SchemaError(#[source] serde_json::Error),
+
+    /// Neither JSON nor OpenMetrics parsing succeeded.
+    ///
+    /// This means the content had invalid JSON syntax, so we tried parsing
+    /// as OpenMetrics format but that also failed.
+    #[error("failed to parse as JSON ({json_error}) or OpenMetrics ({openmetrics_error})")]
+    BothFormatsFailed {
+        json_error: serde_json::Error,
+        openmetrics_error: anyhow::Error,
+    },
+
+    /// Response body was empty.
+    #[error("empty response body")]
+    EmptyBody,
+
+    /// HTTP or network error occurred while fetching.
+    #[error("failed to fetch metadata")]
+    FetchError(#[from] reqwest::Error),
+}
+
 /// Fetch metadata from a URI, auto-detecting JSON vs OpenMetrics format.
 ///
 /// Format detection:
-/// - If Content-Type header contains "application/json", parse as JSON
-/// - Otherwise, parse as OpenMetrics/Prometheus format
-pub async fn fetch_metadata(url: &Url) -> Result<NodeMetadataContent> {
+/// - Ignores Content-Type header (some hosts like GitHub raw serve JSON as text/plain)
+/// - Always tries JSON parsing first
+/// - Falls back to OpenMetrics/Prometheus format if JSON fails
+pub async fn fetch_metadata(url: &Url) -> Result<NodeMetadataContent, MetadataError> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .context("failed to build HTTP client")?;
+        .build()?;
 
-    let response = client
-        .get(url.as_str())
-        .send()
-        .await
-        .with_context(|| format!("failed to fetch metadata from {url}"))?
-        .error_for_status()
-        .context("metadata URI returned error status")?;
+    let response = client.get(url.as_str()).send().await?.error_for_status()?;
 
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let text = response.text().await?;
 
-    let is_json = content_type.contains("application/json");
+    if text.is_empty() {
+        return Err(MetadataError::EmptyBody);
+    }
 
-    if is_json {
-        response
-            .json()
-            .await
-            .context("failed to parse metadata as JSON")
-    } else {
-        let text = response
-            .text()
-            .await
-            .context("failed to read response body")?;
-        parse_openmetrics(&text)
+    // Parse in two explicit steps:
+    // 1. Validate JSON syntax
+    // 2. Validate schema
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(json_value) => {
+            // Valid JSON syntax, now try our schema
+            serde_json::from_value(json_value).map_err(MetadataError::SchemaError)
+        },
+        Err(json_err) => {
+            // Not valid JSON, try OpenMetrics
+            parse_openmetrics(&text).map_err(|openmetrics_error| MetadataError::BothFormatsFailed {
+                json_error: json_err,
+                openmetrics_error,
+            })
+        },
     }
 }
 
@@ -57,7 +91,9 @@ pub async fn validate_metadata_uri(
     uri: &Url,
     expected_pub_key: &BLSPubKey,
 ) -> Result<NodeMetadataContent> {
-    let content = fetch_metadata(uri).await?;
+    let content = fetch_metadata(uri)
+        .await
+        .with_context(|| format!("from {uri}"))?;
 
     if &content.pub_key != expected_pub_key {
         bail!(
@@ -113,11 +149,139 @@ impl fmt::Display for MetadataUri {
     }
 }
 
+/// Custom value parser for metadata URIs that enforces 2048 byte limit.
+///
+/// While HTTP specs don't mandate a URL length limit, most browsers and servers
+/// support at least 2048 characters. This practical limit ensures compatibility
+/// across different HTTP clients and servers.
+fn parse_metadata_url(s: &str) -> Result<Url, String> {
+    let url = Url::parse(s).map_err(|e| e.to_string())?;
+    if url.as_str().len() > 2048 {
+        return Err("metadata URI cannot exceed 2048 bytes".to_string());
+    }
+    Ok(url)
+}
+
+/// Command-line arguments for specifying validator metadata.
+#[derive(ClapArgs, Debug, Clone)]
+pub struct MetadataUriArgs {
+    /// URL where validator metadata is hosted (JSON or OpenMetrics format).
+    #[clap(
+        long,
+        env = "METADATA_URI",
+        required_unless_present = "no_metadata_uri",
+        conflicts_with = "no_metadata_uri",
+        value_parser = parse_metadata_url
+    )]
+    pub metadata_uri: Option<Url>,
+
+    /// Register without a metadata URI.
+    // Provided as separate flag to prevent accidental omission of metadata URI.
+    #[clap(long, env = "NO_METADATA_URI", conflicts_with = "metadata_uri")]
+    pub no_metadata_uri: bool,
+
+    /// Skip metadata URI validation (fetch and schema check).
+    #[clap(
+        long,
+        env = "SKIP_METADATA_VALIDATION",
+        action = ArgAction::SetTrue,
+        conflicts_with = "no_metadata_uri",
+        requires = "metadata_uri"
+    )]
+    pub skip_metadata_validation: bool,
+}
+
+impl TryFrom<MetadataUriArgs> for MetadataUri {
+    type Error = anyhow::Error;
+
+    fn try_from(args: MetadataUriArgs) -> Result<Self> {
+        match args.metadata_uri {
+            Some(url) => Self::try_from(url),
+            None => Ok(Self::empty()),
+        }
+    }
+}
+
 #[cfg(test)]
 fn generate_bls_pub_key() -> BLSPubKey {
     use jf_signature::bls_over_bn254::KeyPair;
     let keypair = KeyPair::generate(&mut rand::thread_rng());
     BLSPubKey::from(keypair.ver_key())
+}
+
+#[cfg(test)]
+mod metadata_uri_args_tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_uri_args_with_url() {
+        let args = MetadataUriArgs {
+            metadata_uri: Some(Url::parse("https://example.com/metadata.json").unwrap()),
+            no_metadata_uri: false,
+            skip_metadata_validation: false,
+        };
+        assert_eq!(
+            args.metadata_uri.as_ref().map(|u| u.as_str()),
+            Some("https://example.com/metadata.json")
+        );
+    }
+
+    #[test]
+    fn test_metadata_uri_args_with_no_metadata() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            no_metadata_uri: true,
+            skip_metadata_validation: false,
+        };
+        assert!(args.metadata_uri.is_none());
+        assert!(args.no_metadata_uri);
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_metadata_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: Some(Url::parse("https://example.com/metadata.json").unwrap()),
+            no_metadata_uri: false,
+            skip_metadata_validation: false,
+        };
+        let metadata_uri = MetadataUri::try_from(args).unwrap();
+        assert_eq!(
+            metadata_uri.url().map(|u| u.as_str()),
+            Some("https://example.com/metadata.json")
+        );
+    }
+
+    #[test]
+    fn test_metadata_uri_args_to_empty_metadata_uri() {
+        let args = MetadataUriArgs {
+            metadata_uri: None,
+            no_metadata_uri: true,
+            skip_metadata_validation: false,
+        };
+        let metadata_uri = MetadataUri::try_from(args).unwrap();
+        assert!(metadata_uri.url().is_none());
+    }
+
+    #[test]
+    fn test_parse_metadata_url_valid() {
+        let url = parse_metadata_url("https://example.com/metadata").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/metadata");
+    }
+
+    #[test]
+    fn test_parse_metadata_url_too_long() {
+        let long_path = "a".repeat(2100);
+        let url_str = format!("https://example.com/{}", long_path);
+        let result = parse_metadata_url(&url_str);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot exceed 2048 bytes"));
+    }
+
+    #[test]
+    fn test_parse_metadata_url_invalid() {
+        let result = parse_metadata_url("not a url");
+        assert!(result.is_err());
+    }
 }
 
 #[cfg(test)]
@@ -242,8 +406,10 @@ mod test {
         });
 
         let result: Result<NodeMetadataContent, _> = serde_json::from_value(json);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("pub_key"));
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("missing field"));
+        assert!(err_msg.contains("pub_key"));
     }
 
     #[test]
@@ -269,6 +435,7 @@ mod test {
 
 #[cfg(all(test, feature = "testing"))]
 mod validation_tests {
+    use pretty_assertions::assert_matches;
     use warp::Filter;
 
     use super::*;
@@ -288,12 +455,12 @@ mod validation_tests {
         };
         let json_body = serde_json::to_string(&metadata).unwrap();
 
-        let route = warp::path("metadata").map(move || {
+        let route = warp::any().map(move || {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
         let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -317,34 +484,59 @@ mod validation_tests {
         };
         let json_body = serde_json::to_string(&metadata).unwrap();
 
-        let route = warp::path("metadata").map(move || {
+        let route = warp::any().map(move || {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
         let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("pub_key mismatch"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_validate_metadata_not_json_parses_as_openmetrics() {
-        // When content-type is not JSON, we try to parse as OpenMetrics
-        // HTML content will fail OpenMetrics parsing
-        let route = warp::path("metadata")
-            .map(|| warp::reply::with_header("<html>Not JSON</html>", "content-type", "text/html"));
+    async fn test_fetch_metadata_json_with_text_plain_content_type() {
+        // Test that JSON parses correctly even with text/plain content-type (GitHub raw scenario)
+        let bls_vk = generate_bls_pub_key();
+        let metadata = NodeMetadataContent {
+            pub_key: bls_vk,
+            name: Some("Text Plain JSON".to_string()),
+            description: None,
+            company_name: None,
+            company_website: None,
+            client_version: None,
+            icon: None,
+        };
+        let json_body = serde_json::to_string(&metadata).unwrap();
+
+        let route = warp::any()
+            .map(move || warp::reply::with_header(json_body.clone(), "content-type", "text/plain"));
 
         let port = serve_on_random_port(route).await;
-        let bls_vk = generate_bls_pub_key();
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        let content = fetch_metadata(&uri).await.unwrap();
+        assert_eq!(content.pub_key, bls_vk);
+        assert_eq!(content.name, Some("Text Plain JSON".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fetch_metadata_invalid_both_formats_shows_both_errors() {
+        // Test that error message shows both JSON and OpenMetrics parsing failures
+        let invalid_content = "This is neither valid JSON nor OpenMetrics";
+
+        let route = warp::any()
+            .map(move || warp::reply::with_header(invalid_content, "content-type", "text/plain"));
+
+        let port = serve_on_random_port(route).await;
         let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
-        let result = validate_metadata_uri(&uri, &bls_vk).await;
-        assert!(result.is_err());
-        // Now it fails on OpenMetrics parsing (missing consensus_node metric)
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing required consensus_node metric"));
+        let err = fetch_metadata(&uri).await.unwrap_err();
+
+        assert_matches!(err, MetadataError::BothFormatsFailed { .. });
+        // Error message should mention both JSON and OpenMetrics failures
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("failed to parse as JSON"));
+        assert!(err_msg.contains("OpenMetrics"));
     }
 
     #[tokio::test]
@@ -354,10 +546,50 @@ mod validation_tests {
         let uri = Url::parse("http://10.255.255.1:12345/metadata").unwrap();
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("failed to fetch metadata from"));
+        let err = result.unwrap_err();
+
+        // Error chain should include the URL context and the base fetch error
+        let err_chain = format!("{:#}", err); // Display full error chain
+        assert!(err_chain.contains("from http://10.255.255.1:12345/metadata"));
+        assert!(err_chain.contains("failed to fetch metadata"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_validate_metadata_uri_includes_url_context_for_schema_error() {
+        // Valid JSON but wrong schema - verify URL appears in error
+        let invalid_json = r#"{"name": "Service", "version": "1.0"}"#;
+        let route = warp::any().map(move || {
+            warp::reply::with_header(invalid_json, "content-type", "application/json")
+        });
+
+        let port = serve_on_random_port(route).await;
+        let bls_vk = generate_bls_pub_key();
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/test-path", port)).unwrap();
+        let err = validate_metadata_uri(&uri, &bls_vk).await.unwrap_err();
+
+        // Error should include URL context from validate_metadata_uri
+        let err_msg = format!("{:#}", err);
+        assert!(err_msg.contains(&format!("from http://127.0.0.1:{}/test-path", port)));
+        assert!(err_msg.contains("valid JSON but incorrect schema"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_validate_metadata_uri_includes_url_context_for_both_formats_failed() {
+        // Invalid content - verify URL appears in error
+        let invalid_content = "<html>Not JSON or OpenMetrics</html>";
+        let route = warp::any()
+            .map(move || warp::reply::with_header(invalid_content, "content-type", "text/html"));
+
+        let port = serve_on_random_port(route).await;
+        let bls_vk = generate_bls_pub_key();
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/custom-endpoint", port)).unwrap();
+        let err = validate_metadata_uri(&uri, &bls_vk).await.unwrap_err();
+
+        // Error should include URL context from validate_metadata_uri
+        let err_msg = format!("{:#}", err);
+        assert!(err_msg.contains(&format!("from http://127.0.0.1:{}/custom-endpoint", port)));
+        assert!(err_msg.contains("failed to parse as JSON"));
+        assert!(err_msg.contains("OpenMetrics"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -374,12 +606,12 @@ mod validation_tests {
         };
         let json_body = serde_json::to_string(&metadata).unwrap();
 
-        let route = warp::path("metadata").map(move || {
+        let route = warp::any().map(move || {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
         let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
         let content = fetch_metadata(&uri).await.unwrap();
         assert_eq!(content.pub_key, bls_vk);
         assert_eq!(content.name, Some("JSON Validator".to_string()));
@@ -399,7 +631,7 @@ consensus_node_identity_general{{name="OpenMetrics Validator",company_name="Test
             bls_vk
         );
 
-        let route = warp::path("metrics").map(move || {
+        let route = warp::any().map(move || {
             warp::reply::with_header(
                 metrics_body.clone(),
                 "content-type",
@@ -408,7 +640,7 @@ consensus_node_identity_general{{name="OpenMetrics Validator",company_name="Test
         });
 
         let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/metrics", port)).unwrap();
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
         let content = fetch_metadata(&uri).await.unwrap();
         assert_eq!(content.pub_key, bls_vk);
         assert_eq!(content.name, Some("OpenMetrics Validator".to_string()));
@@ -457,5 +689,38 @@ consensus_node_identity_general{{name="OpenMetrics Validator",company_name="Test
         let content = fetch_metadata(&uri).await.unwrap();
         assert_eq!(content.pub_key, bls_vk);
         assert_eq!(content.name, Some("Redirected Validator".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fetch_metadata_empty_body() {
+        let route =
+            warp::any().map(|| warp::reply::with_header("", "content-type", "application/json"));
+
+        let port = serve_on_random_port(route).await;
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let err = fetch_metadata(&uri).await.unwrap_err();
+
+        assert_matches!(err, MetadataError::EmptyBody);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fetch_metadata_valid_json_wrong_schema() {
+        // Valid JSON but doesn't match NodeMetadataContent schema
+        let invalid_json = r#"{"name": "Some Service", "version": "1.0"}"#;
+
+        let route = warp::any().map(move || {
+            warp::reply::with_header(invalid_json, "content-type", "application/json")
+        });
+
+        let port = serve_on_random_port(route).await;
+        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let err = fetch_metadata(&uri).await.unwrap_err();
+
+        assert_matches!(err, MetadataError::SchemaError(_));
+        // Should mention the schema validation error with missing required field
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("valid JSON but incorrect schema"));
+        assert!(err_msg.contains("missing field"));
+        assert!(err_msg.contains("pub_key"));
     }
 }
