@@ -1,4 +1,4 @@
-# fetched at block 10299836 (2026-02-20T13:55:48Z)
+# fetched at block 10439344 (2026-03-13T13:31:00Z)
 network = "decaf"
 
 [multisigs.espresso_labs]
@@ -25,8 +25,8 @@ min_delay = "10m"
 [stake_table]
 status = "deployed"
 address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
-owner_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
-owner_name = "espresso_labs"
+default_admin_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+default_admin_name = "espresso_labs"
 version = "2.0.0"
 pauser_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
 pauser_name = "espresso_labs"
@@ -55,8 +55,8 @@ version = "1.0.0"
 [reward_claim]
 status = "deployed"
 address = "0xe81908e34dbb4ba01f27f8769264199727be50c8"
-owner_address = "0x0eb0ef3b5a46a444c38da452055bddb273550d5c"
-owner_name = "safe_exit_timelock"
+default_admin_address = "0x0eb0ef3b5a46a444c38da452055bddb273550d5c"
+default_admin_name = "safe_exit_timelock"
 version = "1.0.0"
 pauser_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
 pauser_name = "espresso_labs"

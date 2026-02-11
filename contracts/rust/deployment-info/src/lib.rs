@@ -64,14 +64,6 @@ enum Network {
 }
 
 impl Network {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Network::Decaf => "decaf",
-            Network::Hoodi => "hoodi",
-            Network::Mainnet => "mainnet",
-        }
-    }
-
     fn default_rpc_url(&self) -> Url {
         match self {
             Network::Decaf => "https://ethereum-sepolia-rpc.publicnode.com",
@@ -101,7 +93,11 @@ impl Network {
 
 impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        match self {
+            Network::Decaf => f.write_str("decaf"),
+            Network::Hoodi => f.write_str("hoodi"),
+            Network::Mainnet => f.write_str("mainnet"),
+        }
     }
 }
 
@@ -240,16 +236,26 @@ struct RoleHolder {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
-enum ContractDeployment {
+enum OwnableDeployment {
     Deployed {
         address: Address,
         owner_address: Address,
         owner_name: String,
         version: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pauser_address: Option<Address>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pauser_name: Option<String>,
+    },
+    NotYetDeployed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+enum AccessControlDeployment {
+    Deployed {
+        address: Address,
+        default_admin_address: Address,
+        default_admin_name: String,
+        version: String,
+        pauser_address: Address,
+        pauser_name: String,
     },
     NotYetDeployed,
 }
@@ -279,11 +285,11 @@ struct DeploymentInfo {
     multisigs: BTreeMap<String, MultisigDeployment>,
     ops_timelock: TimelockDeployment,
     safe_exit_timelock: TimelockDeployment,
-    stake_table: ContractDeployment,
-    esp_token: ContractDeployment,
-    light_client: ContractDeployment,
-    fee_contract: ContractDeployment,
-    reward_claim: ContractDeployment,
+    esp_token: OwnableDeployment,
+    fee_contract: OwnableDeployment,
+    light_client: OwnableDeployment,
+    reward_claim: AccessControlDeployment,
+    stake_table: AccessControlDeployment,
 }
 
 fn get_crate_dir() -> PathBuf {
@@ -299,21 +305,19 @@ fn load_addresses_from_env_file(path: &Path) -> Result<DeploymentAddresses> {
         })
         .collect();
 
-    fn parse_address(env_map: &HashMap<String, String>, key: &str) -> Option<Address> {
-        env_map.get(key).and_then(|val| {
-            if val.is_empty() {
-                tracing::warn!("{} is set but empty", key);
-                None
-            } else {
-                match val.parse() {
-                    Ok(addr) => Some(addr),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse {} with value '{}': {}", key, val, e);
-                        None
-                    },
-                }
-            }
-        })
+    fn parse_address(env_map: &HashMap<String, String>, key: &str) -> Result<Option<Address>> {
+        match env_map.get(key) {
+            None => Ok(None),
+            Some(val) if val.is_empty() => {
+                bail!("{key} is set but empty")
+            },
+            Some(val) => {
+                let addr = val
+                    .parse()
+                    .with_context(|| format!("Failed to parse {key} with value '{val}'"))?;
+                Ok(Some(addr))
+            },
+        }
     }
 
     let mut multisigs = HashMap::new();
@@ -323,49 +327,36 @@ fn load_addresses_from_env_file(path: &Path) -> Result<DeploymentAddresses> {
             .and_then(|s| s.strip_suffix(MULTISIG_SUFFIX))
         {
             let name = name.to_lowercase();
-            if let Some(addr) = parse_address(&env_map, key) {
+            if let Some(addr) = parse_address(&env_map, key)? {
                 multisigs.insert(name, addr);
             }
         }
     }
 
     Ok(DeploymentAddresses {
-        stake_table: parse_address(&env_map, STAKE_TABLE_PROXY_ADDRESS),
-        esp_token: parse_address(&env_map, ESP_TOKEN_PROXY_ADDRESS),
-        light_client: parse_address(&env_map, LIGHT_CLIENT_PROXY_ADDRESS),
-        fee_contract: parse_address(&env_map, FEE_CONTRACT_PROXY_ADDRESS),
-        reward_claim: parse_address(&env_map, REWARD_CLAIM_PROXY_ADDRESS),
+        stake_table: parse_address(&env_map, STAKE_TABLE_PROXY_ADDRESS)?,
+        esp_token: parse_address(&env_map, ESP_TOKEN_PROXY_ADDRESS)?,
+        light_client: parse_address(&env_map, LIGHT_CLIENT_PROXY_ADDRESS)?,
+        fee_contract: parse_address(&env_map, FEE_CONTRACT_PROXY_ADDRESS)?,
+        reward_claim: parse_address(&env_map, REWARD_CLAIM_PROXY_ADDRESS)?,
         multisigs,
-        ops_timelock: parse_address(&env_map, OPS_TIMELOCK_ADDRESS),
-        safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_ADDRESS),
+        ops_timelock: parse_address(&env_map, OPS_TIMELOCK_ADDRESS)?,
+        safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_ADDRESS)?,
     })
 }
 
-struct DeploymentQuerier<P: Provider> {
-    provider: P,
+struct DeploymentQuerier<'a, P: Provider> {
+    provider: &'a P,
     known: KnownAddresses,
     block_id: BlockId,
 }
 
-impl<P: Provider> DeploymentQuerier<P> {
-    fn new(provider: P, known: KnownAddresses, block_number: u64) -> Self {
+impl<'a, P: Provider> DeploymentQuerier<'a, P> {
+    fn new(provider: &'a P, known: KnownAddresses, block_number: u64) -> Self {
         Self {
             provider,
             known,
             block_id: BlockId::number(block_number),
-        }
-    }
-
-    async fn get_owner(&self, addr: Address, contract_type: ContractType) -> Result<Address> {
-        match contract_type {
-            ContractType::StakeTable | ContractType::RewardClaim => self
-                .find_role_holder(addr, AccessControlRole::DefaultAdmin)
-                .await
-                .context(format!("owner of {contract_type}")),
-            _ => {
-                let contract = IOwnable::new(addr, &self.provider);
-                Ok(contract.owner().block(self.block_id).call().await?)
-            },
         }
     }
 
@@ -376,7 +367,7 @@ impl<P: Provider> DeploymentQuerier<P> {
         contract_addr: Address,
         role: AccessControlRole,
     ) -> Result<Address> {
-        let contract = IAccessControl::new(contract_addr, &self.provider);
+        let contract = IAccessControl::new(contract_addr, self.provider);
         let role_hash = role.hash();
         let mut holders = Vec::new();
         for addr in self.known.keys() {
@@ -402,121 +393,140 @@ impl<P: Provider> DeploymentQuerier<P> {
         }
     }
 
-    async fn get_pauser(
-        &self,
-        contract_addr: Address,
-        contract_type: ContractType,
-    ) -> Result<Option<Address>> {
-        match contract_type {
-            ContractType::StakeTable => self
-                .find_role_holder(contract_addr, AccessControlRole::Pauser)
-                .await
-                .map(Some)
-                .context(format!("pauser of {contract_type}")),
-            ContractType::RewardClaim => {
-                match self
-                    .find_role_holder(contract_addr, AccessControlRole::Pauser)
-                    .await
-                {
-                    Ok(addr) => Ok(Some(addr)),
-                    Err(e) => {
-                        tracing::warn!("PAUSER_ROLE lookup failed, older RewardClaim version: {e}");
-                        Ok(None)
-                    },
-                }
-            },
-            _ => Ok(None),
-        }
+    async fn get_version(&self, addr: Address) -> Result<String> {
+        let v = IVersioned::new(addr, self.provider)
+            .getVersion()
+            .block(self.block_id)
+            .call()
+            .await?;
+        Ok(format!("{}.{}.{}", v._0, v._1, v._2))
     }
 
-    fn resolve_role_holder(&self, addr: Address, context: &str) -> Result<RoleHolder> {
-        let name = if addr == Address::ZERO {
-            tracing::debug!("  {context} is zero address, using \"none\"");
-            "none".to_string()
-        } else {
-            self.known.resolve(addr).context(context.to_string())?
-        };
+    fn resolve_role_holder(&self, addr: Address) -> Result<RoleHolder> {
+        let name = self.known.resolve(addr)?;
         Ok(RoleHolder {
             address: addr,
             name,
         })
     }
 
-    async fn query_contract(
+    async fn query_ownable(
         &self,
         addr: Address,
         contract_type: ContractType,
-    ) -> Result<ContractDeployment> {
+    ) -> Result<OwnableDeployment> {
         tracing::info!("querying {contract_type} at {addr}");
 
-        tracing::debug!("  fetching owner");
-        let owner_addr = self.get_owner(addr, contract_type).await?;
-
-        tracing::debug!("  fetching version");
-        let v = IVersioned::new(addr, &self.provider)
-            .getVersion()
+        let owner_addr = IOwnable::new(addr, self.provider)
+            .owner()
             .block(self.block_id)
             .call()
             .await?;
-        let version = format!("{}.{}.{}", v._0, v._1, v._2);
+        let version = self.get_version(addr).await?;
 
-        let owner = self.resolve_role_holder(owner_addr, &format!("owner of {contract_type}"))?;
+        let owner = self
+            .resolve_role_holder(owner_addr)
+            .context(format!("owner of {contract_type}"))?;
 
-        tracing::debug!("  fetching pauser");
-        let pauser_addr = self.get_pauser(addr, contract_type).await?;
-        let pauser = pauser_addr
-            .map(|pa| self.resolve_role_holder(pa, &format!("pauser of {contract_type}")))
-            .transpose()?;
+        tracing::info!("  owner={} version={version}", owner.name);
 
-        let pauser_display = pauser.as_ref().map(|p| p.name.as_str()).unwrap_or("none");
-        tracing::info!(
-            "  owner={} version={version} pauser={pauser_display}",
-            owner.name
-        );
-
-        Ok(ContractDeployment::Deployed {
+        Ok(OwnableDeployment::Deployed {
             address: addr,
             owner_address: owner.address,
             owner_name: owner.name,
             version,
-            pauser_address: pauser.as_ref().map(|p| p.address),
-            pauser_name: pauser.map(|p| p.name),
         })
     }
 
-    async fn query_optional(
+    async fn query_access_control(
         &self,
-        addr: Option<Address>,
+        addr: Address,
         contract_type: ContractType,
-    ) -> Result<ContractDeployment> {
-        match addr {
-            Some(addr) => self
-                .query_contract(addr, contract_type)
+    ) -> Result<AccessControlDeployment> {
+        tracing::info!("querying {contract_type} at {addr}");
+
+        let admin_addr = self
+            .find_role_holder(addr, AccessControlRole::DefaultAdmin)
+            .await
+            .context(format!("default admin of {contract_type}"))?;
+        let version = self.get_version(addr).await?;
+
+        let admin = self
+            .resolve_role_holder(admin_addr)
+            .context(format!("default admin of {contract_type}"))?;
+
+        let pauser_addr = match contract_type {
+            ContractType::StakeTable | ContractType::RewardClaim => self
+                .find_role_holder(addr, AccessControlRole::Pauser)
                 .await
-                .with_context(|| format!("Failed to query {contract_type} at {addr}")),
-            None => Ok(ContractDeployment::NotYetDeployed),
-        }
+                .context(format!("pauser of {contract_type}"))?,
+            other => bail!("{other} is not an AccessControl contract"),
+        };
+        let pauser = self
+            .resolve_role_holder(pauser_addr)
+            .context(format!("pauser of {contract_type}"))?;
+
+        tracing::info!(
+            "  default_admin={} version={version} pauser={}",
+            admin.name,
+            pauser.name
+        );
+
+        Ok(AccessControlDeployment::Deployed {
+            address: addr,
+            default_admin_address: admin.address,
+            default_admin_name: admin.name,
+            version,
+            pauser_address: pauser.address,
+            pauser_name: pauser.name,
+        })
     }
-}
 
-async fn get_timelock_info<P: Provider>(
-    provider: &P,
-    addr: Address,
-    block_id: BlockId,
-) -> Result<TimelockDeployment> {
-    let min_delay_secs: u64 = ITimelock::new(addr, provider)
-        .getMinDelay()
-        .block(block_id)
-        .call()
-        .await?
-        .try_into()
-        .context("min_delay exceeds u64")?;
-    let min_delay = Duration::from_secs(min_delay_secs);
+    async fn query_multisig(&self, name: &str, addr: Address) -> Result<MultisigDeployment> {
+        let contract = ISafe::new(addr, self.provider);
+        let version = contract
+            .VERSION()
+            .block(self.block_id)
+            .call()
+            .await
+            .with_context(|| format!("Failed to get VERSION for multisig '{name}' at {addr}"))?;
+        let owners = contract
+            .getOwners()
+            .block(self.block_id)
+            .call()
+            .await
+            .with_context(|| format!("Failed to get owners for multisig '{name}' at {addr}"))?;
+        let threshold: u64 = contract
+            .getThreshold()
+            .block(self.block_id)
+            .call()
+            .await
+            .with_context(|| format!("Failed to get threshold for multisig '{name}' at {addr}"))?
+            .try_into()
+            .context("threshold exceeds u64")?;
+        Ok(MultisigDeployment {
+            address: addr,
+            version,
+            owners,
+            threshold,
+        })
+    }
 
-    Ok(TimelockDeployment::Deployed {
-        address: addr,
-        min_delay,
-    })
+    async fn query_timelock(&self, addr: Address) -> Result<TimelockDeployment> {
+        let min_delay_secs: u64 = ITimelock::new(addr, self.provider)
+            .getMinDelay()
+            .block(self.block_id)
+            .call()
+            .await?
+            .try_into()
+            .context("min_delay exceeds u64")?;
+        let min_delay = Duration::from_secs(min_delay_secs);
+
+        Ok(TimelockDeployment::Deployed {
+            address: addr,
+            min_delay,
+        })
+    }
 }
 
 struct CollectedDeployment {
@@ -543,73 +553,67 @@ async fn collect_deployment_info(
         .context("Block not found")?;
     let block_timestamp = block.header.timestamp;
 
-    let block_id = BlockId::number(block_number);
     let known = KnownAddresses::from_deployment(&addresses);
-    let querier = DeploymentQuerier::new(provider.clone(), known, block_number);
+    let querier = DeploymentQuerier::new(&provider, known, block_number);
 
     let mut multisigs = BTreeMap::new();
     for (name, addr) in &addresses.multisigs {
-        let contract = ISafe::new(*addr, &provider);
-        let version = contract
-            .VERSION()
-            .block(block_id)
-            .call()
-            .await
-            .with_context(|| format!("Failed to get VERSION for multisig '{name}' at {addr}"))?;
-        let owners = contract
-            .getOwners()
-            .block(block_id)
-            .call()
-            .await
-            .with_context(|| format!("Failed to get owners for multisig '{name}' at {addr}"))?;
-        let threshold: u64 = contract
-            .getThreshold()
-            .block(block_id)
-            .call()
-            .await
-            .with_context(|| format!("Failed to get threshold for multisig '{name}' at {addr}"))?
-            .try_into()
-            .context("threshold exceeds u64")?;
-        multisigs.insert(
-            name.clone(),
-            MultisigDeployment {
-                address: *addr,
-                version,
-                owners,
-                threshold,
-            },
-        );
+        let deployment = querier.query_multisig(name, *addr).await?;
+        multisigs.insert(name.clone(), deployment);
     }
 
     let ops_timelock = match addresses.ops_timelock {
-        Some(addr) => get_timelock_info(&provider, addr, block_id)
+        Some(addr) => querier
+            .query_timelock(addr)
             .await
             .with_context(|| format!("Failed to query OpsTimelock at {addr}"))?,
         None => TimelockDeployment::NotYetDeployed,
     };
 
     let safe_exit_timelock = match addresses.safe_exit_timelock {
-        Some(addr) => get_timelock_info(&provider, addr, block_id)
+        Some(addr) => querier
+            .query_timelock(addr)
             .await
             .with_context(|| format!("Failed to query SafeExitTimelock at {addr}"))?,
         None => TimelockDeployment::NotYetDeployed,
     };
 
-    let stake_table = querier
-        .query_optional(addresses.stake_table, ContractType::StakeTable)
-        .await?;
-    let esp_token = querier
-        .query_optional(addresses.esp_token, ContractType::EspToken)
-        .await?;
-    let light_client = querier
-        .query_optional(addresses.light_client, ContractType::LightClient)
-        .await?;
-    let fee_contract = querier
-        .query_optional(addresses.fee_contract, ContractType::FeeContract)
-        .await?;
-    let reward_claim = querier
-        .query_optional(addresses.reward_claim, ContractType::RewardClaim)
-        .await?;
+    let esp_token = match addresses.esp_token {
+        Some(addr) => querier.query_ownable(addr, ContractType::EspToken).await?,
+        None => OwnableDeployment::NotYetDeployed,
+    };
+    let fee_contract = match addresses.fee_contract {
+        Some(addr) => {
+            querier
+                .query_ownable(addr, ContractType::FeeContract)
+                .await?
+        },
+        None => OwnableDeployment::NotYetDeployed,
+    };
+    let light_client = match addresses.light_client {
+        Some(addr) => {
+            querier
+                .query_ownable(addr, ContractType::LightClient)
+                .await?
+        },
+        None => OwnableDeployment::NotYetDeployed,
+    };
+    let reward_claim = match addresses.reward_claim {
+        Some(addr) => {
+            querier
+                .query_access_control(addr, ContractType::RewardClaim)
+                .await?
+        },
+        None => AccessControlDeployment::NotYetDeployed,
+    };
+    let stake_table = match addresses.stake_table {
+        Some(addr) => {
+            querier
+                .query_access_control(addr, ContractType::StakeTable)
+                .await?
+        },
+        None => AccessControlDeployment::NotYetDeployed,
+    };
 
     Ok(CollectedDeployment {
         info: DeploymentInfo {
@@ -724,6 +728,20 @@ fn address_link(addr: Address, etherscan_url: &str) -> String {
     format!("[`{addr}`]({etherscan_url}/address/{addr})")
 }
 
+fn contract_row(
+    name: &str,
+    address: Address,
+    version: &str,
+    owner: &str,
+    pauser: &str,
+    etherscan: &str,
+) -> String {
+    format!(
+        "| {name} | {} | {version} | {owner} | {pauser} |\n",
+        address_link(address, etherscan),
+    )
+}
+
 fn generate_deployment_table(info: &DeploymentInfo) -> String {
     let etherscan = info.network.etherscan_base_url();
     let mut out = format!("### {}\n\n", info.network);
@@ -731,31 +749,47 @@ fn generate_deployment_table(info: &DeploymentInfo) -> String {
     out.push_str("| Contract | Address | Version | Owner | Pauser |\n");
     out.push_str("|----------|---------|---------|-------|--------|\n");
 
-    let contracts: &[(&str, &ContractDeployment)] = &[
-        ("StakeTable", &info.stake_table),
+    // Alphabetical order
+    for (name, deployment) in [
         ("EspToken", &info.esp_token),
-        ("LightClient", &info.light_client),
         ("FeeContract", &info.fee_contract),
-        ("RewardClaim", &info.reward_claim),
-    ];
-
-    for (name, deployment) in contracts {
+        ("LightClient", &info.light_client),
+    ] {
         match deployment {
-            ContractDeployment::Deployed {
+            OwnableDeployment::Deployed {
                 address,
                 owner_name,
                 version,
+                ..
+            } => out.push_str(&contract_row(
+                name, *address, version, owner_name, "-", etherscan,
+            )),
+            OwnableDeployment::NotYetDeployed => {
+                out.push_str(&format!("| {name} | Not deployed | | | |\n"))
+            },
+        }
+    }
+    for (name, deployment) in [
+        ("RewardClaim", &info.reward_claim),
+        ("StakeTable", &info.stake_table),
+    ] {
+        match deployment {
+            AccessControlDeployment::Deployed {
+                address,
+                default_admin_name,
+                version,
                 pauser_name,
                 ..
-            } => {
-                let pauser = pauser_name.as_deref().unwrap_or("-");
-                out.push_str(&format!(
-                    "| {name} | {} | {version} | {owner_name} | {pauser} |\n",
-                    address_link(*address, etherscan),
-                ));
-            },
-            ContractDeployment::NotYetDeployed => {
-                out.push_str(&format!("| {name} | Not deployed | | | |\n"));
+            } => out.push_str(&contract_row(
+                name,
+                *address,
+                version,
+                default_admin_name,
+                pauser_name,
+                etherscan,
+            )),
+            AccessControlDeployment::NotYetDeployed => {
+                out.push_str(&format!("| {name} | Not deployed | | | |\n"))
             },
         }
     }
@@ -1059,87 +1093,80 @@ mod tests {
             (safe_exit_timelock_addr, "safe_exit_timelock".to_string()),
         ]));
         let block_number = provider.get_block_number().await?;
-        let block_id = BlockId::number(block_number);
-        let querier = DeploymentQuerier::new(provider.clone(), known.clone(), block_number);
+        let querier = DeploymentQuerier::new(&provider, known, block_number);
 
         // Test each contract individually
         let stake_table_info = querier
-            .query_contract(stake_table_addr, ContractType::StakeTable)
+            .query_access_control(stake_table_addr, ContractType::StakeTable)
             .await?;
         assert_eq!(
             stake_table_info,
-            ContractDeployment::Deployed {
+            AccessControlDeployment::Deployed {
                 address: stake_table_addr,
-                owner_address: deployer_address,
-                owner_name: "test_multisig".to_string(),
+                default_admin_address: deployer_address,
+                default_admin_name: "test_multisig".to_string(),
                 version: "2.0.0".to_string(),
-                pauser_address: Some(deployer_address),
-                pauser_name: Some("test_multisig".to_string()),
+                pauser_address: deployer_address,
+                pauser_name: "test_multisig".to_string(),
             }
         );
 
         let esp_token_info = querier
-            .query_contract(esp_token_addr, ContractType::EspToken)
+            .query_ownable(esp_token_addr, ContractType::EspToken)
             .await?;
         assert_eq!(
             esp_token_info,
-            ContractDeployment::Deployed {
+            OwnableDeployment::Deployed {
                 address: esp_token_addr,
                 owner_address: deployer_address,
                 owner_name: "test_multisig".to_string(),
                 version: "2.0.0".to_string(),
-                pauser_address: None,
-                pauser_name: None,
             }
         );
 
         let light_client_info = querier
-            .query_contract(light_client_addr, ContractType::LightClient)
+            .query_ownable(light_client_addr, ContractType::LightClient)
             .await?;
         assert_eq!(
             light_client_info,
-            ContractDeployment::Deployed {
+            OwnableDeployment::Deployed {
                 address: light_client_addr,
                 owner_address: deployer_address,
                 owner_name: "test_multisig".to_string(),
                 version: "3.0.0".to_string(),
-                pauser_address: None,
-                pauser_name: None,
             }
         );
 
         let fee_contract_info = querier
-            .query_contract(fee_contract_addr, ContractType::FeeContract)
+            .query_ownable(fee_contract_addr, ContractType::FeeContract)
             .await?;
         assert_eq!(
             fee_contract_info,
-            ContractDeployment::Deployed {
+            OwnableDeployment::Deployed {
                 address: fee_contract_addr,
                 owner_address: deployer_address,
                 owner_name: "test_multisig".to_string(),
                 version: "1.0.1".to_string(),
-                pauser_address: None,
-                pauser_name: None,
             }
         );
 
         let reward_claim_info = querier
-            .query_contract(reward_claim_addr, ContractType::RewardClaim)
+            .query_access_control(reward_claim_addr, ContractType::RewardClaim)
             .await?;
         assert_eq!(
             reward_claim_info,
-            ContractDeployment::Deployed {
+            AccessControlDeployment::Deployed {
                 address: reward_claim_addr,
-                owner_address: deployer_address,
-                owner_name: "test_multisig".to_string(),
+                default_admin_address: deployer_address,
+                default_admin_name: "test_multisig".to_string(),
                 version: "1.0.0".to_string(),
-                pauser_address: Some(deployer_address),
-                pauser_name: Some("test_multisig".to_string()),
+                pauser_address: deployer_address,
+                pauser_name: "test_multisig".to_string(),
             }
         );
 
         // Test timelocks
-        let ops_tl = get_timelock_info(&provider, ops_timelock_addr, block_id).await?;
+        let ops_tl = querier.query_timelock(ops_timelock_addr).await?;
         assert_eq!(
             ops_tl,
             TimelockDeployment::Deployed {
@@ -1148,7 +1175,7 @@ mod tests {
             }
         );
 
-        let safe_tl = get_timelock_info(&provider, safe_exit_timelock_addr, block_id).await?;
+        let safe_tl = querier.query_timelock(safe_exit_timelock_addr).await?;
         assert_eq!(
             safe_tl,
             TimelockDeployment::Deployed {
@@ -1234,25 +1261,23 @@ mod tests {
                     min_delay: Duration::from_secs(172800),
                 },
                 safe_exit_timelock: TimelockDeployment::NotYetDeployed,
-                stake_table: ContractDeployment::Deployed {
-                    address: addr1,
-                    owner_address: addr3,
-                    owner_name: "ops_timelock".to_string(),
-                    version: "2.0.0".to_string(),
-                    pauser_address: Some(addr2),
-                    pauser_name: Some("espresso_labs".to_string()),
-                },
-                esp_token: ContractDeployment::NotYetDeployed,
-                light_client: ContractDeployment::Deployed {
+                esp_token: OwnableDeployment::NotYetDeployed,
+                fee_contract: OwnableDeployment::NotYetDeployed,
+                light_client: OwnableDeployment::Deployed {
                     address: addr2,
                     owner_address: addr1,
                     owner_name: "espresso_labs".to_string(),
                     version: "1.0.0".to_string(),
-                    pauser_address: None,
-                    pauser_name: None,
                 },
-                fee_contract: ContractDeployment::NotYetDeployed,
-                reward_claim: ContractDeployment::NotYetDeployed,
+                reward_claim: AccessControlDeployment::NotYetDeployed,
+                stake_table: AccessControlDeployment::Deployed {
+                    address: addr1,
+                    default_admin_address: addr3,
+                    default_admin_name: "ops_timelock".to_string(),
+                    version: "2.0.0".to_string(),
+                    pauser_address: addr2,
+                    pauser_name: "espresso_labs".to_string(),
+                },
             }
         }
     }
@@ -1340,19 +1365,27 @@ mod tests {
         write_deployment_info(&info, 100, 1000, &path, false).unwrap();
         let first_content = std::fs::read_to_string(&path).unwrap();
 
-        info.esp_token = ContractDeployment::Deployed {
+        info.esp_token = OwnableDeployment::Deployed {
             address: Address::repeat_byte(0x44),
             owner_address: Address::repeat_byte(0x55),
             owner_name: "new_owner".to_string(),
             version: "1.0.0".to_string(),
-            pauser_address: None,
-            pauser_name: None,
         };
 
         write_deployment_info(&info, 200, 2000, &path, false).unwrap();
         let second_content = std::fs::read_to_string(&path).unwrap();
         assert_ne!(first_content, second_content);
         assert!(second_content.starts_with("# fetched at block 200"));
+    }
+
+    #[test]
+    fn test_load_addresses_empty_value_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join("test.env");
+        std::fs::write(&env_path, "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=\n").unwrap();
+        let result = load_addresses_from_env_file(&env_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
     }
 
     #[test]
