@@ -422,16 +422,20 @@ where
         .stake_table_capacity
         .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
+    let version_upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
+
     tracing::warn!("setting epoch_height={epoch_height:?}");
     tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
     tracing::warn!("setting drb_upgrade_difficulty={drb_upgrade_difficulty:?}");
     tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
     tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
+    tracing::warn!("setting version_upgrade={version_upgrade}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.drb_difficulty = drb_difficulty;
     network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
+    network_config.config.upgrade = version_upgrade;
 
     if let Some(da_committees) = &genesis.da_committees {
         tracing::warn!("setting da_committees from genesis: {da_committees:?}");
@@ -687,7 +691,6 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        versions::Upgrade::new(genesis.base_version, genesis.upgrade_version),
     )
     .await?;
     if wait_for_orchestrator {
@@ -1278,7 +1281,8 @@ pub mod testing {
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
         ) -> SequencerContext<network::Memory, P::Persistence> {
-            let config = self.config.clone();
+            let mut config = self.config.clone();
+            config.upgrade = upgrade;
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
 
@@ -1377,11 +1381,11 @@ pub mod testing {
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
-                upgrade.base,
+                config.upgrade.base,
                 coordinator.clone(),
-                upgrade.base,
+                config.upgrade.base,
             )
-            .with_current_version(upgrade.base)
+            .with_current_version(config.upgrade.base)
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
@@ -1413,7 +1417,6 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                upgrade,
             )
             .await
             .unwrap()
