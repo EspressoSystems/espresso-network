@@ -1035,7 +1035,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 }
             }
         }
+        let max_view = self
+            .validated_state_map
+            .keys()
+            .max()
+            .copied()
+            .unwrap_or(TYPES::View::genesis());
         self.validated_state_map.insert(view_number, new_view);
+        for (_, view) in self.validated_state_map.range_mut(..max_view) {
+            view.forget_reward_state();
+        }
         Ok(())
     }
 

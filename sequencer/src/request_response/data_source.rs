@@ -2,15 +2,16 @@
 //! to calculate/derive a response for a specific request. In the confirmation layer the implementer
 //! would be something like a [`FeeMerkleTree`] for fee catchup
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use espresso_types::{
     retain_accounts,
     traits::SequencerPersistence,
-    v0_3::{RewardAccountV1, RewardMerkleTreeV1},
+    v0_3::{RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+    v0_6::REWARD_MERKLE_TREE_V2_HEIGHT,
     NodeState, PubKey, SeqTypes,
 };
 use hotshot::{traits::NodeImplementation, SystemContext};
@@ -227,6 +228,7 @@ impl<
                     if let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
+                        &state.reward_accounts,
                     ) {
                         return Ok(Response::RewardAccountsV2(reward_accounts));
                     }
@@ -355,11 +357,19 @@ impl<
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    let merkle_tree_bytes = bincode::serialize(
-                        &TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)?,
-                    )
-                    .context("Merkle tree serialization failed; this should never happen.")?;
+                    let num_leaves = state.reward_merkle_tree_v2.num_leaves();
 
+                    let merkle_tree_bytes = if state.reward_accounts.len() as u64 == num_leaves {
+                        bincode::serialize(&Into::<RewardMerkleTreeV2Data>::into(
+                            &state.reward_accounts,
+                        ))
+                        .context("Merkle tree serialization failed; this should never happen.")?
+                    } else {
+                        bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
+                            &state.reward_merkle_tree_v2,
+                        )?)
+                        .context("Merkle tree serialization failed; this should never happen.")?
+                    };
                     return Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes));
                 }
 
@@ -388,7 +398,15 @@ impl<
 pub fn retain_v2_reward_accounts(
     state: &RewardMerkleTreeV2,
     accounts: impl IntoIterator<Item = RewardAccountV2>,
+    balances: &BTreeMap<RewardAccountV2, RewardAmount>,
 ) -> anyhow::Result<RewardMerkleTreeV2> {
+    let tree_from_balances =
+        RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances.iter())?;
+    let state = if balances.is_empty() {
+        state
+    } else {
+        &tree_from_balances
+    };
     let mut snapshot = RewardMerkleTreeV2::from_commitment(state.commitment());
     for account in accounts {
         match state.universal_lookup(account) {

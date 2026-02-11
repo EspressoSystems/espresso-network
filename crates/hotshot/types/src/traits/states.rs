@@ -80,6 +80,9 @@ pub trait ValidatedState<TYPES: NodeType>:
     /// This can also be used to rebuild the state for catchup.
     fn from_header(block_header: &TYPES::BlockHeader) -> Self;
 
+    /// Create a new state with the forgotten reward accounts.
+    fn new_forgotten_reward_state(&self) -> Self;
+
     /// Construct a genesis validated state.
     #[must_use]
     fn genesis(instance: &Self::Instance) -> (Self, Self::Delta);

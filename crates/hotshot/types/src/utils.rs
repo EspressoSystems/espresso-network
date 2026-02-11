@@ -23,6 +23,7 @@ use bincode::{
     DefaultOptions, Options,
 };
 use committable::{Commitment, Committable};
+use derive_more::DerefMut;
 use digest::OutputSizeUser;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -237,6 +238,24 @@ impl<TYPES: NodeType> ViewInner<TYPES> {
             Self::Failed => None,
         }
     }
+
+    pub fn forget_reward_state(&mut self) {
+        if let Self::Leaf {
+            leaf,
+            state,
+            delta,
+            epoch,
+        } = self
+        {
+            let new_state = state.new_forgotten_reward_state();
+            *self = Self::Leaf {
+                state: Arc::new(new_state),
+                delta: delta.clone(),
+                epoch: epoch.clone(),
+                leaf: leaf.clone(),
+            };
+        }
+    }
 }
 
 impl<TYPES: NodeType> Deref for View<TYPES> {
@@ -248,7 +267,7 @@ impl<TYPES: NodeType> Deref for View<TYPES> {
 }
 
 /// This exists so we can perform state transitions mutably
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, DerefMut)]
 #[serde(bound = "")]
 pub struct View<TYPES: NodeType> {
     /// The view data. Wrapped in a struct so we can mutate
