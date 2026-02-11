@@ -227,23 +227,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     .is_ok();
                 if let Some(next_epoch) = next_epoch {
                     consensus_writer.update_validator_participation_epoch(next_epoch);
-                    let (stake_table, success_threshold) = if let Ok(epoch_membership) = self
+                    let (stake_table, success_threshold) = self
                         .membership_coordinator
-                        .stake_table_for_epoch(Some(next_epoch))
-                        .await
-                    {
-                        (
-                            epoch_membership.stake_table().await,
-                            epoch_membership.success_threshold().await,
-                        )
-                    } else {
-                        tracing::warn!(
-                            "Failed to get stake table for epoch {} while updating vote \
-                             participation",
-                            next_epoch
-                        );
-                        (HSStakeTable::default(), U256::MAX)
-                    };
+                        .stake_table_and_threshold(Some(next_epoch))
+                        .await;
                     consensus_writer
                         .update_vote_participation_epoch(
                             stake_table,

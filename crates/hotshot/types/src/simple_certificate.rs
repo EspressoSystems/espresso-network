@@ -113,6 +113,25 @@ impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES>, THRESHOLD: Threshold<TYPES>>
             _pd: pd,
         }
     }
+
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        if self.view_number == TYPES::View::genesis() {
+            return Ok(vec![]);
+        }
+        let real_qc_pp =
+            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
+
+        <TYPES::SignatureKey as SignatureKey>::signers(
+            &real_qc_pp,
+            self.signatures.as_ref().unwrap(),
+        )
+        .wrap()
+        .context(|e| warn!("Tracing signers: {e}"))
+    }
 }
 
 impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES> + Committable, THRESHOLD: Threshold<TYPES>>
@@ -180,18 +199,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
     ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
-        if self.view_number == TYPES::View::genesis() {
-            return Ok(vec![]);
-        }
-        let real_qc_pp =
-            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
-
-        <TYPES::SignatureKey as SignatureKey>::signers(
-            &real_qc_pp,
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Tracing signers: {e}"))
+        self.signers(stake_table, threshold)
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -275,18 +283,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
     ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
-        if self.view_number == TYPES::View::genesis() {
-            return Ok(vec![]);
-        }
-        let real_qc_pp =
-            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
-
-        <TYPES::SignatureKey as SignatureKey>::signers(
-            &real_qc_pp,
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Tracing signers: {e}"))
+        self.signers(stake_table, threshold)
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -373,18 +370,7 @@ impl<
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
     ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
-        if self.view_number == TYPES::View::genesis() {
-            return Ok(vec![]);
-        }
-        let real_qc_pp =
-            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
-
-        <TYPES::SignatureKey as SignatureKey>::signers(
-            &real_qc_pp,
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Tracing signers: {e}"))
+        self.signers(stake_table, threshold)
     }
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
         THRESHOLD::threshold(membership).await

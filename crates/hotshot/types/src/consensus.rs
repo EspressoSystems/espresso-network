@@ -533,25 +533,15 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             .current_epoch_participation
             .get(&key.to_verification_key());
 
-        let current_epoch_vote_ratio = maybe_current_num_votes.map(|num_votes| {
-            if self.current_epoch_num_views == 0 {
-                0.0
-            } else {
-                *num_votes as f64 / self.current_epoch_num_views as f64
-            }
-        });
+        let current_epoch_vote_ratio = maybe_current_num_votes
+            .map(|num_votes| Self::calculate_ratio(num_votes, self.current_epoch_num_views));
 
         let maybe_last_num_votes = self
             .last_epoch_participation
             .get(&key.to_verification_key());
 
-        let last_epoch_vote_ratio = maybe_last_num_votes.map(|num_votes| {
-            if self.last_epoch_num_views == 0 {
-                0.0
-            } else {
-                *num_votes as f64 / self.last_epoch_num_views as f64
-            }
-        });
+        let last_epoch_vote_ratio = maybe_last_num_votes
+            .map(|num_votes| Self::calculate_ratio(num_votes, self.last_epoch_num_views));
 
         (current_epoch_vote_ratio, last_epoch_vote_ratio)
     }
@@ -564,11 +554,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             .map(|(key, votes)| {
                 (
                     key.clone(),
-                    if self.current_epoch_num_views == 0 {
-                        0.0
-                    } else {
-                        *votes as f64 / self.current_epoch_num_views as f64
-                    },
+                    Self::calculate_ratio(votes, self.current_epoch_num_views),
                 )
             })
             .collect()
@@ -581,14 +567,18 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             .map(|(key, votes)| {
                 (
                     key.clone(),
-                    if self.last_epoch_num_views == 0 {
-                        0.0
-                    } else {
-                        *votes as f64 / self.last_epoch_num_views as f64
-                    },
+                    Self::calculate_ratio(votes, self.last_epoch_num_views),
                 )
             })
             .collect()
+    }
+
+    fn calculate_ratio(num_votes: &u64, total_views: u64) -> f64 {
+        if total_views == 0 {
+            0.0
+        } else {
+            *num_votes as f64 / total_views as f64
+        }
     }
 }
 

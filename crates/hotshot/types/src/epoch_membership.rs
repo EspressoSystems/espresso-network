@@ -13,6 +13,7 @@ use crate::{
     data::Leaf2,
     drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
     event::Event,
+    simple_certificate::Threshold,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
@@ -530,6 +531,23 @@ where
         self.membership.write().await.add_drb_result(epoch, drb);
 
         Ok(drb)
+    }
+
+    /// Returns the stake table and success threshold for the given epoch if it is available.
+    /// Otherwise returns a default stake table and MAX U256.
+    pub async fn stake_table_and_threshold(
+        &self,
+        epoch: Option<TYPES::Epoch>,
+    ) -> (HSStakeTable<TYPES>, U256) {
+        if let Ok(epoch_membership) = self.stake_table_for_epoch(epoch).await {
+            (
+                epoch_membership.stake_table().await,
+                epoch_membership.success_threshold().await,
+            )
+        } else {
+            tracing::warn!("Failed to get stake table for epoch {:?}", epoch);
+            (HSStakeTable::default(), U256::MAX)
+        }
     }
 }
 
