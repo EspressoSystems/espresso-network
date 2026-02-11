@@ -1043,7 +1043,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let max_view = self
             .validated_state_map
             .iter()
-            .filter(|(_, view)| matches!(view.view_inner, ViewInner::Leaf { .. }))
+            .filter(|(_, view)| matches!(view.view_inner, ViewInner::Leaf { delta: Some(_), .. }))
             .map(|(view, _)| view)
             .max()
             .copied()
