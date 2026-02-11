@@ -73,8 +73,10 @@ async fn main() {
     // 2 brokers
     for _ in 0..2 {
         // Atomically bind to available ports
-        let private_port = test_utils::reserve_tcp_port().expect("could not bind to TCP port");
-        let public_port = test_utils::reserve_tcp_port().expect("could not bind to TCP port");
+        let private_port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let public_port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Extrapolate addresses
         let private_address = format!("127.0.0.1:{private_port}");

@@ -342,15 +342,16 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             .into_owned();
 
         // Atomically bind to unused public ports
-        let public_port_1 = reserve_tcp_port().expect("could not bind to TCP port");
-        let public_port_2 = reserve_tcp_port().expect("could not bind to TCP port");
+        let public_port_1 = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let public_port_2 = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let public_address_1 = format!("127.0.0.1:{public_port_1}");
         let public_address_2 = format!("127.0.0.1:{public_port_2}");
 
         // 2 brokers
         for i in 0..2 {
             // Atomically bind to a private port
-            let private_port = reserve_tcp_port().expect("could not bind to TCP port");
+            let private_port =
+                reserve_tcp_port().expect("OS should have ephemeral ports available");
 
             // Extrapolate addresses
             let private_address = format!("127.0.0.1:{private_port}");
@@ -405,7 +406,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
         }
 
         // Atomically bind to an available port for the marshal
-        let marshal_port = reserve_tcp_port().expect("could not bind to TCP port");
+        let marshal_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Configure the marshal
         let marshal_endpoint = format!("127.0.0.1:{marshal_port}");

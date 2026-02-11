@@ -44,7 +44,7 @@ type MockSequencerVersions =
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
-    let port = reserve_tcp_port().expect("Failed to reserve TCP port");
+    let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     let storage = SqlDataSource::create_storage().await;
 

@@ -824,7 +824,7 @@ pub mod testing {
         let builder_key_pair = TestConfig::<0>::builder_key();
         let port = match port {
             Some(p) => p,
-            None => reserve_tcp_port().expect("Failed to bind TCP port"),
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
         };
 
         // This should never fail.
@@ -873,7 +873,7 @@ pub mod testing {
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let port = match port {
             Some(p) => p,
-            None => reserve_tcp_port().expect("Failed to bind TCP port"),
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
         };
 
         // This should never fail.

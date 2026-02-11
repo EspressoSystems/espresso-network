@@ -112,7 +112,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             .collect::<Vec<_>>();
 
         // Pick a random, unused port for the builder server
-        let builder_port = reserve_tcp_port().expect("Failed to reserve TCP port");
+        let builder_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Create the bind URL from the random port
         let builder_url =

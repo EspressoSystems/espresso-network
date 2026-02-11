@@ -35,7 +35,7 @@ async fn test_random_block_builder() {
     use hotshot_example_types::node_types::TestVersions;
     use vbs::version::Version;
 
-    let port = reserve_tcp_port().expect("Failed to bind to TCP port");
+    let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
     let api_url = Url::parse(&format!("http://localhost:{port}")).expect("Valid URL");
     let task: Box<dyn BuilderTask<TestTypes>> = RandomBuilderImplementation::start(
         1,

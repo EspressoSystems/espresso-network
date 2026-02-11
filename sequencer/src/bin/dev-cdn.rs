@@ -55,8 +55,8 @@ async fn main() -> Result<()> {
         .into_owned();
 
     // Acquire unused ports for the broker to use
-    let broker_public_port = reserve_tcp_port().expect("failed to bind public port for broker");
-    let broker_private_port = reserve_tcp_port().expect("failed to bind private port for broker");
+    let broker_public_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+    let broker_private_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     // Configure the broker
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {

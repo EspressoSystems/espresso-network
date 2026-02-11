@@ -393,7 +393,8 @@ pub mod testing {
 
     pub fn hotshot_builder_url() -> Url {
         // spawn the builder api
-        let port = test_utils::reserve_tcp_port().expect("Failed to bind TCP port for builder api");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         Url::parse(format!("http://localhost:{port}").as_str()).unwrap()
     }

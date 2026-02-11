@@ -226,9 +226,9 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
 
                 // UDP has no TIME_WAIT, so there's a tiny race before libp2p binds.
                 let port = std::net::UdpSocket::bind("127.0.0.1:0")
-                    .expect("Could not bind UDP socket")
+                    .expect("UDP socket should bind")
                     .local_addr()
-                    .expect("Could not get UDP local addr")
+                    .expect("UDP socket should have local addr")
                     .port();
 
                 let addr =

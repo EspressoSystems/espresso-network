@@ -32,7 +32,7 @@ use std::net::{TcpListener, TcpStream};
 /// ```
 /// use test_utils::reserve_tcp_port;
 ///
-/// let port = reserve_tcp_port().expect("Failed to reserve port");
+/// let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 /// // Port is now in TIME_WAIT state - protected from ephemeral allocation
 /// // Services can still bind to it explicitly
 /// ```

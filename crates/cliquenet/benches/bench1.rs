@@ -48,8 +48,8 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
     let a = Keypair::generate().unwrap();
     let b = Keypair::generate().unwrap();
 
-    let port_a = reserve_tcp_port().expect("Could not bind to TCP port");
-    let port_b = reserve_tcp_port().expect("Could not bind to TCP port");
+    let port_a = reserve_tcp_port().expect("OS should have ephemeral ports available");
+    let port_b = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     let all: [(u8, PublicKey, Address); 2] = [
         (

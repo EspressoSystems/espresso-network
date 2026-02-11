@@ -1396,7 +1396,7 @@ mod tests {
         let anvil_provider = network_config.anvil().unwrap();
 
         let query_service_port =
-            reserve_tcp_port().expect("Failed to bind TCP port for query service");
+            reserve_tcp_port().expect("OS should have ephemeral ports available");
         let query_api_options = Options::with_port(query_service_port);
 
         const NODE_COUNT: usize = 2;

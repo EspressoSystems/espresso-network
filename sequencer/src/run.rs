@@ -359,7 +359,7 @@ mod test {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
 
-        let port = reserve_tcp_port().expect("Failed to bind to TCP port");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let tmp = TempDir::new().unwrap();
 
         let genesis_file = tmp.path().join("genesis.toml");

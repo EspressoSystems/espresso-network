@@ -318,7 +318,8 @@ where
 
         let mut ports = Vec::new();
         for _ in &self.launcher.metadata.builders {
-            let port = test_utils::reserve_tcp_port().expect("Failed to bind to TCP port");
+            let port =
+                test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
             ports.push(port);
         }
 
