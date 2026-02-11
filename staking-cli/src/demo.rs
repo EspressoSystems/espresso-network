@@ -24,7 +24,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use espresso_contract_deployer::{build_provider, build_signer, HttpProviderWithWallet};
 use espresso_types::parse_duration;
-use futures_util::future;
+use futures_util::{stream, StreamExt as _, TryStreamExt as _};
 use hotshot_contract_adapter::{
     sol_types::{EspToken, StakeTableV2},
     stake_table::StakeTableContractVersion,
@@ -411,12 +411,11 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
         while let Some(tx) = txs.pop_front() {
             pending.push(self.send_next(tx).await?);
         }
-        future::try_join_all(
-            pending
-                .into_iter()
-                .map(|p| async move { p.assert_success().await }),
-        )
-        .await
+        stream::iter(pending)
+            .map(|pending| async move { pending.assert_success().await })
+            .buffer_unordered(32)
+            .try_collect()
+            .await
     }
 }
 

@@ -11,10 +11,12 @@
 //! - [`MemoryNetwork`](memory_network::MemoryNetwork), an in memory testing-only implementation
 //! - [`Libp2pNetwork`](libp2p_network::Libp2pNetwork), a production-ready networking implementation built on top of libp2p-rs.
 
+mod cliquenet_network;
 pub mod combined_network;
 pub mod libp2p_network;
 pub mod memory_network;
 /// The Push CDN network
 pub mod push_cdn_network;
 
+pub use cliquenet_network::Cliquenet;
 pub use hotshot_types::traits::network::{NetworkError, NetworkReliability};

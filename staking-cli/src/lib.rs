@@ -5,12 +5,15 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
 };
 use anyhow::{bail, Result};
-use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use espresso_contract_deployer::provider::connect_ledger;
-pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+pub(crate) use hotshot_types::{
+    light_client::StateSignKey,
+    signature_key::{BLSPrivKey, BLSPubKey},
+};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
-use metadata::MetadataUri;
+use metadata::MetadataUriArgs;
 use parse::Commission;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,13 @@ pub mod demo;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
+
+// Re-exported for integration tests (test_real_mainnet_node_metadata)
+pub use metadata::fetch_metadata;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod metadata_types;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod openmetrics;
 pub(crate) mod output;
 /// Used by staking-cli tests (Commission).
 pub mod parse;
@@ -53,6 +63,12 @@ pub fn default_tx_log_path() -> std::path::PathBuf {
         tracing::warn!("Unable to find data directory, using current directory");
         std::path::PathBuf::from("tx_log.json")
     }
+}
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum Network {
+    Mainnet,
+    Decaf,
+    Local,
 }
 
 /// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
@@ -92,6 +108,7 @@ pub struct Config {
     pub espresso_url: Option<Url>,
 
     #[clap(flatten)]
+    #[serde(default)]
     pub signer: SignerConfig,
 
     /// Export calldata for multisig wallets instead of sending transaction.
@@ -213,30 +230,6 @@ impl ValidSignerConfig {
     }
 }
 
-#[derive(ClapArgs, Debug, Clone)]
-#[group(required = true, multiple = false)]
-pub struct MetadataUriArgs {
-    #[clap(long, env = "METADATA_URI")]
-    metadata_uri: Option<String>,
-
-    #[clap(long, env = "NO_METADATA_URI")]
-    no_metadata_uri: bool,
-}
-
-impl TryFrom<MetadataUriArgs> for MetadataUri {
-    type Error = anyhow::Error;
-
-    fn try_from(args: MetadataUriArgs) -> Result<Self> {
-        if args.no_metadata_uri {
-            Ok(MetadataUri::empty())
-        } else if let Some(uri_str) = args.metadata_uri {
-            uri_str.parse()
-        } else {
-            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
-        }
-    }
-}
-
 impl Default for Commands {
     fn default() -> Self {
         Commands::StakeTable {
@@ -298,6 +291,10 @@ pub enum Commands {
         /// Use a ledger hardware wallet.
         #[clap(long, env = "LEDGER_INDEX", required_unless_present_any = ["mnemonic", "private_key"])]
         ledger: bool,
+
+        /// Network to configure (mainnet, decaf, or local).
+        #[clap(long, value_enum, env = "NETWORK")]
+        network: Network,
     },
     /// Remove the config file.
     Purge {
@@ -348,6 +345,12 @@ pub enum Commands {
     UpdateMetadataUri {
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
+
+        /// The consensus public key for metadata validation.
+        ///
+        /// Required for metadata validation unless --skip-metadata-validation is set.
+        #[clap(long, value_parser = parse::parse_bls_pub_key, env = "CONSENSUS_PUBLIC_KEY")]
+        consensus_public_key: Option<BLSPubKey>,
     },
     /// Approve stake table contract to move tokens
     Approve {
@@ -446,5 +449,14 @@ pub enum Commands {
 
         #[clap(flatten)]
         output_args: signature::OutputArgs,
+    },
+    /// Preview metadata from a URL without registering.
+    ///
+    /// Fetches and displays validator metadata from a URL. Useful for verifying
+    /// your metadata endpoint before registration.
+    PreviewMetadata {
+        /// URL where validator metadata is hosted (JSON or OpenMetrics format).
+        #[clap(long, env = "METADATA_URI")]
+        metadata_uri: String,
     },
 }
