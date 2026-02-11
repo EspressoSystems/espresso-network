@@ -251,8 +251,8 @@ impl<TYPES: NodeType> ViewInner<TYPES> {
             *self = Self::Leaf {
                 state: Arc::new(new_state),
                 delta: delta.clone(),
-                epoch: epoch.clone(),
-                leaf: leaf.clone(),
+                epoch,
+                leaf,
             };
         }
     }
