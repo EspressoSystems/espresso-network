@@ -145,6 +145,7 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 ethers = { version = "2.0", features = ["solc", "ws"] }
 futures = "0.3"
 hex = "0.4"
+humantime = "2"
 indexmap = { version = "2", features = ["serde"] }
 lazy_static = "1"
 libp2p-identity = { version = "0.2", features = ["ed25519", "serde"] }

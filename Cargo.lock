@@ -3825,6 +3825,7 @@ dependencies = [
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
+ "humantime",
  "serde",
  "test-log",
  "tokio",

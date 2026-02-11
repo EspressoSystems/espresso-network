@@ -43,7 +43,7 @@ hotshot-example-types = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
-humantime = "2"
+humantime = { workspace = true }
 indexmap = { workspace = true }
 insta = { version = "1.43", features = ["yaml"] }
 itertools = { workspace = true }
