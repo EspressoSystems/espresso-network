@@ -999,6 +999,11 @@ pub trait SequencerPersistence:
     async fn migrate_storage(&self) -> anyhow::Result<()> {
         tracing::warn!("migrating consensus data...");
 
+        tracing::info!("Clearing stored events and epoch drb data");
+        self.clear_events().await.inspect_err(|err| {
+            tracing::error!("Failed to clear stored events at startup: {err}");
+        })?;
+
         self.migrate_anchor_leaf().await?;
         self.migrate_da_proposals().await?;
         self.migrate_vid_shares().await?;
