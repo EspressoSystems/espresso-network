@@ -2,7 +2,7 @@
 
 use alloy::{
     hex::FromHex,
-    primitives::{Address, B256, U256},
+    primitives::{Address, Bytes, B256, U256},
     providers::{Provider, WalletProvider},
 };
 use anyhow::{Context, Result};
@@ -15,15 +15,15 @@ use crate::{
     encode_function_call,
     proposals::{
         multisig::{
-            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
-            upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-            LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
+            call_propose_transaction_generic_script, transfer_ownership_from_multisig_to_timelock,
+            upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
+            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
+            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
+            StakeTableV2UpgradeParams, TransferOwnershipParams,
         },
         timelock::{
-            cancel_timelock_operation, derive_timelock_address_from_contract_type,
-            execute_timelock_operation, schedule_timelock_operation, TimelockOperationData,
-            TimelockOperationType,
+            derive_timelock_address_from_contract_type, perform_timelock_operation,
+            TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
         },
     },
     Contract, Contracts, OwnableContract,
@@ -133,6 +133,18 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     transfer_ownership_from_eoa: Option<bool>,
     #[builder(default)]
     transfer_ownership_new_owner: Option<Address>,
+    #[builder(default)]
+    timelock_operation_id: Option<String>,
+    #[builder(default)]
+    multisig_transaction_target: Option<Address>,
+    #[builder(default)]
+    multisig_transaction_function_signature: Option<String>,
+    #[builder(default)]
+    multisig_transaction_function_args: Option<Vec<String>>,
+    #[builder(default)]
+    multisig_transaction_value: Option<String>,
+    #[builder(default)]
+    ledger: bool,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -600,10 +612,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
     // Perform a timelock operation
     ///
+    /// This function can perform timelock operations via two paths:
+    /// - **Multisig path**: If `multisig` field from DeployerArgs is set, the operation will be proposed via Safe multisig
+    /// - **EOA path**: If `multisig` field from DeployerArgs is not set, the operation will be executed directly via EOA (useful for tests/local development)
+    ///
     /// Parameters:
     /// - `contracts`: ref to deployed contracts
     ///
-    pub async fn perform_timelock_operation_on_contract(
+    pub async fn propose_timelock_operation_for_contract(
         &self,
         contracts: &mut Contracts,
     ) -> Result<()> {
@@ -611,80 +627,111 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .timelock_operation_type
             .context("Timelock operation type not found")?;
         let target_contract = self.target_contract.context("Timelock target not found")?;
-        let value = self
-            .timelock_operation_value
-            .context("Timelock operation value not found")?;
-        let function_signature = self
-            .timelock_operation_function_signature
-            .as_ref()
-            .context("Timelock operation function signature not found")?;
-        let function_values = self
-            .timelock_operation_function_values
-            .clone()
-            .context("Timelock operation function values not found")?;
-        let salt = self
-            .timelock_operation_salt
-            .clone()
-            .context("Timelock operation salt not found")?;
-        let delay = self
-            .timelock_operation_delay
-            .context("Timelock operation delay not found")?;
-
         let contract_type: Contract = target_contract.into();
         let target_addr = contracts
             .address(contract_type)
             .context(format!("{:?} address not found", contract_type))?;
 
-        let function_calldata = encode_function_call(function_signature, function_values.clone())
-            .context("Failed to encode function data")?;
+        let (timelock_operation_data, operation_id) = if timelock_operation_type
+            == TimelockOperationType::Cancel
+            && self.timelock_operation_id.is_some()
+        {
+            // Cancel operation with explicit operation_id - use minimal payload
+            let op_id_str = self
+                .timelock_operation_id
+                .as_ref()
+                .context("Operation ID not found")?;
+            let op_id = if let Some(stripped) = op_id_str.strip_prefix("0x") {
+                B256::from_hex(stripped).context("Invalid operation ID hex format")?
+            } else {
+                B256::from_hex(op_id_str).context("Invalid operation ID hex format")?
+            };
 
-        // Parse salt from string to B256
-        let salt_bytes = if salt == "0x" || salt.is_empty() {
-            B256::ZERO // Use zero salt if empty
-        } else if let Some(stripped) = salt.strip_prefix("0x") {
-            B256::from_hex(stripped).context("Invalid salt hex format")?
+            let minimal_payload = TimelockOperationPayload {
+                target: target_addr,
+                value: U256::ZERO,
+                data: Bytes::new(),
+                predecessor: B256::ZERO,
+                salt: B256::ZERO,
+                delay: U256::ZERO,
+            };
+            (minimal_payload, Some(op_id))
         } else {
-            B256::from_hex(&salt).context("Invalid salt hex format")?
+            // Schedule or Execute operation - we need full operation details
+            let value = self
+                .timelock_operation_value
+                .context("Timelock operation value not found")?;
+            let function_signature = self
+                .timelock_operation_function_signature
+                .as_ref()
+                .context("Timelock operation function signature not found")?;
+            let function_values = self
+                .timelock_operation_function_values
+                .clone()
+                .context("Timelock operation function values not found")?;
+            let salt = self
+                .timelock_operation_salt
+                .clone()
+                .context("Timelock operation salt not found")?;
+            let delay = self
+                .timelock_operation_delay
+                .context("Timelock operation delay not found")?;
+
+            let function_calldata =
+                encode_function_call(function_signature, function_values.clone())
+                    .context("Failed to encode function data")?;
+
+            // Parse salt from string to B256
+            let salt_trimmed = salt.trim();
+            let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
+                B256::ZERO
+            } else {
+                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+                B256::from_hex(hex_str).context("Invalid salt hex format")?
+            };
+
+            let operation = TimelockOperationPayload {
+                target: target_addr,
+                value,
+                data: function_calldata,
+                predecessor: B256::ZERO, // Default to no predecessor
+                salt: salt_bytes,
+                delay,
+            };
+            (operation, None)
         };
 
-        let timelock_operation_data = TimelockOperationData {
-            target: target_addr,
-            value,
-            data: function_calldata,
-            predecessor: B256::ZERO, // Default to no predecessor
-            salt: salt_bytes,
-            delay,
+        let params = if let Some(multisig_proposer) = self.multisig {
+            // Multisig path
+            let rpc_url = self.rpc_url.to_string();
+            let use_hardware_wallet = self.ledger;
+            TimelockOperationParams {
+                multisig_proposer: Some(multisig_proposer),
+                rpc_url: Some(rpc_url),
+                use_hardware_wallet,
+                operation_id,
+                dry_run: self.dry_run,
+            }
+        } else {
+            // EOA path (for tests/local development)
+            TimelockOperationParams {
+                multisig_proposer: None,
+                rpc_url: None,
+                use_hardware_wallet: false,
+                operation_id,
+                dry_run: self.dry_run,
+            }
         };
 
-        match timelock_operation_type {
-            TimelockOperationType::Schedule => {
-                let operation_id = schedule_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation scheduled with ID: {}", operation_id);
-            },
-            TimelockOperationType::Execute => {
-                let tx_id = execute_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation executed with ID: {}", tx_id);
-            },
-            TimelockOperationType::Cancel => {
-                let tx_id = cancel_timelock_operation(
-                    &self.deployer,
-                    contract_type,
-                    timelock_operation_data,
-                )
-                .await?;
-                tracing::info!("Timelock operation cancelled with ID: {}", tx_id);
-            },
-        }
+        perform_timelock_operation(
+            &self.deployer,
+            contract_type,
+            timelock_operation_data,
+            timelock_operation_type,
+            params,
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -716,7 +763,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         );
         let rpc_url = self.rpc_url.clone();
         let dry_run = self.dry_run;
-        let use_hardware_wallet = false;
+        let use_hardware_wallet = self.ledger;
         let result = transfer_ownership_from_multisig_to_timelock(
             &self.deployer,
             contracts,
@@ -799,6 +846,42 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             new_owner,
             receipt.transaction_hash
         );
+
+        Ok(())
+    }
+
+    /// Propose a transaction via Safe multisig
+    pub async fn propose_multisig_transaction(&self) -> Result<()> {
+        let target = self
+            .multisig_transaction_target
+            .context("Multisig transaction target address not found")?;
+        let function_signature = self
+            .multisig_transaction_function_signature
+            .as_ref()
+            .context("Multisig transaction function signature not found")?;
+        let function_args = self
+            .multisig_transaction_function_args
+            .clone()
+            .unwrap_or_default();
+        let value = self
+            .multisig_transaction_value
+            .clone()
+            .unwrap_or_else(|| "0".to_string());
+        let multisig = self
+            .multisig
+            .context("Multisig address required for multisig transaction proposal")?;
+
+        call_propose_transaction_generic_script(
+            target,
+            function_signature.clone(),
+            function_args,
+            self.rpc_url.to_string(),
+            multisig,
+            self.ledger,
+            Some(value),
+            self.dry_run,
+        )
+        .await?;
 
         Ok(())
     }

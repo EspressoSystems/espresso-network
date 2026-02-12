@@ -176,6 +176,7 @@ async function proposeTransferOwnershipTransaction(
     safeSDK,
     transferOwnershipData.proxyAddress,
     data,
+    "0",
     transferOwnershipData.useHardwareWallet,
   );
 

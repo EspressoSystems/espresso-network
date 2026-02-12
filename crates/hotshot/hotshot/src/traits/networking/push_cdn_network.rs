@@ -519,6 +519,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to send the broadcast message.
     async fn broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         topic: HotShotTopic,
         _broadcast_delay: BroadcastDelay,
@@ -544,6 +545,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to send the broadcast message.
     async fn da_broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         _recipients: Vec<K>,
         _broadcast_delay: BroadcastDelay,
@@ -566,7 +568,12 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     ///
     /// - If we fail to serialize the message
     /// - If we fail to send the direct message
-    async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError> {
+    async fn direct_message(
+        &self,
+        _: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError> {
         // If the message is to ourselves, just add it to the internal queue
         if recipient == self.public_key {
             self.internal_queue.lock().push_back(message);
