@@ -229,6 +229,11 @@ pub enum HotShotEvent<TYPES: NodeType> {
     /// 3. The justify QC is valid
     QuorumProposalPreliminarilyValidated(Proposal<TYPES, QuorumProposalWrapper<TYPES>>),
 
+    /// A views validate state was updated with as full a state as possible.
+    ViewValidated(TYPES::View),
+    /// A view's validation was cancelled.
+    ViewValidationCancelled(TYPES::View),
+
     /// Send a VID request to the network; emitted to on of the members of DA committee.
     /// Includes the data request, node's public key and signature as well as public key of DA committee who we want to send to.
     VidRequestSend(
@@ -305,6 +310,8 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
     /// Return the view number for a hotshot event if present
     pub fn view_number(&self) -> Option<TYPES::View> {
         match self {
+            HotShotEvent::ViewValidated(view) => Some(*view),
+            HotShotEvent::ViewValidationCancelled(view) => Some(*view),
             HotShotEvent::QuorumVoteSend(v)
             | HotShotEvent::QuorumVoteRecv(v)
             | HotShotEvent::ExtendedQuorumVoteSend(v) => Some(v.view_number()),
@@ -403,6 +410,10 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HotShotEvent::Shutdown => write!(f, "Shutdown"),
+            HotShotEvent::ViewValidated(view) => write!(f, "ViewValidated(view_number={:?})", view),
+            HotShotEvent::ViewValidationCancelled(view) => {
+                write!(f, "ViewValidationCancelled(view_number={:?})", view)
+            },
             HotShotEvent::QuorumProposalRecv(proposal, _) => write!(
                 f,
                 "QuorumProposalRecv(view_number={:?})",
