@@ -749,11 +749,26 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     parent_qc: &QuorumCertificate2<TYPES>,
     epoch_height: u64,
 ) -> Result<(Leaf2<TYPES>, Arc<<TYPES as NodeType>::ValidatedState>)> {
+    let wait_for_previous = consensus
+        .read()
+        .await
+        .is_view_validating(parent_qc.view_number());
+    if wait_for_previous {
+        if wait_for_previous_view(parent_qc.view_number(), event_receiver.clone())
+            .await
+            .is_some()
+        {
+            tracing::info!(
+                "Successfully waited for previous view {:?}",
+                parent_qc.view_number()
+            );
+        }
+    }
+
     let consensus_reader = consensus.read().await;
     let vsm_contains_parent_view = consensus_reader
         .validated_state_map()
         .contains_key(&parent_qc.view_number());
-    let wait_for_previous = consensus_reader.is_view_validating(parent_qc.view_number());
     drop(consensus_reader);
 
     if !vsm_contains_parent_view {
@@ -770,18 +785,6 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
         )
         .await
         .context(info!("Failed to fetch proposal"))?;
-    }
-
-    if wait_for_previous {
-        if wait_for_previous_view(parent_qc.view_number(), event_receiver.clone())
-            .await
-            .is_some()
-        {
-            tracing::info!(
-                "Successfully waited for previous view {:?}",
-                parent_qc.view_number()
-            );
-        }
     }
 
     let consensus_reader = consensus.read().await;
