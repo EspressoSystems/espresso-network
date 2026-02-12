@@ -593,6 +593,11 @@ where
         genesis.chain_config,
     );
 
+    info!("Clearing stored events and epoch drb data");
+    persistence.clear_events().await.inspect_err(|err| {
+        tracing::error!("Failed to clear stored events at startup: {err}");
+    })?;
+
     info!("Spawning update loop");
 
     fetcher.spawn_update_loop().await;

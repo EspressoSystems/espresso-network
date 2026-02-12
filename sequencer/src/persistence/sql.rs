@@ -2839,6 +2839,9 @@ impl MembershipPersistence for Persistence {
         query("DELETE FROM stake_table_events_l1_block")
             .execute(tx.as_mut())
             .await?;
+        query("DELETE FROM epoch_drb_and_root")
+            .execute(tx.as_mut())
+            .await?;
         tx.commit().await?;
         Ok(())
     }

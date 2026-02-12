@@ -2030,6 +2030,13 @@ impl MembershipPersistence for Persistence {
             fs::remove_dir_all(&events_dir)
                 .with_context(|| format!("Failed to remove events dir: {events_dir:?}"))?;
         }
+
+        let root_header_dir = inner.epoch_root_block_header_dir_path();
+        if root_header_dir.exists() {
+            fs::remove_dir_all(&root_header_dir).with_context(|| {
+                format!("Failed to remove epoch root block header dir: {root_header_dir:?}")
+            })?;
+        }
         Ok(())
     }
 
