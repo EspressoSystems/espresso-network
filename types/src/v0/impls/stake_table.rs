@@ -707,6 +707,7 @@ pub struct ValidatorSet {
 }
 
 /// Extract the active validator set from the L1 stake table events.
+#[cfg(test)]
 pub(crate) fn validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> Result<ValidatorSet, StakeTableError> {
@@ -1343,23 +1344,38 @@ impl Fetcher {
             );
         };
 
-        let events = match self
-            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
+        let l1_block = l1_finalized_block_info.number();
+
+        let events = self
+            .fetch_and_store_stake_table_events(address, l1_block)
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
-        {
-            Ok(events) => events,
-            Err(e) => {
-                bail!("failed to fetch stake table events {e:?}");
-            },
-        };
+            .with_context(|| "failed to fetch stake table events")?;
 
-        match validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
-            Ok(res) => Ok(res),
-            Err(e) => {
-                bail!("failed to construct stake table {e:?}");
-            },
-        }
+        let (all_validators, stake_table_hash) =
+            match validators_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to apply stake table events: {e:?}. Clearing stored events"
+                    );
+
+                    let persistence_lock = self.persistence.lock().await;
+                    persistence_lock.clear_events().await.inspect_err(|err| {
+                        tracing::error!("Failed to clear stored events: {err}");
+                    })?;
+
+                    bail!("failed to apply stake table events: {e:?}");
+                },
+            };
+
+        let active_validators = select_active_validator_set(&all_validators)?;
+
+        Ok(ValidatorSet {
+            all_validators,
+            active_validators,
+            stake_table_hash: Some(stake_table_hash),
+        })
     }
 
     /// Retrieve and verify `ChainConfig`

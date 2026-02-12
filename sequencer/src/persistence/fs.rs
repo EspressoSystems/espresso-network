@@ -2023,6 +2023,16 @@ impl MembershipPersistence for Persistence {
         }
     }
 
+    async fn clear_events(&self) -> anyhow::Result<()> {
+        let inner = self.inner.write().await;
+        let events_dir = inner.stake_table_dir_path().join("events");
+        if events_dir.exists() {
+            fs::remove_dir_all(&events_dir)
+                .with_context(|| format!("Failed to remove events dir: {events_dir:?}"))?;
+        }
+        Ok(())
+    }
+
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
