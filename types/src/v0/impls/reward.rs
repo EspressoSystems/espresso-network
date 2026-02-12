@@ -999,7 +999,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
                     reward_accounts,
                 )
                 .await?
-                .tree;
+                .clone_tree();
 
             tracing::warn!(
                 parent_height,

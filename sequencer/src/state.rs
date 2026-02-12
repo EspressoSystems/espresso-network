@@ -388,7 +388,7 @@ where
                  for the previous height",
             )?;
 
-        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
+        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.clone_tree();
     }
 
     if last_height == 0 {

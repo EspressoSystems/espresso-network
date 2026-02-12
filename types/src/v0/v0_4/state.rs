@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     sync::{Arc, OnceLock},
+    time::Duration,
 };
 
 use alloy::primitives::{Address, U256};
@@ -18,8 +19,30 @@ use crate::{
     v0::sparse_mt::{Keccak256Hasher, KeccakNode},
     v0_3::{RewardAccountV1, RewardAmount},
 };
+use moka::future::Cache;
 
-static REWARD_MERKLE_TREE_V2_MEMORY_LOCK: OnceLock<Arc<Semaphore>> = OnceLock::new();
+static REWARD_MERKLE_TREE_V2_MEMORY_LOCK: OnceLock<Arc<RewardMerkleTreeV2Cache>> = OnceLock::new();
+
+pub struct RewardMerkleTreeV2Cache {
+  semaphore: Arc<Semaphore>,
+  cache: Cache<(), (RewardMerkleTreeV2Balances, PermittedRewardMerkleTreeV2)>,
+}
+
+impl RewardMerkleTreeV2Cache {
+  pub fn new() -> Self {
+    let semaphore = Arc::new(Semaphore::new(1));
+
+    let cache = Cache::builder()
+                .max_capacity(1)
+                .time_to_live(Duration::from_millis(500))
+                .build();
+
+    RewardMerkleTreeV2Cache {
+      semaphore,
+      cache
+    }
+  }
+}
 
 pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160;
 pub const REWARD_MERKLE_TREE_V2_ARITY: usize = 2;
@@ -34,9 +57,11 @@ pub type RewardMerkleTreeV2 = UniversalMerkleTree<
     KeccakNode,
 >;
 
+pub type RewardMerkleTreeV2Balances = Vec<(RewardAccountV2, RewardAmount)>;
+
 #[derive(Clone)]
 pub struct PermittedRewardMerkleTreeV2 {
-    pub tree: RewardMerkleTreeV2,
+    pub tree: Arc<RewardMerkleTreeV2>,
     _permit: Arc<OwnedSemaphorePermit>,
 }
 
@@ -50,22 +75,51 @@ impl std::ops::Deref for PermittedRewardMerkleTreeV2 {
 
 impl PermittedRewardMerkleTreeV2 {
     pub async fn try_from_kv_set(
-        balances: Vec<(RewardAccountV2, RewardAmount)>,
+        balances: RewardMerkleTreeV2Balances,
     ) -> anyhow::Result<Self> {
+        let cache = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
+            .get_or_init(|| Arc::new(RewardMerkleTreeV2Cache::new()));
+
+
+        match cache.cache.get(&()).await {
+            Some((cached_balances, cached_tree)) => {
+              if balances == cached_balances {
+              // if the cached tree is the one we're trying to construct, just return it
+                return Ok(cached_tree);
+              } else {
+              // but if we're trying to build a new tree, drop the cached tree
+                cache.cache.invalidate(&()).await;
+              }
+            }
+            None => {
+            }
+        }
+
         let permit = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
-            .get_or_init(|| Arc::new(Semaphore::new(1)))
+            .get_or_init(|| Arc::new(RewardMerkleTreeV2Cache::new()))
+            .semaphore
             .clone()
             .acquire_owned()
             .await
             .context("Failed to acquire permit for RewardMerkleTreeV2")?;
 
-        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
-            .context("Failed to rebuild reward merkle tree from balances")?;
+        let tree = Arc::new(RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances.clone())
+            .context("Failed to rebuild reward merkle tree from balances")?);
 
-        Ok(PermittedRewardMerkleTreeV2 {
+        let permitted_tree = PermittedRewardMerkleTreeV2 {
             tree,
             _permit: Arc::new(permit),
-        })
+        };
+
+        cache.cache.insert((), (balances, permitted_tree.clone())).await;
+
+        Ok(permitted_tree)
+    }
+
+    pub fn clone_tree(
+      &self
+    ) -> RewardMerkleTreeV2 {
+      RewardMerkleTreeV2::clone(&self.tree)
     }
 }
 

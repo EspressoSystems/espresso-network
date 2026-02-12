@@ -442,7 +442,7 @@ impl CatchupStorage for SqlStorage {
         if height < block_height {
             load_reward_merkle_tree_v2(self, height)
                 .await
-                .map(|(permitted_tree, leaf)| (permitted_tree.tree, leaf))
+                .map(|(permitted_tree, leaf)| (permitted_tree.clone_tree(), leaf))
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
@@ -1150,7 +1150,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
                      origin",
                 )?
                 .0
-                .tree;
+                .clone_tree();
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
                 "loaded reward state does not match parent header"
