@@ -44,6 +44,7 @@ use std::{
     time::Duration,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -63,6 +64,7 @@ use hotshot_types::{
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
         consensus_api::ConsensusApi,
@@ -372,9 +374,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             );
         }
         let high_qc_block_number = initializer.high_qc.data.block_number;
-        let (stake_table, success_threshold) = membership_coordinator
-            .stake_table_and_threshold(epoch)
-            .await;
+        let (stake_table, success_threshold) = if let Ok(epoch_membership) =
+            membership_coordinator.stake_table_for_epoch(epoch).await
+        {
+            (
+                epoch_membership.stake_table().await,
+                epoch_membership.success_threshold().await,
+            )
+        } else {
+            tracing::warn!(
+                "Failed to get stake table for epoch {:?} while creating vote participation",
+                epoch
+            );
+            (HSStakeTable::default(), U256::MAX)
+        };
 
         let consensus = Consensus::new(
             validated_state_map,
