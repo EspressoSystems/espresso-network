@@ -124,6 +124,9 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
             ..Default::default()
         }
     }
+    // fn new_forgotten_reward_state(&self) -> Self {
+    //     self.clone()
+    // }
 
     fn on_commit(&self) {}
 

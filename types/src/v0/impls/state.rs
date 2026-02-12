@@ -1,4 +1,7 @@
-use std::ops::Add;
+use std::{
+    collections::{BTreeMap, HashMap},
+    ops::Add,
+};
 
 use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
@@ -193,6 +196,8 @@ pub struct ValidatedState {
     pub fee_merkle_tree: FeeMerkleTree,
     pub reward_merkle_tree_v1: RewardMerkleTreeV1,
     pub reward_merkle_tree_v2: RewardMerkleTreeV2,
+    // #[serde(skip)]
+    // pub reward_accounts: BTreeMap<RewardAccountV2, RewardAmount>,
     /// Configuration [`Header`] proposals will be validated against.
     pub chain_config: ResolvableChainConfig,
 }
@@ -233,6 +238,7 @@ impl Default for ValidatedState {
             fee_merkle_tree,
             reward_merkle_tree_v1,
             reward_merkle_tree_v2,
+            // reward_accounts: BTreeMap::new(),
             chain_config,
         }
     }
@@ -821,6 +827,7 @@ impl ValidatedState {
             reward_merkle_tree_v1: RewardMerkleTreeV1::from_commitment(
                 self.reward_merkle_tree_v1.commitment(),
             ),
+            // reward_accounts: BTreeMap::new(),
             chain_config: ResolvableChainConfig::from(self.chain_config.commit()),
         }
     }
@@ -986,28 +993,33 @@ impl ValidatedState {
         )?;
 
         // total_rewards_distributed is only present in >= V4
-        let total_rewards_distributed = if version < EpochVersion::version() {
-            None
-        } else if let Some(reward_distributor) = distribute_block_reward(
-            instance,
-            &mut validated_state,
-            parent_leaf,
-            view_number,
-            version,
-        )
-        .await?
-        {
-            reward_distributor
-                .update_rewards_delta(&mut delta)
-                .context("failed to update rewards delta")?;
-
-            Some(reward_distributor.total_distributed())
+        let (total_rewards_distributed, state) = if version < EpochVersion::version() {
+            (None, validated_state)
         } else {
-            // Version >= V4 but no rewards were distributed because epoch <= first epoch + 1
-            Some(Default::default())
+            let (reward_distributor, new_validated_state) = distribute_block_reward(
+                instance,
+                validated_state,
+                parent_leaf,
+                view_number,
+                version,
+            )
+            .await?;
+            if let Some(reward_distributor) = reward_distributor {
+                reward_distributor
+                    .update_rewards_delta(&mut delta)
+                    .context("failed to update rewards delta")?;
+
+                (
+                    Some(reward_distributor.total_distributed()),
+                    new_validated_state,
+                )
+            } else {
+                // Version >= V4 but no rewards were distributed because epoch <= first epoch + 1
+                (Some(Default::default()), new_validated_state)
+            }
         };
 
-        Ok((validated_state, delta, total_rewards_distributed))
+        Ok((state, delta, total_rewards_distributed))
     }
 
     /// Updates the `ValidatedState` if a protocol upgrade has occurred.
@@ -1246,9 +1258,27 @@ impl HotShotState<SeqTypes> for ValidatedState {
             block_merkle_tree,
             reward_merkle_tree_v2,
             reward_merkle_tree_v1,
+            // reward_accounts: BTreeMap::new(),
             chain_config: block_header.chain_config(),
         }
     }
+    // fn new_forgotten_reward_state(&self) -> Self {
+    //     let reward_accounts = self
+    //         .reward_merkle_tree_v2
+    //         .iter()
+    //         .map(|account| (account.0.clone(), account.1.clone()))
+    //         .collect::<BTreeMap<RewardAccountV2, RewardAmount>>();
+    //     Self {
+    //         fee_merkle_tree: self.fee_merkle_tree.clone(),
+    //         block_merkle_tree: self.block_merkle_tree.clone(),
+    //         reward_merkle_tree_v1: self.reward_merkle_tree_v1.clone(),
+    //         reward_merkle_tree_v2: RewardMerkleTreeV2::from_commitment(
+    //             self.reward_merkle_tree_v2.commitment(),
+    //         ),
+    //         reward_accounts,
+    //         chain_config: self.chain_config.clone(),
+    //     }
+    // }
     /// Construct a genesis validated state.
     fn genesis(instance: &Self::Instance) -> (Self, Self::Delta) {
         (instance.genesis_state.clone(), Delta::default())

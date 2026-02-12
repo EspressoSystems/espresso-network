@@ -1,4 +1,9 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context};
@@ -1162,7 +1167,15 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
                 "state not available for height {height}, view {view}"
             ))?;
 
-        retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
+        let accounts = accounts.to_vec();
+        tokio::task::spawn_blocking(move || {
+            retain_v2_reward_accounts(
+                &state.reward_merkle_tree_v2,
+                accounts.iter().copied(),
+                // &state.reward_accounts,
+            )
+        })
+        .await?
     }
 
     // We can iterate over the in-memory reward merkle tree
@@ -1281,6 +1294,16 @@ impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
                  missing."
             );
         }
+    }
+}
+
+impl Into<RewardMerkleTreeV2Data> for &BTreeMap<RewardAccountV2, RewardAmount> {
+    fn into(self) -> RewardMerkleTreeV2Data {
+        let balances: Vec<_> = self
+            .iter()
+            .map(|(account, balance)| (*account, *balance))
+            .collect();
+        RewardMerkleTreeV2Data { balances }
     }
 }
 

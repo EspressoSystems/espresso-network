@@ -7,7 +7,7 @@
 //! Provides the core consensus types
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::Arc,
@@ -396,6 +396,10 @@ pub struct Consensus<TYPES: NodeType> {
     /// The validated states that are currently loaded in memory.
     validated_state_map: BTreeMap<TYPES::View, View<TYPES>>,
 
+    /// The views that are currently in progress of being validated.
+    /// and we expect a state for them to be created soon.
+    in_progress_state_validation: BTreeSet<TYPES::View>,
+
     /// All the VID shares we've received for current and future views.
     vid_shares: VidShares<TYPES>,
 
@@ -619,6 +623,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         };
         Consensus {
             validated_state_map,
+            in_progress_state_validation: BTreeSet::new(),
             vid_shares: vid_shares.unwrap_or_default(),
             saved_da_certs: HashMap::new(),
             cur_view,
@@ -1035,8 +1040,34 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 }
             }
         }
+        // let is_da_view = matches!(new_view.view_inner, ViewInner::Da { .. });
         self.validated_state_map.insert(view_number, new_view);
+        // if is_da_view {
+        //     return Ok(());
+        // }
+        // let max_view = self
+        //     .validated_state_map
+        //     .iter()
+        //     .filter(|(_, view)| matches!(view.view_inner, ViewInner::Leaf { delta: Some(_), .. }))
+        //     .map(|(view, _)| view)
+        //     .max()
+        //     .copied()
+        //     .unwrap_or(TYPES::View::genesis());
+        // for (_, view) in self.validated_state_map.range_mut(..max_view) {
+        //     view.forget_reward_state();
+        // }
         Ok(())
+    }
+
+    pub fn remove_in_progress_state_validation(&mut self, view_number: TYPES::View) {
+        self.in_progress_state_validation.remove(&view_number);
+    }
+    pub fn insert_in_progress_state_validation(&mut self, view_number: TYPES::View) {
+        self.in_progress_state_validation.insert(view_number);
+    }
+
+    pub fn is_view_validating(&self, view_number: TYPES::View) -> bool {
+        self.in_progress_state_validation.contains(&view_number)
     }
 
     /// Update the saved leaves with a new leaf.
