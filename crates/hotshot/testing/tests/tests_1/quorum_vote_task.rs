@@ -80,6 +80,7 @@ async fn test_quorum_vote_task_success() {
     let expectations = vec![Expectations::from_outputs(all_predicates![
         exact(DaCertificateValidated(dacs[1].clone())),
         exact(VidShareValidated(vids[1].0[0].clone())),
+        exact(ViewValidated(ViewNumber::new(2))),
         exact(ViewChange(ViewNumber::new(3), None)),
         quorum_vote_send(),
     ])];

@@ -40,7 +40,7 @@ use crate::{
     events::HotShotEvent,
     helpers::{
         broadcast_event, decide_from_proposal, decide_from_proposal_2, derive_signed_state_digest,
-        fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
+        fetch_proposal, handle_drb_result, wait_for_previous_view, LeafChainTraversalOutcome,
     },
     quorum_vote::Versions,
 };
@@ -308,6 +308,9 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
             .cloned()
     });
 
+    let wait_for_previous = parent_view_number
+        .is_some_and(|view_number| consensus_reader.is_view_validating(view_number));
+
     // Justify qc's leaf commitment should be the same as the parent's leaf commitment.
     let mut maybe_parent = consensus_reader
         .saved_leaves()
@@ -316,6 +319,19 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
 
     drop(consensus_reader);
 
+    if wait_for_previous
+        && wait_for_previous_view(parent_view_number.unwrap(), receiver.activate_cloned())
+            .await
+            .is_some()
+    {
+        tracing::info!("Successfully waited for previous view {parent_view_number:?}");
+        maybe_validated_view = consensus
+            .read()
+            .await
+            .validated_state_map()
+            .get(&parent_view_number.unwrap())
+            .cloned()
+    }
     maybe_parent = match maybe_parent {
         Some(p) => Some(p),
         None => {
@@ -359,6 +375,10 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     let version = upgrade_lock.version(view_number).await?;
 
     let now = Instant::now();
+    consensus
+        .write()
+        .await
+        .insert_in_progress_state_validation(view_number);
     let (validated_state, state_delta) = parent_state
         .validate_and_apply_header(
             &instance_state,
@@ -385,6 +405,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     ) {
         tracing::trace!("{e:?}");
     }
+    consensus_writer.remove_in_progress_state_validation(view_number);
     let update_leaf_duration = now.elapsed();
 
     consensus_writer
@@ -396,6 +417,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
         .update_leaf_duration
         .add_point(update_leaf_duration.as_secs_f64());
     drop(consensus_writer);
+    broadcast_event(Arc::new(HotShotEvent::ViewValidated(view_number)), &sender).await;
     tracing::debug!("update_leaf time: {update_leaf_duration:?}");
 
     Ok(())
