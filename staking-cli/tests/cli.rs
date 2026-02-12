@@ -15,7 +15,6 @@ use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{SeedableRng as _, rngs::StdRng};
 use serde::Deserialize;
 use staking_cli::{
-    Config,
     demo::DelegationConfig,
     deploy::{self, TestSystem},
     fetch_metadata,

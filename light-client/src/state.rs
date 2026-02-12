@@ -516,30 +516,28 @@ where
         // hashes (since these were only added in version 0.4). We will effectively check all this
         // work at once when we check the stake table hash after the first epoch of version 0.4
         #[cfg(feature = "decaf")]
-        if lower_bound < self.first_epoch_with_dynamic_stake_table {
-            if let Some(first_pos_epoch) = self.decaf_first_pos_epoch {
-                tracing::info!(
-                    %first_pos_epoch,
-                    to = %lower_bound,
-                    "performing Decaf catchup through version 0.3",
-                );
-                for epoch in *first_pos_epoch..=*lower_bound {
-                    let events = self
-                        .server
-                        .stake_table_events(EpochNumber::new(epoch))
-                        .await?;
-                    tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
-                    for event in events {
-                        tracing::debug!(epoch, ?event, "replay event");
-                        if let Err(err) =
-                            stake_table.apply_event(event).context("applying event")?
-                        {
-                            tracing::warn!("allowed error in event: {err:#}");
-                        }
+        if lower_bound < self.first_epoch_with_dynamic_stake_table
+            && let Some(first_pos_epoch) = self.decaf_first_pos_epoch
+        {
+            tracing::info!(
+                %first_pos_epoch,
+                to = %lower_bound,
+                "performing Decaf catchup through version 0.3",
+            );
+            for epoch in *first_pos_epoch..=*lower_bound {
+                let events = self
+                    .server
+                    .stake_table_events(EpochNumber::new(epoch))
+                    .await?;
+                tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
+                for event in events {
+                    tracing::debug!(epoch, ?event, "replay event");
+                    if let Err(err) = stake_table.apply_event(event).context("applying event")? {
+                        tracing::warn!("allowed error in event: {err:#}");
                     }
                 }
-                prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
             }
+            prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
         }
 
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.

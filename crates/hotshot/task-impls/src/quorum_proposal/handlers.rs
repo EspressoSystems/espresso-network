@@ -485,10 +485,10 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             .upgrade_certificate()
             .or(formed_upgrade_certificate);
 
-        if let Some(cert) = upgrade_certificate.clone() {
-            if cert.is_relevant(self.view_number).await.is_err() {
-                upgrade_certificate = None;
-            }
+        if let Some(cert) = upgrade_certificate.clone()
+            && cert.is_relevant(self.view_number).await.is_err()
+        {
+            upgrade_certificate = None;
         }
 
         let proposal_certificate = view_change_evidence

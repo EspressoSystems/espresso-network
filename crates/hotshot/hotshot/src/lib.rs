@@ -429,12 +429,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 .await;
             // If we already have an epoch root, we can trigger catchup for the epoch
             // which that root applies to.
-            if let Some(high_qc_block_number) = high_qc_block_number {
-                if is_ge_epoch_root(high_qc_block_number, config.epoch_height) {
-                    let _ = membership_coordinator
-                        .stake_table_for_epoch(Some(epoch + 2))
-                        .await;
-                }
+            if let Some(high_qc_block_number) = high_qc_block_number
+                && is_ge_epoch_root(high_qc_block_number, config.epoch_height)
+            {
+                let _ = membership_coordinator
+                    .stake_table_for_epoch(Some(epoch + 2))
+                    .await;
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {

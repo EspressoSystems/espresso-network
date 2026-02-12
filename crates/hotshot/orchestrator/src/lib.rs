@@ -301,18 +301,17 @@ where
 
         // If the orchestrator is set up for libp2p and we have supplied the proper
         // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
+        if self.config.libp2p_config.clone().is_some()
+            && let (Some(libp2p_public_key), Some(libp2p_address)) =
                 (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
+        {
+            // Push to our bootstrap nodes
+            self.config
+                .libp2p_config
+                .as_mut()
+                .unwrap()
+                .bootstrap_nodes
+                .push((libp2p_public_key, libp2p_address));
         }
 
         tracing::error!("Posted public key for node_index {node_index}");
@@ -373,18 +372,17 @@ where
 
         // If the orchestrator is set up for libp2p and we have supplied the proper
         // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
+        if self.config.libp2p_config.clone().is_some()
+            && let (Some(libp2p_public_key), Some(libp2p_address)) =
                 (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
+        {
+            // Push to our bootstrap nodes
+            self.config
+                .libp2p_config
+                .as_mut()
+                .unwrap()
+                .bootstrap_nodes
+                .push((libp2p_public_key, libp2p_address));
         }
 
         tracing::error!("Node {node_index} has registered.");
@@ -418,18 +416,17 @@ where
 
         // If the orchestrator is set up for libp2p and we have supplied the proper
         // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
+        if self.config.libp2p_config.clone().is_some()
+            && let (Some(libp2p_public_key), Some(libp2p_address)) =
                 (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
+        {
+            // Push to our bootstrap nodes
+            self.config
+                .libp2p_config
+                .as_mut()
+                .unwrap()
+                .bootstrap_nodes
+                .push((libp2p_public_key, libp2p_address));
         }
         Ok(node_index)
     }

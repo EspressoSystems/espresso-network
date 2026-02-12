@@ -476,18 +476,18 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     },
                     ClientRequest::Subscribe(t, chan) => {
                         behaviour.subscribe_gossip(&t);
-                        if let Some(chan) = chan {
-                            if chan.send(()).is_err() {
-                                error!("finished subscribing but response channel dropped");
-                            }
+                        if let Some(chan) = chan
+                            && chan.send(()).is_err()
+                        {
+                            error!("finished subscribing but response channel dropped");
                         }
                     },
                     ClientRequest::Unsubscribe(t, chan) => {
                         behaviour.unsubscribe_gossip(&t);
-                        if let Some(chan) = chan {
-                            if chan.send(()).is_err() {
-                                error!("finished unsubscribing but response channel dropped");
-                            }
+                        if let Some(chan) = chan
+                            && chan.send(()).is_err()
+                        {
+                            error!("finished unsubscribing but response channel dropped");
                         }
                     },
                     ClientRequest::DirectRequest {

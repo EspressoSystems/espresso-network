@@ -180,28 +180,28 @@ where
                         break;
                     },
                     Some(evt) => {
-                        if let EventType::ViewFinished { view_number } = evt.event {
-                            if let Some(change) = self.changes.remove(&view_number) {
-                                match change {
-                                    BuilderChange::Up => {
-                                        if task.is_none() {
-                                            task = Some(spawn(Self::build_blocks(
-                                                self.config.clone(),
-                                                self.pub_key.clone(),
-                                                self.priv_key.clone(),
-                                                self.blocks.clone(),
-                                            )))
-                                        }
-                                    },
-                                    BuilderChange::Down => {
-                                        if let Some(handle) = task.take() {
-                                            handle.abort();
-                                        }
-                                    },
-                                    BuilderChange::FailClaims(_) => {},
-                                }
-                                let _ = self.change_sender.broadcast(change).await;
+                        if let EventType::ViewFinished { view_number } = evt.event
+                            && let Some(change) = self.changes.remove(&view_number)
+                        {
+                            match change {
+                                BuilderChange::Up => {
+                                    if task.is_none() {
+                                        task = Some(spawn(Self::build_blocks(
+                                            self.config.clone(),
+                                            self.pub_key.clone(),
+                                            self.priv_key.clone(),
+                                            self.blocks.clone(),
+                                        )))
+                                    }
+                                },
+                                BuilderChange::Down => {
+                                    if let Some(handle) = task.take() {
+                                        handle.abort();
+                                    }
+                                },
+                                BuilderChange::FailClaims(_) => {},
                             }
+                            let _ = self.change_sender.broadcast(change).await;
                         }
                     },
                 }

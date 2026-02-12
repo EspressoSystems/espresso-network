@@ -263,13 +263,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
                     // Epoch root QC is always not in epoch transition
                     return true;
                 }
-                if let HotShotEvent::Qc2Formed(Either::Left(qc)) = event.as_ref() {
-                    if qc.view_number() + 1 == view_number {
-                        return qc
-                            .data
-                            .block_number
-                            .is_none_or(|bn| !is_epoch_transition(bn, epoch_height));
-                    }
+                if let HotShotEvent::Qc2Formed(Either::Left(qc)) = event.as_ref()
+                    && qc.view_number() + 1 == view_number
+                {
+                    return qc
+                        .data
+                        .block_number
+                        .is_none_or(|bn| !is_epoch_transition(bn, epoch_height));
                 }
                 false
             }),

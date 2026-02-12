@@ -771,14 +771,12 @@ pub async fn upgrade_fee_contract_multisig_owner(
             );
         }
 
-        let new_fee_contract_addr = contracts
+        contracts
             .deploy(
                 Contract::FeeContract,
                 FeeContract::deploy_builder(&provider),
             )
-            .await?;
-
-        new_fee_contract_addr
+            .await?
     } else {
         // Use dummy address for dry run
         Address::random()

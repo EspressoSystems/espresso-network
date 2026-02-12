@@ -346,10 +346,10 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     ));
 
     // Start the HTTP server to get a functioning healthcheck before any heavy computations.
-    if let Some(port) = state.config.port {
-        if let Err(err) = start_http_server(port, state.config.light_client_address, bind_version) {
-            tracing::error!("Error starting http server: {}", err);
-        }
+    if let Some(port) = state.config.port
+        && let Err(err) = start_http_server(port, state.config.light_client_address, bind_version)
+    {
+        tracing::error!("Error starting http server: {}", err);
     }
 
     let proving_key =

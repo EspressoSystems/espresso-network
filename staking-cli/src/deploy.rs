@@ -5,6 +5,7 @@ use alloy::{
     node_bindings::Anvil,
     primitives::{Address, B256, Bytes, U256, utils::parse_ether},
     providers::{
+        Provider, ProviderBuilder, RootProvider, WalletProvider,
         ext::AnvilApi,
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,

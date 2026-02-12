@@ -199,13 +199,12 @@ pub async fn build_cert<
             .expect("Failed to create VersionedVoteData!")
             .commit();
 
-    let cert = CERT::create_signed_certificate(
+    CERT::create_signed_certificate(
         vote_commitment,
         vote.date().clone(),
         real_qc_sig,
         vote.view_number(),
-    );
-    cert
+    )
 }
 
 pub fn vid_share<TYPES: NodeType>(
@@ -265,13 +264,11 @@ pub async fn build_assembled_sig<
         sig_lists.push(original_signature);
     }
 
-    let real_qc_sig = <TYPES::SignatureKey as SignatureKey>::assemble(
+    <TYPES::SignatureKey as SignatureKey>::assemble(
         &real_qc_pp,
         signers.as_bitslice(),
         &sig_lists[..],
-    );
-
-    real_qc_sig
+    )
 }
 
 /// get the keypair for a node id

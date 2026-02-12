@@ -640,16 +640,13 @@ where
                     unreliable_network,
                     secondary_network_delay,
                 ),
-                storage: Rc::new(move |node_id| {
-                    let storage = TestStorage::<TYPES> {
-                        delay_config: metadata
-                            .async_delay_config
-                            .get(&node_id)
-                            .cloned()
-                            .unwrap_or_default(),
-                        ..Default::default()
-                    };
-                    storage
+                storage: Rc::new(move |node_id| TestStorage::<TYPES> {
+                    delay_config: metadata
+                        .async_delay_config
+                        .get(&node_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    ..Default::default()
                 }),
                 hotshot_config,
                 validator_config,

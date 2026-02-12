@@ -441,11 +441,11 @@ impl VidScheme for AvidMScheme {
         let mut bytes: Vec<u8> = field_to_bytes(Self::recover_fields(param, shares)?).collect();
         // Remove the trimming zeros and the last 1 to get the actual payload bytes.
         // See `pad_to_fields`.
-        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
-            if bytes[pad_index] == 1u8 {
-                bytes.truncate(pad_index);
-                return Ok(bytes);
-            }
+        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0)
+            && bytes[pad_index] == 1u8
+        {
+            bytes.truncate(pad_index);
+            return Ok(bytes);
         }
         Err(VidError::Argument(
             "Malformed payload, cannot find the padding position".to_string(),

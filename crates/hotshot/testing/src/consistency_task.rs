@@ -74,13 +74,13 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
     let mut view_decided = TYPES::View::new(0);
 
     for (grandparent, _parent, child) in leaf_triples {
-        if let Some(cert) = grandparent.upgrade_certificate() {
-            if cert.data.decide_by <= child.view_number() {
-                decided_upgrade_certificate = Some(cert);
-                view_decided = child.view_number();
+        if let Some(cert) = grandparent.upgrade_certificate()
+            && cert.data.decide_by <= child.view_number()
+        {
+            decided_upgrade_certificate = Some(cert);
+            view_decided = child.view_number();
 
-                break;
-            }
+            break;
         }
     }
 
