@@ -13083,7 +13083,6 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "serde",
- "serde_bytes",
  "thiserror 2.0.17",
  "vbs",
 ]

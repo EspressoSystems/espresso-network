@@ -1,6 +1,9 @@
 use std::{borrow::Cow, fmt, ops::Deref};
 
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, DeserializeOwned},
+};
 use vbs::version::Version;
 
 // Known versions:
@@ -46,7 +49,7 @@ where
 }
 
 /// A version upgrade from some base to some target version.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub struct Upgrade {
     pub base: Version,
@@ -135,4 +138,69 @@ pub enum VersionError {
 
     #[error("bincode error: {0}")]
     Bincode(#[from] bincode::Error),
+}
+
+// `vbs::version::Version` derives serde's `Serialize` and `Deserialize` traits
+// without customisation. Here we want to render major and minor versions as
+// "{major}.{minor}" and also deserialise them this way. We use this
+// `UpgradeShadow` type to map from and to `Upgrade` and implement our custom
+// format for human readable encodings and fall back to the generic implementation
+// otherwise.
+
+#[derive(Serialize, Deserialize)]
+struct UpgradeShadow<T> {
+    base: T,
+    target: T,
+}
+
+impl Serialize for Upgrade {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let show = |Version { major, minor }: Version| format!("{major}.{minor}");
+
+        if s.is_human_readable() {
+            let us = UpgradeShadow {
+                base: show(self.base),
+                target: show(self.target),
+            };
+            us.serialize(s)
+        } else {
+            let us = UpgradeShadow {
+                base: self.base,
+                target: self.target,
+            };
+            us.serialize(s)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Upgrade {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let parse = |s: &str| -> Result<Version, Box<dyn std::error::Error>> {
+            if let Some((major, minor)) = s.split_once('.') {
+                Ok(version(major.parse()?, minor.parse()?))
+            } else {
+                Err("invalid version format, expecting {major}.{minor}".into())
+            }
+        };
+
+        if d.is_human_readable() {
+            let us: UpgradeShadow<Cow<'de, str>> = UpgradeShadow::deserialize(d)?;
+            Ok(Upgrade {
+                base: parse(&us.base).map_err(de::Error::custom)?,
+                target: parse(&us.target).map_err(de::Error::custom)?,
+            })
+        } else {
+            let us: UpgradeShadow<Version> = UpgradeShadow::deserialize(d)?;
+            Ok(Upgrade {
+                base: us.base,
+                target: us.target,
+            })
+        }
+    }
 }
