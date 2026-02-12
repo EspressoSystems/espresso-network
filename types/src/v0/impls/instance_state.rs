@@ -123,6 +123,10 @@ impl MembershipPersistence for NoStorage {
         bail!("unimplemented")
     }
 
+    async fn clear_events(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_all_validators(
         &self,
         _epoch: EpochNumber,

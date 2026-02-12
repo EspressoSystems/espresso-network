@@ -2641,6 +2641,18 @@ impl MembershipPersistence for Persistence {
         }
     }
 
+    async fn clear_events(&self) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+        query("DELETE FROM stake_table_events")
+            .execute(tx.as_mut())
+            .await?;
+        query("DELETE FROM stake_table_events_l1_block")
+            .execute(tx.as_mut())
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
