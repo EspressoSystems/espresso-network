@@ -357,19 +357,10 @@ impl<
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    let num_leaves = state.reward_merkle_tree_v2.num_leaves();
-
-                    let merkle_tree_bytes = if state.reward_accounts.len() as u64 == num_leaves {
-                        bincode::serialize(&Into::<RewardMerkleTreeV2Data>::into(
-                            &state.reward_accounts,
-                        ))
-                        .context("Merkle tree serialization failed; this should never happen.")?
-                    } else {
-                        bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
-                            &state.reward_merkle_tree_v2,
-                        )?)
-                        .context("Merkle tree serialization failed; this should never happen.")?
-                    };
+                    let merkle_tree_bytes = bincode::serialize(
+                        &TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)?,
+                    )
+                    .context("Merkle tree serialization failed; this should never happen.")?;
                     return Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes));
                 }
 

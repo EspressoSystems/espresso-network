@@ -984,6 +984,31 @@ pub async fn get_leader_and_fetch_missing_rewards(
         );
 
         let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
+
+        // if validated_state.reward_merkle_tree_v2.iter().count() == 0 {
+        //     let has_all_accounts = reward_accounts.iter().fold(true, |has_account, account| {
+        //         has_account && validated_state.reward_accounts.contains_key(account)
+        //     });
+        //     if has_all_accounts {
+        //         let accs = validated_state
+        //             .reward_accounts
+        //             .iter()
+        //             .map(|(account, balance)| (account.clone(), balance.clone()))
+        //             .collect::<Vec<_>>();
+        //         if let Ok(Ok(new_tree)) = tokio::task::spawn_blocking(move || {
+        //             RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, &accs)
+        //         })
+        //         .await
+        //         {
+        //             if new_tree.commitment() == reward_merkle_tree_root {
+        //                 validated_state.reward_merkle_tree_v2 = new_tree;
+        //             } else {
+        //                 tracing::error!("recalculated the wrong merkle tree commitment");
+        //             }
+        //         }
+        //     }
+        // }
+
         if forgotten_accounts_include(&validated_state.reward_merkle_tree_v2, &reward_accounts) {
             tracing::warn!(
                 parent_height,

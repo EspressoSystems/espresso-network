@@ -239,23 +239,23 @@ impl<TYPES: NodeType> ViewInner<TYPES> {
         }
     }
 
-    pub fn forget_reward_state(&mut self) {
-        if let Self::Leaf {
-            leaf,
-            state,
-            delta,
-            epoch,
-        } = self
-        {
-            let new_state = state.new_forgotten_reward_state();
-            *self = Self::Leaf {
-                state: Arc::new(new_state),
-                delta: delta.clone(),
-                epoch: epoch.clone(),
-                leaf: leaf.clone(),
-            };
-        }
-    }
+    // pub fn forget_reward_state(&mut self) {
+    //     if let Self::Leaf {
+    //         leaf,
+    //         state,
+    //         delta,
+    //         epoch,
+    //     } = self
+    //     {
+    //         let new_state = state.new_forgotten_reward_state();
+    //         *self = Self::Leaf {
+    //             state: Arc::new(new_state),
+    //             delta: delta.clone(),
+    //             epoch: epoch.clone(),
+    //             leaf: leaf.clone(),
+    //         };
+    //     }
+    // }
 }
 
 impl<TYPES: NodeType> Deref for View<TYPES> {

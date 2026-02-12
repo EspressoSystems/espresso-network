@@ -1262,23 +1262,23 @@ impl HotShotState<SeqTypes> for ValidatedState {
             chain_config: block_header.chain_config(),
         }
     }
-    fn new_forgotten_reward_state(&self) -> Self {
-        let reward_accounts = self
-            .reward_merkle_tree_v2
-            .iter()
-            .map(|account| (account.0.clone(), account.1.clone()))
-            .collect::<BTreeMap<RewardAccountV2, RewardAmount>>();
-        Self {
-            fee_merkle_tree: self.fee_merkle_tree.clone(),
-            block_merkle_tree: self.block_merkle_tree.clone(),
-            reward_merkle_tree_v1: self.reward_merkle_tree_v1.clone(),
-            reward_merkle_tree_v2: RewardMerkleTreeV2::from_commitment(
-                self.reward_merkle_tree_v2.commitment(),
-            ),
-            reward_accounts,
-            chain_config: self.chain_config.clone(),
-        }
-    }
+    // fn new_forgotten_reward_state(&self) -> Self {
+    //     let reward_accounts = self
+    //         .reward_merkle_tree_v2
+    //         .iter()
+    //         .map(|account| (account.0.clone(), account.1.clone()))
+    //         .collect::<BTreeMap<RewardAccountV2, RewardAmount>>();
+    //     Self {
+    //         fee_merkle_tree: self.fee_merkle_tree.clone(),
+    //         block_merkle_tree: self.block_merkle_tree.clone(),
+    //         reward_merkle_tree_v1: self.reward_merkle_tree_v1.clone(),
+    //         reward_merkle_tree_v2: RewardMerkleTreeV2::from_commitment(
+    //             self.reward_merkle_tree_v2.commitment(),
+    //         ),
+    //         reward_accounts,
+    //         chain_config: self.chain_config.clone(),
+    //     }
+    // }
     /// Construct a genesis validated state.
     fn genesis(instance: &Self::Instance) -> (Self, Self::Delta) {
         (instance.genesis_state.clone(), Delta::default())

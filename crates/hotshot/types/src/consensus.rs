@@ -1035,22 +1035,22 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 }
             }
         }
-        let is_da_view = matches!(new_view.view_inner, ViewInner::Da { .. });
+        // let is_da_view = matches!(new_view.view_inner, ViewInner::Da { .. });
         self.validated_state_map.insert(view_number, new_view);
-        if is_da_view {
-            return Ok(());
-        }
-        let max_view = self
-            .validated_state_map
-            .iter()
-            .filter(|(_, view)| matches!(view.view_inner, ViewInner::Leaf { delta: Some(_), .. }))
-            .map(|(view, _)| view)
-            .max()
-            .copied()
-            .unwrap_or(TYPES::View::genesis());
-        for (_, view) in self.validated_state_map.range_mut(..max_view) {
-            view.forget_reward_state();
-        }
+        // if is_da_view {
+        //     return Ok(());
+        // }
+        // let max_view = self
+        //     .validated_state_map
+        //     .iter()
+        //     .filter(|(_, view)| matches!(view.view_inner, ViewInner::Leaf { delta: Some(_), .. }))
+        //     .map(|(view, _)| view)
+        //     .max()
+        //     .copied()
+        //     .unwrap_or(TYPES::View::genesis());
+        // for (_, view) in self.validated_state_map.range_mut(..max_view) {
+        //     view.forget_reward_state();
+        // }
         Ok(())
     }
 
