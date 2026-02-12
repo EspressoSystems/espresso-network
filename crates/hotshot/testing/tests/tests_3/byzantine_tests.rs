@@ -2,7 +2,7 @@ use std::{collections::HashSet, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_example_types::{
-    node_types::{EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestVersions},
+    node_types::{EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, CliquenetImpl, TestVersions},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
@@ -108,7 +108,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: dishonest_da,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
     Versions: [TestVersions],
     Ignore: false,
@@ -137,7 +137,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: dishonest_voting,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
     Versions: [TestVersions],
     Ignore: false,

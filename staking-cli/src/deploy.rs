@@ -1,15 +1,17 @@
 use std::time::Duration;
 
 use alloy::{
-    network::{Ethereum, EthereumWallet},
+    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
+    node_bindings::Anvil,
     primitives::{utils::parse_ether, Address, B256, U256},
     providers::{
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
-        layers::AnvilProvider,
+        layers::{AnvilLayer, AnvilProvider},
         utils::JoinedRecommendedFillers,
-        ProviderBuilder, RootProvider, WalletProvider,
+        Provider, ProviderBuilder, RootProvider, WalletProvider,
     },
+    rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
     sol_types::SolValue as _,
 };
@@ -37,18 +39,28 @@ use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
+use tokio::net::TcpListener;
 use url::Url;
-use warp::Filter;
+use warp::{http::StatusCode, Filter};
 
 use crate::{
-    delegation::{approve, delegate, undelegate},
-    funding::{send_esp, send_eth},
-    parse::Commission,
-    receipt::ReceiptExt as _,
-    registration::{deregister_validator, fetch_commission, register_validator},
-    signature::NodeSignatures,
-    BLSKeyPair, DEV_MNEMONIC,
+    parse::Commission, receipt::ReceiptExt as _, registration::fetch_commission,
+    signature::NodeSignatures, transaction::Transaction, BLSKeyPair, DEV_MNEMONIC,
 };
+
+/// Spawn a warp server on a random available port and return the port number.
+/// Uses TcpListener::bind with port 0 to atomically acquire a free port,
+/// avoiding race conditions with portpicker.
+pub async fn serve_on_random_port(
+    filter: impl Filter<Extract = impl warp::Reply> + Clone + Send + Sync + 'static,
+) -> u16 {
+    let listener = TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0u16)))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(warp::serve(filter).incoming(listener).run());
+    port
+}
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
@@ -70,6 +82,7 @@ pub struct TestSystem {
     pub state_key_pair: StateKeyPair,
     pub commission: Commission,
     pub approval_amount: U256,
+    pub version: StakeTableContractVersion,
 }
 
 impl TestSystem {
@@ -81,26 +94,15 @@ impl TestSystem {
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
         let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
-        // Sporadically the provider builder fails with a timeout inside alloy.
-        // Retry a few times.
-        let mut attempts = 0;
-        let (port, provider) = loop {
-            let port = portpicker::pick_unused_port().unwrap();
-            match ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-                anvil.port(port).arg("--accounts").arg("20")
-            }) {
-                Ok(provider) => break (port, provider),
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= 5 {
-                        anyhow::bail!("Failed to spawn anvil after 5 attempts: {e}");
-                    }
-                    tracing::warn!("Anvil spawn failed, retrying: {e}");
-                },
-            }
-        };
 
-        let rpc_url: Url = format!("http://localhost:{port}").parse()?;
+        // The AnvilLayer keeps the anvil instance alive internally.
+        let anvil_layer = AnvilLayer::from(Anvil::new().arg("--accounts").arg("20"));
+        let rpc_url = anvil_layer.endpoint_url();
+        let provider = ProviderBuilder::new()
+            .layer(anvil_layer)
+            .wallet(EthereumWallet::from(build_signer(DEV_MNEMONIC, 0)))
+            .connect_http(rpc_url.clone());
+
         let deployer_address = provider.default_signer_address();
         // I don't know how to get the signer out of the provider, by default anvil uses the dev
         // mnemonic and the default signer is the first account.
@@ -189,6 +191,7 @@ impl TestSystem {
             state_key_pair,
             commission: Commission::try_from("12.34")?,
             approval_amount,
+            version: stake_table_contract_version,
         })
     }
 
@@ -210,13 +213,14 @@ impl TestSystem {
             &self.state_key_pair.clone(),
         );
         let metadata_uri = "https://example.com/metadata".parse()?;
-        register_validator(
-            &self.provider,
-            self.stake_table,
-            self.commission,
+        Transaction::RegisterValidator {
+            stake_table: self.stake_table,
+            commission: self.commission,
             metadata_uri,
             payload,
-        )
+            version: self.version,
+        }
+        .send(&self.provider)
         .await?
         .assert_success()
         .await?;
@@ -224,20 +228,23 @@ impl TestSystem {
     }
 
     pub async fn deregister_validator(&self) -> Result<()> {
-        deregister_validator(&self.provider, self.stake_table)
-            .await?
-            .assert_success()
-            .await?;
+        Transaction::DeregisterValidator {
+            stake_table: self.stake_table,
+        }
+        .send(&self.provider)
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
     pub async fn delegate(&self, amount: U256) -> Result<()> {
-        delegate(
-            &self.provider,
-            self.stake_table,
-            self.deployer_address,
+        Transaction::Delegate {
+            stake_table: self.stake_table,
+            validator: self.deployer_address,
             amount,
-        )
+        }
+        .send(&self.provider)
         .await?
         .assert_success()
         .await?;
@@ -245,12 +252,12 @@ impl TestSystem {
     }
 
     pub async fn undelegate(&self, amount: U256) -> Result<()> {
-        undelegate(
-            &self.provider,
-            self.stake_table,
-            self.deployer_address,
+        Transaction::Undelegate {
+            stake_table: self.stake_table,
+            validator: self.deployer_address,
             amount,
-        )
+        }
+        .send(&self.provider)
         .await?
         .assert_success()
         .await?;
@@ -258,7 +265,9 @@ impl TestSystem {
     }
 
     pub async fn transfer_eth(&self, to: Address, amount: U256) -> Result<()> {
-        send_eth(&self.provider, to, amount)
+        let tx = TransactionRequest::default().with_to(to).with_value(amount);
+        self.provider
+            .send_transaction(tx)
             .await?
             .assert_success()
             .await?;
@@ -266,10 +275,15 @@ impl TestSystem {
     }
 
     pub async fn transfer(&self, to: Address, amount: U256) -> Result<()> {
-        send_esp(&self.provider, self.token, to, amount)
-            .await?
-            .assert_success()
-            .await?;
+        Transaction::Transfer {
+            token: self.token,
+            to,
+            amount,
+        }
+        .send(&self.provider)
+        .await?
+        .assert_success()
+        .await?;
         Ok(())
     }
 
@@ -308,10 +322,15 @@ impl TestSystem {
     }
 
     pub async fn approve(&self, amount: U256) -> Result<()> {
-        approve(&self.provider, self.token, self.stake_table, amount)
-            .await?
-            .assert_success()
-            .await?;
+        Transaction::Approve {
+            token: self.token,
+            spender: self.stake_table,
+            amount,
+        }
+        .send(&self.provider)
+        .await?
+        .assert_success()
+        .await?;
         assert!(self.allowance(self.deployer_address).await? == amount);
         Ok(())
     }
@@ -366,15 +385,20 @@ impl TestSystem {
         let claim_input = query_data.to_reward_claim_input()?;
         let claim_input = std::sync::Arc::new(claim_input);
 
-        let port = portpicker::pick_unused_port().expect("No ports available");
-
         let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String).map(
             move |_block_height: u64, _address: String| warp::reply::json(&*claim_input.clone()),
         );
 
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-
+        let port = serve_on_random_port(route).await;
         Ok(format!("http://localhost:{}/", port).parse()?)
+    }
+
+    pub async fn setup_reward_claim_not_found_mock(&self) -> Url {
+        let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String)
+            .map(|_, _| warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND));
+
+        let port = serve_on_random_port(route).await;
+        format!("http://localhost:{}/", port).parse().unwrap()
     }
 }
 

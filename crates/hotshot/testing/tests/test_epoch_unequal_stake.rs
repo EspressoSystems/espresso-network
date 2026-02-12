@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::{
-    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes,
+    CliquenetImpl, EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -23,7 +23,7 @@ use hotshot_testing::{
 // and can tailor our view failure set against that.
 cross_tests!(
     TestName: test_unequal_stake_success_with_failing_majority_count,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
     Versions: [EpochsTestVersions],
     Ignore: false,
