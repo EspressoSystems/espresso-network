@@ -1172,7 +1172,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             retain_v2_reward_accounts(
                 &state.reward_merkle_tree_v2,
                 accounts.iter().copied(),
-                &state.reward_accounts,
+                // &state.reward_accounts,
             )
         })
         .await?

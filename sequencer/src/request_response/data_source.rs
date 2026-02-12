@@ -228,7 +228,7 @@ impl<
                     if let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
-                        &state.reward_accounts,
+                        // &state.reward_accounts,
                     ) {
                         return Ok(Response::RewardAccountsV2(reward_accounts));
                     }
@@ -389,15 +389,15 @@ impl<
 pub fn retain_v2_reward_accounts(
     state: &RewardMerkleTreeV2,
     accounts: impl IntoIterator<Item = RewardAccountV2>,
-    balances: &BTreeMap<RewardAccountV2, RewardAmount>,
+    // balances: &BTreeMap<RewardAccountV2, RewardAmount>,
 ) -> anyhow::Result<RewardMerkleTreeV2> {
-    let tree_from_balances =
-        RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances.iter())?;
-    let state = if balances.is_empty() {
-        state
-    } else {
-        &tree_from_balances
-    };
+    // let tree_from_balances =
+    //     RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances.iter())?;
+    // let state = if balances.is_empty() {
+    //     state
+    // } else {
+    //     &tree_from_balances
+    // };
     let mut snapshot = RewardMerkleTreeV2::from_commitment(state.commitment());
     for account in accounts {
         match state.universal_lookup(account) {

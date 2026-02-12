@@ -196,8 +196,8 @@ pub struct ValidatedState {
     pub fee_merkle_tree: FeeMerkleTree,
     pub reward_merkle_tree_v1: RewardMerkleTreeV1,
     pub reward_merkle_tree_v2: RewardMerkleTreeV2,
-    #[serde(skip)]
-    pub reward_accounts: BTreeMap<RewardAccountV2, RewardAmount>,
+    // #[serde(skip)]
+    // pub reward_accounts: BTreeMap<RewardAccountV2, RewardAmount>,
     /// Configuration [`Header`] proposals will be validated against.
     pub chain_config: ResolvableChainConfig,
 }
@@ -238,7 +238,7 @@ impl Default for ValidatedState {
             fee_merkle_tree,
             reward_merkle_tree_v1,
             reward_merkle_tree_v2,
-            reward_accounts: BTreeMap::new(),
+            // reward_accounts: BTreeMap::new(),
             chain_config,
         }
     }
@@ -827,7 +827,7 @@ impl ValidatedState {
             reward_merkle_tree_v1: RewardMerkleTreeV1::from_commitment(
                 self.reward_merkle_tree_v1.commitment(),
             ),
-            reward_accounts: BTreeMap::new(),
+            // reward_accounts: BTreeMap::new(),
             chain_config: ResolvableChainConfig::from(self.chain_config.commit()),
         }
     }
@@ -1258,7 +1258,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
             block_merkle_tree,
             reward_merkle_tree_v2,
             reward_merkle_tree_v1,
-            reward_accounts: BTreeMap::new(),
+            // reward_accounts: BTreeMap::new(),
             chain_config: block_header.chain_config(),
         }
     }
