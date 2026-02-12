@@ -356,7 +356,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         }
 
         // Update internal state
-        update_shared_state::<TYPES, V>(
+        let result = update_shared_state::<TYPES, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
             self.receiver.clone(),
@@ -372,7 +372,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.epoch_height,
         )
         .await
-        .context(error!("Failed to update shared consensus state"))?;
+        .context(error!("Failed to update shared consensus state"));
+        if result.is_err() {
+            self.consensus
+                .write()
+                .await
+                .remove_in_progress_state_validation(self.view_number);
+            broadcast_event(
+                Arc::new(HotShotEvent::ViewValidationCancelled(self.view_number)),
+                &self.sender,
+            )
+            .await;
+            return result;
+        }
 
         let cur_epoch = option_epoch_from_block_number::<TYPES>(
             leaf.with_epoch,
