@@ -772,16 +772,15 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
         .context(info!("Failed to fetch proposal"))?;
     }
 
-    if wait_for_previous {
-        if wait_for_previous_view(parent_qc.view_number(), event_receiver.clone())
+    if wait_for_previous
+        && wait_for_previous_view(parent_qc.view_number(), event_receiver.clone())
             .await
             .is_some()
-        {
-            tracing::info!(
-                "Successfully waited for previous view {:?}",
-                parent_qc.view_number()
-            );
-        }
+    {
+        tracing::info!(
+            "Successfully waited for previous view {:?}",
+            parent_qc.view_number()
+        );
     }
 
     let consensus_reader = consensus.read().await;

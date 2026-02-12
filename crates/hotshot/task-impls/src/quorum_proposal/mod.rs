@@ -36,8 +36,7 @@ use tracing::instrument;
 
 use self::handlers::{ProposalDependency, ProposalDependencyHandle};
 use crate::{
-    events::HotShotEvent,
-    helpers::{broadcast_event, broadcast_view_change},
+    events::HotShotEvent, helpers::broadcast_view_change,
     quorum_proposal::handlers::handle_eqc_formed,
 };
 

@@ -319,19 +319,18 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
 
     drop(consensus_reader);
 
-    if wait_for_previous {
-        if wait_for_previous_view(parent_view_number.unwrap(), receiver.activate_cloned())
+    if wait_for_previous
+        && wait_for_previous_view(parent_view_number.unwrap(), receiver.activate_cloned())
             .await
             .is_some()
-        {
-            tracing::info!("Successfully waited for previous view {parent_view_number:?}");
-            maybe_validated_view = consensus
-                .read()
-                .await
-                .validated_state_map()
-                .get(&parent_view_number.unwrap())
-                .cloned()
-        }
+    {
+        tracing::info!("Successfully waited for previous view {parent_view_number:?}");
+        maybe_validated_view = consensus
+            .read()
+            .await
+            .validated_state_map()
+            .get(&parent_view_number.unwrap())
+            .cloned()
     }
     maybe_parent = match maybe_parent {
         Some(p) => Some(p),
