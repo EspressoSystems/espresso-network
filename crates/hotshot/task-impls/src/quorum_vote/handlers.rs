@@ -311,12 +311,6 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     let wait_for_previous = parent_view_number
         .is_some_and(|view_number| consensus_reader.is_view_validating(view_number));
 
-    // Justify qc's leaf commitment should be the same as the parent's leaf commitment.
-    let mut maybe_parent = consensus_reader
-        .saved_leaves()
-        .get(&justify_qc.data.leaf_commit)
-        .cloned();
-
     drop(consensus_reader);
 
     if wait_for_previous {
@@ -333,6 +327,14 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
                 .cloned()
         }
     }
+    // Justify qc's leaf commitment should be the same as the parent's leaf commitment.
+    let mut maybe_parent = consensus
+        .read()
+        .await
+        .saved_leaves()
+        .get(&justify_qc.data.leaf_commit)
+        .cloned();
+
     maybe_parent = match maybe_parent {
         Some(p) => Some(p),
         None => {
