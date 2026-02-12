@@ -54,7 +54,7 @@ demo *args:
     fi
 
 
-demo-native *args: (build "release")
+demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
 fmt:
