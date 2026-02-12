@@ -8,7 +8,7 @@ edition = "2021"
 embedded-db = ["sequencer/embedded-db"]
 
 [dependencies]
-sequencer = { path = "../sequencer", features = ["testing"] }
+sequencer = { path = "../sequencer", default-features = false, features = ["testing"] }
 
 alloy = { workspace = true }
 anyhow = { workspace = true }

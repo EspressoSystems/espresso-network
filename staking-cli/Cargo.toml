@@ -28,6 +28,7 @@ hotshot-types = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 portpicker = { workspace = true }
+prometheus-parse = "0.2"
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 reqwest = { workspace = true }

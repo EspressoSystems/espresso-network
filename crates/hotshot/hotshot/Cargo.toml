@@ -27,10 +27,12 @@ async-trait = { workspace = true }
 bimap = "0.6"
 bincode = { workspace = true }
 blake3 = { workspace = true }
+bytes = { workspace = true }
 cdn-broker = { workspace = true }
 cdn-client = { workspace = true }
 cdn-marshal = { workspace = true }
 chrono = { workspace = true }
+cliquenet = { workspace = true, features = ["metrics"] }
 committable = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }

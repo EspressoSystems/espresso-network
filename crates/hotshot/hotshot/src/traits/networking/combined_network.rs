@@ -31,7 +31,7 @@ use hotshot_types::{
         COMBINED_NETWORK_CACHE_SIZE, COMBINED_NETWORK_DELAY_DURATION,
         COMBINED_NETWORK_MIN_PRIMARY_FAILURES, COMBINED_NETWORK_PRIMARY_CHECK_INTERVAL,
     },
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, Topic},
@@ -350,6 +350,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         broadcast_delay: BroadcastDelay,
@@ -362,12 +363,12 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             message,
             async move {
                 primary
-                    .broadcast_message(primary_message, topic, BroadcastDelay::None)
+                    .broadcast_message(view, primary_message, topic, BroadcastDelay::None)
                     .await
             },
             async move {
                 secondary
-                    .broadcast_message(secondary_message, topic, BroadcastDelay::None)
+                    .broadcast_message(view, secondary_message, topic, BroadcastDelay::None)
                     .await
             },
             broadcast_delay,
@@ -377,6 +378,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn da_broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<TYPES::SignatureKey>,
         broadcast_delay: BroadcastDelay,
@@ -390,12 +392,17 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             message,
             async move {
                 primary
-                    .da_broadcast_message(primary_message, primary_recipients, BroadcastDelay::None)
+                    .da_broadcast_message(
+                        view,
+                        primary_message,
+                        primary_recipients,
+                        BroadcastDelay::None,
+                    )
                     .await
             },
             async move {
                 secondary
-                    .da_broadcast_message(secondary_message, recipients, BroadcastDelay::None)
+                    .da_broadcast_message(view, secondary_message, recipients, BroadcastDelay::None)
                     .await
             },
             broadcast_delay,
@@ -405,6 +412,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn direct_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipient: TYPES::SignatureKey,
     ) -> Result<(), NetworkError> {
@@ -417,10 +425,14 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             message,
             async move {
                 primary
-                    .direct_message(primary_message, primary_recipient)
+                    .direct_message(view, primary_message, primary_recipient)
                     .await
             },
-            async move { secondary.direct_message(secondary_message, recipient).await },
+            async move {
+                secondary
+                    .direct_message(view, secondary_message, recipient)
+                    .await
+            },
             BroadcastDelay::None,
         )
         .await
@@ -428,7 +440,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn vid_broadcast_message(
         &self,
-        messages: HashMap<TYPES::SignatureKey, Vec<u8>>,
+        messages: HashMap<TYPES::SignatureKey, (ViewNumber, Vec<u8>)>,
     ) -> Result<(), NetworkError> {
         self.networks.0.vid_broadcast_message(messages).await
     }
@@ -469,20 +481,20 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
         self.secondary().queue_node_lookup(view_number, pk)
     }
 
-    async fn update_view<'a, T>(
-        &'a self,
-        view: u64,
-        epoch: Option<u64>,
+    async fn update_view<T>(
+        &self,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         membership: EpochMembershipCoordinator<T>,
     ) where
-        T: NodeType<SignatureKey = TYPES::SignatureKey> + 'a,
+        T: NodeType<SignatureKey = TYPES::SignatureKey>,
     {
         let delayed_tasks_channels = Arc::clone(&self.delayed_tasks_channels);
         spawn(async move {
             let mut map_lock = delayed_tasks_channels.write().await;
             while let Some((first_view, _)) = map_lock.first_key_value() {
                 // Broadcast a cancelling signal to all the tasks related to each view older than the new one
-                if *first_view < view {
+                if *first_view < *view {
                     if let Some((_, (sender, _))) = map_lock.pop_first() {
                         let _ = sender.try_broadcast(());
                     } else {

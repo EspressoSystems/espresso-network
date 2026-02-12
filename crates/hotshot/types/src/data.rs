@@ -79,6 +79,18 @@ macro_rules! impl_u64_wrapper {
             }
         }
 
+        impl From<u64> for $t {
+            fn from(n: u64) -> Self {
+                Self(n)
+            }
+        }
+
+        impl From<$t> for u64 {
+            fn from(n: $t) -> Self {
+                n.0
+            }
+        }
+
         impl Display for $t {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", self.0)
@@ -927,7 +939,7 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 /// Legacy version of `QuorumProposal2` corresponding to consensus protocol version V3.
 ///
 /// `QuorumProposal2` state_cert field was updated to use new
-/// `LightClientStateUpdateCertificateV2`.  
+/// `LightClientStateUpdateCertificateV2`.
 /// This legacy version uses the older `LightClientStateUpdateCertificateV1`
 /// format for backward compatibility.
 ///
@@ -1004,7 +1016,7 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal2Legacy<TYP
 /// Wrapper type for a legacy quorum proposal.
 ///
 /// This is used to encapsulate a [`QuorumProposal2Legacy`] when working with
-/// data from older consensus protocol versions (e.g., V3).  
+/// data from older consensus protocol versions (e.g., V3).
 /// Primarily used for deserialization of legacy proposals
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound(deserialize = ""))]
