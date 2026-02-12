@@ -1782,14 +1782,14 @@ mod tests {
 
         storage.store_events(l1_block, events.clone()).await?;
 
-        let (read_offset, loaded_events) = storage.load_events(l1_block).await?;
+        let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
         assert!(read_offset.is_some(),);
         assert_eq!(loaded_events.len(), 2,);
         assert_eq!(loaded_events, events);
 
         storage.clear_events().await?;
 
-        let (read_offset, loaded_events) = storage.load_events(l1_block).await?;
+        let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
         assert!(read_offset.is_none(),);
         assert!(loaded_events.is_empty(),);
 
@@ -1801,7 +1801,7 @@ mod tests {
         let new_events: Vec<(EventKey, StakeTableEvent)> = vec![((l1_block, 0), event3)];
         storage.store_events(l1_block, new_events.clone()).await?;
 
-        let (read_offset, loaded_events) = storage.load_events(l1_block).await?;
+        let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
         assert!(read_offset.is_some());
         assert_eq!(loaded_events.len(), 1);
         assert_eq!(loaded_events, new_events);
