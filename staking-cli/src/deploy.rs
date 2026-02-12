@@ -3,12 +3,11 @@ use std::{io::Write as _, path::PathBuf, time::Duration};
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
     node_bindings::Anvil,
-    primitives::{utils::parse_ether, Address, Bytes, B256, U256},
+    primitives::{Address, B256, Bytes, U256, utils::parse_ether},
     providers::{
         ext::AnvilApi,
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,
-        Provider, ProviderBuilder, RootProvider, WalletProvider,
     },
     rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
@@ -16,9 +15,8 @@ use alloy::{
 };
 use anyhow::Result;
 use espresso_contract_deployer::{
-    build_provider, build_signer, builder::DeployerArgsBuilder,
-    network_config::light_client_genesis_from_stake_table, Contract, Contracts,
-    DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+    Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, build_provider, build_signer,
+    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
 };
 use espresso_types::{
     v0::v0_4::{
@@ -37,14 +35,14 @@ use hotshot_contract_adapter::{
 use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
-use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
+use rand::{CryptoRng, Rng as _, RngCore, SeedableRng as _, rngs::StdRng};
 use tokio::net::TcpListener;
 use url::Url;
-use warp::{http::StatusCode, Filter};
+use warp::{Filter, http::StatusCode};
 
 use crate::{
-    parse::Commission, receipt::ReceiptExt as _, registration::fetch_commission,
-    signature::NodeSignatures, transaction::Transaction, BLSKeyPair, DEV_MNEMONIC,
+    BLSKeyPair, DEV_MNEMONIC, parse::Commission, receipt::ReceiptExt as _,
+    registration::fetch_commission, signature::NodeSignatures, transaction::Transaction,
 };
 
 /// Spawn a warp server on a random available port and return the port number.
@@ -232,7 +230,7 @@ impl TestSystem {
         (
             PrivateKeySigner::random_with(rng),
             BLSKeyPair::generate(rng),
-            StateKeyPair::generate_from_seed(rng.gen()),
+            StateKeyPair::generate_from_seed(rng.r#gen()),
         )
     }
 

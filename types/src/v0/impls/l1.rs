@@ -475,7 +475,7 @@ impl L1Client {
         }
     }
 
-    fn update_loop(&self) -> impl Future<Output = ()> {
+    fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let opt = self.options().clone();
         let rpc = self.provider.clone();
         let ws_urls = opt.l1_ws_provider.clone();
@@ -1032,7 +1032,7 @@ impl L1Client {
         let start = transport.current_transport.read().generation % transport.urls.len();
         let end = start + transport.urls.len();
         loop {
-            match op().into_future().await {
+            match TryFutureExt::into_future(op()).await {
                 Ok(res) => return Ok(res),
                 Err(err) => {
                     if transport.current_transport.read().generation >= end {

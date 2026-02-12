@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
 use crate::{
-    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
     VidError, VidResult, VidScheme,
+    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
 };
 
 mod config;
@@ -456,10 +456,10 @@ impl VidScheme for AvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use super::F;
-    use crate::{avidm::AvidMScheme, utils::bytes_to_field, VidScheme};
+    use crate::{VidScheme, avidm::AvidMScheme, utils::bytes_to_field};
 
     #[test]
     fn test_padding() {

@@ -25,7 +25,7 @@ use versions::{Upgrade, VERSION_0_0};
 use crate::{
     overall_safety_task::OverallSafetyPropertiesDescription,
     test_builder::TransactionValidator,
-    test_task::{spawn_timeout_task, TestEvent, TestResult, TestTaskState},
+    test_task::{TestEvent, TestResult, TestTaskState, spawn_timeout_task},
 };
 
 /// Map from views to leaves for a single node, allowing multiple leaves for each view (because the node may a priori send us multiple leaves for a given view).

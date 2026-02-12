@@ -139,7 +139,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     for _i in 0..num_keys {
         let key = RewardAccountV2::from(Address::random());
         // Use u64 values to ensure they fit in Solidity proofs
-        let value = RewardAmount::from(rand::thread_rng().gen::<u64>());
+        let value = RewardAmount::from(rand::thread_rng().r#gen::<u64>());
         test_data.push((key, value));
     }
 

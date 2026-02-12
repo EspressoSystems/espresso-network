@@ -11,7 +11,7 @@ use hotshot_contract_adapter::{
 use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
 use jf_plonk_compat::PlonkError;
 use jf_relation_compat::{BoolVar, Circuit, CircuitError, PlonkCircuit, Variable};
-use jf_rescue_compat::{gadgets::RescueNativeGadget, RescueParameter};
+use jf_rescue_compat::{RescueParameter, gadgets::RescueNativeGadget};
 use jf_signature::schnorr::{Signature, VerKey as SchnorrVerKey};
 use jf_signature_compat::{
     gadgets::schnorr::{SignatureGadget, VerKeyVar},
@@ -525,9 +525,11 @@ mod tests {
             &next_st_state,
         )
         .unwrap();
-        assert!(circuit
-            .check_circuit_satisfiability(&public_inputs.to_vec())
-            .is_ok());
+        assert!(
+            circuit
+                .check_circuit_satisfiability(&public_inputs.to_vec())
+                .is_ok()
+        );
 
         // lower threshold should also pass
         let mut good_st_state = st_state;
@@ -542,9 +544,11 @@ mod tests {
             &next_st_state,
         )
         .unwrap();
-        assert!(circuit
-            .check_circuit_satisfiability(&public_inputs.to_vec())
-            .is_ok());
+        assert!(
+            circuit
+                .check_circuit_satisfiability(&public_inputs.to_vec())
+                .is_ok()
+        );
 
         // bad path: feeding non-bit vector
         let non_bit_vec = [F::from(2u64); 10];
@@ -558,9 +562,11 @@ mod tests {
             &next_st_state,
         )
         .unwrap();
-        assert!(circuit
-            .check_circuit_satisfiability(&public_inputs.to_vec())
-            .is_err());
+        assert!(
+            circuit
+                .check_circuit_satisfiability(&public_inputs.to_vec())
+                .is_err()
+        );
 
         // bad path: total weight doesn't meet the threshold
         let bad_bit_vec = [
@@ -591,9 +597,11 @@ mod tests {
             &next_st_state,
         )
         .unwrap();
-        assert!(bad_circuit
-            .check_circuit_satisfiability(&public_inputs.to_vec())
-            .is_err());
+        assert!(
+            bad_circuit
+                .check_circuit_satisfiability(&public_inputs.to_vec())
+                .is_err()
+        );
 
         // bad path: bad stake table commitment
         let mut bad_lightclient_state = lightclient_state;
@@ -609,9 +617,11 @@ mod tests {
             &next_st_state,
         )
         .unwrap();
-        assert!(bad_circuit
-            .check_circuit_satisfiability(&public_inputs.to_vec())
-            .is_err());
+        assert!(
+            bad_circuit
+                .check_circuit_satisfiability(&public_inputs.to_vec())
+                .is_err()
+        );
 
         // bad path: incorrect signing message
         let bad_lc_state = LightClientState::default();
@@ -637,20 +647,24 @@ mod tests {
             &next_st_state,
         )
         .unwrap();
-        assert!(bad_circuit
-            .check_circuit_satisfiability(&public_inputs.to_vec())
-            .is_err());
+        assert!(
+            bad_circuit
+                .check_circuit_satisfiability(&public_inputs.to_vec())
+                .is_err()
+        );
 
         // bad path: overflowing stake table size
-        assert!(build(
-            &entries,
-            &bit_vec,
-            &bit_masked_sigs,
-            &lightclient_state,
-            &st_state,
-            9,
-            &next_st_state,
-        )
-        .is_err());
+        assert!(
+            build(
+                &entries,
+                &bit_vec,
+                &bit_masked_sigs,
+                &lightclient_state,
+                &st_state,
+                9,
+                &next_st_state,
+            )
+            .is_err()
+        );
     }
 }

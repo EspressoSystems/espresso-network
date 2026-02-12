@@ -12,7 +12,7 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TEST_VERSIONS},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -30,7 +30,7 @@ use tracing_test::traced_test;
 
 use crate::{
     service::{BuilderConfig, GlobalState, ProxyGlobalState},
-    testing::{assert_eq_generic_err, sign, TestServiceWrapper, MOCK_LEADER_KEYS},
+    testing::{MOCK_LEADER_KEYS, TestServiceWrapper, assert_eq_generic_err, sign},
 };
 
 /// This test simulates consensus performing as expected and builder processing a number

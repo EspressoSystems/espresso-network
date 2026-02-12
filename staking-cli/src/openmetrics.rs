@@ -215,10 +215,12 @@ consensus_version{desc="1.0.0"} 1
 
         let result = parse_openmetrics(metrics);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing required consensus_node metric"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required consensus_node metric")
+        );
     }
 
     #[test]

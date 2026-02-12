@@ -27,22 +27,22 @@ use sysinfo::System;
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
 use crate::{
+    Commands, Config, ValidSignerConfig,
     claim::fetch_claim_rewards_inputs,
     demo::{
-        churn_for_demo, delegate_for_demo, stake_for_demo, undelegate_for_demo, ChurnParams,
-        DemoCommands,
+        ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
+        undelegate_for_demo,
     },
     info::{
-        display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
-        StakeTableContractVersion,
+        StakeTableContractVersion, display_stake_table, fetch_stake_table_version,
+        fetch_token_address, stake_table_info,
     },
-    metadata::{fetch_metadata, validate_metadata_uri, MetadataUri},
+    metadata::{MetadataUri, fetch_metadata, validate_metadata_uri},
     output::{
-        format_esp, output_calldata, output_error, output_success, output_warn, CalldataInfo,
+        CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
     },
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     transaction::Transaction,
-    Commands, Config, ValidSignerConfig,
 };
 
 #[derive(Parser)]
@@ -112,8 +112,8 @@ fn exit(msg: impl AsRef<str>) -> ! {
 // foundry. We instead format those types nicely with tagged base64.
 fn decode_and_display_logs(logs: &[Log]) {
     for log in logs {
-        if let Ok(decoded) = StakeTableV2Events::decode_log(log.as_ref()) {
-            match &decoded.data {
+        match StakeTableV2Events::decode_log(log.as_ref()) {
+            Ok(decoded) => match &decoded.data {
                 StakeTableV2Events::ValidatorRegistered(e) => output_success(format!(
                     "event: ValidatorRegistered {{ account: {}, blsVk: {}, schnorrVk: {}, \
                      commission: {} }}",
@@ -160,17 +160,22 @@ fn decode_and_display_logs(logs: &[Log]) {
                 },
 
                 _ => {},
-            }
-        } else if let Ok(decoded) = EspTokenEvents::decode_log(log.as_ref()) {
-            match &decoded.data {
-                EspTokenEvents::Transfer(e) => output_success(format!("event: {e:?}")),
-                EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
-                _ => {},
-            }
-        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref()) {
-            if let RewardClaimEvents::RewardsClaimed(e) = &decoded.data {
-                output_success(format!("event: {e:?}"));
-            }
+            },
+            _ => match EspTokenEvents::decode_log(log.as_ref()) {
+                Ok(decoded) => match &decoded.data {
+                    EspTokenEvents::Transfer(e) => output_success(format!("event: {e:?}")),
+                    EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
+                    _ => {},
+                },
+                _ => match RewardClaimEvents::decode_log(log.as_ref()) {
+                    Ok(decoded) => {
+                        if let RewardClaimEvents::RewardsClaimed(e) = &decoded.data {
+                            output_success(format!("event: {e:?}"));
+                        }
+                    },
+                    _ => {},
+                },
+            },
         }
     }
 }
@@ -398,12 +403,10 @@ pub async fn run() -> Result<()> {
         Address::ZERO
     };
 
-    let wallet =
-        if let Ok(signer_config) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone()) {
-            signer_config.wallet().await.ok()
-        } else {
-            None
-        };
+    let wallet = match TryInto::<ValidSignerConfig>::try_into(config.signer.clone()) {
+        Ok(signer_config) => signer_config.wallet().await.ok(),
+        _ => None,
+    };
 
     // Commands that just read from chain
     if let Commands::Account = config.commands {

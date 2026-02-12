@@ -12,9 +12,9 @@ use async_lock::RwLock;
 use bitvec::bitvec;
 use committable::Committable;
 use hotshot::{
+    HotShotInitializer, SystemContext,
     traits::{BlockPayload, NodeImplementation, TestableNodeImplementation},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
     block_types::TestTransaction,
@@ -24,9 +24,10 @@ use hotshot_example_types::{
 };
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
+    ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{
-        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare, vid_commitment,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
@@ -34,10 +35,9 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
-    traits::{election::Membership, node_implementation::NodeType, EncodeBytes},
-    utils::{option_epoch_from_block_number, View, ViewInner},
+    traits::{EncodeBytes, election::Membership, node_implementation::NodeType},
+    utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
-    ValidatorConfig,
 };
 use serde::Serialize;
 use vbs::version::Version;

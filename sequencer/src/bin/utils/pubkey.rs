@@ -21,12 +21,14 @@ impl FromStr for PrivateKey {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let tb64 = TaggedBase64::parse(s)?;
-        if let Ok(key) = tb64.clone().try_into() {
-            Ok(Self::Bls(key))
-        } else if let Ok(key) = tb64.try_into() {
-            Ok(Self::Schnorr(key))
-        } else {
-            bail!("unrecognized key type")
+        match tb64.clone().try_into() {
+            Ok(key) => Ok(Self::Bls(key)),
+            _ => match tb64.try_into() {
+                Ok(key) => Ok(Self::Schnorr(key)),
+                _ => {
+                    bail!("unrecognized key type")
+                },
+            },
         }
     }
 }

@@ -6,12 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub use async_broadcast::{broadcast, RecvError, TryRecvError};
+pub use async_broadcast::{RecvError, TryRecvError, broadcast};
 use async_broadcast::{Sender as BroadcastSender, TrySendError};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use futures::{future::BoxFuture, stream::StreamExt, Stream};
+use futures::{Stream, future::BoxFuture, stream::StreamExt};
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
@@ -1544,13 +1544,13 @@ mod test {
     };
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::{TestTypes, TEST_VERSIONS},
+        node_types::{TEST_VERSIONS, TestTypes},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
         data::{
-            vid_commitment, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2,
-            QuorumProposalWrapper, VidCommitment, ViewNumber,
+            DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2, QuorumProposalWrapper,
+            VidCommitment, ViewNumber, vid_commitment,
         },
         message::Proposal,
         simple_certificate::QuorumCertificate2,
@@ -1567,9 +1567,9 @@ mod test {
     };
 
     use super::{
-        handle_da_event_implementation, handle_quorum_event_implementation, AvailableBlocksError,
-        BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState, HandleDaEventError,
-        HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
+        AvailableBlocksError, BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState,
+        HandleDaEventError, HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
+        handle_da_event_implementation, handle_quorum_event_implementation,
     };
     use crate::{
         builder_state::{

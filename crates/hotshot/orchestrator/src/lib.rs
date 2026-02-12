@@ -21,30 +21,30 @@ use alloy::primitives::U256;
 use async_lock::RwLock;
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
+    PeerConfig,
     network::{BuilderType, NetworkConfig, PublicKeysFile},
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    PeerConfig,
 };
 use libp2p_identity::{
-    ed25519::{Keypair as EdKeypair, SecretKey},
     Keypair, PeerId,
+    ed25519::{Keypair as EdKeypair, SecretKey},
 };
 use multiaddr::Multiaddr;
 use surf_disco::Url;
 use tide_disco::{
+    Api, App, RequestError,
     api::ApiError,
     error::ServerError,
     method::{ReadState, WriteState},
-    Api, App, RequestError,
 };
 use vbs::{
-    version::{StaticVersion, StaticVersionType},
     BinarySerializer,
+    version::{StaticVersion, StaticVersionType},
 };
 
 /// Orchestrator is not, strictly speaking, bound to the network; it can have its own versioning.

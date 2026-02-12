@@ -822,7 +822,7 @@ impl Fetcher {
     /// This function polls the finalized block number from the L1 client at an interval
     /// and fetches stake table from contract
     /// and updates the persistence
-    fn update_loop(&self) -> impl Future<Output = ()> {
+    fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let span = tracing::warn_span!("Stake table update loop");
         let self_clone = self.clone();
         let state = self.l1_client.state.clone();

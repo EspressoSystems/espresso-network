@@ -7,12 +7,12 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
@@ -22,7 +22,7 @@ use hotshot_types::{
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,

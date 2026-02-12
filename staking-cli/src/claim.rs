@@ -2,7 +2,7 @@ use alloy::{
     primitives::{Address, U256},
     providers::Provider,
 };
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
     sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2},
@@ -152,7 +152,7 @@ pub async fn fetch_claim_rewards_inputs(
 
 #[cfg(test)]
 mod test {
-    use alloy::primitives::{utils::parse_ether, U256};
+    use alloy::primitives::{U256, utils::parse_ether};
     use hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV2};
 
     use super::*;

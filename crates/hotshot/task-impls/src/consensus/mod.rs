@@ -123,14 +123,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
-            HotShotEvent::QuorumVoteRecv(ref vote) => {
+            HotShotEvent::QuorumVoteRecv(vote) => {
                 if let Err(e) =
                     handle_quorum_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
                 }
             },
-            HotShotEvent::EpochRootQuorumVoteRecv(ref vote) => {
+            HotShotEvent::EpochRootQuorumVoteRecv(vote) => {
                 if let Err(e) =
                     handle_epoch_root_quorum_vote_recv(vote, Arc::clone(&event), &sender, self)
                         .await
@@ -138,7 +138,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                     tracing::debug!("Failed to handle EpochRootQuorumVoteRecv event; error = {e}");
                 }
             },
-            HotShotEvent::TimeoutVoteRecv(ref vote) => {
+            HotShotEvent::TimeoutVoteRecv(vote) => {
                 if let Err(e) =
                     handle_timeout_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {

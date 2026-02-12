@@ -99,7 +99,7 @@ pub fn all_predicates<TYPES: NodeType>(
 
 #[macro_export]
 macro_rules! all_predicates {
-    ($($x:expr),* $(,)?) => {
+    ($($x:expr_2021),* $(,)?) => {
         {
             vec![all_predicates(vec![$($x),*])]
         }

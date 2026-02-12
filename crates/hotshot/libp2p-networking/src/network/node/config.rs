@@ -6,7 +6,7 @@
 
 use std::{collections::HashSet, num::NonZeroUsize, time::Duration};
 
-use libp2p::{identity::Keypair, Multiaddr};
+use libp2p::{Multiaddr, identity::Keypair};
 use libp2p_identity::PeerId;
 
 use super::MAX_GOSSIP_MSG_SIZE;

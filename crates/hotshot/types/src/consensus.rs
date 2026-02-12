@@ -1447,31 +1447,34 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
         while let Some(leaf) = self.saved_leaves.get(&next_leaf) {
             let view = leaf.view_number();
-            if let (Some(state), delta) = self.state_and_delta(view) {
-                if let Terminator::Exclusive(stop_before) = terminator {
-                    if stop_before == view {
-                        if ok_when_finished {
-                            return Ok(());
+            match self.state_and_delta(view) {
+                (Some(state), delta) => {
+                    if let Terminator::Exclusive(stop_before) = terminator {
+                        if stop_before == view {
+                            if ok_when_finished {
+                                return Ok(());
+                            }
+                            break;
                         }
-                        break;
                     }
-                }
-                next_leaf = leaf.parent_commitment();
-                if !f(leaf, state, delta) {
-                    return Ok(());
-                }
-                if let Terminator::Inclusive(stop_after) = terminator {
-                    if stop_after == view {
-                        if ok_when_finished {
-                            return Ok(());
+                    next_leaf = leaf.parent_commitment();
+                    if !f(leaf, state, delta) {
+                        return Ok(());
+                    }
+                    if let Terminator::Inclusive(stop_after) = terminator {
+                        if stop_after == view {
+                            if ok_when_finished {
+                                return Ok(());
+                            }
+                            break;
                         }
-                        break;
                     }
-                }
-            } else {
-                return Err(HotShotError::InvalidState(format!(
-                    "View {view} state does not exist in state map"
-                )));
+                },
+                _ => {
+                    return Err(HotShotError::InvalidState(format!(
+                        "View {view} state does not exist in state map"
+                    )));
+                },
             }
         }
         Err(HotShotError::MissingLeaf(next_leaf))

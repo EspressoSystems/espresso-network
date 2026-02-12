@@ -1270,7 +1270,9 @@ pub mod testing {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
-        pub fn validator_providers(&self) -> Vec<(Address, impl Provider + Clone)> {
+        pub fn validator_providers(
+            &self,
+        ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
             self.staking_priv_keys()
                 .into_iter()
                 .map(|(signer, ..)| {

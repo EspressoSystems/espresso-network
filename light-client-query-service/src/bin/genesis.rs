@@ -2,12 +2,12 @@ use std::{fs, path::PathBuf, process::ExitCode};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use espresso_types::{config::PublicNetworkConfig, DrbAndHeaderUpgradeVersion, Header};
+use espresso_types::{DrbAndHeaderUpgradeVersion, Header, config::PublicNetworkConfig};
 use hotshot_types::{
     data::EpochNumber, traits::node_implementation::ConsensusTime, utils::epoch_from_block_number,
 };
 use light_client::state::Genesis;
-use light_client_query_service::{init_logging, LogFormat};
+use light_client_query_service::{LogFormat, init_logging};
 use sequencer::SequencerApiVersion;
 use surf_disco::{Client, Url};
 use tracing::instrument;
@@ -157,10 +157,11 @@ async fn run() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    if let Err(err) = run().await {
-        tracing::error!("{err:#}");
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
+    match run().await {
+        Err(err) => {
+            tracing::error!("{err:#}");
+            ExitCode::FAILURE
+        },
+        _ => ExitCode::SUCCESS,
     }
 }

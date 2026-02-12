@@ -1,6 +1,6 @@
 //! Types for fetching and verifying headers from an untrusted provider.
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, ensure};
 use committable::Committable;
 use espresso_types::{BlockMerkleTree, Header};
 use jf_merkle_tree_compat::MerkleTreeScheme;
@@ -67,7 +67,7 @@ impl HeaderProof {
 #[cfg(test)]
 mod test {
     use espresso_types::BLOCK_MERKLE_TREE_HEIGHT;
-    use jf_merkle_tree_compat::{prelude::SHA3MerkleTree, AppendableMerkleTreeScheme};
+    use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, prelude::SHA3MerkleTree};
     use pretty_assertions::assert_eq;
     use versions::EPOCH_VERSION;
 

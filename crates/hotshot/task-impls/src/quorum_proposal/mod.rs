@@ -6,7 +6,7 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{Receiver, Sender, broadcast};
 use async_trait::async_trait;
 use either::Either;
 use hotshot_task::{
@@ -28,7 +28,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         storage::Storage,
     },
-    utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, is_epoch_transition, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;

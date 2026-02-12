@@ -181,26 +181,31 @@ impl Options {
             Box<dyn EventConsumer>,
             Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
-            if let Some(opt) = self.storage_sql.take() {
-                self.init_with_query_module_sql(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
-            } else if let Some(opt) = self.storage_fs.take() {
-                self.init_with_query_module_fs(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
-            } else {
-                bail!("query module requested but not storage provided");
+            match self.storage_sql.take() {
+                Some(opt) => {
+                    self.init_with_query_module_sql(
+                        query_opt,
+                        opt,
+                        state,
+                        &mut tasks,
+                        SequencerApiVersion::instance(),
+                    )
+                    .await?
+                },
+                _ => {
+                    if let Some(opt) = self.storage_fs.take() {
+                        self.init_with_query_module_fs(
+                            query_opt,
+                            opt,
+                            state,
+                            &mut tasks,
+                            SequencerApiVersion::instance(),
+                        )
+                        .await?
+                    } else {
+                        bail!("query module requested but not storage provided");
+                    }
+                },
             }
         } else if self.status.is_some() {
             // If a status API is requested but no availability API, we use the
@@ -560,7 +565,7 @@ impl Options {
         port: u16,
         app: App<S, E>,
         bind_version: ApiVer,
-    ) -> impl Future<Output = anyhow::Result<()>>
+    ) -> impl Future<Output = anyhow::Result<()>> + use<S, E, ApiVer>
     where
         S: Send + Sync + 'static,
         E: Send + Sync + tide_disco::Error,

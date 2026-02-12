@@ -316,7 +316,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     }
 
     /// Stream consensus events.
-    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> {
+    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> + use<N, P> {
         self.handle.read().await.event_stream()
     }
 
@@ -510,7 +510,7 @@ async fn handle_events<N, P>(
 pub(crate) struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
 
 macro_rules! spawn_with_log_level {
-    ($this:expr, $lvl:expr, $name:expr, $task: expr) => {
+    ($this:expr_2021, $lvl:expr_2021, $name:expr_2021, $task: expr_2021) => {
         let name = $name.to_string();
         let task = {
             let name = name.clone();

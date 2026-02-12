@@ -2,12 +2,12 @@
 
 use std::{collections::BTreeMap, future::Future, sync::Arc};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    select_active_validator_set, Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState,
-    Transaction,
+    Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState, Transaction,
+    select_active_validator_set,
 };
 use hotshot_query_service::{
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
@@ -162,18 +162,21 @@ where
         if latest_from_server > latest_known {
             // The server claims there is a newer block than we previously knew about. Verify that
             // this is the case by requesting a finality proof for the corresponding leaf.
-            if let Err(err) = self
+            match self
                 .fetch_leaf(LeafId::Number(latest_from_server as usize - 1))
                 .await
             {
-                tracing::warn!(
-                    latest_known,
-                    latest_from_server,
-                    "failed to verify block height claimed by server: {err:#}"
-                );
-                return Ok(latest_known);
-            } else {
-                return Ok(latest_from_server);
+                Err(err) => {
+                    tracing::warn!(
+                        latest_known,
+                        latest_from_server,
+                        "failed to verify block height claimed by server: {err:#}"
+                    );
+                    return Ok(latest_known);
+                },
+                _ => {
+                    return Ok(latest_from_server);
+                },
             }
         }
         Ok(latest_known)
@@ -721,7 +724,7 @@ mod test {
     use super::*;
     use crate::{
         storage::SqliteStorage,
-        testing::{leaf_chain, TestClient},
+        testing::{TestClient, leaf_chain},
     };
 
     #[tokio::test]

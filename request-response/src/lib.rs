@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use data_source::DataSource;
 use derive_more::derive::Deref;
 use hotshot_types::traits::signature_key::SignatureKey;
@@ -150,13 +150,13 @@ pub struct RequestResponse<
 /// We need to manually implement the `Clone` trait for this type because deriving
 /// `Deref` will cause an issue where it tries to clone the inner field instead
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > Clone for RequestResponse<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> Clone for RequestResponse<S, R, Req, RS, DS, K>
 {
     fn clone(&self) -> Self {
         Self {
@@ -167,13 +167,13 @@ impl<
 }
 
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > RequestResponse<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> RequestResponse<S, R, Req, RS, DS, K>
 {
     /// Create a new [`RequestResponseProtocol`]
     pub fn new(
@@ -251,13 +251,13 @@ pub struct RequestResponseInner<
     phantom_data: PhantomData<(K, R, Req, DS)>,
 }
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > RequestResponseInner<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> RequestResponseInner<S, R, Req, RS, DS, K>
 {
     /// Request something from the protocol indefinitely until we get a response
     /// or there was a critical error (e.g. the request could not be signed)
@@ -344,40 +344,41 @@ impl<
 
                 // Conditionally get the outgoing request, creating a new one if it doesn't exist or if
                 // the existing one has been dropped and not yet removed
-                if let Some(outgoing_request) = outgoing_requests_write
+                match outgoing_requests_write
                     .get(&request_hash)
                     .and_then(Weak::upgrade)
                 {
-                    OutgoingRequest(outgoing_request)
-                } else {
-                    // Create a new broadcast channel for the response
-                    let (sender, receiver) = async_broadcast::broadcast(1);
+                    Some(outgoing_request) => OutgoingRequest(outgoing_request),
+                    _ => {
+                        // Create a new broadcast channel for the response
+                        let (sender, receiver) = async_broadcast::broadcast(1);
 
-                    // Modify the response validation function to return an `Arc<dyn Any>`
-                    let response_validation_fn =
-                        Box::new(move |request: &Req, response: Req::Response| {
-                            let fut = response_validation_fn(request, response);
-                            Box::pin(
-                                async move { fut.await.map(|ok| Arc::new(ok) as ThreadSafeAny) },
-                            ) as ResponseValidationFuture
-                        });
+                        // Modify the response validation function to return an `Arc<dyn Any>`
+                        let response_validation_fn =
+                            Box::new(move |request: &Req, response: Req::Response| {
+                                let fut = response_validation_fn(request, response);
+                                Box::pin(async move {
+                                    fut.await.map(|ok| Arc::new(ok) as ThreadSafeAny)
+                                }) as ResponseValidationFuture
+                            });
 
-                    // Create a new outgoing request
-                    let outgoing_request = OutgoingRequest(Arc::new(OutgoingRequestInner {
-                        sender,
-                        receiver,
-                        response_validation_fn,
-                        request: request_message.request.clone(),
-                        outgoing_requests: Arc::clone(&self.outgoing_requests),
-                        request_hash,
-                    }));
+                        // Create a new outgoing request
+                        let outgoing_request = OutgoingRequest(Arc::new(OutgoingRequestInner {
+                            sender,
+                            receiver,
+                            response_validation_fn,
+                            request: request_message.request.clone(),
+                            outgoing_requests: Arc::clone(&self.outgoing_requests),
+                            request_hash,
+                        }));
 
-                    // Write the new outgoing request to the map
-                    outgoing_requests_write
-                        .insert(request_hash, Arc::downgrade(&outgoing_request.0));
+                        // Write the new outgoing request to the map
+                        outgoing_requests_write
+                            .insert(request_hash, Arc::downgrade(&outgoing_request.0));
 
-                    // Return the new outgoing request
-                    outgoing_request
+                        // Return the new outgoing request
+                        outgoing_request
+                    },
                 }
             };
 
@@ -727,7 +728,7 @@ impl<R: Request> Drop for OutgoingRequestInner<R> {
 mod tests {
     use std::{
         collections::HashMap,
-        sync::{atomic::AtomicBool, Mutex},
+        sync::{Mutex, atomic::AtomicBool},
     };
 
     use async_trait::async_trait;
@@ -993,7 +994,7 @@ mod tests {
                     .push(Arc::clone(&protocol._receiving_task_handle));
 
                 // Create a random request
-                let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
+                let request = TestRequest(vec![rand::thread_rng().r#gen(); 100]);
 
                 // Get the hash of the request
                 let request_hash = blake3::hash(&request.0).as_bytes().to_vec();
@@ -1119,7 +1120,7 @@ mod tests {
         let one = Arc::new(participants.remove(0));
 
         // Create the request that they should all be able to join on
-        let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
+        let request = TestRequest(vec![rand::thread_rng().r#gen(); 100]);
 
         // Create a join set to wait for all the tasks to finish
         let mut join_set = JoinSet::new();

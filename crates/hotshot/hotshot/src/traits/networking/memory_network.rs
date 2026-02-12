@@ -13,8 +13,8 @@ use core::time::Duration;
 use std::{
     fmt::Debug,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -22,7 +22,7 @@ use async_lock::{Mutex, RwLock};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     data::ViewNumber,
     traits::{
         network::{
@@ -32,13 +32,12 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
-    BoxSyncFuture,
 };
 use tokio::{
     spawn,
-    sync::mpsc::{channel, error::SendError, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender, channel, error::SendError},
 };
-use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, instrument, trace, warn};
 
 use super::{NetworkError, NetworkReliability};
 
@@ -263,7 +262,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             // TODO delay/drop etc here
             let (key, node) = node;
             trace!(?key, "Sending message to node");
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 {
                     let node2 = node.clone();
                     let fut = config.chaos_send_msg(
@@ -318,7 +317,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             // TODO delay/drop etc here
             let (key, node) = node;
             trace!(?key, "Sending message to node");
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 {
                     let node2 = node.clone();
                     let fut = config.chaos_send_msg(
@@ -359,40 +358,41 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
         // debug!(?message, ?recipient, "Sending direct message");
         // Bincode the message
         trace!("Message bincoded, finding recipient");
-        if let Some(node) = self.inner.master_map.map.get(&recipient) {
-            let node = node.value().clone();
-            if let Some(ref config) = &self.inner.reliability_config {
-                {
-                    let fut = config.chaos_send_msg(
-                        message.clone(),
-                        Arc::new(move |msg: Vec<u8>| {
-                            let node2 = node.clone();
-                            boxed_sync(async move {
-                                let _res = node2.input(msg).await;
-                                // NOTE we're dropping metrics here but this is only for testing
-                                // purposes. I think that should be okay
-                            })
-                        }),
-                    );
-                    spawn(fut);
+        match self.inner.master_map.map.get(&recipient) {
+            Some(node) => {
+                let node = node.value().clone();
+                if let Some(config) = &self.inner.reliability_config {
+                    {
+                        let fut = config.chaos_send_msg(
+                            message.clone(),
+                            Arc::new(move |msg: Vec<u8>| {
+                                let node2 = node.clone();
+                                boxed_sync(async move {
+                                    let _res = node2.input(msg).await;
+                                    // NOTE we're dropping metrics here but this is only for testing
+                                    // purposes. I think that should be okay
+                                })
+                            }),
+                        );
+                        spawn(fut);
+                    }
+                    Ok(())
+                } else {
+                    let res = node.input(message).await;
+                    match res {
+                        Ok(()) => {
+                            trace!(?recipient, "Delivered message to remote");
+                            Ok(())
+                        },
+                        Err(e) => Err(NetworkError::MessageSendError(format!(
+                            "error sending direct message to node: {e}",
+                        ))),
+                    }
                 }
-                Ok(())
-            } else {
-                let res = node.input(message).await;
-                match res {
-                    Ok(()) => {
-                        trace!(?recipient, "Delivered message to remote");
-                        Ok(())
-                    },
-                    Err(e) => Err(NetworkError::MessageSendError(format!(
-                        "error sending direct message to node: {e}",
-                    ))),
-                }
-            }
-        } else {
-            Err(NetworkError::MessageSendError(
+            },
+            _ => Err(NetworkError::MessageSendError(
                 "node does not exist".to_string(),
-            ))
+            )),
         }
     }
 

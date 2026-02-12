@@ -21,7 +21,7 @@ pub type Proof = Vec<MerkleNode<Commitment<Header>, u64, Sha3Node>>;
 pub type CircuitField = ark_ed_on_bn254::Fq;
 
 macro_rules! handle_result {
-    ($result:expr) => {
+    ($result:expr_2021) => {
         match $result {
             Ok(value) => value,
             Err(err) => return VerificationResult::err(&format!("Error: {:?}", err)),
@@ -61,7 +61,7 @@ impl VerificationResult {
 /// need to provide a way to our FFI consumer to free the memory we allocated in this way.
 ///
 /// This function needs to be called for every ValidationResult created via FFI.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_error_string(s: *mut c_char) {
     if !s.is_null() {
         unsafe {
@@ -75,7 +75,7 @@ pub unsafe extern "C" fn free_error_string(s: *mut c_char) {
 // root_bytes: Byte representation of a Sha3Node merkle root.
 // header_bytes: Byte representation of the HotShot header being validated as a Merkle leaf.
 // circuit_block_bytes: Circuit representation of the HotShot header commitment returned by the light client contract.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn verify_merkle_proof_helper(
     proof_ptr: *const u8,
     proof_len: usize,
@@ -140,7 +140,7 @@ pub extern "C" fn verify_merkle_proof_helper(
 // commit_bytes: Byte representation of a TaggedBase64 payload commitment string.
 // ns_table_bytes: Raw bytes of the namespace table.
 // tx_comm_bytes: Byte representation of a hex encoded Sha256 digest that the transaction set commits to.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn verify_namespace_helper(
     namespace: u64,
     proof_ptr: *const u8,

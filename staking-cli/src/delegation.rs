@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod test {
     use alloy::{
-        primitives::{utils::parse_ether, U256},
+        primitives::{U256, utils::parse_ether},
         providers::Provider,
     };
     use anyhow::Result;

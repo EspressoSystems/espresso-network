@@ -1,13 +1,13 @@
 use core::panic;
 use std::{
     cmp::PartialEq,
-    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     fmt::Debug,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use async_broadcast::{broadcast, Receiver as BroadcastReceiver, Sender as BroadcastSender};
+use async_broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender, broadcast};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
@@ -16,9 +16,9 @@ use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper},
     message::Proposal,
     traits::{
+        EncodeBytes,
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::{ConsensusTime, NodeType},
-        EncodeBytes,
     },
     utils::BuilderCommitment,
 };
@@ -1146,7 +1146,7 @@ mod test {
     use hotshot_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use hotshot_example_types::{
         block_types::TestTransaction,
-        node_types::{TestTypes, TEST_VERSIONS},
+        node_types::{TEST_VERSIONS, TestTypes},
     };
     use hotshot_types::{
         data::{Leaf2, QuorumProposalWrapper, ViewNumber},
@@ -1514,12 +1514,15 @@ mod test {
         let decide_message = MessageType::DecideMessage(crate::builder_state::DecideMessage {
             latest_decide_view_number,
         });
-        if let MessageType::DecideMessage(practice_decide_msg) = decide_message.clone() {
-            builder_state
-                .process_decide_event(practice_decide_msg.clone())
-                .await;
-        } else {
-            panic!("Not a decide_message in correct format");
+        match decide_message.clone() {
+            MessageType::DecideMessage(practice_decide_msg) => {
+                builder_state
+                    .process_decide_event(practice_decide_msg.clone())
+                    .await;
+            },
+            _ => {
+                panic!("Not a decide_message in correct format");
+            },
         }
         // check whether spawned_builder_states have correct builder_state_id and already exit-ed builder_states older than decides
         let current_spawned_builder_states =

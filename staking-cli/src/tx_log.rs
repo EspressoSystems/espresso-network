@@ -14,7 +14,7 @@ use alloy::{
     providers::Provider,
     rpc::types::{TransactionReceipt, TransactionRequest},
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
@@ -658,11 +658,13 @@ mod tests {
         let archived = log.archive(&path).unwrap();
         assert!(!path.exists());
         assert!(archived.exists());
-        assert!(archived
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .contains(".completed."));
+        assert!(
+            archived
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains(".completed.")
+        );
     }
 
     #[test]

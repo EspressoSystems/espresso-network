@@ -7,7 +7,7 @@ use ark_ec::{AffineRepr, CurveGroup as _};
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use hotshot_types::{
-    light_client::{hash_bytes_to_field, StateKeyPair, StateSignature, StateVerKey},
+    light_client::{StateKeyPair, StateSignature, StateVerKey, hash_bytes_to_field},
     signature_key::{BLSKeyPair, BLSPubKey, BLSSignature},
     traits::signature_key::SignatureKey,
 };
@@ -18,7 +18,7 @@ use jf_signature::{
 };
 
 use crate::sol_types::{
-    StakeTableV2::{getVersionReturn, ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+    StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
     *,
 };
 
@@ -217,7 +217,7 @@ mod test {
         signature_key::{BLSKeyPair, BLSPrivKey, BLSPubKey},
     };
 
-    use super::{sign_address_bls, sign_address_schnorr, StateSignatureSol};
+    use super::{StateSignatureSol, sign_address_bls, sign_address_schnorr};
     use crate::sol_types::{
         G1PointSol, G2PointSol,
         StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},

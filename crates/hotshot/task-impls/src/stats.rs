@@ -11,9 +11,9 @@ use hotshot_types::{
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
-        BlockPayload,
     },
     vote::HasViewNumber,
 };
