@@ -186,24 +186,21 @@ pub mod availability_tests {
             let ix = seen_payloads
                 .entry(block.payload_hash())
                 .or_insert(i as u64);
-            match ds
+            if let Ok(block) = ds
                 .get_block(BlockId::PayloadHash(block.payload_hash()))
                 .await
                 .try_resolve()
             {
-                Ok(block) => {
-                    assert_eq!(block.height(), *ix);
-                },
-                _ => {
-                    tracing::warn!(
-                        "skipping block by payload index check for missing payload {:?}",
-                        block.header()
-                    );
-                    // At least check that _some_ block can be fetched.
-                    ds.get_block(BlockId::PayloadHash(block.payload_hash()))
-                        .await
-                        .await;
-                },
+                assert_eq!(block.height(), *ix);
+            } else {
+                tracing::warn!(
+                    "skipping block by payload index check for missing payload {:?}",
+                    block.header()
+                );
+                // At least check that _some_ block can be fetched.
+                ds.get_block(BlockId::PayloadHash(block.payload_hash()))
+                    .await
+                    .await;
             }
 
             // Check payload lookup.
@@ -213,26 +210,23 @@ pub mod availability_tests {
             assert_eq!(ds.get_payload(block.hash()).await.await, expected_payload);
             // Similar to the above, we can't guarantee which index we will get when passively
             // fetching this payload, so only check the index if the payload is available locally.
-            match ds
+            if let Ok(payload) = ds
                 .get_payload(BlockId::PayloadHash(block.payload_hash()))
                 .await
                 .try_resolve()
             {
-                Ok(payload) => {
-                    if *ix == i as u64 {
-                        assert_eq!(payload, expected_payload);
-                    }
-                },
-                _ => {
-                    tracing::warn!(
-                        "skipping payload index check for missing payload {:?}",
-                        block.header()
-                    );
-                    // At least check that _some_ payload can be fetched.
-                    ds.get_payload(BlockId::PayloadHash(block.payload_hash()))
-                        .await
-                        .await;
-                },
+                if *ix == i as u64 {
+                    assert_eq!(payload, expected_payload);
+                }
+            } else {
+                tracing::warn!(
+                    "skipping payload index check for missing payload {:?}",
+                    block.header()
+                );
+                // At least check that _some_ payload can be fetched.
+                ds.get_payload(BlockId::PayloadHash(block.payload_hash()))
+                    .await
+                    .await;
             }
 
             // Look up the common VID data.
@@ -241,28 +235,25 @@ pub mod availability_tests {
             assert_eq!(common, ds.get_vid_common(block.hash()).await.await);
             // Similar to the above, we can't guarantee which index we will get when passively
             // fetching this data, so only check the index if the data is available locally.
-            match ds
+            if let Ok(res) = ds
                 .get_vid_common(BlockId::PayloadHash(block.payload_hash()))
                 .await
                 .try_resolve()
             {
-                Ok(res) => {
-                    if *ix == i as u64 {
-                        assert_eq!(res, common);
-                    }
-                },
-                _ => {
-                    tracing::warn!(
-                        "skipping VID common index check for missing data {:?}",
-                        block.header()
-                    );
-                    // At least check that _some_ data can be fetched.
-                    let res = ds
-                        .get_vid_common(BlockId::PayloadHash(block.payload_hash()))
-                        .await
-                        .await;
-                    assert_eq!(res.payload_hash(), common.payload_hash());
-                },
+                if *ix == i as u64 {
+                    assert_eq!(res, common);
+                }
+            } else {
+                tracing::warn!(
+                    "skipping VID common index check for missing data {:?}",
+                    block.header()
+                );
+                // At least check that _some_ data can be fetched.
+                let res = ds
+                    .get_vid_common(BlockId::PayloadHash(block.payload_hash()))
+                    .await
+                    .await;
+                assert_eq!(res.payload_hash(), common.payload_hash());
             }
 
             for (j, txn) in block.enumerate() {
@@ -278,28 +269,24 @@ pub mod availability_tests {
                 let ix = seen_transactions
                     .entry(txn.commit())
                     .or_insert((i as u64, j.clone()));
-                match ds
+                if let Ok(tx_data) = ds
                     .get_block_containing_transaction(txn.commit())
                     .await
                     .try_resolve()
                 {
-                    Ok(tx_data) => {
-                        assert_eq!(tx_data.transaction.transaction(), &txn);
-                        assert_eq!(tx_data.transaction.block_height(), ix.0);
-                        assert_eq!(tx_data.transaction.index(), ix.1.position as u64);
-                        assert_eq!(tx_data.index, ix.1);
-                        assert_eq!(tx_data.block, block);
-                    },
-                    _ => {
-                        tracing::warn!(
-                            "skipping transaction index check for missing transaction {j:?} \
-                             {txn:?}"
-                        );
-                        // At least check that _some_ transaction can be fetched.
-                        ds.get_block_containing_transaction(txn.commit())
-                            .await
-                            .await;
-                    },
+                    assert_eq!(tx_data.transaction.transaction(), &txn);
+                    assert_eq!(tx_data.transaction.block_height(), ix.0);
+                    assert_eq!(tx_data.transaction.index(), ix.1.position as u64);
+                    assert_eq!(tx_data.index, ix.1);
+                    assert_eq!(tx_data.block, block);
+                } else {
+                    tracing::warn!(
+                        "skipping transaction index check for missing transaction {j:?} {txn:?}"
+                    );
+                    // At least check that _some_ transaction can be fetched.
+                    ds.get_block_containing_transaction(txn.commit())
+                        .await
+                        .await;
                 }
             }
         }

@@ -358,11 +358,12 @@ pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplemen
     let consensus_reader = validation_info.consensus.read().await;
 
     let parent = match parent_leaf {
-        Some(leaf) => match consensus_reader.state_and_delta(leaf.view_number()) {
-            (Some(state), _) => Some((leaf, Arc::clone(&state))),
-            _ => {
+        Some(leaf) => {
+            if let (Some(state), _) = consensus_reader.state_and_delta(leaf.view_number()) {
+                Some((leaf, Arc::clone(&state)))
+            } else {
                 bail!("Parent state not found! Consensus internally inconsistent");
-            },
+            }
         },
         None => None,
     };

@@ -538,19 +538,16 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     let update_interval = state.config.update_interval;
     let retry_interval = state.config.retry_interval;
     loop {
-        match sync_state(&mut state, &proving_key, &relay_server_client).await {
-            Err(err) => {
-                tracing::error!(
-                    "Cannot sync the light client state, will retry in {:.1}s: {}",
-                    retry_interval.as_secs_f32(),
-                    err
-                );
-                sleep(retry_interval).await;
-            },
-            _ => {
-                tracing::info!("Sleeping for {:.1}s", update_interval.as_secs_f32());
-                sleep(update_interval).await;
-            },
+        if let Err(err) = sync_state(&mut state, &proving_key, &relay_server_client).await {
+            tracing::error!(
+                "Cannot sync the light client state, will retry in {:.1}s: {}",
+                retry_interval.as_secs_f32(),
+                err
+            );
+            sleep(retry_interval).await;
+        } else {
+            tracing::info!("Sleeping for {:.1}s", update_interval.as_secs_f32());
+            sleep(update_interval).await;
         }
     }
 }

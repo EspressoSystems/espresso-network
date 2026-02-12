@@ -33,7 +33,7 @@ pub struct Header {
 }
 
 macro_rules! element {
-    ($seq:expr_2021, $field:ident) => {
+    ($seq:expr, $field:ident) => {
         $seq.next_element()?
             .ok_or_else(|| de::Error::missing_field(stringify!($field)))?
     };

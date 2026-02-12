@@ -105,13 +105,10 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let mut elem_bytes = Vec::with_capacity(self.elem_byte_capacity);
         for _ in 0..elem_bytes.capacity() {
-            match self.bytes_iter.next() {
-                Some(byte) => {
-                    elem_bytes.push(*byte.borrow());
-                },
-                _ => {
-                    break;
-                },
+            if let Some(byte) = self.bytes_iter.next() {
+                elem_bytes.push(*byte.borrow());
+            } else {
+                break;
             }
         }
         if elem_bytes.is_empty() {

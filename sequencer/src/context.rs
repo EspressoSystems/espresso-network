@@ -510,7 +510,7 @@ async fn handle_events<N, P>(
 pub(crate) struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
 
 macro_rules! spawn_with_log_level {
-    ($this:expr_2021, $lvl:expr_2021, $name:expr_2021, $task: expr_2021) => {
+    ($this:expr, $lvl:expr, $name:expr, $task: expr) => {
         let name = $name.to_string();
         let task = {
             let name = name.clone();

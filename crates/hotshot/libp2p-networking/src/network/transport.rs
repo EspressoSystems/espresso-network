@@ -531,7 +531,7 @@ mod test {
 
     // Helper macro to generator a cursor from a length-delimited message
     macro_rules! cursor_from {
-        ($auth_message:expr_2021) => {{
+        ($auth_message:expr) => {{
             let mut stream = futures::io::Cursor::new(vec![]);
             write_length_delimited(&mut stream, &$auth_message)
                 .await

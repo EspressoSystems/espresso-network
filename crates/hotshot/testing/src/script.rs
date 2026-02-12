@@ -18,7 +18,7 @@ pub enum InputOrder<TYPES: NodeType> {
 
 #[macro_export]
 macro_rules! random {
-    ($($x:expr_2021),* $(,)?) => {
+    ($($x:expr),* $(,)?) => {
         {
             let inputs = vec![$($x),*];
             InputOrder::Random(inputs)
@@ -28,7 +28,7 @@ macro_rules! random {
 
 #[macro_export]
 macro_rules! serial {
-    ($($x:expr_2021),* $(,)?) => {
+    ($($x:expr),* $(,)?) => {
         {
             let inputs = vec![$($x),*];
             InputOrder::Serial(inputs)

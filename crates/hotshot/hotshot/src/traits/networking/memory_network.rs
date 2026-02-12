@@ -358,41 +358,40 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
         // debug!(?message, ?recipient, "Sending direct message");
         // Bincode the message
         trace!("Message bincoded, finding recipient");
-        match self.inner.master_map.map.get(&recipient) {
-            Some(node) => {
-                let node = node.value().clone();
-                if let Some(config) = &self.inner.reliability_config {
-                    {
-                        let fut = config.chaos_send_msg(
-                            message.clone(),
-                            Arc::new(move |msg: Vec<u8>| {
-                                let node2 = node.clone();
-                                boxed_sync(async move {
-                                    let _res = node2.input(msg).await;
-                                    // NOTE we're dropping metrics here but this is only for testing
-                                    // purposes. I think that should be okay
-                                })
-                            }),
-                        );
-                        spawn(fut);
-                    }
-                    Ok(())
-                } else {
-                    let res = node.input(message).await;
-                    match res {
-                        Ok(()) => {
-                            trace!(?recipient, "Delivered message to remote");
-                            Ok(())
-                        },
-                        Err(e) => Err(NetworkError::MessageSendError(format!(
-                            "error sending direct message to node: {e}",
-                        ))),
-                    }
+        if let Some(node) = self.inner.master_map.map.get(&recipient) {
+            let node = node.value().clone();
+            if let Some(config) = &self.inner.reliability_config {
+                {
+                    let fut = config.chaos_send_msg(
+                        message.clone(),
+                        Arc::new(move |msg: Vec<u8>| {
+                            let node2 = node.clone();
+                            boxed_sync(async move {
+                                let _res = node2.input(msg).await;
+                                // NOTE we're dropping metrics here but this is only for testing
+                                // purposes. I think that should be okay
+                            })
+                        }),
+                    );
+                    spawn(fut);
                 }
-            },
-            _ => Err(NetworkError::MessageSendError(
+                Ok(())
+            } else {
+                let res = node.input(message).await;
+                match res {
+                    Ok(()) => {
+                        trace!(?recipient, "Delivered message to remote");
+                        Ok(())
+                    },
+                    Err(e) => Err(NetworkError::MessageSendError(format!(
+                        "error sending direct message to node: {e}",
+                    ))),
+                }
+            }
+        } else {
+            Err(NetworkError::MessageSendError(
                 "node does not exist".to_string(),
-            )),
+            ))
         }
     }
 

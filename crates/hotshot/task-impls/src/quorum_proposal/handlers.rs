@@ -743,76 +743,74 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             }
         };
 
-        let (parent_qc, maybe_next_epoch_qc, maybe_state_cert) =
-            if let Some(qc) = parent_qc {
+        let (parent_qc, maybe_next_epoch_qc, maybe_state_cert) = if let Some(qc) = parent_qc {
+            if qc
+                .data
+                .block_number
+                .is_some_and(|bn| is_transition_block(bn, self.epoch_height))
+                && next_epoch_qc
+                    .as_ref()
+                    .is_none_or(|neqc| neqc.data.leaf_commit != qc.data.leaf_commit)
+            {
+                bail!(error!(
+                    "We've formed a transition QC but we haven't formed the corresponding next \
+                     epoch QC. Do not propose."
+                ));
+            }
+            (qc, next_epoch_qc, state_cert)
+        } else if version < EPOCH_VERSION {
+            (self.consensus.read().await.high_qc().clone(), None, None)
+        } else if proposal_cert.is_some() {
+            // If we have a view change evidence, we need to wait to propose with the transition QC
+            if let Ok(Some((qc, next_epoch_qc))) = self.wait_for_transition_qc().await {
+                let Some(epoch) = maybe_epoch else {
+                    bail!(error!(
+                        "No epoch found on view change evidence, but we are in epoch mode"
+                    ));
+                };
                 if qc
                     .data
                     .block_number
-                    .is_some_and(|bn| is_transition_block(bn, self.epoch_height))
-                    && next_epoch_qc
-                        .as_ref()
-                        .is_none_or(|neqc| neqc.data.leaf_commit != qc.data.leaf_commit)
+                    .is_some_and(|bn| epoch_from_block_number(bn, self.epoch_height) == *epoch)
                 {
-                    bail!(error!(
-                        "We've formed a transition QC but we haven't formed the corresponding \
-                         next epoch QC. Do not propose."
-                    ));
-                }
-                (qc, next_epoch_qc, state_cert)
-            } else if version < EPOCH_VERSION {
-                (self.consensus.read().await.high_qc().clone(), None, None)
-            } else if proposal_cert.is_some() {
-                // If we have a view change evidence, we need to wait to propose with the transition QC
-                match self.wait_for_transition_qc().await {
-                    Ok(Some((qc, next_epoch_qc))) => {
-                        let Some(epoch) = maybe_epoch else {
-                            bail!(error!(
-                                "No epoch found on view change evidence, but we are in epoch mode"
-                            ));
-                        };
-                        if qc.data.block_number.is_some_and(|bn| {
-                            epoch_from_block_number(bn, self.epoch_height) == *epoch
-                        }) {
-                            (qc, Some(next_epoch_qc), None)
-                        } else {
-                            match self.wait_for_highest_qc().await {
-                                Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) => {
-                                    (qc, maybe_next_epoch_qc, maybe_state_cert)
-                                },
-                                Err(e) => {
-                                    bail!(error!("Error while waiting for highest QC: {e:?}"));
-                                },
-                            }
-                        }
-                    },
-                    _ => {
-                        let Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) =
-                            self.wait_for_highest_qc().await
-                        else {
-                            bail!(error!("Error while waiting for highest QC"));
-                        };
-                        if qc.data.block_number.is_some_and(|bn| {
-                            is_epoch_transition(bn, self.epoch_height)
-                                && !is_last_block(bn, self.epoch_height)
-                        }) {
-                            bail!(error!(
-                                "High is in transition but we need to propose with transition QC, \
-                                 do nothing"
-                            ));
-                        }
-                        (qc, maybe_next_epoch_qc, maybe_state_cert)
-                    },
+                    (qc, Some(next_epoch_qc), None)
+                } else {
+                    match self.wait_for_highest_qc().await {
+                        Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) => {
+                            (qc, maybe_next_epoch_qc, maybe_state_cert)
+                        },
+                        Err(e) => {
+                            bail!(error!("Error while waiting for highest QC: {e:?}"));
+                        },
+                    }
                 }
             } else {
-                match self.wait_for_highest_qc().await {
-                    Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) => {
-                        (qc, maybe_next_epoch_qc, maybe_state_cert)
-                    },
-                    Err(e) => {
-                        bail!(error!("Error while waiting for highest QC: {e:?}"));
-                    },
+                let Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) =
+                    self.wait_for_highest_qc().await
+                else {
+                    bail!(error!("Error while waiting for highest QC"));
+                };
+                if qc.data.block_number.is_some_and(|bn| {
+                    is_epoch_transition(bn, self.epoch_height)
+                        && !is_last_block(bn, self.epoch_height)
+                }) {
+                    bail!(error!(
+                        "High is in transition but we need to propose with transition QC, do \
+                         nothing"
+                    ));
                 }
-            };
+                (qc, maybe_next_epoch_qc, maybe_state_cert)
+            }
+        } else {
+            match self.wait_for_highest_qc().await {
+                Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) => {
+                    (qc, maybe_next_epoch_qc, maybe_state_cert)
+                },
+                Err(e) => {
+                    bail!(error!("Error while waiting for highest QC: {e:?}"));
+                },
+            }
+        };
 
         ensure!(
             commit_and_metadata.is_some(),

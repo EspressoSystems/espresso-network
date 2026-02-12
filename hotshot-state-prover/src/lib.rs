@@ -117,12 +117,13 @@ impl StateProverConfig {
     pub async fn validate_light_client_contract(&self) -> Result<(), ProverError> {
         let provider = ProviderBuilder::new().connect_client(self.l1_rpc_client.clone());
 
-        match is_proxy_contract(&provider, self.light_client_address).await {
-            Err(e) => Err(ProverError::ContractError(anyhow::anyhow!(
+        if let Err(e) = is_proxy_contract(&provider, self.light_client_address).await {
+            Err(ProverError::ContractError(anyhow::anyhow!(
                 "Light Client contract's address {:?} is not a proxy: {e}",
                 self.light_client_address,
-            ))),
-            _ => Ok(()),
+            )))
+        } else {
+            Ok(())
         }
     }
 }

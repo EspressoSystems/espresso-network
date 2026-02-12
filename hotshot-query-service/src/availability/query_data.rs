@@ -182,9 +182,12 @@ where
         meta: &Self::Metadata,
         hash: Commitment<Self::Transaction>,
     ) -> Option<TransactionIndex<Types>> {
-        self.iter(meta).find(|i| match self.transaction(meta, i) {
-            Some(tx) => tx.commit() == hash,
-            _ => false,
+        self.iter(meta).find(|i| {
+            if let Some(tx) = self.transaction(meta, i) {
+                tx.commit() == hash
+            } else {
+                false
+            }
         })
     }
 

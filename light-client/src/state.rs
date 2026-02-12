@@ -162,21 +162,18 @@ where
         if latest_from_server > latest_known {
             // The server claims there is a newer block than we previously knew about. Verify that
             // this is the case by requesting a finality proof for the corresponding leaf.
-            match self
+            if let Err(err) = self
                 .fetch_leaf(LeafId::Number(latest_from_server as usize - 1))
                 .await
             {
-                Err(err) => {
-                    tracing::warn!(
-                        latest_known,
-                        latest_from_server,
-                        "failed to verify block height claimed by server: {err:#}"
-                    );
-                    return Ok(latest_known);
-                },
-                _ => {
-                    return Ok(latest_from_server);
-                },
+                tracing::warn!(
+                    latest_known,
+                    latest_from_server,
+                    "failed to verify block height claimed by server: {err:#}"
+                );
+                return Ok(latest_known);
+            } else {
+                return Ok(latest_from_server);
             }
         }
         Ok(latest_known)

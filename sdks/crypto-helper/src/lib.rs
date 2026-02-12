@@ -21,7 +21,7 @@ pub type Proof = Vec<MerkleNode<Commitment<Header>, u64, Sha3Node>>;
 pub type CircuitField = ark_ed_on_bn254::Fq;
 
 macro_rules! handle_result {
-    ($result:expr_2021) => {
+    ($result:expr) => {
         match $result {
             Ok(value) => value,
             Err(err) => return VerificationResult::err(&format!("Error: {:?}", err)),

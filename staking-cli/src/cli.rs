@@ -112,8 +112,8 @@ fn exit(msg: impl AsRef<str>) -> ! {
 // foundry. We instead format those types nicely with tagged base64.
 fn decode_and_display_logs(logs: &[Log]) {
     for log in logs {
-        match StakeTableV2Events::decode_log(log.as_ref()) {
-            Ok(decoded) => match &decoded.data {
+        if let Ok(decoded) = StakeTableV2Events::decode_log(log.as_ref()) {
+            match &decoded.data {
                 StakeTableV2Events::ValidatorRegistered(e) => output_success(format!(
                     "event: ValidatorRegistered {{ account: {}, blsVk: {}, schnorrVk: {}, \
                      commission: {} }}",
@@ -160,21 +160,17 @@ fn decode_and_display_logs(logs: &[Log]) {
                 },
 
                 _ => {},
-            },
-            _ => match EspTokenEvents::decode_log(log.as_ref()) {
-                Ok(decoded) => match &decoded.data {
-                    EspTokenEvents::Transfer(e) => output_success(format!("event: {e:?}")),
-                    EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
-                    _ => {},
-                },
-                _ => {
-                    if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref())
-                        && let RewardClaimEvents::RewardsClaimed(e) = &decoded.data
-                    {
-                        output_success(format!("event: {e:?}"));
-                    }
-                },
-            },
+            }
+        } else if let Ok(decoded) = EspTokenEvents::decode_log(log.as_ref()) {
+            match &decoded.data {
+                EspTokenEvents::Transfer(e) => output_success(format!("event: {e:?}")),
+                EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
+                _ => {},
+            }
+        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref())
+            && let RewardClaimEvents::RewardsClaimed(e) = &decoded.data
+        {
+            output_success(format!("event: {e:?}"));
         }
     }
 }
@@ -364,22 +360,23 @@ pub async fn run() -> Result<()> {
     // Handle deploy-contracts early since it doesn't require stake table address
     #[cfg(feature = "testing")]
     if let Commands::Demo(ref demo) = config.commands
-        && let DemoCommands::DeployContracts { ref output } = demo.command {
-            tracing::info!("Deploying staking contracts for testing");
-            deploy_contracts_for_testing(
-                config.rpc_url.clone(),
-                config
-                    .signer
-                    .mnemonic
-                    .clone()
-                    .expect("mnemonic required for deployment"),
-                config.signer.account_index.unwrap_or(0),
-                output.clone(),
-            )
-            .await
-            .context("failed to deploy contracts")?;
-            return Ok(());
-        }
+        && let DemoCommands::DeployContracts { ref output } = demo.command
+    {
+        tracing::info!("Deploying staking contracts for testing");
+        deploy_contracts_for_testing(
+            config.rpc_url.clone(),
+            config
+                .signer
+                .mnemonic
+                .clone()
+                .expect("mnemonic required for deployment"),
+            config.signer.account_index.unwrap_or(0),
+            output.clone(),
+        )
+        .await
+        .context("failed to deploy contracts")?;
+        return Ok(());
+    }
 
     // Clap serde will put default value if they aren't set. We check some
     // common configuration mistakes.
@@ -401,10 +398,12 @@ pub async fn run() -> Result<()> {
         Address::ZERO
     };
 
-    let wallet = match TryInto::<ValidSignerConfig>::try_into(config.signer.clone()) {
-        Ok(signer_config) => signer_config.wallet().await.ok(),
-        _ => None,
-    };
+    let wallet =
+        if let Ok(signer_config) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone()) {
+            signer_config.wallet().await.ok()
+        } else {
+            None
+        };
 
     // Commands that just read from chain
     if let Commands::Account = config.commands {

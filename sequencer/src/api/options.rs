@@ -181,31 +181,26 @@ impl Options {
             Box<dyn EventConsumer>,
             Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
-            match self.storage_sql.take() {
-                Some(opt) => {
-                    self.init_with_query_module_sql(
-                        query_opt,
-                        opt,
-                        state,
-                        &mut tasks,
-                        SequencerApiVersion::instance(),
-                    )
-                    .await?
-                },
-                _ => {
-                    if let Some(opt) = self.storage_fs.take() {
-                        self.init_with_query_module_fs(
-                            query_opt,
-                            opt,
-                            state,
-                            &mut tasks,
-                            SequencerApiVersion::instance(),
-                        )
-                        .await?
-                    } else {
-                        bail!("query module requested but not storage provided");
-                    }
-                },
+            if let Some(opt) = self.storage_sql.take() {
+                self.init_with_query_module_sql(
+                    query_opt,
+                    opt,
+                    state,
+                    &mut tasks,
+                    SequencerApiVersion::instance(),
+                )
+                .await?
+            } else if let Some(opt) = self.storage_fs.take() {
+                self.init_with_query_module_fs(
+                    query_opt,
+                    opt,
+                    state,
+                    &mut tasks,
+                    SequencerApiVersion::instance(),
+                )
+                .await?
+            } else {
+                bail!("query module requested but not storage provided");
             }
         } else if self.status.is_some() {
             // If a status API is requested but no availability API, we use the

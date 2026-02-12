@@ -198,14 +198,15 @@ where
 
                 // We should receive a response from the server that identifies us
                 // uniquely.
-                let client_id = match server_message_receiver.next().await {
-                    Some(ServerMessage::YouAre(client_id)) => client_id,
-                    _ => {
-                        // The channel is closed, and this client should be removed
-                        // we need to exit the stream
-                        tracing::info!("server message receiver closed before first message",);
-                        return Ok(());
-                    },
+                let client_id = if let Some(ServerMessage::YouAre(client_id)) =
+                    server_message_receiver.next().await
+                {
+                    client_id
+                } else {
+                    // The channel is closed, and this client should be removed
+                    // we need to exit the stream
+                    tracing::info!("server message receiver closed before first message",);
+                    return Ok(());
                 };
 
                 // We want to start these futures outside of the loop.  If we

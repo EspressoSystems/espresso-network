@@ -24,14 +24,11 @@ pub async fn main() -> anyhow::Result<()> {
 
     if let Some(storage) = modules.storage_fs.take() {
         run_with_storage(genesis, modules, opt, storage).await
+    } else if let Some(storage) = modules.storage_sql.take() {
+        run_with_storage(genesis, modules, opt, storage).await
     } else {
-        match modules.storage_sql.take() {
-            Some(storage) => run_with_storage(genesis, modules, opt, storage).await,
-            _ => {
-                // Persistence is required. If none is provided, just use the local file system.
-                run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
-            },
-        }
+        // Persistence is required. If none is provided, just use the local file system.
+        run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
     }
 }
 

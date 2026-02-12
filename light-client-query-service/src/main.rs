@@ -206,11 +206,10 @@ async fn run() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run().await {
-        Err(err) => {
-            tracing::error!("{err:#}");
-            ExitCode::FAILURE
-        },
-        _ => ExitCode::SUCCESS,
+    if let Err(err) = run().await {
+        tracing::error!("{err:#}");
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }

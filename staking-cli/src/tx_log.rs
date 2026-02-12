@@ -305,10 +305,11 @@ pub async fn submit_with_retry(
 
                 // On timeout, tx might have been accepted - check if already confirmed
                 if is_timeout_error(&err_str)
-                    && let Ok(Some(_receipt)) = provider.get_transaction_receipt(tx_hash).await {
-                        tracing::info!("tx {} already confirmed despite timeout", tx_hash);
-                        return Ok(tx_hash);
-                    }
+                    && let Ok(Some(_receipt)) = provider.get_transaction_receipt(tx_hash).await
+                {
+                    tracing::info!("tx {} already confirmed despite timeout", tx_hash);
+                    return Ok(tx_hash);
+                }
 
                 attempts += 1;
                 if attempts >= MAX_RETRIES {
@@ -519,9 +520,10 @@ async fn execute_signed_tx_log_inner<P: Provider + Clone + 'static>(
                     async move {
                         let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
                         if let Some(r) = &receipt
-                            && !r.status() {
-                                bail!("tx {} failed (reverted)", tx.tx_hash);
-                            }
+                            && !r.status()
+                        {
+                            bail!("tx {} failed (reverted)", tx.tx_hash);
+                        }
                         Ok((tx, receipt.is_some()))
                     }
                 }

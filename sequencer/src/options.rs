@@ -588,7 +588,7 @@ trait ModuleInfo: Args + FromArgMatches {
 }
 
 macro_rules! module {
-    ($name:expr_2021, $opt:ty $(,requires: $($req:expr_2021),*)?) => {
+    ($name:expr, $opt:ty $(,requires: $($req:expr),*)?) => {
         impl ModuleInfo for $opt {
             const NAME: &'static str = $name;
 

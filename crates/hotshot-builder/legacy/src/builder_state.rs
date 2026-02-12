@@ -1514,15 +1514,12 @@ mod test {
         let decide_message = MessageType::DecideMessage(crate::builder_state::DecideMessage {
             latest_decide_view_number,
         });
-        match decide_message.clone() {
-            MessageType::DecideMessage(practice_decide_msg) => {
-                builder_state
-                    .process_decide_event(practice_decide_msg.clone())
-                    .await;
-            },
-            _ => {
-                panic!("Not a decide_message in correct format");
-            },
+        if let MessageType::DecideMessage(practice_decide_msg) = decide_message.clone() {
+            builder_state
+                .process_decide_event(practice_decide_msg.clone())
+                .await;
+        } else {
+            panic!("Not a decide_message in correct format");
         }
         // check whether spawned_builder_states have correct builder_state_id and already exit-ed builder_states older than decides
         let current_spawned_builder_states =

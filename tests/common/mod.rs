@@ -366,11 +366,10 @@ impl TestRuntime {
 pub async fn get_builder_address(url: Url) -> Address {
     for _ in 0..5 {
         // Try to get builder address somehow
-        match reqwest::get(url.clone()).await {
-            Ok(body) => {
-                return body.json::<Address>().await.unwrap();
-            },
-            _ => sleep(Duration::from_millis(400)).await,
+        if let Ok(body) = reqwest::get(url.clone()).await {
+            return body.json::<Address>().await.unwrap();
+        } else {
+            sleep(Duration::from_millis(400)).await
         }
     }
     panic!("Error: Failed to retrieve address from builder!");

@@ -344,41 +344,40 @@ impl<
 
                 // Conditionally get the outgoing request, creating a new one if it doesn't exist or if
                 // the existing one has been dropped and not yet removed
-                match outgoing_requests_write
+                if let Some(outgoing_request) = outgoing_requests_write
                     .get(&request_hash)
                     .and_then(Weak::upgrade)
                 {
-                    Some(outgoing_request) => OutgoingRequest(outgoing_request),
-                    _ => {
-                        // Create a new broadcast channel for the response
-                        let (sender, receiver) = async_broadcast::broadcast(1);
+                    OutgoingRequest(outgoing_request)
+                } else {
+                    // Create a new broadcast channel for the response
+                    let (sender, receiver) = async_broadcast::broadcast(1);
 
-                        // Modify the response validation function to return an `Arc<dyn Any>`
-                        let response_validation_fn =
-                            Box::new(move |request: &Req, response: Req::Response| {
-                                let fut = response_validation_fn(request, response);
-                                Box::pin(async move {
-                                    fut.await.map(|ok| Arc::new(ok) as ThreadSafeAny)
-                                }) as ResponseValidationFuture
-                            });
+                    // Modify the response validation function to return an `Arc<dyn Any>`
+                    let response_validation_fn =
+                        Box::new(move |request: &Req, response: Req::Response| {
+                            let fut = response_validation_fn(request, response);
+                            Box::pin(
+                                async move { fut.await.map(|ok| Arc::new(ok) as ThreadSafeAny) },
+                            ) as ResponseValidationFuture
+                        });
 
-                        // Create a new outgoing request
-                        let outgoing_request = OutgoingRequest(Arc::new(OutgoingRequestInner {
-                            sender,
-                            receiver,
-                            response_validation_fn,
-                            request: request_message.request.clone(),
-                            outgoing_requests: Arc::clone(&self.outgoing_requests),
-                            request_hash,
-                        }));
+                    // Create a new outgoing request
+                    let outgoing_request = OutgoingRequest(Arc::new(OutgoingRequestInner {
+                        sender,
+                        receiver,
+                        response_validation_fn,
+                        request: request_message.request.clone(),
+                        outgoing_requests: Arc::clone(&self.outgoing_requests),
+                        request_hash,
+                    }));
 
-                        // Write the new outgoing request to the map
-                        outgoing_requests_write
-                            .insert(request_hash, Arc::downgrade(&outgoing_request.0));
+                    // Write the new outgoing request to the map
+                    outgoing_requests_write
+                        .insert(request_hash, Arc::downgrade(&outgoing_request.0));
 
-                        // Return the new outgoing request
-                        outgoing_request
-                    },
+                    // Return the new outgoing request
+                    outgoing_request
                 }
             };
 
