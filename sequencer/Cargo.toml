@@ -11,7 +11,6 @@ normal = ["hotshot-testing"]
 ignored = ["vergen", "include_dir", "hotshot_builder_api"]
 
 [features]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -21,10 +20,6 @@ testing = [
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
-fee = []
-pos = []
-drb-and-header = []
-da-upgrade = []
 
 [dependencies]
 alloy = { workspace = true }
