@@ -176,7 +176,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             calc_lock: Arc::new(RwLock::new(HashMap::new())),
             proposals: BTreeMap::new(),
             vid_shares: Arc::new(RwLock::new(BTreeMap::new())),
-            block_ready_sender: handle.block_ready_stream.0.clone(),
+            block_ready_sender: handle.block_ready_sender.clone(),
         }
     }
 }
@@ -323,7 +323,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             first_epoch: None,
             stake_table_capacity: handle.hotshot.config.stake_table_capacity,
             da_committees: handle.hotshot.config.da_committees.clone(),
-            block_ready_receiver: handle.block_ready_stream.0.clone(),
+            block_ready_sender: handle.block_ready_sender.clone(),
         }
     }
 }

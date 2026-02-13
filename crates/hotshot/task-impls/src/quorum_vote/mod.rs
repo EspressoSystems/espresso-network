@@ -110,8 +110,8 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     pub cancel_receiver: Receiver<()>,
 
-    /// Receiver for block ready notifications
-    pub block_ready_receiver: tokio_broadcast::Sender<BlockReady<TYPES>>,
+    /// Sender for block ready notifications
+    pub block_ready_sender: tokio_broadcast::Sender<BlockReady<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -449,11 +449,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         let now = Instant::now();
 
         // Subscribe to block ready notifications using the dedicated channel
-        // This avoids cloning the main event receiver which causes queue overflow issues
-        let mut block_ready_rx = self.block_ready_receiver.subscribe();
+        let mut block_ready_rx = self.block_ready_sender.subscribe();
 
         loop {
-            // Check again in case block was reconstructed while we were setting up
             if self
                 .consensus
                 .read()
@@ -551,8 +549,8 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     /// DA committees from HotShotConfig, to apply when an upgrade is decided
     pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
 
-    /// Receiver for block ready notifications - used to wait for blocks without polling main event stream
-    pub block_ready_receiver: tokio_broadcast::Sender<BlockReady<TYPES>>,
+    /// Sender for block ready notifications
+    pub block_ready_sender: tokio_broadcast::Sender<BlockReady<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -675,7 +673,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 first_epoch: self.first_epoch,
                 stake_table_capacity: self.stake_table_capacity,
                 cancel_receiver,
-                block_ready_receiver: self.block_ready_receiver.clone(),
+                block_ready_sender: self.block_ready_sender.clone(),
             },
         );
         self.vote_dependencies.insert(view_number, cancel_sender);

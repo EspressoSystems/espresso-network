@@ -401,7 +401,7 @@ where
         let output_event_stream = hotshot.external_event_stream.clone();
         let internal_event_stream = hotshot.internal_event_stream.clone();
 
-        let block_ready_stream = tokio::sync::broadcast::channel(1000);
+        let (block_ready_sender, _) = tokio::sync::broadcast::channel(1000);
 
         let mut handle = SystemContextHandle {
             consensus_registry,
@@ -413,7 +413,7 @@ where
             network: Arc::clone(&hotshot.network),
             membership_coordinator: memberships.clone(),
             epoch_height,
-            block_ready_stream,
+            block_ready_sender,
         };
 
         add_consensus_tasks::<TYPES, I, V>(&mut handle).await;

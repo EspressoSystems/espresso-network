@@ -72,12 +72,8 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 
-    /// Channel for block ready notifications - used to notify vote tasks that a block is available
-    /// without polling the main event stream
-    pub block_ready_stream: (
-        tokio_broadcast::Sender<BlockReady<TYPES>>,
-        tokio_broadcast::Receiver<BlockReady<TYPES>>,
-    ),
+    /// Sender for block ready notifications
+    pub block_ready_sender: tokio::sync::broadcast::Sender<BlockReady<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
