@@ -19,12 +19,10 @@
 use std::{borrow::Borrow, sync::Arc};
 
 use jf_merkle_tree_compat::{
-    internal::MerkleTreeIter,
     prelude::{MerkleNode, MerkleProof},
     universal_merkle_tree::UniversalMerkleTree,
-    DigestAlgorithm, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleCommitment, MerkleTreeCommitment, MerkleTreeError, MerkleTreeScheme,
-    UniversalMerkleTreeScheme,
+    DigestAlgorithm, ForgetableMerkleTreeScheme, LookupResult, MerkleCommitment,
+    MerkleTreeCommitment, MerkleTreeError, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest as _, Keccak256};
@@ -46,38 +44,87 @@ pub const REWARD_MERKLE_TREE_V2_ARITY: usize = 2;
 
 /// Two-level reward Merkle tree with pluggable storage backend.
 ///
-/// The tree uses an outer tree (4 bits) to index 16 inner trees (156 bits each).
-/// Storage determines persistence strategy (in-memory, file system, etc).
+/// # Architecture
+///
+/// This data structure implements a 160-bit Merkle tree (matching Ethereum's address space)
+/// using a two-level approach for efficient storage and retrieval:
+///
+/// - **Outer tree**: 4-bit tree (16 partitions) that stores the roots of inner trees
+/// - **Inner trees**: 16 separate 156-bit trees, one for each partition
+///
+/// The outer index is derived from the first 4 bits (most significant nibble) of an
+/// Ethereum address, allowing accounts to be distributed across 16 partitions.
+///
+/// # Storage Backend
+///
+/// The storage backend determines how inner tree roots are persisted:
+/// - [`storage::CachedInMemoryStorage`]: Fast in-memory storage with single-entry cache
+/// - [`fs_storage::RewardMerkleTreeFSStorage`]: File system backed, survives restarts
+///
+/// # Benefits
+///
+/// - **Sparse storage**: Only non-empty partitions consume storage
+/// - **Efficient lookups**: Operations only need to load one inner tree at a time
+/// - **Parallelization**: Different partitions can be processed independently
+/// - **Solidity compatibility**: Hashing matches on-chain verification
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let mut tree = InMemoryRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+/// tree.update(&account, &amount)?;
+/// let LookupResult::Ok(balance, proof) = tree.lookup(&account)?;
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RewardMerkleTreeV2Impl<S: RewardMerkleTreeStorage> {
-    /// Outer tree storing roots of 16 inner trees
+pub struct StorageBackedRewardMerkleTreeV2<S: RewardMerkleTreeStorage> {
+    /// Outer tree storing roots of 16 inner trees (4-bit indexed)
     outer: OuterRewardMerkleTreeV2,
-    /// Total number of accounts across all inner trees
+    /// Total number of accounts with non-zero balances across all inner trees
     num_leaves: u64,
-    /// Storage backend for inner tree roots
+    /// Storage backend for persisting inner tree roots
     storage: S,
 }
 
 // Manual Hash implementation that only hashes the outer tree
 // The storage is an implementation detail and doesn't affect logical equality
-impl<S: RewardMerkleTreeStorage> std::hash::Hash for RewardMerkleTreeV2Impl<S> {
+impl<S: RewardMerkleTreeStorage> std::hash::Hash for StorageBackedRewardMerkleTreeV2<S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.outer.hash(state);
     }
 }
 
-/// Merkle tree commitment
+/// Merkle tree commitment (root hash).
+///
+/// Contains the Keccak256 digest of the tree root along with metadata
+/// about tree height and number of leaves. Used for efficient verification.
 pub type RewardMerkleCommitmentV2 = MerkleTreeCommitment<KeccakNode>;
 
-/// Membership proof for account balance in the tree
+/// Membership proof for an account's balance in the tree.
+///
+/// Proves that a specific account has a specific balance at a given tree root.
+/// Contains the merkle path from leaf to root with all sibling hashes needed
+/// for verification. This proof can be verified on-chain in Solidity.
 pub type RewardMerkleProof =
     MerkleProof<RewardAmount, RewardAccountV2, KeccakNode, REWARD_MERKLE_TREE_V2_ARITY>;
 
-/// Membership proof for inner tree root in outer tree
+/// Non-membership proof for an account not in the tree.
+///
+/// Proves that a specific account does NOT exist in the tree. In a universal
+/// Merkle tree, this is structurally identical to a membership proof, showing
+/// the path to where the account would be if it existed (an empty position).
+pub type RewardNonMembershipProof = RewardMerkleProof;
+
+/// Membership proof for an inner tree root in the outer tree.
+///
+/// Internal type used when patching inner proofs with outer proofs. Proves
+/// that a specific inner tree root exists at a specific partition index.
 type OuterRewardMerkleProof =
     MerkleProof<KeccakNode, OuterIndex, KeccakNode, REWARD_MERKLE_TREE_V2_ARITY>;
 
-/// Merkle node containing reward amount
+/// Merkle node containing a reward amount leaf.
+///
+/// Internal representation of tree nodes. Can be Empty, Leaf (account + amount),
+/// Branch (internal node with children), or ForgettenSubtree (sparse placeholder).
 type RewardMerkleNode = MerkleNode<RewardAmount, RewardAccountV2, KeccakNode>;
 
 /// Height of outer tree (4 bits = 16 partitions)
@@ -87,7 +134,11 @@ const REWARD_MERKLE_TREE_V2_OUTER_HEIGHT: usize = 4;
 const REWARD_MERKLE_TREE_V2_INNER_HEIGHT: usize =
     REWARD_MERKLE_TREE_V2_HEIGHT - REWARD_MERKLE_TREE_V2_OUTER_HEIGHT;
 
-/// Inner tree type: stores account balances within a partition
+/// Inner tree type: 156-bit universal Merkle tree for account balances.
+///
+/// Each inner tree corresponds to one of the 16 partitions (indexed by the first
+/// 4 bits of the account address). Stores reward amounts keyed by full account addresses.
+/// Uses standard Keccak256 hashing for both leaves and internal nodes.
 type InnerRewardMerkleTreeV2 = UniversalMerkleTree<
     RewardAmount,
     Keccak256Hasher,
@@ -96,7 +147,16 @@ type InnerRewardMerkleTreeV2 = UniversalMerkleTree<
     KeccakNode,
 >;
 
-/// Outer tree type: stores roots of 16 inner trees
+/// Expected type alias for single-level reward Merkle tree.
+///
+/// Used in tests and comparisons to verify that the two-level implementation
+/// produces identical commitments to a single-level tree.
+pub type ExpectedRewardMerkleTreeV2 = InnerRewardMerkleTreeV2;
+
+/// Outer tree type: 4-bit universal Merkle tree storing inner tree roots.
+///
+/// Contains up to 16 entries (2^4), each storing the root hash of one inner tree.
+/// Uses a custom hasher (OuterKeccak256Hasher) that treats leaves as pre-hashed values.
 type OuterRewardMerkleTreeV2 = UniversalMerkleTree<
     KeccakNode,
     OuterKeccak256Hasher,
@@ -105,19 +165,35 @@ type OuterRewardMerkleTreeV2 = UniversalMerkleTree<
     KeccakNode,
 >;
 
-/// Keccak256 hasher for outer tree (inner tree roots).
+/// Keccak256 hasher for outer tree nodes.
 ///
-/// Implements Solidity-compatible hashing:
-/// - Leaves: pass-through (already hashed inner tree roots)
-/// - Internal nodes: keccak256 of concatenated children
+/// Implements Solidity-compatible hashing with special handling for leaves:
+///
+/// - **Leaf nodes**: Pass-through (no additional hashing) because inner tree roots
+///   are already Keccak256 hashes. Adding another hash layer would break compatibility.
+/// - **Internal nodes**: Standard `keccak256(left || right)` of concatenated children,
+///   matching Solidity's abi.encodePacked + keccak256.
+///
+/// This ensures that proofs generated here can be verified on-chain using
+/// the RewardClaim contract's merkle verification logic.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct OuterKeccak256Hasher;
 
 impl DigestAlgorithm<KeccakNode, OuterIndex, KeccakNode> for OuterKeccak256Hasher {
+    /// Hash internal nodes by concatenating children and applying Keccak256.
+    ///
+    /// Implements `keccak256(child[0] || child[1] || ... || child[n])` matching
+    /// Solidity's `keccak256(abi.encodePacked(...))`.
+    ///
+    /// # Arguments
+    /// * `data` - Slice of child node hashes to combine
+    ///
+    /// # Returns
+    /// The Keccak256 hash of the concatenated children
     fn digest(data: &[KeccakNode]) -> Result<KeccakNode, jf_merkle_tree_compat::MerkleTreeError> {
         let mut hasher = Keccak256::new();
 
-        // Hash the concatenated node data directly (no domain separator)
+        // Concatenate all child hashes without domain separator
         for node in data {
             hasher.update(node.as_ref());
         }
@@ -126,19 +202,28 @@ impl DigestAlgorithm<KeccakNode, OuterIndex, KeccakNode> for OuterKeccak256Hashe
         Ok(KeccakNode(result.into()))
     }
 
+    /// Pass-through for leaf nodes (inner tree roots are already hashed).
+    ///
+    /// Unlike typical Merkle trees where leaves are hashed, the outer tree's
+    /// "leaves" are inner tree roots that are already Keccak256 hashes.
+    /// Hashing them again would add an unnecessary layer and break Solidity
+    /// verification compatibility.
+    ///
+    /// # Arguments
+    /// * `_pos` - Outer index (0-15), unused
+    /// * `elem` - Inner tree root hash (already a Keccak256 digest)
+    ///
+    /// # Returns
+    /// The input hash unchanged
     fn digest_leaf(
         _pos: &OuterIndex,
         elem: &KeccakNode,
     ) -> Result<KeccakNode, jf_merkle_tree_compat::MerkleTreeError> {
-        // Do not hash the root of the inner Merkle tree
         Ok(*elem)
     }
 }
 
-impl<S: RewardMerkleTreeStorage> RewardMerkleTreeV2Impl<S> {
-    /// Tree arity (binary tree)
-    pub const ARITY: usize = REWARD_MERKLE_TREE_V2_ARITY;
-
+impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
     /// Create a new empty tree with the given storage backend
     pub fn new_with_storage(storage: S) -> Self {
         Self {
@@ -173,7 +258,7 @@ impl<S: RewardMerkleTreeStorage> RewardMerkleTreeV2Impl<S> {
         height: usize,
         data: impl IntoIterator<Item = impl Borrow<(BI, BE)>>,
         storage: S,
-    ) -> Result<Self, MerkleTreeError>
+    ) -> anyhow::Result<Self>
     where
         BI: Borrow<RewardAccountV2>,
         BE: Borrow<RewardAmount>,
@@ -186,15 +271,31 @@ impl<S: RewardMerkleTreeStorage> RewardMerkleTreeV2Impl<S> {
         let mut mt = Self::new_with_storage(storage);
         for tuple in data.into_iter() {
             let (key, value) = tuple.borrow();
-            UniversalMerkleTreeScheme::update(&mut mt, key.borrow(), value.borrow())?;
+            Self::update(&mut mt, key.borrow(), value.borrow())?;
         }
         Ok(mt)
     }
 
-    /// Merge inner tree proof with outer tree proof into a single proof.
+    /// Merge inner tree proof with outer tree proof into a single 160-bit proof.
     ///
-    /// The inner proof verifies the account in its partition, and the outer proof
-    /// verifies that partition's root in the outer tree.
+    /// # Two-Level Proof Construction
+    ///
+    /// The two-level tree generates proofs in two stages:
+    /// 1. **Inner proof** (156 bits): Proves account balance within its partition
+    /// 2. **Outer proof** (4 bits): Proves partition root in outer tree
+    ///
+    /// This method combines them into a single 160-bit proof that can be verified
+    /// against the tree's root commitment, matching the format expected by Solidity.
+    ///
+    /// # Implementation Details
+    ///
+    /// - Skips the first outer proof node (it's the inner tree root, already in inner proof)
+    /// - Appends remaining outer proof nodes to the inner proof path
+    /// - Converts outer tree nodes to inner tree node format (ForgettenSubtree placeholders)
+    ///
+    /// # Arguments
+    /// * `proof` - Inner proof (156-bit) to extend (modified in place)
+    /// * `outer_proof` - Outer proof (4-bit) to append
     fn patch_membership_proof(proof: &mut RewardMerkleProof, outer_proof: &OuterRewardMerkleProof) {
         outer_proof
             .proof
@@ -222,11 +323,41 @@ impl<S: RewardMerkleTreeStorage> RewardMerkleTreeV2Impl<S> {
     }
 }
 
-/// Default reward Merkle tree with in-memory storage
-pub type RewardMerkleTreeV2 = RewardMerkleTreeV2Impl<storage::CachedInMemoryStorage>;
+/// Two-level reward Merkle tree with in-memory storage (default).
+///
+/// Fast, non-persistent storage suitable for:
+/// - Validators that don't store full reward state
+/// - Testing and development
+/// - Reconstructing state from block headers + catchup
+///
+/// Uses [`storage::CachedInMemoryStorage`] with single-entry cache for efficiency.
+pub type InMemoryRewardMerkleTreeV2 =
+    StorageBackedRewardMerkleTreeV2<storage::CachedInMemoryStorage>;
+
+/// Two-level reward Merkle tree with file system storage.
+///
+/// Persistent storage that survives process restarts, suitable for:
+/// - Nodes that maintain full reward state
+/// - Archival nodes
+/// - Long-running sequencers
+///
+/// Uses [`fs_storage::RewardMerkleTreeFSStorage`] with bincode serialization.
+pub type FileBackedRewardMerkleTreeV2 =
+    StorageBackedRewardMerkleTreeV2<fs_storage::RewardMerkleTreeFSStorage>;
+
+/// Canonical reward Merkle tree type (single-level, 160-bit).
+///
+/// This is the "reference" implementation used for:
+/// - Testing two-level tree correctness (commitments must match)
+/// - Understanding the logical tree structure
+/// - Generating test vectors
+///
+/// Production code uses [`InMemoryRewardMerkleTreeV2`] or [`FileBackedRewardMerkleTreeV2`]
+/// for better performance and storage efficiency.
+pub type RewardMerkleTreeV2 = InnerRewardMerkleTreeV2;
 
 // Convenience methods for the default cached storage implementation
-impl RewardMerkleTreeV2 {
+impl InMemoryRewardMerkleTreeV2 {
     /// Create a new empty tree with default in-memory storage
     ///
     /// # Arguments
@@ -256,7 +387,7 @@ impl RewardMerkleTreeV2 {
     pub fn from_kv_set<BI, BE>(
         height: usize,
         data: impl IntoIterator<Item = impl Borrow<(BI, BE)>>,
-    ) -> Result<Self, MerkleTreeError>
+    ) -> anyhow::Result<Self>
     where
         BI: Borrow<RewardAccountV2>,
         BE: Borrow<RewardAmount>,
@@ -265,37 +396,36 @@ impl RewardMerkleTreeV2 {
     }
 }
 
-/// Verification result: Ok(()) means valid, Err(()) means invalid
+/// Verification result for merkle proofs.
+///
+/// - `Ok(())` - Proof is valid, account exists with claimed balance
+/// - `Err(())` - Proof is invalid (wrong proof data or commitment)
+///
+/// Used by [`StorageBackedRewardMerkleTreeV2::verify`] to check membership proofs.
 pub type VerificationResult = Result<(), ()>;
 
-/// Core Merkle tree operations: lookup, verification, commitment
-impl<S: RewardMerkleTreeStorage> MerkleTreeScheme for RewardMerkleTreeV2Impl<S> {
-    type Element = RewardAmount;
-    type Index = RewardAccountV2;
-    type MembershipProof = <InnerRewardMerkleTreeV2 as MerkleTreeScheme>::MembershipProof;
-    type Commitment = RewardMerkleCommitmentV2;
-    type NodeValue = KeccakNode;
-    type BatchMembershipProof = ();
-
-    const ARITY: usize = REWARD_MERKLE_TREE_V2_ARITY;
+/// Core Merkle tree operations
+impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
+    /// Tree arity (binary tree)
+    pub const ARITY: usize = REWARD_MERKLE_TREE_V2_ARITY;
 
     /// Returns the tree height (160 bits for Ethereum address space)
-    fn height(&self) -> usize {
-        160
+    pub fn height(&self) -> usize {
+        REWARD_MERKLE_TREE_V2_HEIGHT
     }
 
     /// Returns the tree capacity (2^160 possible accounts)
-    fn capacity(&self) -> bigdecimal::num_bigint::BigUint {
+    pub fn capacity(&self) -> bigdecimal::num_bigint::BigUint {
         bigdecimal::num_bigint::BigUint::from_slice(&[2]).pow(160)
     }
 
     /// Returns the number of accounts with non-zero balances
-    fn num_leaves(&self) -> u64 {
-        self.commitment().size()
+    pub fn num_leaves(&self) -> u64 {
+        self.num_leaves
     }
 
     /// Returns the root commitment (hash) of the tree
-    fn commitment(&self) -> Self::Commitment {
+    pub fn commitment(&self) -> RewardMerkleCommitmentV2 {
         MerkleTreeCommitment::new(
             self.outer.commitment().digest(),
             REWARD_MERKLE_TREE_V2_HEIGHT,
@@ -306,51 +436,198 @@ impl<S: RewardMerkleTreeStorage> MerkleTreeScheme for RewardMerkleTreeV2Impl<S> 
     /// Look up an account's balance and generate a membership proof
     ///
     /// Returns the balance and proof if the account exists, NotFound otherwise.
-    fn lookup(
+    ///
+    /// # Errors
+    /// Returns storage error if IO operation fails.
+    pub fn lookup(
         &self,
-        index: impl Borrow<Self::Index>,
-    ) -> LookupResult<Self::Element, Self::MembershipProof, ()> {
+        index: impl Borrow<RewardAccountV2>,
+    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, ()>, S::Error> {
         let outer_index = OuterIndex::new(index.borrow());
         let outer_proof = match self.outer.lookup(outer_index) {
             LookupResult::Ok(_, proof) => proof,
             LookupResult::NotInMemory => {
                 unreachable!("Outer reward merkle tree will never be forgetten.")
             },
-            LookupResult::NotFound(_) => return LookupResult::NotFound(()),
+            LookupResult::NotFound(_) => return Ok(LookupResult::NotFound(())),
         };
-        match self.storage.lookup(index) {
+        match self.storage.lookup(index)? {
             LookupResult::Ok(value, mut proof) => {
                 Self::patch_membership_proof(&mut proof, &outer_proof);
-                LookupResult::Ok(value, proof)
+                Ok(LookupResult::Ok(value, proof))
             },
-            LookupResult::NotInMemory => LookupResult::NotInMemory,
-            LookupResult::NotFound(_) => LookupResult::NotFound(()),
+            LookupResult::NotInMemory => Ok(LookupResult::NotInMemory),
+            LookupResult::NotFound(_) => Ok(LookupResult::NotFound(())),
         }
     }
 
     /// Verify a membership proof against a root commitment
     ///
     /// Returns Ok(Ok(())) if proof is valid, Ok(Err(())) if invalid.
-    fn verify(
-        root: impl Borrow<Self::Commitment>,
-        index: impl Borrow<Self::Index>,
-        proof: impl Borrow<Self::MembershipProof>,
+    pub fn verify(
+        root: impl Borrow<RewardMerkleCommitmentV2>,
+        index: impl Borrow<RewardAccountV2>,
+        proof: impl Borrow<RewardMerkleProof>,
     ) -> Result<VerificationResult, MerkleTreeError> {
         InnerRewardMerkleTreeV2::verify(root, index, proof)
     }
 
-    /// Iterate over all accounts and balances (not yet implemented)
+    /// Update an account's balance using a custom function
     ///
-    /// Note: This method is challenging to implement efficiently for the two-level tree structure
-    /// because MerkleTreeIter requires borrowing from a single tree. Use `into_iter()` instead
-    /// to consume the tree and iterate over all entries.
-    fn iter(&'_ self) -> MerkleTreeIter<'_, Self::Element, Self::Index, Self::NodeValue> {
-        todo!()
+    /// The function receives the current balance (if any) and returns the new balance.
+    /// Returning None removes the account. Updates both inner and outer trees.
+    ///
+    /// # Errors
+    /// If the merkle tree update fails.
+    pub fn update_with<F>(
+        &mut self,
+        pos: impl Borrow<RewardAccountV2>,
+        f: F,
+    ) -> anyhow::Result<LookupResult<RewardAmount, (), ()>>
+    where
+        F: FnOnce(Option<&RewardAmount>) -> Option<RewardAmount>,
+    {
+        let outer_index = OuterIndex::new(pos.borrow());
+        let (result, delta, root) = self.storage.update_with(pos, f)?;
+        self.num_leaves = (self.num_leaves as i64 + delta) as u64;
+        if root == KeccakNode::default() {
+            self.outer.update_with(outer_index, |_| None)?;
+        } else {
+            self.outer.update(outer_index, root)?;
+        }
+        Ok(result)
+    }
+
+    /// Convenience method to update an account's balance directly
+    ///
+    /// # Errors
+    /// Returns `MerkleTreeError` if the merkle tree update fails.
+    /// Panics if storage operation fails.
+    pub fn update(
+        &mut self,
+        pos: impl Borrow<RewardAccountV2>,
+        value: impl Borrow<RewardAmount>,
+    ) -> anyhow::Result<LookupResult<RewardAmount, (), ()>> {
+        self.update_with(pos, |_| Some(*value.borrow()))
+    }
+
+    /// Look up an account and generate proof (membership or non-membership)
+    ///
+    /// Returns membership proof if account exists, non-membership proof otherwise.
+    ///
+    /// # Errors
+    /// Returns storage error if IO operation fails.
+    pub fn universal_lookup(
+        &self,
+        index: impl Borrow<RewardAccountV2>,
+    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, RewardMerkleProof>, S::Error> {
+        let index = index.borrow();
+        let outer_index = OuterIndex::new(index);
+        let outer_proof = match self.outer.universal_lookup(outer_index) {
+            LookupResult::Ok(_, proof) => proof,
+            LookupResult::NotInMemory => {
+                unreachable!("Outer reward merkle tree will never be forgetten.")
+            },
+            LookupResult::NotFound(outer_proof) => {
+                let mut proof = RewardMerkleProof::new(
+                    *index,
+                    vec![MerkleNode::Empty; REWARD_MERKLE_TREE_V2_INNER_HEIGHT + 1],
+                );
+                Self::patch_membership_proof(&mut proof, &outer_proof);
+                return Ok(LookupResult::NotFound(proof));
+            },
+        };
+        match self.storage.lookup(index)? {
+            LookupResult::Ok(value, mut proof) => {
+                Self::patch_membership_proof(&mut proof, &outer_proof);
+                Ok(LookupResult::Ok(value, proof))
+            },
+            LookupResult::NotInMemory => Ok(LookupResult::NotInMemory),
+            LookupResult::NotFound(mut proof) => {
+                Self::patch_membership_proof(&mut proof, &outer_proof);
+                Ok(LookupResult::NotFound(proof))
+            },
+        }
+    }
+
+    /// Verify a non-membership proof against a root commitment
+    ///
+    /// Returns true if proof is valid (account doesn't exist), false otherwise.
+    pub fn non_membership_verify(
+        root: impl Borrow<RewardMerkleCommitmentV2>,
+        index: impl Borrow<RewardAccountV2>,
+        proof: impl Borrow<RewardMerkleProof>,
+    ) -> Result<bool, MerkleTreeError> {
+        InnerRewardMerkleTreeV2::non_membership_verify(root, index, proof)
+    }
+
+    /// Remove an account from memory (not yet implemented, currently just performs lookup)
+    ///
+    /// Returns the account's balance and proof if it exists.
+    ///
+    /// # Errors
+    /// Returns storage error if IO operation fails.
+    pub fn forget(
+        &mut self,
+        index: impl Borrow<RewardAccountV2>,
+    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, ()>, S::Error> {
+        self.lookup(index)
+    }
+
+    /// Restore an account to memory using a proof (currently a no-op)
+    ///
+    /// Restores an account that was previously forgotten. Currently does nothing.
+    pub fn remember(
+        &mut self,
+        _pos: impl Borrow<RewardAccountV2>,
+        _element: impl Borrow<RewardAmount>,
+        _proof: impl Borrow<RewardMerkleProof>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Remove an account and generate proof (membership or non-membership)
+    ///
+    /// Currently just performs universal_lookup without actually removing from memory.
+    ///
+    /// # Errors
+    /// Returns storage error if IO operation fails.
+    pub fn universal_forget(
+        &mut self,
+        pos: RewardAccountV2,
+    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, RewardMerkleProof>, S::Error> {
+        self.universal_lookup(pos)
+    }
+
+    /// Restore non-membership information using a proof (currently a no-op)
+    ///
+    /// Restores non-membership information for an account. Currently does nothing.
+    pub fn non_membership_remember(
+        &mut self,
+        _pos: RewardAccountV2,
+        _proof: impl Borrow<RewardMerkleProof>,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
-/// Iterator over all accounts and balances
-impl<S: RewardMerkleTreeStorage> IntoIterator for RewardMerkleTreeV2Impl<S> {
+/// Consumes the tree and returns an iterator over all (account, balance) pairs.
+///
+/// # Performance Note
+///
+/// This operation loads all 16 inner trees (even if sparse) and traverses them
+/// recursively to collect leaf entries. For trees with many accounts, this can
+/// be memory-intensive. Consider using storage-level iteration if available.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let tree = InMemoryRewardMerkleTreeV2::from_kv_set(height, accounts)?;
+/// for (account, balance) in tree {
+///     println!("{:?}: {}", account, balance);
+/// }
+/// ```
+impl<S: RewardMerkleTreeStorage> IntoIterator for StorageBackedRewardMerkleTreeV2<S> {
     type Item = (RewardAccountV2, RewardAmount);
 
     type IntoIter = <std::vec::Vec<(RewardAccountV2, RewardAmount)> as IntoIterator>::IntoIter;
@@ -361,17 +638,26 @@ impl<S: RewardMerkleTreeStorage> IntoIterator for RewardMerkleTreeV2Impl<S> {
         let mut all_entries = Vec::new();
 
         for outer_idx in indices {
-            self.storage.with_tree(outer_idx, |root| {
-                // Traverse the MerkleNode tree to collect all leaf entries
-                collect_merkle_leaves(root, &mut all_entries);
-            });
+            self.storage
+                .with_tree(outer_idx, |root| {
+                    // Traverse the MerkleNode tree to collect all leaf entries
+                    collect_merkle_leaves(root, &mut all_entries);
+                })
+                .expect("Storage operation failed during iteration");
         }
 
         all_entries.into_iter()
     }
 }
 
-/// Helper function to recursively collect all leaf entries from a MerkleNode
+/// Recursively traverses a merkle tree node and collects all leaf entries.
+///
+/// Performs depth-first traversal of the tree structure, extracting account-balance
+/// pairs from leaf nodes. Skips empty nodes and forgotten subtrees.
+///
+/// # Arguments
+/// * `node` - Root node to traverse (can be Empty, Leaf, Branch, or ForgettenSubtree)
+/// * `entries` - Mutable vector to append discovered (account, balance) pairs
 fn collect_merkle_leaves(
     node: &storage::InnerRewardMerkleTreeRoot,
     entries: &mut Vec<(RewardAccountV2, RewardAmount)>,
@@ -388,576 +674,5 @@ fn collect_merkle_leaves(
         MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. } => {
             // No leaves to collect
         },
-    }
-}
-
-/// Universal Merkle tree operations: update, non-membership proofs
-///
-/// Supports proving both membership (account exists) and non-membership (account doesn't exist).
-impl<S: RewardMerkleTreeStorage> UniversalMerkleTreeScheme for RewardMerkleTreeV2Impl<S> {
-    type NonMembershipProof =
-        <InnerRewardMerkleTreeV2 as UniversalMerkleTreeScheme>::NonMembershipProof;
-    type BatchNonMembershipProof = ();
-
-    /// Update an account's balance using a custom function
-    ///
-    /// The function receives the current balance (if any) and returns the new balance.
-    /// Returning None removes the account. Updates both inner and outer trees.
-    fn update_with<F>(
-        &mut self,
-        pos: impl Borrow<Self::Index>,
-        f: F,
-    ) -> Result<LookupResult<Self::Element, (), ()>, MerkleTreeError>
-    where
-        F: FnOnce(Option<&Self::Element>) -> Option<Self::Element>,
-    {
-        let outer_index = OuterIndex::new(pos.borrow());
-        let (result, delta, root) = self.storage.update_with(pos, f)?;
-        self.num_leaves = (self.num_leaves as i64 + delta) as u64;
-        if root == KeccakNode::default() {
-            self.outer.update_with(outer_index, |_| None)?;
-        } else {
-            self.outer.update(outer_index, root)?;
-        }
-        Ok(result)
-    }
-
-    /// Look up an account and generate proof (membership or non-membership)
-    ///
-    /// Returns membership proof if account exists, non-membership proof otherwise.
-    fn universal_lookup(
-        &self,
-        index: impl Borrow<Self::Index>,
-    ) -> LookupResult<Self::Element, Self::MembershipProof, Self::NonMembershipProof> {
-        let index = index.borrow();
-        let outer_index = OuterIndex::new(index);
-        let outer_proof = match self.outer.universal_lookup(outer_index) {
-            LookupResult::Ok(_, proof) => proof,
-            LookupResult::NotInMemory => {
-                unreachable!("Outer reward merkle tree will never be forgetten.")
-            },
-            LookupResult::NotFound(outer_proof) => {
-                let mut proof = RewardMerkleProof::new(
-                    *index,
-                    vec![MerkleNode::Empty; REWARD_MERKLE_TREE_V2_INNER_HEIGHT + 1],
-                );
-                Self::patch_membership_proof(&mut proof, &outer_proof);
-                return LookupResult::NotFound(proof);
-            },
-        };
-        match self.storage.lookup(index) {
-            LookupResult::Ok(value, mut proof) => {
-                Self::patch_membership_proof(&mut proof, &outer_proof);
-                LookupResult::Ok(value, proof)
-            },
-            LookupResult::NotInMemory => LookupResult::NotInMemory,
-            LookupResult::NotFound(mut proof) => {
-                Self::patch_membership_proof(&mut proof, &outer_proof);
-                LookupResult::NotFound(proof)
-            },
-        }
-    }
-
-    /// Verify a non-membership proof against a root commitment
-    ///
-    /// Returns true if proof is valid (account doesn't exist), false otherwise.
-    fn non_membership_verify(
-        root: impl Borrow<Self::Commitment>,
-        index: impl Borrow<Self::Index>,
-        proof: impl Borrow<Self::NonMembershipProof>,
-    ) -> Result<bool, MerkleTreeError> {
-        InnerRewardMerkleTreeV2::non_membership_verify(root, index, proof)
-    }
-}
-
-/// Forgetable operations: prune tree to reduce memory usage
-///
-/// Allows removing account data from memory while maintaining the root hash.
-/// Accounts can be restored later with remember operations.
-impl<S: RewardMerkleTreeStorage + Default> ForgetableMerkleTreeScheme
-    for RewardMerkleTreeV2Impl<S>
-{
-    /// Reconstruct a sparse tree from a commitment with default storage
-    ///
-    /// Creates an empty tree with the given root. Accounts can be populated with remember.
-    fn from_commitment(commitment: impl Borrow<Self::Commitment>) -> Self {
-        let num_leaves = commitment.borrow().size();
-        Self {
-            outer: OuterRewardMerkleTreeV2::from_commitment(commitment),
-            num_leaves,
-            storage: S::default(),
-        }
-    }
-
-    /// Remove an account from memory (not yet implemented, currently just performs lookup)
-    ///
-    /// Returns the account's balance and proof if it exists.
-    fn forget(
-        &mut self,
-        index: impl Borrow<Self::Index>,
-    ) -> LookupResult<Self::Element, Self::MembershipProof, ()> {
-        self.lookup(index)
-        // let outer_index = OuterIndex::new(index.borrow());
-        // let outer_proof = match self.outer.lookup(outer_index) {
-        //     LookupResult::Ok(_, proof) => proof,
-        //     LookupResult::NotInMemory => {
-        //         unreachable!("Outer reward merkle tree will never be forgetten.")
-        //     },
-        //     LookupResult::NotFound(_) => return LookupResult::NotFound(()),
-        // };
-        // match self.storage.forget(index) {
-        //     LookupResult::Ok(value, mut proof) => {
-        //         Self::patch_membership_proof(&mut proof, &outer_proof);
-        //         LookupResult::Ok(value, proof)
-        //     },
-        //     LookupResult::NotInMemory => LookupResult::NotInMemory,
-        //     LookupResult::NotFound(_) => LookupResult::NotFound(()),
-        // }
-    }
-
-    /// Restore an account to memory using a proof (currently a no-op)
-    ///
-    /// Restores an account that was previously forgotten. Currently does nothing.
-    fn remember(
-        &mut self,
-        _pos: impl Borrow<Self::Index>,
-        _element: impl Borrow<Self::Element>,
-        _proof: impl Borrow<Self::MembershipProof>,
-    ) -> Result<(), MerkleTreeError> {
-        Ok(())
-    }
-}
-
-/// Forgetable universal operations: forget with non-membership proofs
-impl<S: RewardMerkleTreeStorage + Default> ForgetableUniversalMerkleTreeScheme
-    for RewardMerkleTreeV2Impl<S>
-{
-    /// Remove an account and generate proof (membership or non-membership)
-    ///
-    /// Currently just performs universal_lookup without actually removing from memory.
-    fn universal_forget(
-        &mut self,
-        pos: Self::Index,
-    ) -> LookupResult<Self::Element, Self::MembershipProof, Self::NonMembershipProof> {
-        self.universal_lookup(pos)
-    }
-
-    /// Restore non-membership information using a proof (currently a no-op)
-    ///
-    /// Restores non-membership information for an account. Currently does nothing.
-    fn non_membership_remember(
-        &mut self,
-        _pos: Self::Index,
-        _proof: impl Borrow<Self::NonMembershipProof>,
-    ) -> Result<(), MerkleTreeError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloy::primitives::U256;
-    use jf_merkle_tree_compat::ToTraversalPath;
-    use rand::{Rng, SeedableRng};
-    use rand_chacha::ChaCha20Rng;
-
-    use super::*;
-
-    /// Generate a random reward account address
-    fn random_account(rng: &mut impl Rng) -> RewardAccountV2 {
-        let mut bytes = [0u8; 20];
-        rng.fill(&mut bytes);
-        RewardAccountV2::from(bytes)
-    }
-
-    /// Generate a random reward amount
-    fn random_amount(rng: &mut impl Rng) -> RewardAmount {
-        RewardAmount(U256::from(rng.gen::<u64>()))
-    }
-
-    #[test]
-    fn test_to_traversal_path() {
-        let mut rng = ChaCha20Rng::seed_from_u64(42);
-        let account = random_account(&mut rng);
-        let full_path = <RewardAccountV2 as ToTraversalPath<2>>::to_traversal_path(&account, 160);
-        let outer_index = OuterIndex::new(&account);
-        let outer_path = <OuterIndex as ToTraversalPath<2>>::to_traversal_path(&outer_index, 4);
-        assert_eq!(
-            &outer_path,
-            &full_path[REWARD_MERKLE_TREE_V2_INNER_HEIGHT..]
-        );
-    }
-
-    #[test]
-    fn test_two_level_tree_matches_single_level() {
-        let mut rng = ChaCha20Rng::seed_from_u64(42);
-
-        // Create two-level tree (our implementation)
-        let mut two_level_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        // Create single-level tree for comparison
-        let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        // Insert random accounts
-        let num_accounts = 20;
-        let mut test_accounts = Vec::new();
-
-        for _ in 0..num_accounts {
-            let account = random_account(&mut rng);
-            let amount = random_amount(&mut rng);
-            test_accounts.push((account, amount));
-
-            // Insert into both trees
-            two_level_tree.update(account, amount).unwrap();
-            single_level_tree.update(account, amount).unwrap();
-
-            // Verify commitments match after each insertion
-            assert_eq!(
-                two_level_tree.commitment(),
-                single_level_tree.commitment(),
-                "Commitments should match after insertion"
-            );
-        }
-
-        // Verify final state
-        assert_eq!(
-            two_level_tree.num_leaves(),
-            single_level_tree.num_leaves(),
-            "Number of leaves should match"
-        );
-    }
-
-    #[test]
-    fn test_lookup_and_proof_verification() {
-        let mut rng = ChaCha20Rng::seed_from_u64(123);
-
-        let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let mut accounts = Vec::new();
-
-        // Insert several accounts
-        for _ in 0..10 {
-            let account = random_account(&mut rng);
-            let amount = random_amount(&mut rng);
-            accounts.push((account, amount));
-            tree.update(account, amount).unwrap();
-        }
-
-        // Test lookup for each inserted account
-        for (account, expected_amount) in &accounts {
-            match tree.lookup(account) {
-                LookupResult::Ok(amount, proof) => {
-                    assert_eq!(amount, *expected_amount, "Amount should match");
-
-                    // Verify the proof
-                    let verification =
-                        RewardMerkleTreeV2::verify(tree.commitment(), account, &proof).unwrap();
-                    assert!(verification.is_ok(), "Proof should be valid");
-                },
-                _ => panic!("Account should be found"),
-            }
-        }
-
-        // Test lookup for non-existent account
-        let non_existent = random_account(&mut rng);
-        match tree.lookup(non_existent) {
-            LookupResult::NotFound(_) => {}, // Expected
-            _ => panic!("Non-existent account should not be found"),
-        }
-    }
-
-    #[test]
-    fn test_universal_lookup() {
-        let mut rng = ChaCha20Rng::seed_from_u64(456);
-
-        let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let account = random_account(&mut rng);
-        let amount = random_amount(&mut rng);
-
-        // Insert account
-        tree.update(account, amount).unwrap();
-
-        // Test universal lookup for existing account
-        match tree.universal_lookup(account) {
-            LookupResult::Ok(found_amount, proof) => {
-                assert_eq!(found_amount, amount, "Amount should match");
-
-                // Verify membership proof
-                let verification =
-                    RewardMerkleTreeV2::verify(tree.commitment(), &account, &proof).unwrap();
-                assert!(verification.is_ok(), "Membership proof should be valid");
-            },
-            _ => panic!("Account should be found with membership proof"),
-        }
-
-        // Test universal lookup for non-existent account
-        let non_existent = random_account(&mut rng);
-        match tree.universal_lookup(non_existent) {
-            LookupResult::NotFound(proof) => {
-                // Verify non-membership proof
-                let is_valid = RewardMerkleTreeV2::non_membership_verify(
-                    tree.commitment(),
-                    &non_existent,
-                    &proof,
-                )
-                .unwrap();
-                assert!(is_valid, "Non-membership proof should be valid");
-            },
-            _ => panic!("Non-existent account should return non-membership proof"),
-        }
-    }
-
-    #[test]
-    fn test_update_existing_account() {
-        let mut rng = ChaCha20Rng::seed_from_u64(101112);
-
-        let mut two_level_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let account = random_account(&mut rng);
-        let amount1 = random_amount(&mut rng);
-        let amount2 = random_amount(&mut rng);
-
-        // Initial insert
-        two_level_tree.update(account, amount1).unwrap();
-        single_level_tree.update(account, amount1).unwrap();
-        assert_eq!(two_level_tree.commitment(), single_level_tree.commitment());
-
-        // Update existing account
-        two_level_tree.update(account, amount2).unwrap();
-        single_level_tree.update(account, amount2).unwrap();
-        assert_eq!(
-            two_level_tree.commitment(),
-            single_level_tree.commitment(),
-            "Commitments should match after update"
-        );
-
-        // Verify the updated value
-        match two_level_tree.lookup(account) {
-            LookupResult::Ok(amount, _) => {
-                assert_eq!(amount, amount2, "Updated amount should match");
-            },
-            _ => panic!("Account should be found"),
-        }
-
-        // Number of leaves should remain the same (updated, not inserted new)
-        assert_eq!(two_level_tree.num_leaves(), 1);
-    }
-
-    #[test]
-    fn test_from_kv_set() {
-        let mut rng = ChaCha20Rng::seed_from_u64(161718);
-
-        // Generate test data
-        let mut kv_pairs = Vec::new();
-        for _ in 0..15 {
-            let account = random_account(&mut rng);
-            let amount = random_amount(&mut rng);
-            kv_pairs.push((account, amount));
-        }
-
-        // Build two-level tree from kv set
-        let two_level_tree =
-            RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, &kv_pairs).unwrap();
-
-        // Build single-level tree from same kv set
-        let single_level_tree =
-            InnerRewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, &kv_pairs).unwrap();
-
-        // Verify commitments match
-        assert_eq!(
-            two_level_tree.commitment(),
-            single_level_tree.commitment(),
-            "Commitments should match when built from same kv set"
-        );
-
-        // Verify all accounts can be looked up
-        for (account, expected_amount) in &kv_pairs {
-            match two_level_tree.lookup(account) {
-                LookupResult::Ok(amount, _) => {
-                    assert_eq!(amount, *expected_amount, "Amount should match");
-                },
-                _ => panic!("Account should be found"),
-            }
-        }
-    }
-
-    #[test]
-    fn test_update_with_custom_function() {
-        let mut rng = ChaCha20Rng::seed_from_u64(222324);
-
-        let mut two_level_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let account = random_account(&mut rng);
-        let initial_amount = RewardAmount(U256::from(100u64));
-        let increment = RewardAmount(U256::from(50u64));
-
-        // Initial insert
-        two_level_tree.update(account, initial_amount).unwrap();
-        single_level_tree.update(account, initial_amount).unwrap();
-
-        // Update using custom function (increment)
-        two_level_tree
-            .update_with(&account, |existing| {
-                existing.map(|amt| RewardAmount(amt.0 + increment.0))
-            })
-            .unwrap();
-        single_level_tree
-            .update_with(&account, |existing| {
-                existing.map(|amt| RewardAmount(amt.0 + increment.0))
-            })
-            .unwrap();
-
-        // Verify commitments match
-        assert_eq!(
-            two_level_tree.commitment(),
-            single_level_tree.commitment(),
-            "Commitments should match after update_with"
-        );
-
-        // Verify the updated value
-        match two_level_tree.lookup(account) {
-            LookupResult::Ok(amount, _) => {
-                assert_eq!(
-                    amount,
-                    RewardAmount(initial_amount.0 + increment.0),
-                    "Amount should be incremented"
-                );
-            },
-            _ => panic!("Account should be found"),
-        }
-    }
-
-    #[test]
-    fn test_remove_account() {
-        let mut rng = ChaCha20Rng::seed_from_u64(252627);
-
-        let mut two_level_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let account = random_account(&mut rng);
-        let amount = random_amount(&mut rng);
-
-        // Insert account
-        two_level_tree.update(account, amount).unwrap();
-        single_level_tree.update(account, amount).unwrap();
-        assert_eq!(two_level_tree.num_leaves(), 1);
-
-        // Remove account by returning None
-        two_level_tree.update_with(account, |_| None).unwrap();
-        single_level_tree.update_with(account, |_| None).unwrap();
-
-        // Verify commitments match
-        assert_eq!(
-            two_level_tree.commitment(),
-            single_level_tree.commitment(),
-            "Commitments should match after removal"
-        );
-
-        // Verify account is gone
-        assert_eq!(two_level_tree.num_leaves(), 0);
-        match two_level_tree.lookup(account) {
-            LookupResult::NotFound(_) => {}, // Expected
-            _ => panic!("Removed account should not be found"),
-        }
-    }
-
-    #[test]
-    fn test_stress_with_many_operations() {
-        let mut rng = ChaCha20Rng::seed_from_u64(282930);
-
-        let mut two_level_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let mut known_accounts = Vec::new();
-
-        // Perform many random operations
-        for i in 0..50 {
-            let op = rng.gen_range(0..3);
-
-            match op {
-                0 => {
-                    // Insert new account
-                    let account = random_account(&mut rng);
-                    let amount = random_amount(&mut rng);
-                    known_accounts.push((account, amount));
-
-                    two_level_tree.update(account, amount).unwrap();
-                    single_level_tree.update(account, amount).unwrap();
-                },
-                1 if !known_accounts.is_empty() => {
-                    // Update existing account
-                    let idx = rng.gen_range(0..known_accounts.len());
-                    let (account, _) = known_accounts[idx];
-                    let new_amount = random_amount(&mut rng);
-                    known_accounts[idx].1 = new_amount;
-
-                    two_level_tree.update(account, new_amount).unwrap();
-                    single_level_tree.update(account, new_amount).unwrap();
-                },
-                2 if !known_accounts.is_empty() => {
-                    // Remove account
-                    let idx = rng.gen_range(0..known_accounts.len());
-                    let (account, _) = known_accounts.remove(idx);
-
-                    two_level_tree.update_with(&account, |_| None).unwrap();
-                    single_level_tree.update_with(&account, |_| None).unwrap();
-                },
-                _ => continue,
-            }
-
-            // Verify commitments match after each operation
-            assert_eq!(
-                two_level_tree.commitment(),
-                single_level_tree.commitment(),
-                "Commitments should match after operation {}",
-                i
-            );
-        }
-
-        // Final verification
-        assert_eq!(
-            two_level_tree.num_leaves(),
-            known_accounts.len() as u64,
-            "Number of leaves should match known accounts"
-        );
-    }
-
-    #[test]
-    fn test_into_iter() {
-        let mut rng = ChaCha20Rng::seed_from_u64(424344);
-
-        let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let mut expected_entries = std::collections::HashMap::new();
-
-        // Insert accounts across multiple partitions
-        for _ in 0..20 {
-            let account = random_account(&mut rng);
-            let amount = random_amount(&mut rng);
-            expected_entries.insert(account, amount);
-            tree.update(account, amount).unwrap();
-        }
-
-        // Collect entries from iterator
-        let collected_entries: std::collections::HashMap<_, _> = tree.into_iter().collect();
-
-        // Verify all expected entries are present
-        assert_eq!(
-            collected_entries.len(),
-            expected_entries.len(),
-            "Iterator should return all entries"
-        );
-
-        for (account, expected_amount) in &expected_entries {
-            let collected_amount = collected_entries
-                .get(account)
-                .expect("Account should be in iterator results");
-            assert_eq!(
-                collected_amount, expected_amount,
-                "Amount should match for account {:?}",
-                account
-            );
-        }
     }
 }

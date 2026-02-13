@@ -426,7 +426,7 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
             bail!("only presence proofs supported")
         };
 
-        let path = ToTraversalPath::<REWARD_MERKLE_TREE_V2_ARITY>::to_traversal_path(
+        let path = ToTraversalPath::<{ REWARD_MERKLE_TREE_V2_ARITY }>::to_traversal_path(
             &RewardAccountV2(self.account),
             REWARD_MERKLE_TREE_V2_HEIGHT,
         );
