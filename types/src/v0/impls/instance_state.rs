@@ -650,6 +650,8 @@ pub mod mock {
         async fn try_fetch_reward_merkle_tree_v2(
             &self,
             _retry: usize,
+            _instance: &NodeState,
+            _current_tree: Arc<RewardMerkleTreeV2>,
             _height: u64,
             _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitmentV2,
