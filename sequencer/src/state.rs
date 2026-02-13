@@ -6,7 +6,7 @@ use either::Either;
 use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardMerkleTreeV2},
+    v0_4::{Delta, PermittedRewardMerkleTreeV2, RewardMerkleTreeV2},
     BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
     ValidatedState,
 };
@@ -388,7 +388,7 @@ where
                  for the previous height",
             )?;
 
-        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2;
+        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
     }
 
     if last_height == 0 {
