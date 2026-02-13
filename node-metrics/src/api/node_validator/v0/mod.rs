@@ -617,7 +617,6 @@ where
 
         // Next, do we already have a connection?
         if let Some(connection_mut) = &mut self_mut.connection {
-            // Alright, then we'll want to retrieve the next entry
             pin_mut!(connection_mut);
 
             return match connection_mut.poll_next(cx) {
