@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, UpgradeMode};
+use espresso_types::{
+    DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeVersion, UpgradeMode,
+};
 use futures::{future::join_all, StreamExt};
 use sequencer::Genesis;
 use vbs::version::StaticVersionType;
@@ -97,7 +99,6 @@ where
     // Calculate reward claim deadline if applicable
     let reward_claim_deadline_block_height =
         if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
-            // Rewards should be claimable after 2 epochs on the upgrade version (min 200 blocks)
             let upgrade = genesis
                 .upgrades
                 .get(&Target::version())
@@ -106,7 +107,13 @@ where
                 UpgradeMode::View(view_upgrade) => view_upgrade.start_proposing_view,
                 UpgradeMode::Time(_) => panic!("time-based upgrades not supported in tests"),
             };
-            Some(start_proposing_view + (epoch_length * 2).max(300))
+
+            let epochs_needed = if Target::version() >= EpochRewardVersion::version() {
+                3
+            } else {
+                2
+            };
+            Some(start_proposing_view + (epoch_length * epochs_needed))
         } else {
             None
         };
@@ -151,6 +158,14 @@ async fn test_native_demo_drb_header_upgrade() -> Result<()> {
 async fn test_native_demo_fee_to_drb_header_upgrade() -> Result<()> {
     run_upgrade_test::<FeeVersion, DrbAndHeaderUpgradeVersion>(
         "data/genesis/demo-fee-to-drb-header-upgrade.toml",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_epoch_reward_upgrade() -> Result<()> {
+    run_upgrade_test::<DrbAndHeaderUpgradeVersion, EpochRewardVersion>(
+        "data/genesis/demo-epoch-reward-upgrade.toml",
     )
     .await
 }

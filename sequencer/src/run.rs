@@ -29,19 +29,19 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        #[cfg(all(feature = "fee", feature = "da-upgrade"))]
-        (espresso_types::FeeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => run(
+        #[cfg(all(feature = "fee", feature = "epoch-reward"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::EpochRewardVersion::VERSION) => run(
             genesis,
             modules,
             opt,
-            SequencerVersions::<espresso_types::FeeVersion, espresso_types::DaUpgradeVersion>::new(
+            SequencerVersions::<espresso_types::FeeVersion, espresso_types::EpochRewardVersion>::new(
             ),
         )
         .await,
-        #[cfg(all(feature = "drb-and-header", feature = "da-upgrade"))]
+        #[cfg(all(feature = "drb-and-header", feature = "epoch-reward"))]
         (
             espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-            espresso_types::DaUpgradeVersion::VERSION,
+            espresso_types::EpochRewardVersion::VERSION,
         ) => {
             run(
                 genesis,
@@ -49,13 +49,45 @@ pub async fn main() -> anyhow::Result<()> {
                 opt,
                 SequencerVersions::<
                     espresso_types::DrbAndHeaderUpgradeVersion,
+                    espresso_types::EpochRewardVersion,
+                >::new(),
+            )
+            .await
+        },
+        #[cfg(feature = "epoch-reward")]
+        (espresso_types::EpochRewardVersion::VERSION, espresso_types::EpochRewardVersion::VERSION) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::EpochRewardVersion,
+                    espresso_types::EpochRewardVersion,
+                >::new(),
+            )
+            .await
+        },
+        #[cfg(all(feature = "epoch-reward", feature = "da-upgrade"))]
+        (
+            espresso_types::EpochRewardVersion::VERSION,
+            espresso_types::DaUpgradeVersion::VERSION,
+        ) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<
+                    espresso_types::EpochRewardVersion,
                     espresso_types::DaUpgradeVersion,
                 >::new(),
             )
             .await
         },
         #[cfg(feature = "da-upgrade")]
-        (espresso_types::DaUpgradeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
+        (
+            espresso_types::DaUpgradeVersion::VERSION,
+            espresso_types::DaUpgradeVersion::VERSION,
+        ) => {
             run(
                 genesis,
                 modules,

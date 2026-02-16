@@ -27,8 +27,8 @@ use espresso_dev_node::{
     AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, DrbAndHeaderUpgradeVersion, EpochVersion, L1ClientOptions,
-    SeqTypes, SequencerVersions, ValidatedState,
+    parse_duration, v0_3::ChainConfig, DaUpgradeVersion, DrbAndHeaderUpgradeVersion,
+    EpochRewardVersion, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
@@ -222,7 +222,7 @@ struct Args {
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
-    /// protocol version to run (V3 or V4)
+    /// protocol version to run (V3, V4, V5, or V6)
     #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.3")]
     version: DevNodeVersion,
 
@@ -664,6 +664,20 @@ async fn main() -> anyhow::Result<()> {
             TestNetwork::new(
                 config,
                 SequencerVersions::<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>::new(),
+            )
+            .await,
+        ),
+        DevNodeVersion::V0_5 => AnyTestNetwork::V0_5(
+            TestNetwork::new(
+                config,
+                SequencerVersions::<EpochRewardVersion, EpochRewardVersion>::new(),
+            )
+            .await,
+        ),
+        DevNodeVersion::V0_6 => AnyTestNetwork::V0_6(
+            TestNetwork::new(
+                config,
+                SequencerVersions::<DaUpgradeVersion, DaUpgradeVersion>::new(),
             )
             .await,
         ),

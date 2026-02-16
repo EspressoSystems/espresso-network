@@ -9,7 +9,7 @@
 //! This modules provides the [`Storage`] trait.
 //!
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, ensure, Result};
 use async_trait::async_trait;
@@ -169,7 +169,20 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
     drb_input: DrbInput,
 ) -> Result<()> {
-    storage.store_drb_input(drb_input).await
+    for attempt in 1..=5 {
+        match storage.store_drb_input(drb_input.clone()).await {
+            Ok(()) => (),
+            Err(e) if attempt < 5 => {
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            },
+            Err(e) => {
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
+                return Err(e);
+            },
+        }
+    }
+    Ok(())
 }
 
 pub type StoreDrbProgressFn =
@@ -202,7 +215,24 @@ async fn store_drb_result_impl<TYPES: NodeType>(
     epoch: TYPES::Epoch,
     drb_result: DrbResult,
 ) -> Result<()> {
-    storage.store_drb_result(epoch, drb_result).await
+    for attempt in 1..=5 {
+        match storage.store_drb_result(epoch, drb_result).await {
+            Ok(()) => (),
+            Err(e) if attempt < 5 => {
+                tracing::warn!(
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/5): {e}"
+                );
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/5): {e}"
+                );
+                return Err(e);
+            },
+        }
+    }
+    Ok(())
 }
 
 /// Helper function to create a callback to add a drb result to storage
