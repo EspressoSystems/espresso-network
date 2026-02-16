@@ -749,12 +749,14 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     parent_qc: &QuorumCertificate2<TYPES>,
     epoch_height: u64,
 ) -> Result<(Leaf2<TYPES>, Arc<<TYPES as NodeType>::ValidatedState>)> {
-    let wait_for_previous = consensus
-        .read()
-        .await
-        .is_view_validating(parent_qc.view_number());
+    let mut receiver = event_receiver.clone();
+    let wait_for_previous = {
+        let reader = consensus.read().await;
+        !reader.validated_state_map().contains_key(&parent_qc.view_number())
+            && reader.is_view_validating(parent_qc.view_number())
+    };
     if wait_for_previous {
-        if wait_for_previous_view(parent_qc.view_number(), event_receiver.clone())
+        if wait_for_previous_view(parent_qc.view_number(), receiver)
             .await
             .is_some()
         {
