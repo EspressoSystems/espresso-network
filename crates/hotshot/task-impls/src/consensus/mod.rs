@@ -153,7 +153,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
             HotShotEvent::ViewChange(new_view_number, epoch_number) => {
                 // Request the randomized stake table for the subsequent epoch,
                 // to trigger catchup and the DRB calculation if it happens to be missing.
-                if **new_view_number % 200 == 0 {
+                //
+                // the frequency is dynamic, depending on the epoch height. if the epoch height is low
+                // (e.g. like it is in tests), we do this every view
+                let frequency = (self.epoch_height / 30).clamp(1, 100);
+                if **new_view_number % frequency == 0 {
                     let _ = self
                         .membership_coordinator
                         .membership_for_epoch(epoch_number.map(|e| e + 1))
