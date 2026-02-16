@@ -4571,6 +4571,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4675,6 +4676,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4791,6 +4793,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4890,6 +4893,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
