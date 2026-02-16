@@ -65,8 +65,8 @@ async fn fetch_reward_claim_data(
     let block_height = finalized_state.blockHeight;
 
     let reward_claim_url = format!(
-        "{}reward-state-v2/proof/latest/{}",
-        espresso_url, claimer_address
+        "{}reward-state-v2/reward-claim-input/{}/{}",
+        espresso_url, block_height, claimer_address
     );
 
     let http_client = reqwest::Client::new();

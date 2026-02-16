@@ -385,8 +385,8 @@ impl TestSystem {
         let claim_input = query_data.to_reward_claim_input()?;
         let claim_input = std::sync::Arc::new(claim_input);
 
-        let route = warp::path!("reward-state-v2" / "proof" / "latest" / String).map(
-            move |_address: String| warp::reply::json(&*claim_input.clone()),
+        let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String).map(
+            move |_block_height: u64, _address: String| warp::reply::json(&*claim_input.clone()),
         );
 
         let port = serve_on_random_port(route).await;
@@ -394,8 +394,8 @@ impl TestSystem {
     }
 
     pub async fn setup_reward_claim_not_found_mock(&self) -> Url {
-        let route = warp::path!("reward-state-v2" / "proof" / "latest" / String)
-            .map(|_| warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND));
+        let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String)
+            .map(|_, _| warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND));
 
         let port = serve_on_random_port(route).await;
         format!("http://localhost:{}/", port).parse().unwrap()
