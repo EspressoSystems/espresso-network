@@ -260,7 +260,7 @@ impl NodeState {
             } else {
                 Cache::builder()
                     .max_capacity(1)
-                    .time_to_live(Duration::from_secs(1))
+                    .time_to_live(Duration::from_secs(30))
                     .build()
             },
         }
