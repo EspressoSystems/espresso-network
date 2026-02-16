@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidDisperse, VidDisperseAndDuration},
+    data::{EpochNumber, PackedBundle, VidDisperse, VidDisperseAndDuration, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
@@ -34,10 +34,10 @@ use crate::{
 /// Tracks state of a VID task
 pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Reference to consensus. Leader will require a read lock on this.
     pub consensus: OuterConsensus<TYPES>,
@@ -204,11 +204,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 // We just sent a proposal for the last block in the epoch. We need to calculate
                 // and send VID for the nodes in the next epoch so that they can vote.
                 let proposal_view_number = proposal.data.view_number();
-                let sender_epoch = option_epoch_from_block_number::<TYPES>(
-                    true,
-                    proposed_block_number,
-                    self.epoch_height,
-                );
+                let sender_epoch =
+                    option_epoch_from_block_number(true, proposed_block_number, self.epoch_height);
                 let target_epoch = sender_epoch.map(|x| x + 1);
 
                 let consensus_reader = self.consensus.read().await;

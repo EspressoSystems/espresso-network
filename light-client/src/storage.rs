@@ -9,9 +9,7 @@ use hotshot_query_service::{
     availability::{BlockId, LeafId, LeafQueryData},
     types::HeightIndexed,
 };
-use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, traits::node_implementation::ConsensusTime,
-};
+use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
 use serde_json::Value;
 use sqlx::{
     query, query_as,

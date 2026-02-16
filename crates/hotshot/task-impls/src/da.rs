@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
-    data::{vid_commitment, vid_disperse::vid_total_weight, DaProposal2, PackedBundle},
+    data::{
+        vid_commitment, vid_disperse::vid_total_weight, DaProposal2, EpochNumber, PackedBundle,
+        ViewNumber,
+    },
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
@@ -45,10 +48,10 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Reference to consensus. Leader will require a read lock on this.
     pub consensus: OuterConsensus<TYPES>,

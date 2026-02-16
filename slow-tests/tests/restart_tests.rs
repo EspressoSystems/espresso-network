@@ -52,7 +52,7 @@ use hotshot_types::{
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     signature_key::{BLSPrivKey, BLSPubKey},
-    traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
+    traits::signature_key::SignatureKey,
     PeerConfig,
 };
 use itertools::Itertools;

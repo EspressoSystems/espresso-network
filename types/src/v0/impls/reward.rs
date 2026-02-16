@@ -12,7 +12,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    traits::election::Membership,
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree_compat::{

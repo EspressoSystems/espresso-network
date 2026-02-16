@@ -18,7 +18,9 @@ use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
     consensus::{CommitmentAndMetadata, OuterConsensus},
-    data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2},
+    data::{
+        Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2, ViewNumber,
+    },
     epoch_membership::EpochMembership,
     message::Proposal,
     simple_certificate::{
@@ -27,7 +29,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
         BlockPayload,
@@ -76,10 +78,10 @@ pub(crate) enum ProposalDependency {
 /// Handler for the proposal dependency
 pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
     /// Latest view number that has been proposed for (proxy for cur_view).
-    pub latest_proposed_view: TYPES::View,
+    pub latest_proposed_view: ViewNumber,
 
     /// The view number to propose for.
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// The event sender.
     pub sender: Sender<Arc<HotShotEvent<TYPES>>>,
@@ -512,7 +514,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     .upgrade_lock
                     .upgrade_view()
                     .await
-                    .unwrap_or(TYPES::View::new(0))
+                    .unwrap_or(ViewNumber::new(0))
         {
             let Some(parent_block_number) = parent_qc.data.block_number else {
                 tracing::error!("Parent QC does not have a block number. Do not propose.");
@@ -560,7 +562,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         .await
         .wrap()
         .context(warn!("Failed to construct block header"))?;
-        let epoch = option_epoch_from_block_number::<TYPES>(
+        let epoch = option_epoch_from_block_number(
             version >= V::Epochs::VERSION,
             block_header.block_number(),
             self.epoch_height,
@@ -866,7 +868,7 @@ pub(super) async fn handle_eqc_formed<
     I: NodeImplementation<TYPES>,
     V: Versions,
 >(
-    cert_view: TYPES::View,
+    cert_view: ViewNumber,
     leaf_commit: Commitment<Leaf2<TYPES>>,
     block_number: Option<u64>,
     task_state: &mut QuorumProposalTaskState<TYPES, I, V>,

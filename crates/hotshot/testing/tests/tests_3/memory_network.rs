@@ -21,7 +21,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
     }, vote::HasViewNumber,
 };
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -65,7 +65,7 @@ fn gen_messages(num_messages: u64, seed: u64, pk: BLSPubKey) -> Vec<Message<Test
             sender: pk,
             kind: MessageKind::Data(DataMessage::SubmitTransaction(
                 TestTransaction::new(bytes.to_vec()),
-                <ViewNumber as ConsensusTime>::new(0),
+                ViewNumber::new(0),
             )),
         };
         messages.push(message);

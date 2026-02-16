@@ -21,9 +21,10 @@ use hotshot_task_impls::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::ViewNumber,
     traits::{
         consensus_api::ConsensusApi,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
 };
 use tokio::spawn;
@@ -180,10 +181,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             finalize_relay_map: BTreeMap::default().into(),
             view_sync_timeout: handle.hotshot.config.view_sync_timeout,
             id: handle.hotshot.id,
-            last_garbage_collected_view: TYPES::View::new(0),
+            last_garbage_collected_view: ViewNumber::new(0),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             first_epoch: None,
-            highest_finalized_epoch_view: (None, TYPES::View::new(0)),
+            highest_finalized_epoch_view: (None, ViewNumber::new(0)),
             epoch_height: handle.epoch_height,
         }
     }

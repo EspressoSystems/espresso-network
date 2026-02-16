@@ -14,14 +14,14 @@ use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::{vid_commitment, BlockError, Leaf2, VidCommitment},
+    data::{vid_commitment, BlockError, Leaf2, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{
             BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
             GENESIS_VID_NUM_STORAGE_NODES,
         },
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
@@ -401,7 +401,7 @@ impl<
         self.version
     }
 
-    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState> {
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {
         LightClientState::new(
             view.u64(),
             self.block_number,

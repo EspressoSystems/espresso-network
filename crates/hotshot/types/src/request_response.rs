@@ -10,13 +10,16 @@
 use committable::{Committable, RawCommitmentBuilder};
 use serde::{Deserialize, Serialize};
 
-use crate::traits::{node_implementation::NodeType, signature_key::SignatureKey};
+use crate::{
+    data::ViewNumber,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+};
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 /// A signed request for a proposal.
 pub struct ProposalRequestPayload<TYPES: NodeType> {
     /// The view number that we're requesting a proposal for.
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// Our public key. The ensures that the recipient can reply to
     /// us directly.

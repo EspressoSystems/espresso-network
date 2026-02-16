@@ -16,6 +16,7 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{
@@ -24,7 +25,7 @@ use hotshot_types::{
     },
     stake_table::StakeTableEntries,
     traits::{
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -45,20 +46,20 @@ mod handlers;
 /// The state for the quorum proposal task.
 pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
     /// Latest view number that has been proposed for.
-    pub latest_proposed_view: TYPES::View,
+    pub latest_proposed_view: ViewNumber,
 
     /// Current epoch
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Table for the in-progress proposal dependency tasks.
-    pub proposal_dependencies: BTreeMap<TYPES::View, Sender<()>>,
+    pub proposal_dependencies: BTreeMap<ViewNumber, Sender<()>>,
 
     /// Formed QCs
-    pub formed_quorum_certificates: BTreeMap<TYPES::View, QuorumCertificate2<TYPES>>,
+    pub formed_quorum_certificates: BTreeMap<ViewNumber, QuorumCertificate2<TYPES>>,
 
     /// Formed QCs for the next epoch
     pub formed_next_epoch_quorum_certificates:
-        BTreeMap<TYPES::View, NextEpochQuorumCertificate2<TYPES>>,
+        BTreeMap<ViewNumber, NextEpochQuorumCertificate2<TYPES>>,
 
     /// Immutable instance state
     pub instance_state: Arc<TYPES::InstanceState>,
@@ -99,10 +100,10 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub epoch_height: u64,
 
     /// Formed light client state update certificates
-    pub formed_state_cert: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificateV2<TYPES>>,
+    pub formed_state_cert: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
@@ -113,7 +114,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     fn create_event_dependency(
         &self,
         dependency_type: ProposalDependency,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         cancel_receiver: Receiver<()>,
     ) -> EventDependency<Arc<HotShotEvent<TYPES>>> {
@@ -197,7 +198,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     /// Creates the requisite dependencies for the Quorum Proposal task. It also handles any event forwarding.
     fn create_and_complete_dependencies(
         &self,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
         event: Arc<HotShotEvent<TYPES>>,
         cancel_receiver: &Receiver<()>,
@@ -350,8 +351,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Create dependency task", level = "error")]
     async fn create_dependency_task_if_new(
         &mut self,
-        view_number: TYPES::View,
-        epoch_number: Option<TYPES::Epoch>,
+        view_number: ViewNumber,
+        epoch_number: Option<EpochNumber>,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
         event: Arc<HotShotEvent<TYPES>>,
@@ -444,7 +445,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 
     /// Update the latest proposed view number.
     #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Update latest proposed view", level = "error")]
-    async fn update_latest_proposed_view(&mut self, new_view: TYPES::View) -> bool {
+    async fn update_latest_proposed_view(&mut self, new_view: ViewNumber) -> bool {
         if *self.latest_proposed_view < *new_view {
             tracing::debug!(
                 "Updating latest proposed view from {} to {}",
@@ -454,8 +455,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 
             // Cancel the old dependency tasks.
             for view in (*self.latest_proposed_view + 1)..=(*new_view) {
-                let maybe_cancel_sender =
-                    self.proposal_dependencies.remove(&TYPES::View::new(view));
+                let maybe_cancel_sender = self.proposal_dependencies.remove(&ViewNumber::new(view));
                 if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
                     tracing::error!("Aborting proposal dependency task for view {view}");
                     let _ = maybe_cancel_sender.unwrap().try_broadcast(());
@@ -690,11 +690,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 if epoch > &self.cur_epoch {
                     self.cur_epoch = *epoch;
                 }
-                let keep_view = TYPES::View::new(view.saturating_sub(1));
+                let keep_view = ViewNumber::new(view.saturating_sub(1));
                 self.cancel_tasks(keep_view);
             },
             HotShotEvent::Timeout(view, ..) => {
-                let keep_view = TYPES::View::new(view.saturating_sub(1));
+                let keep_view = ViewNumber::new(view.saturating_sub(1));
                 self.cancel_tasks(keep_view);
             },
             HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) => {
@@ -742,7 +742,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     }
 
     /// Cancel all tasks the consensus tasks has spawned before the given view
-    pub fn cancel_tasks(&mut self, view: TYPES::View) {
+    pub fn cancel_tasks(&mut self, view: ViewNumber) {
         let keep = self.proposal_dependencies.split_off(&view);
         while let Some((view, cancel_sender)) = self.proposal_dependencies.pop_first() {
             if !cancel_sender.is_closed() {

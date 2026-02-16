@@ -11,7 +11,7 @@ use chrono::Utc;
 use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare},
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     drb::INITIAL_DRB_RESULT,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
@@ -21,7 +21,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
         },
@@ -56,7 +56,7 @@ async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Vers
     }
 
     let decided_block_number = decided_leaf.block_header().block_number();
-    let current_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
+    let current_epoch_number = EpochNumber::new(epoch_from_block_number(
         decided_block_number,
         task_state.epoch_height,
     ));
@@ -147,7 +147,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         drop(decided_certificate_lock);
         if cert.data.new_version >= V::Epochs::VERSION && V::Base::VERSION < V::Epochs::VERSION {
             let epoch_height = task_state.consensus.read().await.epoch_height;
-            let first_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
+            let first_epoch_number = EpochNumber::new(epoch_from_block_number(
                 proposal.block_header().block_number(),
                 epoch_height,
             ));
@@ -289,11 +289,11 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: UpgradeLock<TYPES, V>,
-    view_number: TYPES::View,
+    view_number: ViewNumber,
     instance_state: Arc<TYPES::InstanceState>,
     proposed_leaf: &Leaf2<TYPES>,
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
-    parent_view_number: Option<TYPES::View>,
+    parent_view_number: Option<ViewNumber>,
     epoch_height: u64,
 ) -> Result<()> {
     let justify_qc = &proposed_leaf.justify_qc();
@@ -410,7 +410,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: UpgradeLock<TYPES, V>,
-    view_number: TYPES::View,
+    view_number: ViewNumber,
     storage: I::Storage,
     storage_metrics: Arc<StorageMetricsValue>,
     leaf: Leaf2<TYPES>,
@@ -524,7 +524,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
         let state_vote = LightClientStateUpdateVote2 {
-            epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
+            epoch: EpochNumber::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
             signature,

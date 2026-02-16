@@ -11,7 +11,7 @@ use hotshot_types::{
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
@@ -1219,10 +1219,7 @@ impl BlockHeader<SeqTypes> for Header {
         self.builder_commitment().clone()
     }
 
-    fn get_light_client_state(
-        &self,
-        view: <SeqTypes as NodeType>::View,
-    ) -> anyhow::Result<LightClientState> {
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {
         let mut block_comm_root_bytes = vec![];
         self.block_merkle_tree_root()
             .serialize_compressed(&mut block_comm_root_bytes)?;

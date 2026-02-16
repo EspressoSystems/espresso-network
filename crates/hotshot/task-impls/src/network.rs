@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{VidDisperse, VidDisperseShare},
+    data::{EpochNumber, VidDisperse, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, HotShotAction},
     message::{
@@ -29,7 +29,7 @@ use hotshot_types::{
             BroadcastDelay, ConnectedNetwork, RequestKind, ResponseMessage, Topic, TransmitType,
             ViewMessage,
         },
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         storage::Storage,
     },
     vote::{HasViewNumber, Vote},
@@ -676,7 +676,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                 // Send the external message to the external event stream so it can be processed
                 broadcast_event(
                     Event {
-                        view_number: TYPES::View::new(1),
+                        view_number: ViewNumber::new(1),
                         event: EventType::ExternalMessageReceived { sender, data },
                     },
                     &self.external_event_stream,
@@ -698,10 +698,10 @@ pub struct NetworkEventTaskState<
     pub network: Arc<NET>,
 
     /// view number
-    pub view: TYPES::View,
+    pub view: ViewNumber,
 
     /// epoch number
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
 
     /// network memberships
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
@@ -719,7 +719,7 @@ pub struct NetworkEventTaskState<
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 
     /// map view number to transmit tasks
-    pub transmit_tasks: BTreeMap<TYPES::View, Vec<JoinHandle<()>>>,
+    pub transmit_tasks: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -898,8 +898,8 @@ impl<
         maybe_action: Option<HotShotAction>,
         storage: S,
         consensus: OuterConsensus<TYPES>,
-        view: <TYPES as NodeType>::View,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
     ) -> std::result::Result<(), ()> {
         if let Some(mut action) = maybe_action {
             if !consensus.write().await.update_action(action, view) {
@@ -923,7 +923,7 @@ impl<
     }
 
     /// Cancel all tasks for previous views
-    pub fn cancel_tasks(&mut self, view: TYPES::View) {
+    pub fn cancel_tasks(&mut self, view: ViewNumber) {
         let keep = self.transmit_tasks.split_off(&view);
 
         while let Some((_, tasks)) = self.transmit_tasks.pop_first() {
@@ -1397,7 +1397,7 @@ impl<
                 if epoch > self.epoch {
                     self.epoch = epoch;
                 }
-                let keep_view = TYPES::View::new(view.saturating_sub(1));
+                let keep_view = ViewNumber::new(view.saturating_sub(1));
                 self.cancel_tasks(keep_view);
                 let net = Arc::clone(&self.network);
                 let epoch = self.epoch.map(|x| x.u64().into());

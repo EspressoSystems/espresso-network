@@ -18,9 +18,8 @@ use hotshot_types::{
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
     simple_vote::{QuorumData2, VersionedVoteData},
     traits::{
-        block_contents::GENESIS_VID_NUM_STORAGE_NODES,
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        BlockPayload, EncodeBytes,
+        block_contents::GENESIS_VID_NUM_STORAGE_NODES, node_implementation::Versions, BlockPayload,
+        EncodeBytes,
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
     vid::advz::advz_scheme,
@@ -78,7 +77,7 @@ pub async fn proposals_with_transactions(
     transactions: Vec<TestTransaction>,
 ) -> (DaProposal2<TestTypes>, QuorumProposalWrapper<TestTypes>) {
     let epoch = None;
-    let view_number = <TestTypes as NodeType>::View::new(view);
+    let view_number = ViewNumber::new(view);
     let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
     let validated_state = TestValidatedState::default();
     let instance_state = TestInstanceState::default();
@@ -186,7 +185,7 @@ pub fn builder_state(view: u64) -> Arc<BuilderState<TestTypes>> {
 pub fn parent_references(view: u64) -> ParentBlockReferences<TestTypes> {
     let rng = &mut thread_rng();
     ParentBlockReferences {
-        view_number: <TestTypes as NodeType>::View::new(view),
+        view_number: ViewNumber::new(view),
         leaf_commit: random_commitment(rng),
         vid_commitment: hotshot_types::data::VidCommitment::V0(
             advz_scheme(TEST_NUM_NODES_IN_VID_COMPUTATION)

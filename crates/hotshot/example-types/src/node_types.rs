@@ -14,7 +14,6 @@ use hotshot::traits::{
 };
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
-    data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::node_implementation::{NodeType, Versions},
     upgrade_config::UpgradeConstants,
@@ -55,8 +54,6 @@ pub struct TestTypes;
 impl NodeType for TestTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -87,8 +84,6 @@ pub struct TestTypesRandomizedLeader;
 impl NodeType for TestTypesRandomizedLeader {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -153,8 +148,6 @@ impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey> + 'static> NodeType
 {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -194,8 +187,6 @@ impl<QuorumConfig: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
 {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -229,8 +220,6 @@ pub struct TestConsecutiveLeaderTypes;
 impl NodeType for TestConsecutiveLeaderTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -264,8 +253,6 @@ pub struct TestTwoStakeTablesTypes;
 impl NodeType for TestTwoStakeTablesTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -428,23 +415,23 @@ impl Versions for Vid2UpgradeTestVersions {
 mod tests {
     use committable::{Commitment, Committable};
     use hotshot_types::{
+        data::{EpochNumber, ViewNumber},
         impl_has_epoch,
         message::UpgradeLock,
         simple_vote::{HasEpoch, VersionedVoteData},
-        traits::node_implementation::ConsensusTime,
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
 
-    use crate::node_types::{EpochsTestVersions, NodeType, TestTypes, TestVersions};
+    use crate::node_types::{EpochsTestVersions, TestTypes, TestVersions};
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
     /// Dummy data used for test
-    struct TestData<TYPES: NodeType> {
+    struct TestData {
         data: u64,
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     }
 
-    impl<TYPES: NodeType> Committable for TestData<TYPES> {
+    impl Committable for TestData {
         fn commit(&self) -> Commitment<Self> {
             committable::RawCommitmentBuilder::new("Test data")
                 .u64(self.data)
@@ -452,7 +439,7 @@ mod tests {
         }
     }
 
-    impl_has_epoch!(TestData<TYPES>);
+    impl_has_epoch!(TestData);
 
     #[tokio::test(flavor = "multi_thread")]
     /// Test that the view number affects the commitment post-marketplace
@@ -464,25 +451,23 @@ mod tests {
             epoch: None,
         };
 
-        let view_0 = <TestTypes as NodeType>::View::new(0);
-        let view_1 = <TestTypes as NodeType>::View::new(1);
+        let view_0 = ViewNumber::new(0);
+        let view_1 = ViewNumber::new(1);
 
-        let versioned_data_0 =
-            VersionedVoteData::<TestTypes, TestData<TestTypes>, TestVersions>::new(
-                data,
-                view_0,
-                &upgrade_lock,
-            )
-            .await
-            .unwrap();
-        let versioned_data_1 =
-            VersionedVoteData::<TestTypes, TestData<TestTypes>, TestVersions>::new(
-                data,
-                view_1,
-                &upgrade_lock,
-            )
-            .await
-            .unwrap();
+        let versioned_data_0 = VersionedVoteData::<TestTypes, TestData, TestVersions>::new(
+            data,
+            view_0,
+            &upgrade_lock,
+        )
+        .await
+        .unwrap();
+        let versioned_data_1 = VersionedVoteData::<TestTypes, TestData, TestVersions>::new(
+            data,
+            view_1,
+            &upgrade_lock,
+        )
+        .await
+        .unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();
@@ -496,31 +481,31 @@ mod tests {
     #[test]
     fn test_option_epoch_from_block_number() {
         // block 0 is always epoch 0
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 1, 10);
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(1)), epoch);
+        let epoch = option_epoch_from_block_number(true, 1, 10);
+        assert_eq!(Some(EpochNumber::new(1)), epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 1, 10);
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(1)), epoch);
+        let epoch = option_epoch_from_block_number(true, 1, 10);
+        assert_eq!(Some(EpochNumber::new(1)), epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 10, 10);
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(1)), epoch);
+        let epoch = option_epoch_from_block_number(true, 10, 10);
+        assert_eq!(Some(EpochNumber::new(1)), epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 11, 10);
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(2)), epoch);
+        let epoch = option_epoch_from_block_number(true, 11, 10);
+        assert_eq!(Some(EpochNumber::new(2)), epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 20, 10);
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(2)), epoch);
+        let epoch = option_epoch_from_block_number(true, 20, 10);
+        assert_eq!(Some(EpochNumber::new(2)), epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 21, 10);
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(3)), epoch);
+        let epoch = option_epoch_from_block_number(true, 21, 10);
+        assert_eq!(Some(EpochNumber::new(3)), epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 21, 0);
+        let epoch = option_epoch_from_block_number(true, 21, 0);
         assert_eq!(None, epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(false, 21, 10);
+        let epoch = option_epoch_from_block_number(false, 21, 10);
         assert_eq!(None, epoch);
 
-        let epoch = option_epoch_from_block_number::<TestTypes>(false, 21, 0);
+        let epoch = option_epoch_from_block_number(false, 21, 0);
         assert_eq!(None, epoch);
     }
 
@@ -530,6 +515,6 @@ mod tests {
         assert_eq!(None, epoch);
 
         let epoch = genesis_epoch_from_version::<EpochsTestVersions, TestTypes>();
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(1)), epoch);
+        assert_eq!(Some(EpochNumber::new(1)), epoch);
     }
 }

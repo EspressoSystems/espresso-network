@@ -18,7 +18,7 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{QuorumProposal, VidCommitment, VidCommon, ViewNumber},
+    data::{QuorumProposal, VidCommitment, VidCommon},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::node_implementation::{NodeType, Versions},
 };
@@ -171,8 +171,6 @@ impl QueryablePayload<MockTypes> for MockPayload {
 pub struct MockTypes;
 
 impl NodeType for MockTypes {
-    type View = ViewNumber;
-    type Epoch = ViewNumber;
     type BlockHeader = MockHeader;
     type BlockPayload = MockPayload;
     type SignatureKey = BLSPubKey;

@@ -23,10 +23,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::ViewNumber,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::Versions},
     vote::HasViewNumber,
 };
 use itertools::Itertools;

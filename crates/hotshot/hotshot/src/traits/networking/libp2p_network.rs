@@ -56,7 +56,7 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, Gauge, Metrics, NoMetrics},
         network::{ConnectedNetwork, NetworkError, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
     BoxSyncFuture,
@@ -999,8 +999,8 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     ) where
         TYPES: NodeType<SignatureKey = T::SignatureKey>,
     {
-        let future_view = <TYPES as NodeType>::View::new(*view) + LOOK_AHEAD;
-        let epoch = epoch.map(|e| <TYPES as NodeType>::Epoch::new(*e));
+        let future_view = ViewNumber::new(*view) + LOOK_AHEAD;
+        let epoch = epoch.map(|e| EpochNumber::new(*e));
 
         let membership = match membership_coordinator.membership_for_epoch(epoch).await {
             Ok(m) => m,

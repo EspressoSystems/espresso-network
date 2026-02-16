@@ -39,11 +39,7 @@ use hotshot_types::{
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        election::Membership,
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType, Versions},
-    },
+    traits::{election::Membership, network::ConnectedNetwork, node_implementation::Versions},
     vid::avidm::{init_avidm_param, AvidMScheme},
     vote::HasViewNumber,
     PeerConfig,
@@ -217,7 +213,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_stake_table(epoch).await
     }
@@ -230,7 +226,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_da_stake_table(epoch).await
     }
@@ -243,10 +239,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 
     /// Get all the validators
-    async fn get_validators(
-        &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<ValidatorMap> {
+    async fn get_validators(&self, epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
         self.as_ref().get_validators(epoch).await
     }
 
@@ -266,7 +259,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 
     async fn get_all_validators(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
@@ -346,7 +339,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let highest_epoch = self
             .consensus()
@@ -387,7 +380,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         Ok(self
             .consensus()
@@ -436,10 +429,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the whole validators map
-    async fn get_validators(
-        &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<ValidatorMap> {
+    async fn get_validators(&self, epoch: EpochNumber) -> anyhow::Result<ValidatorMap> {
         let mem = self
             .consensus()
             .await
@@ -480,7 +470,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
     async fn get_all_validators(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<Validator<PubKey>>> {
@@ -1356,9 +1346,7 @@ pub mod test_helpers {
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
-        event::LeafInfo,
-        light_client::LCV3StateSignatureRequestBody,
-        traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        event::LeafInfo, light_client::LCV3StateSignatureRequestBody, traits::metrics::NoMetrics,
         HotShotConfig,
     };
     use itertools::izip;
@@ -2084,7 +2072,7 @@ mod api_tests {
         event::LeafInfo,
         message::Proposal,
         simple_certificate::{CertificatePair, QuorumCertificate2},
-        traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
+        traits::{signature_key::SignatureKey, EncodeBytes},
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
     };
@@ -2679,10 +2667,7 @@ mod test {
     use hotshot_types::{
         data::EpochNumber,
         event::LeafInfo,
-        traits::{
-            block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
-            node_implementation::ConsensusTime,
-        },
+        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
         ValidatorConfig,
     };

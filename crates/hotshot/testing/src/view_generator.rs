@@ -37,7 +37,7 @@ use hotshot_types::{
     },
     traits::{
         consensus_api::ConsensusApi,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         BlockPayload,
     },
     utils::{genesis_epoch_from_version, EpochTransitionIndicator},
@@ -66,10 +66,10 @@ pub struct TestView {
     pub leader_public_key: <TestTypes as NodeType>::SignatureKey,
     pub da_certificate: DaCertificate2<TestTypes>,
     pub transactions: Vec<TestTransaction>,
-    upgrade_data: Option<UpgradeProposalData<TestTypes>>,
+    upgrade_data: Option<UpgradeProposalData>,
     formed_upgrade_certificate: Option<UpgradeCertificate<TestTypes>>,
-    view_sync_finalize_data: Option<ViewSyncFinalizeData2<TestTypes>>,
-    timeout_cert_data: Option<TimeoutData2<TestTypes>>,
+    view_sync_finalize_data: Option<ViewSyncFinalizeData2>,
+    timeout_cert_data: Option<TimeoutData2>,
     upgrade_lock: UpgradeLock<TestTypes, TestVersions>,
 }
 
@@ -77,7 +77,7 @@ impl TestView {
     async fn find_leader_key_pair(
         membership: &EpochMembership<TestTypes>,
         node_key_map: &Arc<TestNodeKeyMap>,
-        view_number: <TestTypes as NodeType>::View,
+        view_number: ViewNumber,
     ) -> (
         <<TestTypes as NodeType>::SignatureKey as SignatureKey>::PrivateKey,
         <TestTypes as NodeType>::SignatureKey,
@@ -365,7 +365,7 @@ impl TestView {
             let cert = build_cert::<
                 TestTypes,
                 TestVersions,
-                UpgradeProposalData<TestTypes>,
+                UpgradeProposalData,
                 UpgradeVote<TestTypes>,
                 UpgradeCertificate<TestTypes>,
             >(
@@ -387,7 +387,7 @@ impl TestView {
             let cert = build_cert::<
                 TestTypes,
                 TestVersions,
-                ViewSyncFinalizeData2<TestTypes>,
+                ViewSyncFinalizeData2,
                 ViewSyncFinalizeVote2<TestTypes>,
                 ViewSyncFinalizeCertificate2<TestTypes>,
             >(
@@ -409,7 +409,7 @@ impl TestView {
             let cert = build_cert::<
                 TestTypes,
                 TestVersions,
-                TimeoutData2<TestTypes>,
+                TimeoutData2,
                 TimeoutVote2<TestTypes>,
                 TimeoutCertificate2<TestTypes>,
             >(
@@ -546,7 +546,7 @@ impl TestView {
 
     pub async fn create_upgrade_vote(
         &self,
-        data: UpgradeProposalData<TestTypes>,
+        data: UpgradeProposalData,
         handle: &SystemContextHandle<TestTypes, MemoryImpl, TestVersions>,
     ) -> UpgradeVote<TestTypes> {
         UpgradeVote::<TestTypes>::create_signed_vote(
@@ -562,7 +562,7 @@ impl TestView {
 
     pub async fn create_da_vote(
         &self,
-        data: DaData2<TestTypes>,
+        data: DaData2,
         handle: &SystemContextHandle<TestTypes, MemoryImpl, TestVersions>,
     ) -> DaVote2<TestTypes> {
         DaVote2::create_signed_vote(
@@ -599,7 +599,7 @@ impl<V: Versions> TestViewGenerator<V> {
         }
     }
 
-    pub fn add_upgrade(&mut self, upgrade_proposal_data: UpgradeProposalData<TestTypes>) {
+    pub fn add_upgrade(&mut self, upgrade_proposal_data: UpgradeProposalData) {
         if let Some(ref view) = self.current_view {
             self.current_view = Some(TestView {
                 upgrade_data: Some(upgrade_proposal_data),
@@ -621,10 +621,7 @@ impl<V: Versions> TestViewGenerator<V> {
         }
     }
 
-    pub fn add_view_sync_finalize(
-        &mut self,
-        view_sync_finalize_data: ViewSyncFinalizeData2<TestTypes>,
-    ) {
+    pub fn add_view_sync_finalize(&mut self, view_sync_finalize_data: ViewSyncFinalizeData2) {
         if let Some(ref view) = self.current_view {
             self.current_view = Some(TestView {
                 view_sync_finalize_data: Some(view_sync_finalize_data),
@@ -635,7 +632,7 @@ impl<V: Versions> TestViewGenerator<V> {
         }
     }
 
-    pub fn add_timeout(&mut self, timeout_data: TimeoutData2<TestTypes>) {
+    pub fn add_timeout(&mut self, timeout_data: TimeoutData2) {
         if let Some(ref view) = self.current_view {
             self.current_view = Some(TestView {
                 timeout_cert_data: Some(timeout_data),

@@ -14,11 +14,11 @@ use committable::{Commitment, Committable};
 use futures::StreamExt;
 use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
-    data::{DaProposal2, Leaf2, QuorumProposalWrapper},
+    data::{DaProposal2, Leaf2, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
     traits::{
         block_contents::{BlockHeader, BlockPayload},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         EncodeBytes,
     },
     utils::BuilderCommitment,
@@ -42,8 +42,8 @@ pub enum TransactionSource {
 
 /// Decide Message to be put on the decide channel
 #[derive(Clone, Debug)]
-pub struct DecideMessage<Types: NodeType> {
-    pub latest_decide_view_number: Types::View,
+pub struct DecideMessage {
+    pub latest_decide_view_number: ViewNumber,
 }
 /// DA Proposal Message to be put on the da proposal channel
 #[derive(Clone, PartialEq)]
@@ -79,8 +79,8 @@ impl<Types: NodeType> Debug for QuorumProposalMessage<Types> {
 
 /// Request Message to be put on the request channel
 #[derive(Clone, Debug)]
-pub struct RequestMessage<Types: NodeType> {
-    pub state_id: BuilderStateId<Types>,
+pub struct RequestMessage {
+    pub state_id: BuilderStateId,
     pub response_channel: UnboundedSender<ResponseMessage>,
 }
 
@@ -93,7 +93,7 @@ pub enum TriggerStatus {
 /// Response Message to be put on the response channel
 #[derive(Debug)]
 pub struct BuildBlockInfo<Types: NodeType> {
-    pub id: BlockId<Types>,
+    pub id: BlockId,
     pub block_size: u64,
     pub offered_fee: u64,
     pub block_payload: Types::BlockPayload,
@@ -120,7 +120,7 @@ pub enum Status {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DAProposalInfo<Types: NodeType> {
-    pub view_number: Types::View,
+    pub view_number: ViewNumber,
     pub proposal: Arc<Proposal<Types, DaProposal2<Types>>>,
 }
 
@@ -152,12 +152,12 @@ pub struct BuilderState<Types: NodeType, V: Versions> {
     /// `da_proposal_payload_commit` to (`da_proposal`, `node_count`)
     #[allow(clippy::type_complexity)]
     pub da_proposal_payload_commit_to_da_proposal:
-        HashMap<(BuilderCommitment, Types::View), DAProposalInfo<Types>>,
+        HashMap<(BuilderCommitment, ViewNumber), DAProposalInfo<Types>>,
 
     /// `quorum_proposal_payload_commit` to `quorum_proposal`
     #[allow(clippy::type_complexity)]
     pub quorum_proposal_payload_commit_to_quorum_proposal: HashMap<
-        (BuilderCommitment, Types::View),
+        (BuilderCommitment, ViewNumber),
         Arc<Proposal<Types, QuorumProposalWrapper<Types>>>,
     >,
 
@@ -184,7 +184,7 @@ pub struct BuilderState<Types: NodeType, V: Versions> {
     pub global_state: Arc<RwLock<GlobalState<Types>>>,
 
     /// locally spawned builder Commitements
-    pub builder_commitments: HashSet<(BuilderStateId<Types>, BuilderCommitment)>,
+    pub builder_commitments: HashSet<(BuilderStateId, BuilderCommitment)>,
 
     /// timeout for maximising the txns in the block
     pub maximize_txn_capture_timeout: Duration,
@@ -209,7 +209,7 @@ pub struct BuilderState<Types: NodeType, V: Versions> {
     /// a builder should stop producing empty blocks. This is done specifically
     /// to allow for faster finalization of previous blocks that have had
     /// transactions included in them.
-    pub allow_empty_block_until: Option<Types::View>,
+    pub allow_empty_block_until: Option<ViewNumber>,
 
     phantom: PhantomData<V>,
 }
@@ -275,10 +275,10 @@ pub struct BuilderState<Types: NodeType, V: Versions> {
 async fn best_builder_states_to_extend<Types: NodeType>(
     quorum_proposal: Arc<Proposal<Types, QuorumProposalWrapper<Types>>>,
     global_state: Arc<RwLock<GlobalState<Types>>>,
-) -> HashSet<BuilderStateId<Types>> {
+) -> HashSet<BuilderStateId> {
     let current_view_number = quorum_proposal.data.view_number();
     let current_commitment = quorum_proposal.data.block_header().payload_commitment();
-    let current_builder_state_id = BuilderStateId::<Types> {
+    let current_builder_state_id = BuilderStateId {
         parent_commitment: current_commitment,
         parent_view: current_view_number,
     };
@@ -604,7 +604,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
     /// processing the decide event
     #[tracing::instrument(skip_all, name = "process decide event",
                                    fields(builder_parent_block_references = %self.parent_block_references))]
-    async fn process_decide_event(&mut self, decide_msg: DecideMessage<Types>) -> Option<Status> {
+    async fn process_decide_event(&mut self, decide_msg: DecideMessage) -> Option<Status> {
         // Exit out all the builder states if their parent_block_references.view_number is less than the latest_decide_view_number
         // The only exception is that we want to keep the highest view number builder state active to ensure that
         // we have a builder state to handle the incoming DA and quorum proposals
@@ -694,7 +694,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
             .retain(|tx| self.txns_in_queue.contains(&tx.commit));
 
         if !txn_commitments.is_empty() {
-            self.allow_empty_block_until = Some(Types::View::new(
+            self.allow_empty_block_until = Some(ViewNumber::new(
                 da_proposal_info.view_number.u64() + ALLOW_EMPTY_BLOCK_PERIOD,
             ));
         }
@@ -715,10 +715,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
     // build a block
     #[tracing::instrument(skip_all, name = "build block",
                                     fields(builder_parent_block_references = %self.parent_block_references))]
-    async fn build_block(
-        &mut self,
-        state_id: BuilderStateId<Types>,
-    ) -> Option<BuildBlockInfo<Types>> {
+    async fn build_block(&mut self, state_id: BuilderStateId) -> Option<BuildBlockInfo<Types>> {
         let timeout_after = Instant::now() + self.maximize_txn_capture_timeout;
         let sleep_interval = self.maximize_txn_capture_timeout / 10;
         while Instant::now() <= timeout_after {
@@ -835,7 +832,7 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
         })
     }
 
-    async fn process_block_request(&mut self, req: RequestMessage<Types>) {
+    async fn process_block_request(&mut self, req: RequestMessage) {
         // If a spawned clone is active then it will handle the request, otherwise the highest view num builder will handle
         if req.state_id.parent_commitment != self.parent_block_references.vid_commitment
             || req.state_id.parent_view != self.parent_block_references.view_number
@@ -1014,10 +1011,10 @@ impl<Types: NodeType, V: Versions> BuilderState<Types, V> {
 /// Unifies the possible messages that can be received by the builder
 #[derive(Debug, Clone)]
 pub enum MessageType<Types: NodeType> {
-    DecideMessage(DecideMessage<Types>),
+    DecideMessage(DecideMessage),
     DaProposalMessage(DaProposalMessage<Types>),
     QuorumProposalMessage(QuorumProposalMessage<Types>),
-    RequestMessage(RequestMessage<Types>),
+    RequestMessage(RequestMessage),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1155,7 +1152,6 @@ mod test {
     };
     use hotshot_types::{
         data::{Leaf2, QuorumProposalWrapper, ViewNumber},
-        traits::node_implementation::{ConsensusTime, NodeType},
         utils::BuilderCommitment,
     };
     use tracing_subscriber::EnvFilter;
@@ -1196,7 +1192,7 @@ mod test {
         // call process_da_proposal without matching quorum proposal message
         // da_proposal_payload_commit_to_da_proposal should insert the message
         let mut correct_da_proposal_payload_commit_to_da_proposal: HashMap<
-            (BuilderCommitment, <TestTypes as NodeType>::View),
+            (BuilderCommitment, ViewNumber),
             DAProposalInfo<TestTypes>,
         > = HashMap::new();
         let (payload_builder_commitment, da_proposal_info) =
@@ -1482,7 +1478,8 @@ mod test {
         let decide_message = MessageType::DecideMessage(crate::builder_state::DecideMessage {
             latest_decide_view_number,
         });
-        if let MessageType::DecideMessage(practice_decide_msg) = decide_message.clone() {
+        if let MessageType::DecideMessage::<TestTypes>(practice_decide_msg) = decide_message.clone()
+        {
             builder_state
                 .process_decide_event(practice_decide_msg.clone())
                 .await;

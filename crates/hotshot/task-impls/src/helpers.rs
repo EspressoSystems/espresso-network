@@ -22,7 +22,10 @@ use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSo
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
+    data::{
+        EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2,
+        ViewNumber,
+    },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
@@ -38,7 +41,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
         },
@@ -161,7 +164,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
 }
 pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership: &Arc<RwLock<TYPES::Membership>>,
-    epoch: TYPES::Epoch,
+    epoch: EpochNumber,
     storage: &I::Storage,
     drb_result: DrbResult,
 ) {
@@ -201,7 +204,7 @@ pub(crate) async fn verify_drb_result<
     // #3967 REVIEW NOTE: Check if this is the right way to decide if we're doing epochs
     // Alternatively, should we just return Err() if epochs aren't happening here? Or can we assume
     // that epochs are definitely happening by virtue of getting here?
-    let epoch = option_epoch_from_block_number::<TYPES>(
+    let epoch = option_epoch_from_block_number(
         validation_info
             .upgrade_lock
             .epochs_enabled(proposal.view_number())
@@ -265,7 +268,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     // Skip if this is not the expected block.
     if epoch_height != 0 && is_epoch_root(decided_block_number, epoch_height) {
         let next_epoch_number =
-            TYPES::Epoch::new(epoch_from_block_number(decided_block_number, epoch_height) + 2);
+            EpochNumber::new(epoch_from_block_number(decided_block_number, epoch_height) + 2);
 
         let start = Instant::now();
         if let Err(e) = storage
@@ -333,10 +336,10 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 #[derive(Debug)]
 pub struct LeafChainTraversalOutcome<TYPES: NodeType> {
     /// The new locked view obtained from a 2 chain starting from the proposal's parent.
-    pub new_locked_view_number: Option<TYPES::View>,
+    pub new_locked_view_number: Option<ViewNumber>,
 
     /// The new decided view obtained from a 3 chain starting from the proposal's parent.
-    pub new_decided_view_number: Option<TYPES::View>,
+    pub new_decided_view_number: Option<ViewNumber>,
 
     /// The QC signing the latest new leaf, causing it to become committed.
     ///
@@ -984,7 +987,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         proposed_leaf.parent_commitment() == parent_leaf.commit(),
         "Proposed leaf does not extend the parent leaf."
     );
-    let proposal_epoch = option_epoch_from_block_number::<TYPES>(
+    let proposal_epoch = option_epoch_from_block_number(
         validation_info
             .upgrade_lock
             .epochs_enabled(view_number)
@@ -1036,7 +1039,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         // The proposal is safe if
         // 1. the proposed block and the justify QC block belong to the same epoch or
         // 2. the justify QC is the eQC for the previous block
-        let justify_qc_epoch = option_epoch_from_block_number::<TYPES>(
+        let justify_qc_epoch = option_epoch_from_block_number(
             validation_info
                 .upgrade_lock
                 .epochs_enabled(view_number)
@@ -1226,7 +1229,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
     // Validate the upgrade certificate -- this is just a signature validation.
     // Note that we don't do anything with the certificate directly if this passes; it eventually gets stored as part of the leaf if nothing goes wrong.
     {
-        let epoch = option_epoch_from_block_number::<TYPES>(
+        let epoch = option_epoch_from_block_number(
             proposal.data.epoch().is_some(),
             proposal.data.block_header().block_number(),
             validation_info.epoch_height,
@@ -1345,7 +1348,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: 
             #[allow(clippy::collapsible_else_if)]
             // We only perform the second signature check prior to the DrbAndHeaderUpgrade
             if !upgrade_lock
-                .proposal2_version(TYPES::View::new(state_cert.light_client_state.view_number))
+                .proposal2_version(ViewNumber::new(state_cert.light_client_state.view_number))
                 .await
             {
                 if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
@@ -1397,7 +1400,7 @@ pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
 /// makes sure it corresponds to the given DA certificate;
 /// if it's not yet available, waits for it with the given timeout.
 pub async fn wait_for_second_vid_share<TYPES: NodeType>(
-    target_epoch: Option<TYPES::Epoch>,
+    target_epoch: Option<EpochNumber>,
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
@@ -1467,9 +1470,9 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
 
 pub async fn broadcast_view_change<TYPES: NodeType>(
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    new_view_number: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
-    first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    new_view_number: ViewNumber,
+    epoch: Option<EpochNumber>,
+    first_epoch: Option<(ViewNumber, EpochNumber)>,
 ) {
     let mut broadcast_epoch = epoch;
     if let Some((first_epoch_view, first_epoch)) = first_epoch {

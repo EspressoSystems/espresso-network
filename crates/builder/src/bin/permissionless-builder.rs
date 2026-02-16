@@ -7,10 +7,7 @@ use espresso_types::{
 };
 use futures::future::pending;
 use hotshot::traits::ValidatedState;
-use hotshot_types::{
-    data::ViewNumber,
-    traits::node_implementation::{ConsensusTime, Versions},
-};
+use hotshot_types::{data::ViewNumber, traits::node_implementation::Versions};
 use sequencer::{Genesis, L1Params};
 use sequencer_utils::logging;
 use url::Url;

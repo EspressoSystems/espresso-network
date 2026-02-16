@@ -25,7 +25,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         consensus_api::ConsensusApi,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         BlockPayload,
     },
 };
@@ -90,13 +90,13 @@ async fn test_vid_task() {
         },
         view_number: ViewNumber::new(2),
     };
-    let message = Proposal {
+    let message = Proposal::<TestTypes, DaProposal<TestTypes>> {
         data: proposal.clone(),
         signature,
         _pd: PhantomData,
     };
 
-    let vid_proposal = Proposal {
+    let vid_proposal = Proposal::<TestTypes, VidDisperse<TestTypes>> {
         data: vid_disperse.disperse.clone(),
         signature: message.signature.clone(),
         _pd: PhantomData,

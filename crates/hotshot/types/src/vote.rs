@@ -19,6 +19,7 @@ use hotshot_utils::anytrace::*;
 use tracing::error;
 
 use crate::{
+    data::ViewNumber,
     epoch_membership::EpochMembership,
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
@@ -26,7 +27,7 @@ use crate::{
     simple_vote::{LightClientStateUpdateVote2, VersionedVoteData, Voteable},
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
             StateSignatureKey,
@@ -36,7 +37,7 @@ use crate::{
 };
 
 /// A simple vote that has a signer and commitment to the data voted on.
-pub trait Vote<TYPES: NodeType>: HasViewNumber<TYPES> {
+pub trait Vote<TYPES: NodeType>: HasViewNumber {
     /// Type of data commitment this vote uses.
     type Commitment: Voteable<TYPES>;
 
@@ -52,9 +53,9 @@ pub trait Vote<TYPES: NodeType>: HasViewNumber<TYPES> {
 }
 
 /// Any type that is associated with a view
-pub trait HasViewNumber<TYPES: NodeType> {
+pub trait HasViewNumber {
     /// Returns the view number the type refers to.
-    fn view_number(&self) -> TYPES::View;
+    fn view_number(&self) -> ViewNumber;
 }
 
 /**
@@ -62,7 +63,7 @@ The certificate formed from the collection of signatures a committee.
 The committee is defined by the `Membership` associated type.
 The votes all must be over the `Commitment` associated type.
 */
-pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
+pub trait Certificate<TYPES: NodeType, T>: HasViewNumber {
     /// The data commitment this certificate certifies.
     type Voteable: Voteable<TYPES>;
 
@@ -74,7 +75,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
         vote_commitment: Commitment<VersionedVoteData<TYPES, Self::Voteable, V>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
-        view: TYPES::View,
+        view: ViewNumber,
     ) -> Self;
 
     /// Checks if the cert is valid in the given epoch
@@ -296,7 +297,7 @@ impl<TYPES: NodeType, V: Versions> LightClientStateUpdateVoteAccumulator<TYPES, 
         // only verify the new state signature on the new version
         if self
             .upgrade_lock
-            .proposal2_version(TYPES::View::new(vote.light_client_state.view_number))
+            .proposal2_version(ViewNumber::new(vote.light_client_state.view_number))
             .await
             && !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
                 &state_ver_key,

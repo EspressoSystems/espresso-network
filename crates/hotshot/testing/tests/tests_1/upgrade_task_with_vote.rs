@@ -31,7 +31,7 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, EpochNumber, Leaf2, ViewNumber},
     simple_vote::UpgradeProposalData,
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    traits::{election::Membership},
     vote::HasViewNumber,
 };
 use vbs::version::Version;
@@ -49,7 +49,7 @@ async fn test_upgrade_task_with_vote() {
     let old_version = Version { major: 0, minor: 1 };
     let new_version = Version { major: 0, minor: 2 };
 
-    let upgrade_data: UpgradeProposalData<TestTypes> = UpgradeProposalData {
+    let upgrade_data: UpgradeProposalData = UpgradeProposalData {
         old_version,
         new_version,
         decide_by: ViewNumber::new(6),

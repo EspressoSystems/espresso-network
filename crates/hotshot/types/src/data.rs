@@ -32,7 +32,6 @@ use vec1::Vec1;
 use crate::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
@@ -43,7 +42,7 @@ use crate::{
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
         states::TestableState,
         BlockPayload,
@@ -60,21 +59,21 @@ use crate::{
     vote::{Certificate, HasViewNumber},
 };
 
-/// Implements `ConsensusTime`, `Display`, `Add`, `AddAssign`, `Deref` and `Sub`
+/// Implements `Display`, `Add`, `AddAssign`, `Deref` and `Sub`
 /// for the given thing wrapper type around u64.
 macro_rules! impl_u64_wrapper {
     ($t:ty, $genesis_val:expr) => {
-        impl ConsensusTime for $t {
+        impl $t {
             /// Create a genesis number
-            fn genesis() -> Self {
+            pub fn genesis() -> Self {
                 Self($genesis_val)
             }
             /// Create a new number with the given value.
-            fn new(n: u64) -> Self {
+            pub fn new(n: u64) -> Self {
                 Self(n)
             }
             /// Return the u64 format
-            fn u64(&self) -> u64 {
+            pub fn u64(&self) -> u64 {
                 self.0
             }
         }
@@ -142,7 +141,9 @@ impl Committable for ViewNumber {
 impl_u64_wrapper!(ViewNumber, 0u64);
 
 /// Type-safe wrapper around `u64` so we know the thing we're talking about is a epoch number.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct EpochNumber(u64);
 
 impl Committable for EpochNumber {
@@ -163,7 +164,7 @@ pub struct DaProposal<TYPES: NodeType> {
     /// Metadata of the block to be applied.
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     /// View this proposal applies to
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 }
 
 /// A proposal to start providing data availability for a block.
@@ -175,9 +176,9 @@ pub struct DaProposal2<TYPES: NodeType> {
     /// Metadata of the block to be applied.
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     /// View this proposal applies to
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// Epoch this proposal applies to
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// Indicates whether we are in epoch transition
     /// In epoch transition the next epoch payload commit should be calculated additionally
     pub epoch_transition_indicator: EpochTransitionIndicator,
@@ -207,15 +208,11 @@ impl<TYPES: NodeType> From<DaProposal2<TYPES>> for DaProposal<TYPES> {
 
 /// A proposal to upgrade the network
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
-#[serde(bound = "TYPES: NodeType")]
-pub struct UpgradeProposal<TYPES>
-where
-    TYPES: NodeType,
-{
+pub struct UpgradeProposal {
     /// The information about which version we are upgrading to.
-    pub upgrade_proposal: UpgradeProposalData<TYPES>,
+    pub upgrade_proposal: UpgradeProposalData,
     /// View this proposal applies to
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 }
 
 /// Type aliases for different versions of VID commitments
@@ -516,8 +513,8 @@ impl<TYPES: NodeType> From<VidDisperse2<TYPES>> for VidDisperse<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for VidDisperse<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         match self {
             Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
@@ -526,8 +523,8 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperse<TYPES> {
-    fn epoch(&self) -> Option<TYPES::Epoch> {
+impl<TYPES: NodeType> HasEpoch for VidDisperse<TYPES> {
+    fn epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V0(disperse) => disperse.epoch(),
             Self::V1(disperse) => disperse.epoch(),
@@ -546,9 +543,9 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     pub async fn calculate_vid_disperse<V: Versions>(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
-        view: TYPES::View,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        target_epoch: Option<EpochNumber>,
+        data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
@@ -617,7 +614,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     }
 
     /// Set the view number
-    pub fn set_view_number(&mut self, view_number: <TYPES as NodeType>::View) {
+    pub fn set_view_number(&mut self, view_number: ViewNumber) {
         match self {
             Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
@@ -763,7 +760,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     }
 
     /// Return the target epoch
-    pub fn target_epoch(&self) -> Option<<TYPES as NodeType>::Epoch> {
+    pub fn target_epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V0(_) => None,
             Self::V1(share) => share.target_epoch,
@@ -781,7 +778,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     }
 
     /// Set the view number
-    pub fn set_view_number(&mut self, view_number: <TYPES as NodeType>::View) {
+    pub fn set_view_number(&mut self, view_number: ViewNumber) {
         match self {
             Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
@@ -790,8 +787,8 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for VidDisperseShare<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         match self {
             Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
@@ -800,8 +797,8 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperseShare<TYPES> {
-    fn epoch(&self) -> Option<TYPES::Epoch> {
+impl<TYPES: NodeType> HasEpoch for VidDisperseShare<TYPES> {
+    fn epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V0(_) => None,
             Self::V1(share) => share.epoch(),
@@ -823,7 +820,7 @@ pub enum ViewChangeEvidence<TYPES: NodeType> {
 
 impl<TYPES: NodeType> ViewChangeEvidence<TYPES> {
     /// Check that the given ViewChangeEvidence is relevant to the current view.
-    pub fn is_valid_for_view(&self, view: &TYPES::View) -> bool {
+    pub fn is_valid_for_view(&self, view: &ViewNumber) -> bool {
         match self {
             ViewChangeEvidence::Timeout(timeout_cert) => timeout_cert.data().view == *view - 1,
             ViewChangeEvidence::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
@@ -856,7 +853,7 @@ pub enum ViewChangeEvidence2<TYPES: NodeType> {
 
 impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
     /// Check that the given ViewChangeEvidence2 is relevant to the current view.
-    pub fn is_valid_for_view(&self, view: &TYPES::View) -> bool {
+    pub fn is_valid_for_view(&self, view: &ViewNumber) -> bool {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => timeout_cert.data().view == *view - 1,
             ViewChangeEvidence2::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
@@ -884,7 +881,7 @@ pub struct QuorumProposal<TYPES: NodeType> {
     pub block_header: TYPES::BlockHeader,
 
     /// CurView from leader when proposing leaf
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// Per spec, justification
     pub justify_qc: QuorumCertificate<TYPES>,
@@ -907,10 +904,10 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     pub block_header: TYPES::BlockHeader,
 
     /// view number for the proposal
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
 
     /// certificate that the proposal is chaining from
     pub justify_qc: QuorumCertificate2<TYPES>,
@@ -951,10 +948,10 @@ pub struct QuorumProposal2Legacy<TYPES: NodeType> {
     pub block_header: TYPES::BlockHeader,
 
     /// view number for the proposal
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
 
     /// certificate that the proposal is chaining from
     pub justify_qc: QuorumCertificate2<TYPES>,
@@ -1050,7 +1047,7 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
         upgrade_lock: &UpgradeLock<TYPES, V>,
         epoch_height: u64,
     ) -> Result<()> {
-        let calculated_epoch = option_epoch_from_block_number::<TYPES>(
+        let calculated_epoch = option_epoch_from_block_number(
             upgrade_lock.epochs_enabled(self.view_number()).await,
             self.block_header.block_number(),
             epoch_height,
@@ -1070,7 +1067,7 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     }
 
     /// Helper function to get the proposal's view_number
-    pub fn view_number(&self) -> TYPES::View {
+    pub fn view_number(&self) -> ViewNumber {
         self.proposal.view_number
     }
 
@@ -1211,78 +1208,102 @@ impl<TYPES: NodeType> From<Leaf<TYPES>> for Leaf2<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for DaProposal<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for DaProposal<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for DaProposal2<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for DaProposal2<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for QuorumProposal<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for QuorumProposal2<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposal2Legacy<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for QuorumProposal2Legacy<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapper<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for QuorumProposalWrapper<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.proposal.view_number
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for QuorumProposalWrapperLegacy<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for QuorumProposalWrapperLegacy<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.proposal.view_number
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for UpgradeProposal<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl HasViewNumber for UpgradeProposal {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
 
-impl_has_epoch!(
-    QuorumProposal2<TYPES>,
-    DaProposal2<TYPES>,
-    QuorumProposal2Legacy<TYPES>
-);
+impl<NODE: NodeType> HasEpoch for QuorumProposal2<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
 
-impl_has_none_epoch!(
-    QuorumProposal<TYPES>,
-    DaProposal<TYPES>,
-    UpgradeProposal<TYPES>
-);
+impl<NODE: NodeType> HasEpoch for DaProposal2<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapper<TYPES> {
+impl<NODE: NodeType> HasEpoch for QuorumProposal2Legacy<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
+
+impl HasEpoch for UpgradeProposal {
+    fn epoch(&self) -> Option<EpochNumber> {
+        None
+    }
+}
+
+impl<NODE: NodeType> HasEpoch for QuorumProposal<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        None
+    }
+}
+
+impl<NODE: NodeType> HasEpoch for DaProposal<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        None
+    }
+}
+
+impl<NODE: NodeType> HasEpoch for QuorumProposalWrapper<NODE> {
     /// Return an underlying proposal's epoch
     #[allow(clippy::panic)]
-    fn epoch(&self) -> Option<TYPES::Epoch> {
+    fn epoch(&self) -> Option<EpochNumber> {
         self.proposal.epoch()
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapperLegacy<TYPES> {
+impl<TYPES: NodeType> HasEpoch for QuorumProposalWrapperLegacy<TYPES> {
     /// Return an underlying proposal's epoch
     #[allow(clippy::panic)]
-    fn epoch(&self) -> Option<TYPES::Epoch> {
+    fn epoch(&self) -> Option<EpochNumber> {
         self.proposal.epoch()
     }
 }
@@ -1323,7 +1344,7 @@ pub trait TestableLeaf {
 #[serde(bound(deserialize = ""))]
 pub struct Leaf<TYPES: NodeType> {
     /// CurView from leader when proposing leaf
-    view_number: TYPES::View,
+    view_number: ViewNumber,
 
     /// Per spec, justification
     justify_qc: QuorumCertificate<TYPES>,
@@ -1350,7 +1371,7 @@ pub struct Leaf<TYPES: NodeType> {
 #[serde(bound(deserialize = ""))]
 pub struct Leaf2<TYPES: NodeType> {
     /// CurView from leader when proposing leaf
-    view_number: TYPES::View,
+    view_number: ViewNumber,
 
     /// Per spec, justification
     justify_qc: QuorumCertificate2<TYPES>,
@@ -1406,7 +1427,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
                 .await
                 .unwrap();
 
-        let genesis_view = TYPES::View::genesis();
+        let genesis_view = ViewNumber::genesis();
 
         let block_header =
             TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
@@ -1445,12 +1466,12 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         }
     }
     /// Time when this leaf was created.
-    pub fn view_number(&self) -> TYPES::View {
+    pub fn view_number(&self) -> ViewNumber {
         self.view_number
     }
     /// Epoch in which this leaf was created.
-    pub fn epoch(&self, epoch_height: u64) -> Option<TYPES::Epoch> {
-        option_epoch_from_block_number::<TYPES>(
+    pub fn epoch(&self, epoch_height: u64) -> Option<EpochNumber> {
+        option_epoch_from_block_number(
             self.with_epoch,
             self.block_header.block_number(),
             epoch_height,
@@ -1736,7 +1757,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         // since this is genesis, we should never have a decided upgrade certificate.
         let upgrade_lock = UpgradeLock::<TYPES, V>::new();
 
-        let genesis_view = <TYPES::View as ConsensusTime>::genesis();
+        let genesis_view = ViewNumber::genesis();
 
         let data = QuorumData {
             leaf_commit: Leaf::genesis::<V>(validated_state, instance_state)
@@ -1771,7 +1792,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         // since this is genesis, we should never have a decided upgrade certificate.
         let upgrade_lock = UpgradeLock::<TYPES, V>::new();
 
-        let genesis_view = <TYPES::View as ConsensusTime>::genesis();
+        let genesis_view = ViewNumber::genesis();
 
         let genesis_leaf = Leaf2::genesis::<V>(validated_state, instance_state).await;
         let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
@@ -1818,7 +1839,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
                 .await
                 .unwrap();
 
-        let genesis_view = TYPES::View::genesis();
+        let genesis_view = ViewNumber::genesis();
 
         let block_header =
             TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
@@ -1846,7 +1867,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     }
 
     /// Time when this leaf was created.
-    pub fn view_number(&self) -> TYPES::View {
+    pub fn view_number(&self) -> ViewNumber {
         self.view_number
     }
     /// Height of this leaf in the chain.
@@ -2207,10 +2228,10 @@ pub struct PackedBundle<TYPES: NodeType> {
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
 
     /// The view number that this block is associated with.
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// The view number that this block is associated with.
-    pub epoch_number: Option<TYPES::Epoch>,
+    pub epoch_number: Option<EpochNumber>,
 
     /// The sequencing fee for submitting bundles.
     pub sequencing_fees: Vec1<BuilderFee<TYPES>>,
@@ -2221,8 +2242,8 @@ impl<TYPES: NodeType> PackedBundle<TYPES> {
     pub fn new(
         encoded_transactions: Arc<[u8]>,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        view_number: TYPES::View,
-        epoch_number: Option<TYPES::Epoch>,
+        view_number: ViewNumber,
+        epoch_number: Option<EpochNumber>,
         sequencing_fees: Vec1<BuilderFee<TYPES>>,
     ) -> Self {
         Self {
