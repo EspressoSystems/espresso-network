@@ -125,12 +125,13 @@ impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES>, THRESHOLD: Threshold<TYPES>>
         let real_qc_pp =
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
 
-        <TYPES::SignatureKey as SignatureKey>::signers(
-            &real_qc_pp,
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Tracing signers: {e}"))
+        let Some(ref signatures) = self.signatures else {
+            bail!("No signatures found while retrieving signers");
+        };
+
+        <TYPES::SignatureKey as SignatureKey>::signers(&real_qc_pp, signatures)
+            .wrap()
+            .context(|e| warn!("Tracing signers: {e}"))
     }
 }
 
@@ -186,13 +187,13 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock).await?;
 
-        <TYPES::SignatureKey as SignatureKey>::check(
-            &real_qc_pp,
-            commit.as_ref(),
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {e}"))
+        let Some(ref signatures) = self.signatures else {
+            bail!("No signatures found while validating certificate");
+        };
+
+        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
+            .wrap()
+            .context(|e| warn!("Signature check failed: {e}"))
     }
     fn signers(
         &self,
