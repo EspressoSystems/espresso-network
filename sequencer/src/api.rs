@@ -1313,13 +1313,15 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             // in either case the actual work should still not occur every block, since the proofs
             // are not generated unless they were not already stored for the previous light client
             // finalized height.
-            if (height + node_state.node_id).is_multiple_of(30)
-                || cfg!(any(test, feature = "testing"))
+//            if (height + node_state.node_id).is_multiple_of(30)
+//                || cfg!(any(test, feature = "testing"))
             {
                 let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
                 else {
                     return Ok(());
                 };
+
+                let finalized_hotshot_height = height;
 
                 // check to see whether we have proofs at that height already stored
                 if !self.proof_exists(finalized_hotshot_height).await {
@@ -1354,7 +1356,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                         return Ok(());
                     };
 
-                    let _ = self.garbage_collect(finalized_hotshot_height).await;
+                    // let _ = self.garbage_collect(finalized_hotshot_height).await;
 
                     // tree is dropped here
                 }
