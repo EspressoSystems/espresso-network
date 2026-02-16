@@ -1346,8 +1346,8 @@ pub mod test_helpers {
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, MockSequencerVersions, NamespaceId,
-        SequencerVersions, ValidatedState, V0_1,
+        DaUpgradeVersion, DrbAndHeaderUpgradeVersion, EpochRewardVersion, EpochVersion, FeeVersion,
+        MockSequencerVersions, NamespaceId, SequencerVersions, ValidatedState, V0_1,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -1451,6 +1451,8 @@ pub mod test_helpers {
                 SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
             >,
         ),
+        V0_5(TestNetwork<P, NUM_NODES, SequencerVersions<EpochRewardVersion, EpochRewardVersion>>),
+        V0_6(TestNetwork<P, NUM_NODES, SequencerVersions<DaUpgradeVersion, DaUpgradeVersion>>),
     }
 
     impl<P: PersistenceOptions, const NUM_NODES: usize> AnyTestNetwork<P, NUM_NODES> {
@@ -1460,6 +1462,8 @@ pub mod test_helpers {
                 AnyTestNetwork::V0_2(network) => network.cfg.hotshot_config(),
                 AnyTestNetwork::V0_3(network) => network.cfg.hotshot_config(),
                 AnyTestNetwork::V0_4(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_5(network) => network.cfg.hotshot_config(),
+                AnyTestNetwork::V0_6(network) => network.cfg.hotshot_config(),
             }
         }
     }
