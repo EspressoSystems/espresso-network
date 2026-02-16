@@ -252,10 +252,17 @@ impl NodeState {
             epoch_start_block: 0,
             light_client_contract_address: Cache::builder().max_capacity(1).build(),
             token_contract_address: Cache::builder().max_capacity(1).build(),
-            finalized_hotshot_height: Cache::builder()
-                .max_capacity(1)
-                .time_to_live(Duration::from_secs(30))
-                .build(),
+            finalized_hotshot_height: if cfg!(any(test, feature = "testing")) {
+                Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(Duration::from_secs(1))
+                    .build()
+            } else {
+                Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(Duration::from_secs(30))
+                    .build()
+            },
         }
     }
 
