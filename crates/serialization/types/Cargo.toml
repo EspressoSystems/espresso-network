@@ -1,0 +1,17 @@
+[package]
+authors = ["Espresso Systems <hello@espressosys.com>"]
+description = "Serializations for protocol communication"
+edition = "2021"
+name = "espresso-serialization"
+version = "0.1.11"
+license = "MIT"
+
+[[bin]]
+name = "deserialize"
+path = "bin/deserialize.rs"
+
+[dependencies]
+hotshot-types = { workspace = true }
+
+[lints]
+workspace = true
