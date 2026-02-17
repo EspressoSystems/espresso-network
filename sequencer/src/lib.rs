@@ -35,8 +35,8 @@ use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
         derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, Cliquenet,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        CombinedNetworks, CompatNetwork, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork,
+        PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
 };
@@ -669,27 +669,6 @@ where
             .build(),
     };
 
-    let cliquenet = {
-        let peers = coordinator
-            .stake_table_for_epoch(None)
-            .await?
-            .stake_table()
-            .await
-            .0
-            .into_iter()
-            .filter_map(|cfg| {
-                Some((
-                    cfg.stake_table_entry.stake_key,
-                    cfg.x25519_key?,
-                    cfg.p2p_addr?,
-                ))
-            });
-        let k = network_params.x25519_secret_key.clone();
-        let a = network_params.p2p_bind_address.clone();
-        let m = metrics.clone();
-        Cliquenet::<PubKey>::create("sequencer", pub_key, k.into(), a, peers, m).await?
-    };
-
     // Initialize the Libp2p network
     let network = {
         info!("Initializing Libp2p network");
@@ -726,11 +705,29 @@ where
         };
 
         // Combine the CDN and P2P networks
-        Arc::from(CombinedNetworks::new(
-            cdn_network,
-            p2p_network,
-            Some(Duration::from_secs(1)),
-        ))
+        CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
+    };
+
+    let network = {
+        let peers = coordinator
+            .stake_table_for_epoch(None)
+            .await?
+            .stake_table()
+            .await
+            .0
+            .into_iter()
+            .filter_map(|cfg| {
+                Some((
+                    cfg.stake_table_entry.stake_key,
+                    cfg.x25519_key?,
+                    cfg.p2p_addr?,
+                ))
+            });
+        let k = network_params.x25519_secret_key.clone();
+        let a = network_params.p2p_bind_address.clone();
+        let m = metrics.clone();
+        let c = Cliquenet::<PubKey>::create("sequencer", pub_key, k.into(), a, peers, m).await?;
+        CompatNetwork::new(c, network)
     };
 
     let mut ctx = SequencerContext::init(
@@ -741,7 +738,7 @@ where
         storage,
         state_catchup_providers,
         persistence,
-        network,
+        Arc::new(network),
         Some(network_params.state_relay_server_url),
         &*metrics,
         genesis.stake_table.capacity,

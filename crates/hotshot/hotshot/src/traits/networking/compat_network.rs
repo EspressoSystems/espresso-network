@@ -1,6 +1,12 @@
+#[cfg(feature = "hotshot-testing")]
+use std::time::Duration;
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::traits::network::{
+    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
+};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -21,6 +27,20 @@ pub struct CompatNetwork<A, K> {
     cliquenet: Cliquenet<K>,
     cliquenet_peers: Arc<RwLock<HashSet<K>>>,
     fallback: A,
+}
+
+impl<A, K> CompatNetwork<A, K>
+where
+    K: SignatureKey + 'static,
+{
+    pub fn new(cliquenet: Cliquenet<K>, fallback: A) -> Self {
+        let peers = cliquenet.peers();
+        Self {
+            cliquenet,
+            cliquenet_peers: Arc::new(RwLock::new(HashSet::from_iter(peers))),
+            fallback,
+        }
+    }
 }
 
 #[async_trait]
@@ -50,12 +70,12 @@ where
         recipients: Vec<K>,
         d: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        let cliquenet_peers = self.cliquenet_peers.read();
-        let (c, f): (Vec<_>, Vec<_>) = recipients
-            .into_iter()
-            .partition(|k| cliquenet_peers.contains(k));
-        drop(cliquenet_peers);
-
+        let (c, f): (Vec<_>, Vec<_>) = {
+            let cliquenet_peers = self.cliquenet_peers.read();
+            recipients
+                .into_iter()
+                .partition(|k| cliquenet_peers.contains(k))
+        };
         let (a, b) = join! {
             self.cliquenet.da_broadcast_message(v, m.clone(), c, d.clone()),
             self.fallback.da_broadcast_message(v, m, f, d)
@@ -95,6 +115,10 @@ where
             self.cliquenet.update_view(v, e, m.clone()),
             self.fallback.update_view(v, e, m)
         };
+
+        let mut peers = self.cliquenet_peers.write();
+        peers.clear();
+        peers.extend(self.cliquenet.peers());
     }
 
     async fn wait_for_ready(&self) {
@@ -124,6 +148,58 @@ where
         Box::pin(async {
             join!(a, b);
         })
+    }
+}
+
+#[cfg(feature = "hotshot-testing")]
+impl<T, A> TestableNetworkingImplementation<T> for CompatNetwork<A, T::SignatureKey>
+where
+    T: NodeType,
+    A: TestableNetworkingImplementation<T> + Clone + 'static,
+{
+    fn generator(
+        nodes: usize,
+        num_bootstrap: usize,
+        network_id: usize,
+        da_committee_size: usize,
+        reliability_config: Option<Box<dyn NetworkReliability>>,
+        secondary_network_delay: Duration,
+    ) -> AsyncGenerator<Arc<Self>> {
+        let cliquenet =
+            <Cliquenet<T::SignatureKey> as TestableNetworkingImplementation<T>>::generator(
+                nodes,
+                num_bootstrap,
+                network_id,
+                da_committee_size,
+                reliability_config.clone(),
+                secondary_network_delay,
+            );
+
+        let fallback = <A as TestableNetworkingImplementation<T>>::generator(
+            nodes,
+            num_bootstrap,
+            network_id,
+            da_committee_size,
+            reliability_config.clone(),
+            secondary_network_delay,
+        );
+
+        Box::pin(move |i: u64| {
+            let cliquenet = cliquenet(i);
+            let fallback = fallback(i);
+
+            let future = async move {
+                let cliquenet = Arc::unwrap_or_clone(cliquenet.await);
+                let fallback = Arc::unwrap_or_clone(fallback.await);
+                Arc::new(Self::new(cliquenet, fallback))
+            };
+
+            Box::pin(future)
+        })
+    }
+
+    fn in_flight_message_count(&self) -> Option<usize> {
+        None
     }
 }
 

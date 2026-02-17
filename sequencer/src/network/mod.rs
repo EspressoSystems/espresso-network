@@ -5,6 +5,7 @@ use super::*;
 pub mod cdn;
 pub mod libp2p;
 
-pub type Production = CombinedNetworks<SeqTypes>;
+pub type Production =
+    CompatNetwork<CombinedNetworks<SeqTypes>, <SeqTypes as NodeType>::SignatureKey>;
 
 pub type Memory = MemoryNetwork<PubKey>;

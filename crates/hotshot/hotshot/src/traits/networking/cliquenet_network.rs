@@ -1,10 +1,12 @@
 #[cfg(feature = "hotshot-testing")]
-use std::sync::Arc;
-#[cfg(feature = "hotshot-testing")]
 use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
-use cliquenet::{NetConf, Retry};
+use cliquenet::{NetConf, Retry, Role};
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
@@ -18,37 +20,23 @@ use hotshot_types::{
         metrics::Metrics,
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::{ConsensusTime, NodeType},
-        signature_key::{PrivateSignatureKey, SignatureKey},
+        signature_key::{PrivateSignatureKey, SignatureKey, StakeTableEntryType},
     },
     x25519::{Keypair, PublicKey, SecretKey},
     BoxSyncFuture,
 };
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone)]
 pub struct Cliquenet<K> {
     net: Retry<K>,
-    epoch: Arc<Mutex<EpochNumber>>,
+    inner: Arc<Mutex<Inner>>,
 }
 
-impl<K: SignatureKey + 'static> Cliquenet<K> {
-    async fn on_epoch_change<U>(&self, epoch: EpochNumber, coord: &EpochMembershipCoordinator<U>)
-    where
-        U: NodeType<SignatureKey = K>,
-    {
-        let ours = self.epoch.lock().await;
-        if epoch <= *ours {
-            return;
-        }
-        let next = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch) + 1);
-        let _prev =
-            <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch).saturating_sub(1));
-        let Ok(_membership) = coord.stake_table_for_epoch(Some(next)).await else {
-            warn!(epoch = %next, "no stake table available");
-            return;
-        };
-    }
+#[derive(Clone)]
+struct Inner {
+    epoch: EpochNumber,
 }
 
 impl<K: SignatureKey + 'static> Cliquenet<K> {
@@ -78,8 +66,94 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
         Ok(Self {
             net,
-            epoch: Arc::new(Mutex::new(EpochNumber::genesis())),
+            inner: Arc::new(Mutex::new(Inner {
+                epoch: EpochNumber::genesis(),
+            })),
         })
+    }
+
+    /// Get the current network peers.
+    pub fn peers(&self) -> Vec<K> {
+        self.net.parties(None)
+    }
+
+    /// Handle an epoch change.
+    ///
+    /// We are at epoch e and if this method is applied to an epoch e' (> e),
+    /// we perform the following steps:
+    ///
+    /// - Add new peers from epoch e' + 1.
+    /// - Remove peers which are in e but not e'.
+    async fn on_epoch_change<U>(&self, epoch: EpochNumber, coord: &EpochMembershipCoordinator<U>)
+    where
+        U: NodeType<SignatureKey = K>,
+    {
+        let mut inner = self.inner.lock().await;
+
+        if epoch <= inner.epoch {
+            return;
+        }
+
+        let current_peers: HashSet<K> = HashSet::from_iter(self.peers());
+
+        // Remove current peers which are not in this new epoch:
+
+        if let Ok(membership) = coord.stake_table_for_epoch(None).await {
+            let parties: HashSet<_> = HashSet::from_iter(
+                membership
+                    .stake_table()
+                    .await
+                    .0
+                    .into_iter()
+                    .map(|m| m.stake_table_entry.public_key()),
+            );
+            let mut to_del = Vec::new();
+            for p in &current_peers {
+                if !parties.contains(p) {
+                    debug!(%epoch, peer = %p, "removing network peer");
+                    to_del.push(p.clone())
+                }
+            }
+            if let Err(err) = self.net.remove(to_del).await {
+                error!(%epoch, %err, "could not remove peers from network");
+            }
+        } else {
+            warn!(%epoch, "no stake table available");
+        }
+
+        // Add peers from the next epoch:
+
+        let next_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch) + 1);
+
+        if let Ok(membership) = coord.stake_table_for_epoch(Some(next_epoch)).await {
+            let stake_tbl: HashMap<_, _> = HashMap::from_iter(
+                membership
+                    .stake_table()
+                    .await
+                    .0
+                    .into_iter()
+                    .map(|m| (m.stake_table_entry.public_key(), (m.x25519_key, m.p2p_addr))),
+            );
+            let mut to_add = Vec::new();
+            for (k, v) in stake_tbl {
+                if current_peers.contains(&k) {
+                    continue;
+                }
+                let (Some(x25519), Some(addr)) = v else {
+                    info!(%epoch, peer = %k, "ignoring peer without x25519 key or p2p address");
+                    continue;
+                };
+                debug!(%epoch, peer = %k, "adding network peer");
+                to_add.push((k, x25519, addr))
+            }
+            if let Err(err) = self.net.add(Role::Active, to_add).await {
+                error!(%epoch, %err, "could not add peers to network");
+            }
+        } else {
+            warn!(epoch = %next_epoch, "no stake table available");
+        }
+
+        inner.epoch = epoch
     }
 }
 
@@ -169,29 +243,19 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
 #[cfg(feature = "hotshot-testing")]
 impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::SignatureKey> {
     fn generator(
-        expected_node_count: usize,
+        nodes: usize,
         _num_bootstrap: usize,
         _network_id: usize,
         _da_committee_size: usize,
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
     ) -> AsyncGenerator<Arc<Self>> {
-        use std::net::Ipv4Addr;
-
-        let mut parties: Vec<(Keypair, T::SignatureKey, Address)> = Vec::new();
-        for i in 0..expected_node_count {
-            let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
-            let public = T::SignatureKey::from_private(&secret);
-            let kpair = derive_keypair::<<T as NodeType>::SignatureKey>(&secret);
-            let port =
-                test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-            let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
-
-            parties.push((kpair, public, addr));
-        }
-
-        let parties = Arc::new(parties);
-
+        let parties = {
+            let p = gen_parties::<T::SignatureKey>()
+                .take(nodes)
+                .collect::<Vec<_>>();
+            Arc::new(p)
+        };
         Box::pin(move |i| {
             let parties = parties.clone();
             let future = async move {
@@ -214,4 +278,22 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
     fn in_flight_message_count(&self) -> Option<usize> {
         None
     }
+}
+
+/// Generate an arbitrary number or network parties.
+///
+/// A party is defined by its X25519 keypair, public signing key and network address.
+#[cfg(feature = "hotshot-testing")]
+fn gen_parties<K: SignatureKey>() -> impl Iterator<Item = (Keypair, K, NetAddr)> {
+    let mut i = 0u64;
+    std::iter::repeat_with(move || {
+        let secret = K::generated_from_seed_indexed([0u8; 32], i).1;
+        let public = K::from_private(&secret);
+        let kpair = derive_keypair::<K>(&secret);
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        i += 1;
+        (kpair, public, addr)
+    })
 }

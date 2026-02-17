@@ -1806,7 +1806,7 @@ impl EpochCommittees {
                             v.stake,
                         ))
                         .state_ver_key(v.state_ver_key.clone())
-                        .maybe_x25519_key(v.x25519_key.clone())
+                        .maybe_x25519_key(v.x25519_key)
                         .maybe_p2p_addr(v.p2p_addr.clone())
                         .build(),
                 )
