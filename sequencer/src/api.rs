@@ -1315,7 +1315,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             // finalized height.
 //            if (height + node_state.node_id).is_multiple_of(30)
 //                || cfg!(any(test, feature = "testing"))
-//            {
+            {
 //                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
 //                else {
 //                    return Ok(());
