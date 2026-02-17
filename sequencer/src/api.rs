@@ -1316,15 +1316,15 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 //            if (height + node_state.node_id).is_multiple_of(30)
 //                || cfg!(any(test, feature = "testing"))
             {
-                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
-                else {
-                    return Ok(());
-                };
+//                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
+//                else {
+//                    return Ok(());
+//                };
 
                 let finalized_hotshot_height = height;
 
                 // check to see whether we have proofs at that height already stored
-                if !self.proof_exists(finalized_hotshot_height).await {
+//                if !self.proof_exists(finalized_hotshot_height).await {
                     let Ok(permitted_tree) = self
                         .load_reward_merkle_tree_v2(finalized_hotshot_height)
                         .await
@@ -1359,7 +1359,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                     // let _ = self.garbage_collect(finalized_hotshot_height).await;
 
                     // tree is dropped here
-                }
+//                }
             }
 
             Ok(())
