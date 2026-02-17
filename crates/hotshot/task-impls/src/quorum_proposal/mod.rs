@@ -32,12 +32,13 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
+use tokio::sync::broadcast as tokio_broadcast;
 use tracing::instrument;
 
 use self::handlers::{ProposalDependency, ProposalDependencyHandle};
 use crate::{
     events::HotShotEvent, helpers::broadcast_view_change,
-    quorum_proposal::handlers::handle_eqc_formed,
+    quorum_proposal::handlers::handle_eqc_formed, reconstruct::ProposalResponse,
 };
 
 pub mod handlers;
@@ -103,6 +104,9 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Sender for proposal responses
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
@@ -432,6 +436,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 view_start_time: Instant::now(),
                 epoch_height: self.epoch_height,
                 cancel_receiver,
+                proposal_response_sender: self.proposal_response_sender.clone(),
             },
         );
         self.proposal_dependencies

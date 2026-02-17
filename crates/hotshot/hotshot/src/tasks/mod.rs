@@ -48,7 +48,7 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use tokio::{spawn, time::sleep};
+use tokio::{spawn, sync::broadcast as tokio_broadcast, time::sleep};
 use vbs::version::{StaticVersionType, Version};
 
 use crate::{
@@ -148,6 +148,7 @@ pub fn add_network_message_task<
         public_key: handle.public_key().clone(),
         upgrade_lock: upgrade_lock.clone(),
         id: handle.hotshot.id,
+        proposal_response_sender: handle.proposal_response_sender.clone(),
     };
 
     let network = Arc::clone(channel);
@@ -401,7 +402,8 @@ where
         let output_event_stream = hotshot.external_event_stream.clone();
         let internal_event_stream = hotshot.internal_event_stream.clone();
 
-        let (block_ready_sender, _) = tokio::sync::broadcast::channel(1000);
+        let (block_ready_sender, _) = tokio_broadcast::channel(1000);
+        let (proposal_response_sender, _) = tokio_broadcast::channel(1000);
 
         let mut handle = SystemContextHandle {
             consensus_registry,
@@ -414,6 +416,7 @@ where
             membership_coordinator: memberships.clone(),
             epoch_height,
             block_ready_sender,
+            proposal_response_sender,
         };
 
         add_consensus_tasks::<TYPES, I, V>(&mut handle).await;

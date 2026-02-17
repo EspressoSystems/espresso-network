@@ -10,8 +10,11 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{QuorumProposal2, VidCommitment, VidDisperseShare, VidDisperseShare2},
+    data::{
+        QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare, VidDisperseShare2,
+    },
     epoch_membership::EpochMembershipCoordinator,
+    message::Proposal,
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
@@ -35,6 +38,12 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct BlockReady<TYPES: NodeType> {
     pub view: TYPES::View,
+}
+
+// Notification sent on a dedicated channel when a proposal response arrives from the network.
+#[derive(Clone, Debug)]
+pub struct ProposalResponse<TYPES: NodeType> {
+    pub proposal: Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
 }
 
 pub struct ReconstructTaskState<TYPES: NodeType> {

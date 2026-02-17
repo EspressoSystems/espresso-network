@@ -36,12 +36,13 @@ use hotshot_types::{
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
-use tokio::{spawn, task::JoinHandle, time::Instant};
+use tokio::{spawn, sync::broadcast as tokio_broadcast, task::JoinHandle, time::Instant};
 use tracing::instrument;
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
+    reconstruct::ProposalResponse,
 };
 
 /// the network message task state
@@ -61,6 +62,9 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
 
     /// Node's id
     pub id: u64,
+
+    /// Sender for proposal responses
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 }
 
 impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
@@ -183,7 +187,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
+                            let _ = self.proposal_response_sender.send(ProposalResponse {
+                                proposal: convert_proposal(proposal),
+                            });
+                            return;
                         },
                         GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
                             if !self
@@ -199,7 +206,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
+                            let _ = self.proposal_response_sender.send(ProposalResponse {
+                                proposal: convert_proposal(proposal),
+                            });
+                            return;
                         },
                         GeneralConsensusMessage::ProposalResponse2(proposal) => {
                             if !self
@@ -214,7 +224,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 );
                                 return;
                             }
-                            HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
+                            let _ = self.proposal_response_sender.send(ProposalResponse {
+                                proposal: convert_proposal(proposal),
+                            });
+                            return;
                         },
                         GeneralConsensusMessage::Vote(vote) => {
                             if self.upgrade_lock.epochs_enabled(vote.view_number()).await {

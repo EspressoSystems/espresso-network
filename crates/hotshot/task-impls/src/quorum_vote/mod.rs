@@ -40,7 +40,7 @@ use crate::{
     events::HotShotEvent,
     helpers::{broadcast_event, broadcast_view_change},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
-    reconstruct::BlockReady,
+    reconstruct::{BlockReady, ProposalResponse},
 };
 
 /// Event handlers for `QuorumProposalValidated`.
@@ -112,6 +112,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Sender for block ready notifications
     pub block_ready_sender: tokio_broadcast::Sender<BlockReady<TYPES>>,
+
+    /// Sender for proposal responses
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -350,7 +353,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         update_shared_state::<TYPES, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
-            self.receiver.clone(),
+            &self.proposal_response_sender,
             self.membership_coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
@@ -551,6 +554,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Sender for block ready notifications
     pub block_ready_sender: tokio_broadcast::Sender<BlockReady<TYPES>>,
+
+    /// Sender for proposal responses
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -674,6 +680,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 stake_table_capacity: self.stake_table_capacity,
                 cancel_receiver,
                 block_ready_sender: self.block_ready_sender.clone(),
+                proposal_response_sender: self.proposal_response_sender.clone(),
             },
         );
         self.vote_dependencies.insert(view_number, cancel_sender);

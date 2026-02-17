@@ -31,7 +31,7 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::{bail, Result};
-use tokio::task::JoinHandle;
+use tokio::{sync::broadcast as tokio_broadcast, task::JoinHandle};
 use tracing::{debug, error, info, instrument, warn};
 use vbs::version::Version;
 
@@ -39,6 +39,7 @@ use self::handlers::handle_quorum_proposal_recv;
 use crate::{
     events::{HotShotEvent, ProposalMissing},
     helpers::{broadcast_event, fetch_proposal, parent_leaf_and_state},
+    reconstruct::ProposalResponse,
 };
 /// Event handlers for this task.
 mod handlers;
@@ -88,6 +89,9 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Sender for proposal responses
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 }
 
 /// all the info we need to validate a proposal.  This makes it easy to spawn an effemeral task to
@@ -122,6 +126,9 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Sender for proposal responses
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
@@ -184,15 +191,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     upgrade_lock: self.upgrade_lock.clone(),
                     epoch_height: self.epoch_height,
                     first_epoch: self.first_epoch,
+                    proposal_response_sender: self.proposal_response_sender.clone(),
                 };
-                match handle_quorum_proposal_recv(
-                    proposal,
-                    sender,
-                    &event_sender,
-                    &event_receiver,
-                    validation_info,
-                )
-                .await
+                match handle_quorum_proposal_recv(proposal, sender, &event_sender, validation_info)
+                    .await
                 {
                     Ok(()) => {},
                     Err(e) => tracing::error!(?e, "Failed to validate the proposal"),

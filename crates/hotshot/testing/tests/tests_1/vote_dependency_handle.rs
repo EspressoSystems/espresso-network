@@ -101,6 +101,7 @@ async fn test_vote_dependency_handle() {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 cancel_receiver,
                 block_ready_sender: handle.block_ready_sender.clone(),
+                proposal_response_sender: handle.proposal_response_sender.clone(),
             };
 
         vote_dependency_handle_state
