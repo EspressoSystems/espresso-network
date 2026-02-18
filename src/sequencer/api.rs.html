@@ -17,12 +17,12 @@
 <a href=#17 id=17 data-nosnippet>17</a>    traits::EventsPersistenceRead,
 <a href=#18 id=18 data-nosnippet>18</a>    v0::traits::{SequencerPersistence, StateCatchup},
 <a href=#19 id=19 data-nosnippet>19</a>    v0_3::{
-<a href=#20 id=20 data-nosnippet>20</a>        ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
-<a href=#21 id=21 data-nosnippet>21</a>        StakeTableEvent, Validator,
+<a href=#20 id=20 data-nosnippet>20</a>        ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
+<a href=#21 id=21 data-nosnippet>21</a>        RewardMerkleTreeV1, StakeTableEvent,
 <a href=#22 id=22 data-nosnippet>22</a>    },
 <a href=#23 id=23 data-nosnippet>23</a>    v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
-<a href=#24 id=24 data-nosnippet>24</a>    AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
-<a href=#25 id=25 data-nosnippet>25</a>    Transaction, ValidatorMap,
+<a href=#24 id=24 data-nosnippet>24</a>    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
+<a href=#25 id=25 data-nosnippet>25</a>    NodeState, PubKey, Transaction,
 <a href=#26 id=26 data-nosnippet>26</a>};
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>futures::{
 <a href=#28 id=28 data-nosnippet>28</a>    future::{BoxFuture, Future, FutureExt},
@@ -246,7 +246,7 @@
 <a href=#246 id=246 data-nosnippet>246</a>    </span><span class="kw">async fn </span>get_validators(
 <a href=#247 id=247 data-nosnippet>247</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#248 id=248 data-nosnippet>248</a>        epoch: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::Epoch,
-<a href=#249 id=249 data-nosnippet>249</a>    ) -&gt; anyhow::Result&lt;ValidatorMap&gt; {
+<a href=#249 id=249 data-nosnippet>249</a>    ) -&gt; anyhow::Result&lt;AuthenticatedValidatorMap&gt; {
 <a href=#250 id=250 data-nosnippet>250</a>        <span class="self">self</span>.as_ref().get_validators(epoch).<span class="kw">await
 <a href=#251 id=251 data-nosnippet>251</a>    </span>}
 <a href=#252 id=252 data-nosnippet>252</a>
@@ -269,7 +269,7 @@
 <a href=#269 id=269 data-nosnippet>269</a>        epoch: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::Epoch,
 <a href=#270 id=270 data-nosnippet>270</a>        offset: u64,
 <a href=#271 id=271 data-nosnippet>271</a>        limit: u64,
-<a href=#272 id=272 data-nosnippet>272</a>    ) -&gt; anyhow::Result&lt;Vec&lt;Validator&lt;PubKey&gt;&gt;&gt; {
+<a href=#272 id=272 data-nosnippet>272</a>    ) -&gt; anyhow::Result&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt; {
 <a href=#273 id=273 data-nosnippet>273</a>        <span class="self">self</span>.as_ref().get_all_validators(epoch, offset, limit).<span class="kw">await
 <a href=#274 id=274 data-nosnippet>274</a>    </span>}
 <a href=#275 id=275 data-nosnippet>275</a>
@@ -439,7 +439,7 @@
 <a href=#439 id=439 data-nosnippet>439</a>    </span><span class="kw">async fn </span>get_validators(
 <a href=#440 id=440 data-nosnippet>440</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#441 id=441 data-nosnippet>441</a>        epoch: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::Epoch,
-<a href=#442 id=442 data-nosnippet>442</a>    ) -&gt; anyhow::Result&lt;ValidatorMap&gt; {
+<a href=#442 id=442 data-nosnippet>442</a>    ) -&gt; anyhow::Result&lt;AuthenticatedValidatorMap&gt; {
 <a href=#443 id=443 data-nosnippet>443</a>        <span class="kw">let </span>mem = <span class="self">self
 <a href=#444 id=444 data-nosnippet>444</a>            </span>.consensus()
 <a href=#445 id=445 data-nosnippet>445</a>            .<span class="kw">await
@@ -450,8 +450,8 @@
 <a href=#450 id=450 data-nosnippet>450</a>            .<span class="kw">await
 <a href=#451 id=451 data-nosnippet>451</a>            </span>.context(<span class="string">"membership not found"</span>)<span class="question-mark">?</span>;
 <a href=#452 id=452 data-nosnippet>452</a>
-<a href=#453 id=453 data-nosnippet>453</a>        <span class="kw">let </span>r = mem.coordinator.membership().read().<span class="kw">await</span>;
-<a href=#454 id=454 data-nosnippet>454</a>        r.active_validators(<span class="kw-2">&amp;</span>epoch)
+<a href=#453 id=453 data-nosnippet>453</a>        <span class="kw">let </span>membership = mem.coordinator.membership().read().<span class="kw">await</span>;
+<a href=#454 id=454 data-nosnippet>454</a>        membership.active_validators(<span class="kw-2">&amp;</span>epoch)
 <a href=#455 id=455 data-nosnippet>455</a>    }
 <a href=#456 id=456 data-nosnippet>456</a>
 <a href=#457 id=457 data-nosnippet>457</a>    <span class="doccomment">/// Get the current proposal participation.
@@ -483,7 +483,7 @@
 <a href=#483 id=483 data-nosnippet>483</a>        epoch: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::Epoch,
 <a href=#484 id=484 data-nosnippet>484</a>        offset: u64,
 <a href=#485 id=485 data-nosnippet>485</a>        limit: u64,
-<a href=#486 id=486 data-nosnippet>486</a>    ) -&gt; anyhow::Result&lt;Vec&lt;Validator&lt;PubKey&gt;&gt;&gt; {
+<a href=#486 id=486 data-nosnippet>486</a>    ) -&gt; anyhow::Result&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt; {
 <a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>handle = <span class="self">self</span>.consensus().<span class="kw">await</span>;
 <a href=#488 id=488 data-nosnippet>488</a>        <span class="kw">let </span>handle_read = handle.read().<span class="kw">await</span>;
 <a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">let </span>storage = handle_read.storage();
@@ -2646,9 +2646,9 @@
 <a href=#2646 id=2646 data-nosnippet>2646</a>        },
 <a href=#2647 id=2647 data-nosnippet>2647</a>        validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
 <a href=#2648 id=2648 data-nosnippet>2648</a>        EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
-<a href=#2649 id=2649 data-nosnippet>2649</a>        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
-<a href=#2650 id=2650 data-nosnippet>2650</a>        SequencerVersions, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
-<a href=#2651 id=2651 data-nosnippet>2651</a>        ValidatedState,
+<a href=#2649 id=2649 data-nosnippet>2649</a>        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof,
+<a href=#2650 id=2650 data-nosnippet>2650</a>        RegisteredValidatorMap, RewardDistributor, SequencerVersions, StakeTableState,
+<a href=#2651 id=2651 data-nosnippet>2651</a>        StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
 <a href=#2652 id=2652 data-nosnippet>2652</a>    };
 <a href=#2653 id=2653 data-nosnippet>2653</a>    <span class="kw">use </span>futures::{
 <a href=#2654 id=2654 data-nosnippet>2654</a>        future::{<span class="self">self</span>, join_all, try_join_all},
@@ -3878,7 +3878,7 @@
 <a href=#3878 id=3878 data-nosnippet>3878</a>        // Basically epoch 3 and epoch 4 as epoch height is 20
 <a href=#3879 id=3879 data-nosnippet>3879</a>        // get all the validators
 <a href=#3880 id=3880 data-nosnippet>3880</a>        </span><span class="kw">let </span>validators = client
-<a href=#3881 id=3881 data-nosnippet>3881</a>            .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/3"</span>)
+<a href=#3881 id=3881 data-nosnippet>3881</a>            .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/3"</span>)
 <a href=#3882 id=3882 data-nosnippet>3882</a>            .send()
 <a href=#3883 id=3883 data-nosnippet>3883</a>            .<span class="kw">await
 <a href=#3884 id=3884 data-nosnippet>3884</a>            </span>.expect(<span class="string">"failed to get validator"</span>);
@@ -3893,7 +3893,7 @@
 <a href=#3893 id=3893 data-nosnippet>3893</a>        }
 <a href=#3894 id=3894 data-nosnippet>3894</a>        <span class="comment">// get all the validators
 <a href=#3895 id=3895 data-nosnippet>3895</a>        </span><span class="kw">let </span>validators = client
-<a href=#3896 id=3896 data-nosnippet>3896</a>            .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/4"</span>)
+<a href=#3896 id=3896 data-nosnippet>3896</a>            .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/4"</span>)
 <a href=#3897 id=3897 data-nosnippet>3897</a>            .send()
 <a href=#3898 id=3898 data-nosnippet>3898</a>            .<span class="kw">await
 <a href=#3899 id=3899 data-nosnippet>3899</a>            </span>.expect(<span class="string">"failed to get validator"</span>);
@@ -4105,14 +4105,14 @@
 <a href=#4105 id=4105 data-nosnippet>4105</a>        <span class="comment">// Verify that there are no validators for epoch # 1 and epoch # 2
 <a href=#4106 id=4106 data-nosnippet>4106</a>        </span>{
 <a href=#4107 id=4107 data-nosnippet>4107</a>            client
-<a href=#4108 id=4108 data-nosnippet>4108</a>                .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/1"</span>)
+<a href=#4108 id=4108 data-nosnippet>4108</a>                .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/1"</span>)
 <a href=#4109 id=4109 data-nosnippet>4109</a>                .send()
 <a href=#4110 id=4110 data-nosnippet>4110</a>                .<span class="kw">await
 <a href=#4111 id=4111 data-nosnippet>4111</a>                </span>.unwrap()
 <a href=#4112 id=4112 data-nosnippet>4112</a>                .is_empty();
 <a href=#4113 id=4113 data-nosnippet>4113</a>
 <a href=#4114 id=4114 data-nosnippet>4114</a>            client
-<a href=#4115 id=4115 data-nosnippet>4115</a>                .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/2"</span>)
+<a href=#4115 id=4115 data-nosnippet>4115</a>                .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/2"</span>)
 <a href=#4116 id=4116 data-nosnippet>4116</a>                .send()
 <a href=#4117 id=4117 data-nosnippet>4117</a>                .<span class="kw">await
 <a href=#4118 id=4118 data-nosnippet>4118</a>                </span>.unwrap()
@@ -4121,7 +4121,7 @@
 <a href=#4121 id=4121 data-nosnippet>4121</a>
 <a href=#4122 id=4122 data-nosnippet>4122</a>        <span class="comment">// Get the epoch # 3 validators
 <a href=#4123 id=4123 data-nosnippet>4123</a>        </span><span class="kw">let </span>validators = client
-<a href=#4124 id=4124 data-nosnippet>4124</a>            .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/3"</span>)
+<a href=#4124 id=4124 data-nosnippet>4124</a>            .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/3"</span>)
 <a href=#4125 id=4125 data-nosnippet>4125</a>            .send()
 <a href=#4126 id=4126 data-nosnippet>4126</a>            .<span class="kw">await
 <a href=#4127 id=4127 data-nosnippet>4127</a>            </span>.expect(<span class="string">"validators"</span>);
@@ -4187,7 +4187,7 @@
 <a href=#4187 id=4187 data-nosnippet>4187</a>            drop(membership);
 <a href=#4188 id=4188 data-nosnippet>4188</a>
 <a href=#4189 id=4189 data-nosnippet>4189</a>            <span class="kw">let </span>validators = client
-<a href=#4190 id=4190 data-nosnippet>4190</a>                .get::&lt;ValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{epoch}"</span>))
+<a href=#4190 id=4190 data-nosnippet>4190</a>                .get::&lt;AuthenticatedValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{epoch}"</span>))
 <a href=#4191 id=4191 data-nosnippet>4191</a>                .send()
 <a href=#4192 id=4192 data-nosnippet>4192</a>                .<span class="kw">await
 <a href=#4193 id=4193 data-nosnippet>4193</a>                </span>.expect(<span class="string">"validators"</span>);
@@ -4333,14 +4333,14 @@
 <a href=#4333 id=4333 data-nosnippet>4333</a>        <span class="comment">// Verify that there are no validators for epoch # 1 and epoch # 2
 <a href=#4334 id=4334 data-nosnippet>4334</a>        </span>{
 <a href=#4335 id=4335 data-nosnippet>4335</a>            client
-<a href=#4336 id=4336 data-nosnippet>4336</a>                .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/1"</span>)
+<a href=#4336 id=4336 data-nosnippet>4336</a>                .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/1"</span>)
 <a href=#4337 id=4337 data-nosnippet>4337</a>                .send()
 <a href=#4338 id=4338 data-nosnippet>4338</a>                .<span class="kw">await
 <a href=#4339 id=4339 data-nosnippet>4339</a>                </span>.unwrap()
 <a href=#4340 id=4340 data-nosnippet>4340</a>                .is_empty();
 <a href=#4341 id=4341 data-nosnippet>4341</a>
 <a href=#4342 id=4342 data-nosnippet>4342</a>            client
-<a href=#4343 id=4343 data-nosnippet>4343</a>                .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/2"</span>)
+<a href=#4343 id=4343 data-nosnippet>4343</a>                .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/2"</span>)
 <a href=#4344 id=4344 data-nosnippet>4344</a>                .send()
 <a href=#4345 id=4345 data-nosnippet>4345</a>                .<span class="kw">await
 <a href=#4346 id=4346 data-nosnippet>4346</a>                </span>.unwrap()
@@ -4349,7 +4349,7 @@
 <a href=#4349 id=4349 data-nosnippet>4349</a>
 <a href=#4350 id=4350 data-nosnippet>4350</a>        <span class="comment">// Get the epoch # 3 validators
 <a href=#4351 id=4351 data-nosnippet>4351</a>        </span><span class="kw">let </span>validators = client
-<a href=#4352 id=4352 data-nosnippet>4352</a>            .get::&lt;ValidatorMap&gt;(<span class="string">"node/validators/3"</span>)
+<a href=#4352 id=4352 data-nosnippet>4352</a>            .get::&lt;AuthenticatedValidatorMap&gt;(<span class="string">"node/validators/3"</span>)
 <a href=#4353 id=4353 data-nosnippet>4353</a>            .send()
 <a href=#4354 id=4354 data-nosnippet>4354</a>            .<span class="kw">await
 <a href=#4355 id=4355 data-nosnippet>4355</a>            </span>.expect(<span class="string">"validators"</span>);
@@ -4432,7 +4432,7 @@
 <a href=#4432 id=4432 data-nosnippet>4432</a>            drop(membership);
 <a href=#4433 id=4433 data-nosnippet>4433</a>
 <a href=#4434 id=4434 data-nosnippet>4434</a>            <span class="kw">let </span>validators = client
-<a href=#4435 id=4435 data-nosnippet>4435</a>                .get::&lt;ValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{epoch_number}"</span>))
+<a href=#4435 id=4435 data-nosnippet>4435</a>                .get::&lt;AuthenticatedValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{epoch_number}"</span>))
 <a href=#4436 id=4436 data-nosnippet>4436</a>                .send()
 <a href=#4437 id=4437 data-nosnippet>4437</a>                .<span class="kw">await
 <a href=#4438 id=4438 data-nosnippet>4438</a>                </span>.expect(<span class="string">"validators"</span>);
@@ -6513,7 +6513,7 @@
 <a href=#6513 id=6513 data-nosnippet>6513</a>        </span><span class="kw">let </span>client: Client&lt;ServerError, SequencerApiVersion&gt; =
 <a href=#6514 id=6514 data-nosnippet>6514</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap());
 <a href=#6515 id=6515 data-nosnippet>6515</a>        <span class="kw">let </span>validators = client
-<a href=#6516 id=6516 data-nosnippet>6516</a>            .get::&lt;ValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{}"</span>, target_epoch - <span class="number">1</span>))
+<a href=#6516 id=6516 data-nosnippet>6516</a>            .get::&lt;AuthenticatedValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{}"</span>, target_epoch - <span class="number">1</span>))
 <a href=#6517 id=6517 data-nosnippet>6517</a>            .send()
 <a href=#6518 id=6518 data-nosnippet>6518</a>            .<span class="kw">await
 <a href=#6519 id=6519 data-nosnippet>6519</a>            </span>.expect(<span class="string">"validators"</span>);
@@ -6526,7 +6526,7 @@
 <a href=#6526 id=6526 data-nosnippet>6526</a>        </span><span class="kw">let </span>client: Client&lt;ServerError, SequencerApiVersion&gt; =
 <a href=#6527 id=6527 data-nosnippet>6527</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap());
 <a href=#6528 id=6528 data-nosnippet>6528</a>        <span class="kw">let </span>validators = client
-<a href=#6529 id=6529 data-nosnippet>6529</a>            .get::&lt;ValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{target_epoch}"</span>))
+<a href=#6529 id=6529 data-nosnippet>6529</a>            .get::&lt;AuthenticatedValidatorMap&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"node/validators/{target_epoch}"</span>))
 <a href=#6530 id=6530 data-nosnippet>6530</a>            .send()
 <a href=#6531 id=6531 data-nosnippet>6531</a>            .<span class="kw">await
 <a href=#6532 id=6532 data-nosnippet>6532</a>            </span>.expect(<span class="string">"validators"</span>);
@@ -6756,7 +6756,7 @@
 <a href=#6756 id=6756 data-nosnippet>6756</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap());
 <a href=#6757 id=6757 data-nosnippet>6757</a>
 <a href=#6758 id=6758 data-nosnippet>6758</a>        <span class="kw">let </span>err = client
-<a href=#6759 id=6759 data-nosnippet>6759</a>            .get::&lt;Vec&lt;Validator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/1001"</span>)
+<a href=#6759 id=6759 data-nosnippet>6759</a>            .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/1001"</span>)
 <a href=#6760 id=6760 data-nosnippet>6760</a>            .header(<span class="string">"Accept"</span>, <span class="string">"application/json"</span>)
 <a href=#6761 id=6761 data-nosnippet>6761</a>            .send()
 <a href=#6762 id=6762 data-nosnippet>6762</a>            .<span class="kw">await
@@ -6774,14 +6774,14 @@
 <a href=#6774 id=6774 data-nosnippet>6774</a>        <span class="comment">// Verify that there are no validators for epoch # 1 and epoch # 2
 <a href=#6775 id=6775 data-nosnippet>6775</a>        </span>{
 <a href=#6776 id=6776 data-nosnippet>6776</a>            client
-<a href=#6777 id=6777 data-nosnippet>6777</a>                .get::&lt;Vec&lt;Validator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/100"</span>)
+<a href=#6777 id=6777 data-nosnippet>6777</a>                .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/100"</span>)
 <a href=#6778 id=6778 data-nosnippet>6778</a>                .send()
 <a href=#6779 id=6779 data-nosnippet>6779</a>                .<span class="kw">await
 <a href=#6780 id=6780 data-nosnippet>6780</a>                </span>.unwrap()
 <a href=#6781 id=6781 data-nosnippet>6781</a>                .is_empty();
 <a href=#6782 id=6782 data-nosnippet>6782</a>
 <a href=#6783 id=6783 data-nosnippet>6783</a>            client
-<a href=#6784 id=6784 data-nosnippet>6784</a>                .get::&lt;Vec&lt;Validator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/2/0/100"</span>)
+<a href=#6784 id=6784 data-nosnippet>6784</a>                .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/2/0/100"</span>)
 <a href=#6785 id=6785 data-nosnippet>6785</a>                .send()
 <a href=#6786 id=6786 data-nosnippet>6786</a>                .<span class="kw">await
 <a href=#6787 id=6787 data-nosnippet>6787</a>                </span>.unwrap()
@@ -6790,7 +6790,7 @@
 <a href=#6790 id=6790 data-nosnippet>6790</a>
 <a href=#6791 id=6791 data-nosnippet>6791</a>        <span class="comment">// Get the epoch # 3 validators
 <a href=#6792 id=6792 data-nosnippet>6792</a>        </span><span class="kw">let </span>validators = client
-<a href=#6793 id=6793 data-nosnippet>6793</a>            .get::&lt;Vec&lt;Validator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/3/0/100"</span>)
+<a href=#6793 id=6793 data-nosnippet>6793</a>            .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/3/0/100"</span>)
 <a href=#6794 id=6794 data-nosnippet>6794</a>            .send()
 <a href=#6795 id=6795 data-nosnippet>6795</a>            .<span class="kw">await
 <a href=#6796 id=6796 data-nosnippet>6796</a>            </span>.expect(<span class="string">"validators"</span>);
@@ -7581,7 +7581,7 @@
 <a href=#7581 id=7581 data-nosnippet>7581</a>                </span>.unwrap()
 <a href=#7582 id=7582 data-nosnippet>7582</a>                .into_iter()
 <a href=#7583 id=7583 data-nosnippet>7583</a>                .map(|v| (v.account, v))
-<a href=#7584 id=7584 data-nosnippet>7584</a>                .collect::&lt;ValidatorMap&gt;()
+<a href=#7584 id=7584 data-nosnippet>7584</a>                .collect::&lt;RegisteredValidatorMap&gt;()
 <a href=#7585 id=7585 data-nosnippet>7585</a>        );
 <a href=#7586 id=7586 data-nosnippet>7586</a>
 <a href=#7587 id=7587 data-nosnippet>7587</a>        <span class="comment">// Querying for a stake table before the first real epoch is an error.

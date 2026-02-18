@@ -118,7 +118,7 @@
 <a href=#118 id=118 data-nosnippet>118</a>            EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
 <a href=#119 id=119 data-nosnippet>119</a>            PersistenceOptions, SequencerPersistence,
 <a href=#120 id=120 data-nosnippet>120</a>        },
-<a href=#121 id=121 data-nosnippet>121</a>        v0_3::{Fetcher, Validator},
+<a href=#121 id=121 data-nosnippet>121</a>        v0_3::{AuthenticatedValidator, Fetcher, RegisteredValidator},
 <a href=#122 id=122 data-nosnippet>122</a>        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
 <a href=#123 id=123 data-nosnippet>123</a>        SequencerVersions, ValidatedState,
 <a href=#124 id=124 data-nosnippet>124</a>    };
@@ -1695,7 +1695,7 @@
 <a href=#1695 id=1695 data-nosnippet>1695</a>
 <a href=#1696 id=1696 data-nosnippet>1696</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
 <a href=#1697 id=1697 data-nosnippet>1697</a>
-<a href=#1698 id=1698 data-nosnippet>1698</a>        <span class="kw">let </span>validator = Validator::mock();
+<a href=#1698 id=1698 data-nosnippet>1698</a>        <span class="kw">let </span>validator = AuthenticatedValidator::mock();
 <a href=#1699 id=1699 data-nosnippet>1699</a>        <span class="kw">let </span><span class="kw-2">mut </span>st = IndexMap::new();
 <a href=#1700 id=1700 data-nosnippet>1700</a>        st.insert(validator.account, validator);
 <a href=#1701 id=1701 data-nosnippet>1701</a>
@@ -1706,7 +1706,7 @@
 <a href=#1706 id=1706 data-nosnippet>1706</a>        <span class="kw">let </span>(table, ..) = storage.load_stake(EpochNumber::new(<span class="number">10</span>)).<span class="kw">await</span><span class="question-mark">?</span>.unwrap();
 <a href=#1707 id=1707 data-nosnippet>1707</a>        <span class="macro">assert_eq!</span>(st, table);
 <a href=#1708 id=1708 data-nosnippet>1708</a>
-<a href=#1709 id=1709 data-nosnippet>1709</a>        <span class="kw">let </span>val2 = Validator::mock();
+<a href=#1709 id=1709 data-nosnippet>1709</a>        <span class="kw">let </span>val2 = AuthenticatedValidator::mock();
 <a href=#1710 id=1710 data-nosnippet>1710</a>        <span class="kw">let </span><span class="kw-2">mut </span>st2 = IndexMap::new();
 <a href=#1711 id=1711 data-nosnippet>1711</a>        st2.insert(val2.account, val2);
 <a href=#1712 id=1712 data-nosnippet>1712</a>        storage
@@ -1765,7 +1765,7 @@
 <a href=#1765 id=1765 data-nosnippet>1765</a>
 <a href=#1766 id=1766 data-nosnippet>1766</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap1 = IndexMap::new();
 <a href=#1767 id=1767 data-nosnippet>1767</a>        <span class="kw">for </span>_i <span class="kw">in </span><span class="number">0</span>..<span class="number">25 </span>{
-<a href=#1768 id=1768 data-nosnippet>1768</a>            <span class="kw">let </span>v = Validator::mock();
+<a href=#1768 id=1768 data-nosnippet>1768</a>            <span class="kw">let </span>v = RegisteredValidator::mock();
 <a href=#1769 id=1769 data-nosnippet>1769</a>            vmap1.insert(v.account, v);
 <a href=#1770 id=1770 data-nosnippet>1770</a>        }
 <a href=#1771 id=1771 data-nosnippet>1771</a>        storage
@@ -1810,7 +1810,7 @@
 <a href=#1810 id=1810 data-nosnippet>1810</a>        <span class="macro">assert!</span>(loaded_empty.is_empty());
 <a href=#1811 id=1811 data-nosnippet>1811</a>
 <a href=#1812 id=1812 data-nosnippet>1812</a>        <span class="comment">// epoch 11
-<a href=#1813 id=1813 data-nosnippet>1813</a>        </span><span class="kw">let </span>validator2 = Validator::mock();
+<a href=#1813 id=1813 data-nosnippet>1813</a>        </span><span class="kw">let </span>validator2 = RegisteredValidator::mock();
 <a href=#1814 id=1814 data-nosnippet>1814</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap2 = IndexMap::new();
 <a href=#1815 id=1815 data-nosnippet>1815</a>        vmap2.insert(validator2.account, validator2.clone());
 <a href=#1816 id=1816 data-nosnippet>1816</a>

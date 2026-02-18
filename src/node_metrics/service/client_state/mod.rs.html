@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a>
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>bitvec::vec::BitVec;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>espresso_types::{v0_3::Validator, SeqTypes};
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>espresso_types::{v0_3::AuthenticatedValidator, SeqTypes};
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot::types::BLSPubKey;
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
@@ -1156,7 +1156,7 @@
 <a href=#1156 id=1156 data-nosnippet>1156</a>
 <a href=#1157 id=1157 data-nosnippet>1157</a><span class="kw">async fn </span>handle_received_validator&lt;K&gt;(
 <a href=#1158 id=1158 data-nosnippet>1158</a>    client_thread_state: Arc&lt;RwLock&lt;ClientThreadState&lt;K&gt;&gt;&gt;,
-<a href=#1159 id=1159 data-nosnippet>1159</a>    validator: Validator&lt;BLSPubKey&gt;,
+<a href=#1159 id=1159 data-nosnippet>1159</a>    validator: AuthenticatedValidator&lt;BLSPubKey&gt;,
 <a href=#1160 id=1160 data-nosnippet>1160</a>) <span class="kw">where
 <a href=#1161 id=1161 data-nosnippet>1161</a>    </span>K: Sink&lt;ServerMessage, Error = SendError&gt; + Clone + Unpin,
 <a href=#1162 id=1162 data-nosnippet>1162</a>{
@@ -1556,7 +1556,7 @@
 <a href=#1556 id=1556 data-nosnippet>1556</a>        validator_receiver: S,
 <a href=#1557 id=1557 data-nosnippet>1557</a>    ) -&gt; <span class="self">Self
 <a href=#1558 id=1558 data-nosnippet>1558</a>    </span><span class="kw">where
-<a href=#1559 id=1559 data-nosnippet>1559</a>        </span>S: Stream&lt;Item = Validator&lt;BLSPubKey&gt;&gt; + Send + Sync + Unpin + <span class="lifetime">'static</span>,
+<a href=#1559 id=1559 data-nosnippet>1559</a>        </span>S: Stream&lt;Item = AuthenticatedValidator&lt;BLSPubKey&gt;&gt; + Send + Sync + Unpin + <span class="lifetime">'static</span>,
 <a href=#1560 id=1560 data-nosnippet>1560</a>        K: Sink&lt;ServerMessage, Error = SendError&gt; + Clone + Send + Sync + Unpin + <span class="lifetime">'static</span>,
 <a href=#1561 id=1561 data-nosnippet>1561</a>    {
 <a href=#1562 id=1562 data-nosnippet>1562</a>        <span class="kw">let </span>task_handle = spawn(<span class="self">Self</span>::process_distribute_validator_handling_stream(
@@ -1576,7 +1576,7 @@
 <a href=#1576 id=1576 data-nosnippet>1576</a>        client_thread_state: Arc&lt;RwLock&lt;ClientThreadState&lt;K&gt;&gt;&gt;,
 <a href=#1577 id=1577 data-nosnippet>1577</a>        <span class="kw-2">mut </span>stream: S,
 <a href=#1578 id=1578 data-nosnippet>1578</a>    ) <span class="kw">where
-<a href=#1579 id=1579 data-nosnippet>1579</a>        </span>S: Stream&lt;Item = Validator&lt;BLSPubKey&gt;&gt; + Unpin,
+<a href=#1579 id=1579 data-nosnippet>1579</a>        </span>S: Stream&lt;Item = AuthenticatedValidator&lt;BLSPubKey&gt;&gt; + Unpin,
 <a href=#1580 id=1580 data-nosnippet>1580</a>        K: Sink&lt;ServerMessage, Error = SendError&gt; + Clone + Unpin,
 <a href=#1581 id=1581 data-nosnippet>1581</a>    {
 <a href=#1582 id=1582 data-nosnippet>1582</a>        <span class="kw">loop </span>{

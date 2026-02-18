@@ -205,16 +205,18 @@
 <a href=#205 id=205 data-nosnippet>205</a>
 <a href=#206 id=206 data-nosnippet>206</a><span class="kw">pub type </span>NetworkConfig = hotshot_types::network::NetworkConfig&lt;SeqTypes&gt;;
 <a href=#207 id=207 data-nosnippet>207</a>
-<a href=#208 id=208 data-nosnippet>208</a><span class="kw">pub use </span><span class="self">self</span>::impls::{NodeState, UpgradeMap, ValidatedState, ValidatorMap};
-<a href=#209 id=209 data-nosnippet>209</a><span class="kw">pub use crate</span>::{
-<a href=#210 id=210 data-nosnippet>210</a>    v0::impls::{
-<a href=#211 id=211 data-nosnippet>211</a>        calculate_proportion_staked_and_reward_rate, select_active_validator_set, StakeTableHash,
-<a href=#212 id=212 data-nosnippet>212</a>        StakeTableState,
-<a href=#213 id=213 data-nosnippet>213</a>    },
-<a href=#214 id=214 data-nosnippet>214</a>    v0_1::{
-<a href=#215 id=215 data-nosnippet>215</a>        BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
-<a href=#216 id=216 data-nosnippet>216</a>        NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
-<a href=#217 id=217 data-nosnippet>217</a>    },
-<a href=#218 id=218 data-nosnippet>218</a>    v0_3::ChainConfig,
-<a href=#219 id=219 data-nosnippet>219</a>};
+<a href=#208 id=208 data-nosnippet>208</a><span class="kw">pub use </span><span class="self">self</span>::impls::{
+<a href=#209 id=209 data-nosnippet>209</a>    AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
+<a href=#210 id=210 data-nosnippet>210</a>};
+<a href=#211 id=211 data-nosnippet>211</a><span class="kw">pub use crate</span>::{
+<a href=#212 id=212 data-nosnippet>212</a>    v0::impls::{
+<a href=#213 id=213 data-nosnippet>213</a>        calculate_proportion_staked_and_reward_rate, select_active_validator_set,
+<a href=#214 id=214 data-nosnippet>214</a>        to_registered_validator_map, StakeTableHash, StakeTableState,
+<a href=#215 id=215 data-nosnippet>215</a>    },
+<a href=#216 id=216 data-nosnippet>216</a>    v0_1::{
+<a href=#217 id=217 data-nosnippet>217</a>        BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
+<a href=#218 id=218 data-nosnippet>218</a>        NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+<a href=#219 id=219 data-nosnippet>219</a>    },
+<a href=#220 id=220 data-nosnippet>220</a>    v0_3::ChainConfig,
+<a href=#221 id=221 data-nosnippet>221</a>};
 </code></pre></div></section></main></body></html>
