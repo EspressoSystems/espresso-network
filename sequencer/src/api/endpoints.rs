@@ -751,21 +751,57 @@ where
         }
         .boxed()
     })?
-    .get("reward_amounts", move |_, _| {
+    .get("reward_amounts", move |req, state| {
         async move {
-            Err::<u64, _>(Error::catch_all(
-                StatusCode::NOT_FOUND,
-                format!("catchup/reward_amounts is deprecated"),
-            ))
+            let height = req
+                .integer_param::<_, u64>("height")
+                .map_err(Error::from_request_error)?;
+            let offset = req
+                .integer_param::<_, u64>("offset")
+                .map_err(Error::from_request_error)?;
+            let limit = req
+                .integer_param::<_, u64>("limit")
+                .map_err(Error::from_request_error)?;
+
+            if limit > 10_000 {
+                return Err(Error::catch_all(
+                    StatusCode::BAD_REQUEST,
+                    format!("limit {limit} exceeds maximum allowed 10000"),
+                ));
+            }
+
+            state
+                .get_all_reward_accounts(height, offset, limit)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
         .boxed()
     })?
-    .at("reward_accounts_v2", move |_, _| {
+    .at("reward_accounts_v2", move |req, state| {
         async move {
-            Err::<u64, _>(Error::catch_all(
-                StatusCode::NOT_FOUND,
-                format!("catchup/reward_accounts_v2 is deprecated"),
-            ))
+            let (height, view) = parse_height_view(&req)?;
+            let accounts = req
+                .body_auto::<Vec<RewardAccountV2>, ApiVer>(ApiVer::instance())
+                .map_err(Error::from_request_error)?;
+
+            state
+                .read(|state| {
+                    async move {
+                        state
+                            .get_reward_accounts_v2(
+                                &state.node_state().await,
+                                height,
+                                view,
+                                &accounts,
+                            )
+                            .await
+                            .map_err(|err| {
+                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
+                            })
+                    }
+                    .boxed()
+                })
+                .await
         }
         .boxed()
     })?
