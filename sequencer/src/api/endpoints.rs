@@ -755,7 +755,7 @@ where
         async move {
             Err::<u64, _>(Error::catch_all(
                 StatusCode::NOT_FOUND,
-                "catchup/reward_amounts is deprecated".to_string(),
+                format!("catchup/reward_amounts is deprecated"),
             ))
         }
         .boxed()
@@ -764,7 +764,7 @@ where
         async move {
             Err::<u64, _>(Error::catch_all(
                 StatusCode::NOT_FOUND,
-                "catchup/reward_accounts_v2 is deprecated".to_string(),
+                format!("catchup/reward_accounts_v2 is deprecated"),
             ))
         }
         .boxed()
