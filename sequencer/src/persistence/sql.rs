@@ -1134,7 +1134,7 @@ impl SequencerPersistence for Persistence {
         let (is_completed, mut offset) = result.unwrap_or((false, 0));
 
         if is_completed {
-            tracing::info!("reward_merkle_tree_v2 bincode migration already done");
+            tracing::info!("reward_merkle_tree_v2 migration already done");
             return Ok(());
         }
 
