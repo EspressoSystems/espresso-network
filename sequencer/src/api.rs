@@ -1313,14 +1313,8 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             // in either case the actual work should still not occur every block, since the proofs
             // are not generated unless they were not already stored for the previous light client
             // finalized height.
-//            if (height + node_state.node_id).is_multiple_of(30)
-//                || cfg!(any(test, feature = "testing"))
-            {
-                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
-                else {
-                    return Ok(());
-                };
 
+            if cfg!(any(test, feature = "testing")) {
                 let finalized_hotshot_height = height;
 
                 // check to see whether we have proofs at that height already stored
@@ -1356,7 +1350,48 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                         return Ok(());
                     };
 
-                    // let _ = self.garbage_collect(finalized_hotshot_height).await;
+                    // tree is dropped here
+                }
+            } else if (height + node_state.node_id).is_multiple_of(30) {
+                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
+                else {
+                    return Ok(());
+                };
+
+                // check to see whether we have proofs at that height already stored
+                if !self.proof_exists(finalized_hotshot_height).await {
+                    let Ok(permitted_tree) = self
+                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
+                        .await
+                    else {
+                        return Ok(());
+                    };
+
+                    let tree = permitted_tree.tree;
+
+                    // we try to be careful to avoid allocating for all the proofs immediately,
+                    // but note that there are no guarantees here (if e.g. the database is slow)
+                    let iter =
+                        tree.iter()
+                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
+                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
+
+                                let proof = RewardAccountQueryDataV2 {
+                                    balance: (*balance).into(),
+                                    proof: proof.0,
+                                };
+
+                                let serialized_account = bincode::serialize(&account).ok()?;
+                                let serialized_proof = bincode::serialize(&proof).ok()?;
+
+                                Some((serialized_account, serialized_proof))
+                            });
+
+                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
+                        return Ok(());
+                    };
+
+                    let _ = self.garbage_collect(finalized_hotshot_height).await;
 
                     // tree is dropped here
                 }
