@@ -4,10 +4,11 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent, Validator},
-    Leaf2, NetworkConfig, PubKey, StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
+    StakeTableHash,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -242,6 +243,10 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
@@ -302,10 +307,7 @@ impl SequencerPersistence for NoStorage {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         Ok(None)
     }
 
@@ -316,7 +318,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorMap,
+        _stake: AuthenticatedValidatorMap,
         _block_reward: Option<RewardAmount>,
         _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -344,7 +346,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_all_validators(
         &self,
         _epoch: EpochNumber,
-        _all_validators: ValidatorMap,
+        _all_validators: RegisteredValidatorMap,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -354,7 +356,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _offset: u64,
         _limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         Ok(Default::default())
     }
 }

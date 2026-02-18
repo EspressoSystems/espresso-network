@@ -1770,7 +1770,7 @@ pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> 
 #[cfg(test)]
 mod test {
     use alloy::providers::ext::AnvilApi as _;
-    use espresso_types::v0_3::Validator;
+    use espresso_types::v0_3::RegisteredValidator;
     use hotshot_types::signature_key::BLSPubKey;
     use pretty_assertions::assert_matches;
     use rand::rngs::StdRng;
@@ -1780,7 +1780,10 @@ mod test {
 
     async fn shared_setup(
         config: DelegationConfig,
-    ) -> Result<(Validator<BLSPubKey>, Validator<BLSPubKey>)> {
+    ) -> Result<(
+        RegisteredValidator<BLSPubKey>,
+        RegisteredValidator<BLSPubKey>,
+    )> {
         let system = TestSystem::deploy().await?;
 
         let mut rng = StdRng::from_seed([42u8; 32]);
