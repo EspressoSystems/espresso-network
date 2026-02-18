@@ -175,7 +175,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         let request_response_config = RequestResponseConfig {
             incoming_request_ttl: Duration::from_secs(40),
             incoming_request_timeout: Duration::from_secs(5),
-            incoming_response_timeout: Duration::from_secs(10),
+            incoming_response_timeout: Duration::from_secs(5),
             request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
             max_incoming_requests: 10,
