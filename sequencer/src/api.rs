@@ -22,7 +22,7 @@ use espresso_types::{
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
+        RewardAccountV2, RewardMerkleTreeV2,
     },
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
     NodeState, PubKey, Transaction,
