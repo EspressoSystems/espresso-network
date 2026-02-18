@@ -59,7 +59,7 @@ pub async fn init_with_storage<S>(
 where
     S: DataSourceOptions,
 {
-    let (private_staking_key, private_state_key) = opt.private_keys()?;
+    let (private_staking_key, private_state_key, x25519_sk) = opt.private_keys()?;
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: opt.l1_options,
@@ -67,6 +67,8 @@ where
 
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
+        p2p_bind_address: opt.p2p_bind_address,
+        x25519_secret_key: x25519_sk,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,
         libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
@@ -150,7 +152,7 @@ where
                         init_node(
                             genesis,
                             network_params,
-                            &*metrics,
+                            metrics,
                             persistence,
                             l1_params,
                             storage,
@@ -169,7 +171,7 @@ where
             init_node(
                 genesis,
                 network_params,
-                &NoMetrics,
+                Box::new(NoMetrics),
                 persistence,
                 l1_params,
                 None,

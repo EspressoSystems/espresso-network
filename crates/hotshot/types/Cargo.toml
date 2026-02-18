@@ -29,12 +29,14 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
 blake3 = { workspace = true }
+bs58 = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
 digest = { workspace = true }
 displaydoc = { workspace = true }
 dyn-clone = { workspace = true }
+ed25519-compact = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 generic-array = { workspace = true }

@@ -23,7 +23,9 @@ use vbs::version::Version;
 use vec1::Vec1;
 use versions::Upgrade;
 
-use crate::utils::bincode_opts;
+use crate::{addr::NetAddr, utils::bincode_opts};
+
+pub mod addr;
 pub mod bundle;
 pub mod consensus;
 pub mod constants;
@@ -55,6 +57,7 @@ pub mod upgrade_config;
 pub mod utils;
 pub mod vid;
 pub mod vote;
+pub mod x25519;
 
 /// Pinned future that is Send and Sync
 pub type BoxSyncFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
@@ -89,6 +92,8 @@ pub struct ValidatorConfig<TYPES: NodeType> {
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
     /// Whether or not this validator is DA
     pub is_da: bool,
+    pub x25519_keypair: Option<x25519::Keypair>,
+    pub p2p_addr: Option<NetAddr>
 }
 
 impl<TYPES: NodeType> ValidatorConfig<TYPES> {
@@ -111,6 +116,8 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
             state_public_key,
             state_private_key,
             is_da,
+            p2p_addr: None,
+            x25519_keypair: None
         }
     }
 

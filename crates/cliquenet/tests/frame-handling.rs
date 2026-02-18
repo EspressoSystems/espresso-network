@@ -1,7 +1,10 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::Bytes;
-use cliquenet::{Address, Keypair, NetConf, Retry};
+use cliquenet::{NetConf, Retry};
+use hotshot_types::addr::NetAddr;
+use hotshot_types::x25519::Keypair;
+
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;
 use rand::Rng;
@@ -18,7 +21,7 @@ async fn multiple_frames() {
             (
                 i,
                 Keypair::generate().unwrap(),
-                Address::from((Ipv4Addr::LOCALHOST, 50000 + i)),
+                NetAddr::from((Ipv4Addr::LOCALHOST, 50000 + i)),
             )
         })
         .collect::<Vec<_>>();

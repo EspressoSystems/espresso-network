@@ -34,27 +34,19 @@ pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey, derive_libp2p_multiaddr, derive_libp2p_peer_id
     },
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
-    data::ViewNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    light_client::{StateKeyPair, StateSignKey},
-    signature_key::{BLSPrivKey, BLSPubKey},
-    traits::{
+    ValidatorConfig, addr::NetAddr, data::ViewNumber, epoch_membership::EpochMembershipCoordinator, light_client::{StateKeyPair, StateSignKey}, signature_key::{BLSPrivKey, BLSPubKey}, traits::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
         storage::Storage,
-    },
-    utils::BuilderCommitment,
-    ValidatorConfig,
+    }, utils::BuilderCommitment, x25519
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -121,6 +113,9 @@ pub struct NetworkParams {
     pub catchup_base_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
+
+    pub p2p_bind_address: NetAddr,
+    pub x25519_secret_key: x25519::SecretKey,
 
     /// The address to send to other Libp2p nodes to contact us
     pub libp2p_advertise_address: String,
@@ -199,7 +194,7 @@ pub struct L1Params {
 pub async fn init_node<P>(
     genesis: Genesis,
     network_params: NetworkParams,
-    metrics: &dyn Metrics,
+    metrics: Box<dyn Metrics>,
     mut persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
@@ -359,6 +354,8 @@ where
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
+        x25519_keypair: Some(network_params.x25519_secret_key.clone().into()),
+        p2p_addr: Some(network_params.p2p_bind_address.clone())
     };
 
     // Derive our Libp2p public key from our private key
@@ -502,7 +499,7 @@ where
             public_key: WrappedSignatureKey(validator_config.public_key),
             private_key: validator_config.private_key.clone(),
         },
-        CdnMetricsValue::new(metrics),
+        CdnMetricsValue::new(&*metrics),
     )
     .with_context(|| format!("Failed to create CDN network {node_index}"))?;
 
@@ -538,7 +535,7 @@ where
 
     let l1_client = l1_params
         .options
-        .with_metrics(metrics)
+        .with_metrics(&*metrics)
         .connect(l1_params.urls)
         .with_context(|| "failed to create L1 client")?;
 
@@ -585,7 +582,7 @@ where
         network_params.state_peers,
         network_params.catchup_backoff,
         network_params.catchup_base_timeout,
-        metrics,
+        &*metrics,
     );
     state_catchup_providers.add_provider(Arc::new(state_peers));
 
@@ -604,7 +601,7 @@ where
         },
     };
 
-    persistence.enable_metrics(metrics);
+    persistence.enable_metrics(&*metrics);
 
     let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),
@@ -631,6 +628,17 @@ where
     info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
     info!("Stake reloaded");
+
+    let cliquenet = {
+        let peers = membership
+            .active_validators(&network_config.config.epoch_height.into())?
+            .into_values()
+            .filter_map(|v| Some((v.stake_table_key, v.x25519_key?, v.p2p_addr?)));
+        let k = network_params.x25519_secret_key.clone();
+        let a = network_params.p2p_bind_address.clone();
+        let m = metrics.clone();
+        Cliquenet::<SeqTypes>::create("sequencer", pub_key, k.into(), a, peers, m).await?
+    };
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
@@ -676,7 +684,7 @@ where
             // We need the private key so we can derive our Libp2p keypair
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
             &validator_config.private_key,
-            hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
+            hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
         )
         .await
         .with_context(|| {
@@ -716,7 +724,7 @@ where
         persistence,
         network,
         Some(network_params.state_relay_server_url),
-        metrics,
+        &*metrics,
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
@@ -1334,6 +1342,8 @@ pub mod testing {
                 state_public_key: self.state_key_pairs[i].ver_key(),
                 state_private_key: self.state_key_pairs[i].sign_key(),
                 is_da,
+                x25519_keypair: None,
+                p2p_addr: None
             };
 
             let topics = if is_da {

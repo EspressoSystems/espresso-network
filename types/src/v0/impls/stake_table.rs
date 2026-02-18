@@ -342,6 +342,8 @@ impl StakeTableState {
                     commission,
                     delegators: HashMap::new(),
                     authenticated: true,
+                    x25519_key: None,
+                    p2p_addr: None
                 });
             },
 
@@ -401,6 +403,8 @@ impl StakeTableState {
                     commission: *commission,
                     delegators: HashMap::new(),
                     authenticated,
+                    x25519_key: None,
+                    p2p_addr: None
                 });
             },
 
@@ -2738,6 +2742,8 @@ pub mod testing {
                 commission: val.commission,
                 delegators,
                 authenticated: true,
+                x25519_key: None,
+                p2p_addr: None
             }
         }
     }

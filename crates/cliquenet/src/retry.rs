@@ -10,6 +10,7 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
+use hotshot_types::addr::NetAddr;
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
 use scopeguard::{ScopeGuard, guard};
@@ -22,7 +23,7 @@ use tokio::{
 use tracing::warn;
 
 use crate::{
-    Address, Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command,
+    Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command,
 };
 
 type Result<T> = std::result::Result<T, NetworkError>;
@@ -170,7 +171,7 @@ where
         self.send(b.into(), Target::Single(to), data).await
     }
 
-    pub async fn add(&self, r: Role, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
+    pub async fn add(&self, r: Role, peers: Vec<(K, PublicKey, NetAddr)>) -> Result<()> {
         self.inner.net.add(r, peers).await
     }
 

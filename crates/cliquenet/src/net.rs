@@ -12,6 +12,7 @@ use std::{
 
 use bimap::BiHashMap;
 use bytes::{Bytes, BytesMut};
+use hotshot_types::addr::NetAddr;
 use parking_lot::Mutex;
 use snow::{Builder, HandshakeState, TransportState};
 use tokio::{
@@ -30,7 +31,7 @@ use tracing::{debug, error, info, trace, warn};
 #[cfg(feature = "metrics")]
 use crate::metrics::NetworkMetrics;
 use crate::{
-    Address, Id, Keypair, LAST_DELAY, NUM_DELAYS, NetConf, NetworkError, PublicKey, Role, chan,
+    Id, Keypair, LAST_DELAY, NUM_DELAYS, NetConf, NetworkError, PublicKey, Role, chan,
     error::Empty,
     frame::{Header, Type},
     time::{Countdown, Timestamp},
@@ -106,7 +107,7 @@ impl<K> Drop for Network<K> {
 #[derive(Debug)]
 pub(crate) enum Command<K> {
     /// Add the given peers.
-    Add(Role, Vec<(K, PublicKey, Address)>),
+    Add(Role, Vec<(K, PublicKey, NetAddr)>),
     /// Remove the given peers.
     Remove(Vec<K>),
     /// Assign a `Role` to the given peers.
@@ -173,7 +174,7 @@ struct Server<K> {
 
 #[derive(Debug)]
 struct Peer {
-    addr: Address,
+    addr: NetAddr,
     role: Role,
     budget: Budget,
 }
@@ -381,7 +382,7 @@ where
     }
 
     /// Add the given peers to the network.
-    pub async fn add(&self, r: Role, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
+    pub async fn add(&self, r: Role, peers: Vec<(K, PublicKey, NetAddr)>) -> Result<()> {
         self.parties
             .lock()
             .extend(peers.iter().map(|(p, ..)| (p.clone(), r)));
@@ -962,7 +963,7 @@ where
         self.peers
             .get(k)
             .map(|p| {
-                let Address::Inet(ip, _) = p.addr else {
+                let NetAddr::Inet(ip, _) = p.addr else {
                     return true;
                 };
                 Some(ip) == s.peer_addr().ok().map(|a| a.ip())
@@ -979,7 +980,7 @@ async fn connect<K>(
     name: &'static str,
     this: (K, Keypair),
     to: (K, PublicKey),
-    addr: Address,
+    addr: NetAddr,
     delays: [u8; NUM_DELAYS],
     #[cfg(feature = "metrics")] metrics: Arc<NetworkMetrics<K>>,
 ) -> (TcpStream, TransportState)

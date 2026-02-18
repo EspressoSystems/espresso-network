@@ -4,12 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cliquenet::{Address, Keypair, NetConf, PublicKey, Retry, SecretKey};
+use cliquenet::{NetConf, Retry};
+
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
+    addr::NetAddr,
     boxed_sync,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -19,6 +21,7 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
+    x25519::{Keypair, PublicKey, SecretKey},
     BoxSyncFuture,
 };
 
@@ -28,19 +31,18 @@ pub struct Cliquenet<T: NodeType> {
 }
 
 impl<T: NodeType> Cliquenet<T> {
-    pub async fn create<A, B, P, M>(
+    pub async fn create<A, B, P>(
         name: &'static str,
         key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
-        metrics: M,
+        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
-        A: Into<Address>,
-        B: Into<Address>,
+        A: Into<NetAddr>,
+        B: Into<NetAddr>,
         P: IntoIterator<Item = (T::SignatureKey, PublicKey, B)>,
-        M: Metrics + 'static,
     {
         let cfg = NetConf::builder()
             .name(name)
@@ -48,7 +50,7 @@ impl<T: NodeType> Cliquenet<T> {
             .keypair(keypair)
             .bind(addr.into())
             .parties(parties.into_iter().map(|(k, x, a)| (k, x, a.into())))
-            .metrics(Box::new(metrics))
+            .metrics(metrics)
             .build();
         let net = Retry::create(cfg)
             .await
@@ -148,8 +150,6 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
     ) -> AsyncGenerator<Arc<Self>> {
         use std::net::Ipv4Addr;
 
-        use cliquenet::Address;
-
         let mut parties: Vec<(Keypair, T::SignatureKey, Address)> = Vec::new();
         for i in 0..expected_node_count {
             let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
@@ -157,7 +157,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
             let kpair = derive_keypair::<<T as NodeType>::SignatureKey>(&secret);
             let port =
                 test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-            let addr = Address::Inet(Ipv4Addr::LOCALHOST.into(), port);
+            let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
 
             parties.push((kpair, public, addr));
         }
@@ -173,7 +173,8 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
                 let it = parties
                     .iter()
                     .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
-                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, NoMetrics)
+                let met = Box::new(NoMetrics);
+                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, met)
                     .await
                     .unwrap();
                 Arc::new(net)
