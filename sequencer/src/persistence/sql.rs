@@ -1186,7 +1186,7 @@ impl SequencerPersistence for Persistence {
                        FROM reward_merkle_tree_v2
                       WHERE idx IS NOT NULL AND entry IS NOT NULL
                  ) sub
-                 WHERE rn = 1
+                 WHERE rn = 1 ORDER BY idx
                  LIMIT $1 OFFSET $2",
             )
             .bind(batch_size)
@@ -1218,13 +1218,13 @@ impl SequencerPersistence for Persistence {
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
                 ["table_name"],
-                [("reward_merkle_tree_v2_bincode".to_string(), false, offset)],
+                [("reward_merkle_tree_v2_data".to_string(), false, offset)],
             )
             .await?;
             tx.commit().await?;
 
             tracing::info!(
-                "reward_merkle_tree_v2 bincode migration progress: rows={} offset={}",
+                "reward_merkle_tree_v2 bincode progress: rows={} offset={}",
                 rows_count,
                 offset
             );
@@ -1293,7 +1293,7 @@ impl SequencerPersistence for Persistence {
             "epoch_migration",
             ["table_name", "completed", "migrated_rows"],
             ["table_name"],
-            [("reward_merkle_tree_v2_bincode".to_string(), true, offset)],
+            [("reward_merkle_tree_v2_data".to_string(), true, offset)],
         )
         .await?;
         tx.commit().await?;
