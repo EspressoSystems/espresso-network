@@ -13,7 +13,7 @@ pub mod retry;
 use std::{fmt, sync::Arc};
 
 use bon::Builder;
-pub use error::NetworkError;
+pub use error::{NetworkDown, NetworkError};
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::Metrics;
 use hotshot_types::{

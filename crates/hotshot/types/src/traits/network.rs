@@ -19,6 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use dyn_clone::DynClone;
+use either::Either;
 use futures::{future::join_all, Future};
 use rand::{
     distributions::{Bernoulli, Uniform},
@@ -184,11 +185,11 @@ pub enum BroadcastDelay {
     View(u64),
 }
 
-#[async_trait]
 /// represents a networking implmentration
 /// exposes low level API for interacting with a network
 /// intended to be implemented for libp2p, the centralized server,
 /// and memory network
+#[async_trait]
 pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'static {
     /// Pauses the underlying network
     fn pause(&self);
@@ -610,6 +611,139 @@ impl Display for Topic {
         match self {
             Topic::Global => write!(f, "global"),
             Topic::Da => write!(f, "DA"),
+        }
+    }
+}
+
+#[async_trait]
+impl<A, B, K> ConnectedNetwork<K> for Either<A, B>
+where
+    A: ConnectedNetwork<K>,
+    B: ConnectedNetwork<K>,
+    K: SignatureKey + 'static,
+{
+    fn pause(&self) {
+        match self {
+            Self::Left(a) => a.pause(),
+            Self::Right(b) => b.pause(),
+        }
+    }
+
+    fn resume(&self) {
+        match self {
+            Self::Left(a) => a.resume(),
+            Self::Right(b) => b.resume(),
+        }
+    }
+
+    async fn wait_for_ready(&self) {
+        match self {
+            Self::Left(a) => a.wait_for_ready().await,
+            Self::Right(b) => b.wait_for_ready().await,
+        }
+    }
+
+    fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
+    where
+        'a: 'b,
+        Self: 'b,
+    {
+        match self {
+            Self::Left(a) => a.shut_down(),
+            Self::Right(b) => b.shut_down(),
+        }
+    }
+
+    async fn broadcast_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        topic: Topic,
+        delay: BroadcastDelay,
+    ) -> Result<(), NetworkError> {
+        match self {
+            Self::Left(a) => a.broadcast_message(view, message, topic, delay).await,
+            Self::Right(b) => b.broadcast_message(view, message, topic, delay).await,
+        }
+    }
+
+    async fn da_broadcast_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        recipients: Vec<K>,
+        delay: BroadcastDelay,
+    ) -> Result<(), NetworkError> {
+        match self {
+            Self::Left(a) => {
+                a.da_broadcast_message(view, message, recipients, delay)
+                    .await
+            },
+            Self::Right(b) => {
+                b.da_broadcast_message(view, message, recipients, delay)
+                    .await
+            },
+        }
+    }
+
+    async fn vid_broadcast_message(
+        &self,
+        messages: HashMap<K, (ViewNumber, Vec<u8>)>,
+    ) -> Result<(), NetworkError> {
+        match self {
+            Self::Left(a) => a.vid_broadcast_message(messages).await,
+            Self::Right(b) => b.vid_broadcast_message(messages).await,
+        }
+    }
+
+    async fn direct_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError> {
+        match self {
+            Self::Left(a) => a.direct_message(view, message, recipient).await,
+            Self::Right(b) => b.direct_message(view, message, recipient).await,
+        }
+    }
+
+    async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
+        match self {
+            Self::Left(a) => a.recv_message().await,
+            Self::Right(b) => b.recv_message().await,
+        }
+    }
+
+    fn queue_node_lookup(
+        &self,
+        v: ViewNumber,
+        k: K,
+    ) -> Result<(), TrySendError<Option<(ViewNumber, K)>>> {
+        match self {
+            Self::Left(a) => a.queue_node_lookup(v, k),
+            Self::Right(b) => b.queue_node_lookup(v, k),
+        }
+    }
+
+    async fn update_view<TYPES>(
+        &self,
+        v: ViewNumber,
+        e: Option<EpochNumber>,
+        m: EpochMembershipCoordinator<TYPES>,
+    ) where
+        TYPES: NodeType<SignatureKey = K>,
+    {
+        match self {
+            Self::Left(a) => a.update_view(v, e, m).await,
+            Self::Right(b) => b.update_view(v, e, m).await,
+        }
+    }
+
+    fn is_primary_down(&self) -> bool {
+        match self {
+            Self::Left(a) => a.is_primary_down(),
+            Self::Right(b) => b.is_primary_down(),
         }
     }
 }

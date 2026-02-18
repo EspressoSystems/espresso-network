@@ -3,6 +3,7 @@ use std::{
     convert::Infallible,
     fmt::{self, Display},
     hash::Hash,
+    result::Result as StdResult,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -22,7 +23,9 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::{Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command};
+use crate::{
+    Id, NUM_DELAYS, NetConf, Network, NetworkDown, NetworkError, PublicKey, Role, net::Command,
+};
 
 type Result<T> = std::result::Result<T, NetworkError>;
 
@@ -169,15 +172,19 @@ where
         self.send(b.into(), Target::Single(to), data).await
     }
 
-    pub async fn add(&self, r: Role, peers: Vec<(K, PublicKey, NetAddr)>) -> Result<()> {
+    pub async fn add(
+        &self,
+        r: Role,
+        peers: Vec<(K, PublicKey, NetAddr)>,
+    ) -> StdResult<(), NetworkDown> {
         self.inner.net.add(r, peers).await
     }
 
-    pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
+    pub async fn remove(&self, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         self.inner.net.remove(peers).await
     }
 
-    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
+    pub async fn assign(&self, r: Role, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         self.inner.net.assign(r, peers).await
     }
 

@@ -34,7 +34,6 @@ pub(crate) fn key_pairs_for_testing<R: CryptoRng + RngCore>(
 }
 
 /// Helper function for test
-#[allow(clippy::cast_possible_truncation)]
 pub(crate) fn stake_table_for_testing(
     bls_keys: &[BLSVerKey],
     schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
@@ -43,14 +42,14 @@ pub(crate) fn stake_table_for_testing(
         .iter()
         .enumerate()
         .zip(schnorr_keys)
-        .map(|((i, bls_key), (_, schnorr_key))| {
-            PeerConfig::builder()
-                .stake_table_entry(StakeTableEntry {
-                    stake_key: *bls_key,
-                    stake_amount: U256::from((i + 1) as u32),
-                })
-                .state_ver_key(schnorr_key.clone())
-                .build()
+        .map(|((i, bls_key), (_, schnorr_key))| PeerConfig {
+            stake_table_entry: StakeTableEntry {
+                stake_key: *bls_key,
+                stake_amount: U256::from((i + 1) as u32),
+            },
+            state_ver_key: schnorr_key.clone(),
+            x25519_key: None,
+            p2p_addr: None,
         })
         .collect::<Vec<_>>()
         .into()

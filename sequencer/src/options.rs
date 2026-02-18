@@ -69,10 +69,10 @@ pub struct Options {
     /// The address to bind to for cliquenet (in `host:port` | `ip:port` form)
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_P2P_BIND_ADDRESS",
+        env = "ESPRESSO_SEQUENCER_P2P_ADDRESS",
         default_value = "127.0.0.1:1776"
     )]
-    pub p2p_bind_address: NetAddr,
+    pub p2p_address: Option<NetAddr>,
 
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
@@ -388,7 +388,9 @@ impl Options {
         ModuleArgs(self.modules.clone()).parse()
     }
 
-    pub fn private_keys(&self) -> anyhow::Result<(BLSPrivKey, StateSignKey, x25519::SecretKey)> {
+    pub fn private_keys(
+        &self,
+    ) -> anyhow::Result<(BLSPrivKey, StateSignKey, Option<x25519::SecretKey>)> {
         if let Some(path) = &self.key_file {
             let vars = dotenvy::from_path_iter(path)?.collect::<Result<HashMap<_, _>, _>>()?;
             let staking = TaggedBase64::parse(
@@ -403,21 +405,25 @@ impl Options {
             )?
             .try_into()?;
 
-            let x25519 = TaggedBase64::parse(
-                vars.get("ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY")
-                    .context("key file missing ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY")?,
-            )?
-            .try_into()?;
+            let x25519 = if let Some(key) = vars.get("ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY") {
+                Some(TaggedBase64::parse(key)?.try_into()?)
+            } else {
+                None
+            };
 
             Ok((staking, state, x25519))
-        } else if let (Some(staking), Some(state), Some(x25519)) = (
+        } else if let (Some(staking), Some(state), x25519) = (
             self.private_staking_key.clone(),
             self.private_state_key.clone(),
             self.private_x25519_key.clone(),
         ) {
             let staking = bls_over_bn254::SignKey::try_from(staking)?;
             let state = schnorr::SignKey::try_from(state)?;
-            let x25519 = x25519::SecretKey::try_from(x25519)?;
+            let x25519 = if let Some(x) = x25519 {
+                Some(x25519::SecretKey::try_from(x)?)
+            } else {
+                None
+            };
             Ok((staking, state, x25519))
         } else {
             bail!("neither key file nor full set of private keys was provided")

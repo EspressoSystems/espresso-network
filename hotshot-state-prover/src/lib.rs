@@ -30,7 +30,6 @@ pub mod v3;
 
 pub mod utils;
 
-#[cfg(test)]
 mod test_utils;
 
 /// Configuration/Parameters used for hotshot state prover

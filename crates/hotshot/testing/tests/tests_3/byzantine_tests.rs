@@ -210,7 +210,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: view_sync_split,
-    Impls: [PushCdnImpl],
+    Impls: [PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -251,7 +251,7 @@ cross_tests!(
 // Tests that dishonest nodes cannot form a precommit certificate for a new epoch without forming an eQC.
 cross_tests!(
     TestName: view_sync_next_epoch,
-    Impls: [PushCdnImpl],
+    Impls: [PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

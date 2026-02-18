@@ -11,7 +11,6 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 
 use alloy::primitives::U256;
 use bincode::Options;
-use bon::Builder;
 use displaydoc::Display;
 use stake_table::HSStakeTable;
 use tracing::error;
@@ -93,13 +92,14 @@ pub struct ValidatorConfig<TYPES: NodeType> {
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
     /// Whether or not this validator is DA
     pub is_da: bool,
+    /// X25519 keypair for network.
     pub x25519_keypair: Option<x25519::Keypair>,
+    /// Network address.
     pub p2p_addr: Option<NetAddr>,
 }
 
 impl<TYPES: NodeType> ValidatorConfig<TYPES> {
     /// generate validator config from input seed, index, stake value, and whether it's DA
-    #[must_use]
     pub fn generated_from_seed_indexed(
         seed: [u8; 32],
         index: u64,
@@ -131,18 +131,16 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
             p2p_addr: self.p2p_addr.clone(),
         }
     }
-}
 
-impl<TYPES: NodeType> Default for ValidatorConfig<TYPES> {
-    fn default() -> Self {
+    /// Create a default `ValidatorConfig` for testing.
+    pub fn test_default() -> Self {
         Self::generated_from_seed_indexed([0u8; 32], 0, U256::from(1), true)
     }
 }
 
 /// Structure of peers' config, including public key, stake value, and state key.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Display, PartialEq, Eq, Hash, Builder)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Display, PartialEq, Eq, Hash)]
 #[serde(bound(deserialize = ""))]
-#[non_exhaustive]
 pub struct PeerConfig<TYPES: NodeType> {
     /// The peer's public key and stake value. The key is the BLS Public Key used to
     /// verify Stake Holder in the application layer.
@@ -157,6 +155,12 @@ pub struct PeerConfig<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> PeerConfig<TYPES> {
+    /// Create a default `PeerConfig` for testing.
+    pub fn test_default() -> Self {
+        let default_validator_config = ValidatorConfig::<TYPES>::test_default();
+        default_validator_config.public_config()
+    }
+
     /// Serialize a peer's config to bytes
     pub fn to_bytes(config: &Self) -> Vec<u8> {
         let x = bincode_opts().serialize(config);
@@ -184,18 +188,13 @@ impl<TYPES: NodeType> PeerConfig<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> Default for PeerConfig<TYPES> {
-    fn default() -> Self {
-        let default_validator_config = ValidatorConfig::<TYPES>::default();
-        default_validator_config.public_config()
-    }
-}
-
 impl<TYPES: NodeType> Debug for PeerConfig<TYPES> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PeerConfig")
             .field("stake_table_entry", &self.stake_table_entry)
             .field("state_ver_key", &format_args!("{}", self.state_ver_key))
+            .field("x25519_key", &self.x25519_key)
+            .field("p2p_addr", &self.p2p_addr)
             .finish()
     }
 }

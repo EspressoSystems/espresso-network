@@ -104,11 +104,11 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
         let master_map = MasterMap::new();
         let stake = 1u64;
         let known_nodes_with_stake = (0..num_staked_nodes.into())
-            .map(|id| {
-                PeerConfig::builder()
-                    .stake_table_entry(pub_keys[id].stake_table_entry(U256::from(stake)))
-                    .state_ver_key(state_key_pairs[id].ver_key())
-                    .build()
+            .map(|id| PeerConfig {
+                stake_table_entry: pub_keys[id].stake_table_entry(U256::from(stake)),
+                state_ver_key: state_key_pairs[id].ver_key(),
+                x25519_key: None,
+                p2p_addr: None,
             })
             .collect::<Vec<_>>();
 

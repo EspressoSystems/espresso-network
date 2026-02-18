@@ -24,6 +24,7 @@ use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
+use either::Either;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
@@ -122,10 +123,10 @@ pub struct NetworkParams {
     pub catchup_base_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
-
-    pub p2p_bind_address: NetAddr,
-    pub x25519_secret_key: x25519::SecretKey,
-
+    /// Network address.
+    pub p2p_address: Option<NetAddr>,
+    /// X25519 secret key.
+    pub x25519_secret_key: Option<x25519::SecretKey>,
     /// The address to send to other Libp2p nodes to contact us
     pub libp2p_advertise_address: String,
     /// The address to bind to for Libp2p
@@ -363,8 +364,11 @@ where
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
-        x25519_keypair: Some(network_params.x25519_secret_key.clone().into()),
-        p2p_addr: Some(network_params.p2p_bind_address.clone()),
+        x25519_keypair: network_params
+            .x25519_secret_key
+            .as_ref()
+            .map(x25519::Keypair::from),
+        p2p_addr: network_params.p2p_address.clone(),
     };
 
     // Derive our Libp2p public key from our private key
@@ -708,26 +712,47 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    let network = {
-        let peers = coordinator
+    let network = if let Some((k, a)) = network_params
+        .x25519_secret_key
+        .zip(network_params.p2p_address.as_ref())
+    {
+        let (peers, non_peers): (Vec<_>, Vec<_>) = coordinator
             .stake_table_for_epoch(None)
             .await?
             .stake_table()
             .await
             .0
             .into_iter()
-            .filter_map(|cfg| {
-                Some((
-                    cfg.stake_table_entry.stake_key,
-                    cfg.x25519_key?,
-                    cfg.p2p_addr?,
-                ))
-            });
-        let k = network_params.x25519_secret_key.clone();
-        let a = network_params.p2p_bind_address.clone();
+            .partition(|cfg| cfg.x25519_key.is_some() && cfg.p2p_addr.is_some());
+
+        let peers = peers.into_iter().map(|cfg| {
+            (
+                cfg.stake_table_entry.stake_key,
+                cfg.x25519_key
+                    .expect("LHS of partitioned peers has X25519 key"),
+                cfg.p2p_addr
+                    .expect("LHS of partitioned peers has P2P address"),
+            )
+        });
+
+        let non_peers = non_peers
+            .into_iter()
+            .map(|cfg| cfg.stake_table_entry.stake_key);
+
         let m = metrics.clone();
-        let c = Cliquenet::<PubKey>::create("sequencer", pub_key, k.into(), a, peers, m).await?;
-        CompatNetwork::new(c, network)
+        let c = Cliquenet::<PubKey>::create(
+            "sequencer",
+            pub_key,
+            k.into(),
+            a.clone(),
+            peers,
+            non_peers,
+            m,
+        )
+        .await?;
+        Either::Right(CompatNetwork::new(c, network).await)
+    } else {
+        Either::Left(network)
     };
 
     let mut ctx = SequencerContext::init(
@@ -1158,11 +1183,11 @@ pub mod testing {
             let known_nodes_with_stake = pub_keys
                 .iter()
                 .zip(&state_key_pairs)
-                .map(|(pub_key, state_key_pair)| {
-                    PeerConfig::<SeqTypes>::builder()
-                        .stake_table_entry(pub_key.stake_table_entry(U256::from(1)))
-                        .state_ver_key(state_key_pair.ver_key())
-                        .build()
+                .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
+                    stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
+                    state_ver_key: state_key_pair.ver_key(),
+                    x25519_key: None,
+                    p2p_addr: None,
                 })
                 .collect::<Vec<_>>();
 

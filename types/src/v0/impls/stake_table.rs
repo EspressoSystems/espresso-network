@@ -1800,15 +1800,15 @@ impl EpochCommittees {
                 address_mapping.insert(v.stake_table_key, v.account);
                 (
                     v.stake_table_key,
-                    PeerConfig::builder()
-                        .stake_table_entry(BLSPubKey::stake_table_entry(
+                    PeerConfig {
+                        stake_table_entry: BLSPubKey::stake_table_entry(
                             &v.stake_table_key,
                             v.stake,
-                        ))
-                        .state_ver_key(v.state_ver_key.clone())
-                        .maybe_x25519_key(v.x25519_key)
-                        .maybe_p2p_addr(v.p2p_addr.clone())
-                        .build(),
+                        ),
+                        state_ver_key: v.state_ver_key.clone(),
+                        x25519_key: v.x25519_key,
+                        p2p_addr: v.p2p_addr.clone(),
+                    },
                 )
             })
             .collect();
@@ -2592,7 +2592,7 @@ impl super::v0_3::StakeTable {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
@@ -2604,7 +2604,7 @@ impl DAMembers {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }

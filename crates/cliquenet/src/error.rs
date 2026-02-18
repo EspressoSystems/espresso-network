@@ -52,3 +52,19 @@ pub enum NetworkError {
     #[error("timeout")]
     Timeout,
 }
+
+#[derive(Debug, Error)]
+#[error("network down")]
+pub struct NetworkDown(());
+
+impl NetworkDown {
+    pub(crate) const fn new() -> Self {
+        Self(())
+    }
+}
+
+impl From<NetworkDown> for NetworkError {
+    fn from(_: NetworkDown) -> Self {
+        Self::ChannelClosed
+    }
+}

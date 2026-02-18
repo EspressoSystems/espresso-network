@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, ops::Bound};
 
 use hotshot_types::{
+    addr::NetAddr,
     drb::DrbResult,
     traits::{
         node_implementation::NodeType,
@@ -9,7 +10,7 @@ use hotshot_types::{
             StateSignatureKey,
         },
     },
-    PeerConfig,
+    x25519, PeerConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -20,6 +21,8 @@ pub struct TestStakeTableEntry<
     pub signature_key: PubKey,
     pub stake_table_entry: <PubKey as SignatureKey>::StakeTableEntry,
     pub state_ver_key: StatePubKey,
+    pub x25519_key: Option<x25519::PublicKey>,
+    pub p2p_addr: Option<NetAddr>,
 }
 
 impl<TYPES: NodeType> From<PeerConfig<TYPES>>
@@ -30,6 +33,8 @@ impl<TYPES: NodeType> From<PeerConfig<TYPES>>
             signature_key: SignatureKey::public_key(&peer_config.stake_table_entry),
             stake_table_entry: peer_config.stake_table_entry,
             state_ver_key: peer_config.state_ver_key,
+            x25519_key: peer_config.x25519_key,
+            p2p_addr: peer_config.p2p_addr,
         }
     }
 }
@@ -40,10 +45,12 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
     fn from(
         test_stake_table_entry: TestStakeTableEntry<TYPES::SignatureKey, TYPES::StateSignatureKey>,
     ) -> Self {
-        PeerConfig::builder()
-            .stake_table_entry(test_stake_table_entry.stake_table_entry)
-            .state_ver_key(test_stake_table_entry.state_ver_key)
-            .build()
+        PeerConfig {
+            stake_table_entry: test_stake_table_entry.stake_table_entry,
+            state_ver_key: test_stake_table_entry.state_ver_key,
+            x25519_key: test_stake_table_entry.x25519_key,
+            p2p_addr: test_stake_table_entry.p2p_addr,
+        }
     }
 }
 

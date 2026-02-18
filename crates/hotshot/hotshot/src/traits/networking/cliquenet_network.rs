@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use cliquenet::{NetConf, Retry, Role};
+use cliquenet::{NetConf, NetworkDown, Retry, Role};
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
@@ -20,54 +20,67 @@ use hotshot_types::{
         metrics::Metrics,
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::{ConsensusTime, NodeType},
-        signature_key::{PrivateSignatureKey, SignatureKey, StakeTableEntryType},
+        signature_key::{SignatureKey, StakeTableEntryType},
     },
-    x25519::{Keypair, PublicKey, SecretKey},
+    x25519::{Keypair, PublicKey},
     BoxSyncFuture,
 };
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct Cliquenet<K> {
     net: Retry<K>,
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<Mutex<Inner<K>>>,
 }
 
 #[derive(Clone)]
-struct Inner {
+struct Inner<K> {
     epoch: EpochNumber,
+    peers: HashMap<K, (PublicKey, NetAddr)>,
+    non_peers: HashSet<K>,
 }
 
 impl<K: SignatureKey + 'static> Cliquenet<K> {
-    pub async fn create<A, B, P>(
+    pub async fn create<A, B, P, Q>(
         name: &'static str,
         key: K,
         keypair: Keypair,
         addr: A,
         parties: P,
+        others: Q,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         A: Into<NetAddr>,
         B: Into<NetAddr>,
         P: IntoIterator<Item = (K, PublicKey, B)>,
+        Q: IntoIterator<Item = K>,
     {
+        let parties: HashMap<K, (PublicKey, NetAddr)> = parties
+            .into_iter()
+            .map(|(k, x, a)| (k, (x, a.into())))
+            .collect();
+
         let cfg = NetConf::builder()
             .name(name)
             .label(key)
             .keypair(keypair)
             .bind(addr.into())
-            .parties(parties.into_iter().map(|(k, x, a)| (k, x, a.into())))
+            .parties(parties.iter().map(|(k, (x, a))| (k.clone(), *x, a.clone())))
             .metrics(metrics)
             .build();
+
         let net = Retry::create(cfg)
             .await
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
+
         Ok(Self {
             net,
             inner: Arc::new(Mutex::new(Inner {
                 epoch: EpochNumber::genesis(),
+                peers: parties,
+                non_peers: HashSet::from_iter(others),
             })),
         })
     }
@@ -77,13 +90,18 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         self.net.parties(None)
     }
 
+    /// Get keys of peers not in this network.
+    pub async fn non_peers(&self) -> HashSet<K> {
+        self.inner.lock().await.non_peers.clone()
+    }
+
     /// Handle an epoch change.
     ///
-    /// We are at epoch e and if this method is applied to an epoch e' (> e),
+    /// We are at epoch e0 and if this method is applied to an epoch e1 (> e0),
     /// we perform the following steps:
     ///
-    /// - Add new peers from epoch e' + 1.
-    /// - Remove peers which are in e but not e'.
+    /// - Add new peers from epoch e2 (= e1 + 1).
+    /// - Remove peers which are in e0 but not e1.
     async fn on_epoch_change<U>(&self, epoch: EpochNumber, coord: &EpochMembershipCoordinator<U>)
     where
         U: NodeType<SignatureKey = K>,
@@ -94,38 +112,16 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             return;
         }
 
-        let current_peers: HashSet<K> = HashSet::from_iter(self.peers());
+        let mut non_peers = HashSet::new();
+        let mut to_add = Vec::new();
+        let mut to_del = Vec::new();
 
-        // Remove current peers which are not in this new epoch:
+        let epoch_1 = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch));
+        let epoch_2 = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch) + 1);
 
-        if let Ok(membership) = coord.stake_table_for_epoch(None).await {
-            let parties: HashSet<_> = HashSet::from_iter(
-                membership
-                    .stake_table()
-                    .await
-                    .0
-                    .into_iter()
-                    .map(|m| m.stake_table_entry.public_key()),
-            );
-            let mut to_del = Vec::new();
-            for p in &current_peers {
-                if !parties.contains(p) {
-                    debug!(%epoch, peer = %p, "removing network peer");
-                    to_del.push(p.clone())
-                }
-            }
-            if let Err(err) = self.net.remove(to_del).await {
-                error!(%epoch, %err, "could not remove peers from network");
-            }
-        } else {
-            warn!(%epoch, "no stake table available");
-        }
+        // Collect peers from the epoch + 2 to add to the network:
 
-        // Add peers from the next epoch:
-
-        let next_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch) + 1);
-
-        if let Ok(membership) = coord.stake_table_for_epoch(Some(next_epoch)).await {
+        if let Ok(membership) = coord.stake_table_for_epoch(Some(epoch_2)).await {
             let stake_tbl: HashMap<_, _> = HashMap::from_iter(
                 membership
                     .stake_table()
@@ -134,31 +130,76 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
                     .into_iter()
                     .map(|m| (m.stake_table_entry.public_key(), (m.x25519_key, m.p2p_addr))),
             );
-            let mut to_add = Vec::new();
             for (k, v) in stake_tbl {
-                if current_peers.contains(&k) {
-                    continue;
-                }
                 let (Some(x25519), Some(addr)) = v else {
                     info!(%epoch, peer = %k, "ignoring peer without x25519 key or p2p address");
+                    non_peers.insert(k);
                     continue;
                 };
+                if let Some((x, a)) = inner.peers.get(&k) {
+                    if *x == x25519 && *a == addr {
+                        debug!(%epoch, peer = %k, "peer unchanged");
+                        continue;
+                    }
+                }
                 debug!(%epoch, peer = %k, "adding network peer");
                 to_add.push((k, x25519, addr))
             }
-            if let Err(err) = self.net.add(Role::Active, to_add).await {
-                error!(%epoch, %err, "could not add peers to network");
-            }
         } else {
-            warn!(epoch = %next_epoch, "no stake table available");
+            error!(epoch = %epoch_2, "no stake table available");
+            return;
         }
 
-        inner.epoch = epoch
-    }
-}
+        // Collect current peers which are not in the new epoch to delete from the network:
 
-pub fn derive_keypair<K: SignatureKey>(k: &K::PrivateKey) -> Keypair {
-    SecretKey::from(blake3::derive_key("cliquenet key", &k.to_bytes())).into()
+        if let Ok(membership) = coord.stake_table_for_epoch(Some(epoch_1)).await {
+            let stake_tbl: HashSet<_> = HashSet::from_iter(
+                membership
+                    .stake_table()
+                    .await
+                    .0
+                    .into_iter()
+                    .map(|m| m.stake_table_entry.public_key()),
+            );
+            for p in inner.peers.keys() {
+                if !stake_tbl.contains(p) {
+                    debug!(%epoch, peer = %p, "removing network peer");
+                    to_del.push(p.clone())
+                }
+            }
+        } else {
+            error!(%epoch, "no stake table available");
+            return;
+        }
+
+        for k in &to_del {
+            inner.peers.remove(k);
+        }
+
+        for (k, x, a) in to_add.iter().cloned() {
+            inner.peers.insert(k, (x, a));
+        }
+
+        if let Err(err) = self.net.add(Role::Active, to_add).await {
+            let err: NetworkDown = err;
+            error!(%epoch, %err, "could not add peers to network");
+            return;
+        }
+
+        if let Err(err) = self.net.remove(to_del).await {
+            let err: NetworkDown = err;
+            error!(%epoch, %err, "could not remove peers from network");
+            return;
+        }
+
+        debug_assert_eq! {
+            HashSet::<K>::from_iter(self.net.parties(None)),
+            HashSet::<K>::from_iter(inner.peers.keys().cloned())
+        }
+
+        inner.epoch = epoch;
+        inner.non_peers = non_peers;
+    }
 }
 
 #[async_trait]
@@ -259,6 +300,8 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
         Box::pin(move |i| {
             let parties = parties.clone();
             let future = async move {
+                use std::iter::empty;
+
                 use hotshot_types::traits::metrics::NoMetrics;
 
                 let (s, k, a) = &parties[i as usize];
@@ -266,9 +309,10 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
                     .iter()
                     .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
                 let met = Box::new(NoMetrics);
-                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, met)
-                    .await
-                    .unwrap();
+                let net =
+                    Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, empty(), met)
+                        .await
+                        .unwrap();
                 Arc::new(net)
             };
             Box::pin(future)
@@ -289,7 +333,7 @@ fn gen_parties<K: SignatureKey>() -> impl Iterator<Item = (Keypair, K, NetAddr)>
     std::iter::repeat_with(move || {
         let secret = K::generated_from_seed_indexed([0u8; 32], i).1;
         let public = K::from_private(&secret);
-        let kpair = derive_keypair::<K>(&secret);
+        let kpair = Keypair::derive_from::<K>(&secret);
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);

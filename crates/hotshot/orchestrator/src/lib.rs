@@ -455,7 +455,6 @@ where
         Ok(tmp_node_index)
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn register_public_key(
         &mut self,
         pubkey: &mut Vec<u8>,
@@ -874,14 +873,13 @@ where
     network_config.config.known_nodes_with_stake = network_config
         .public_keys
         .iter()
-        .map(|keys| {
-            PeerConfig::builder()
-                .stake_table_entry(
-                    keys.stake_table_key
-                        .stake_table_entry(U256::from(keys.stake)),
-                )
-                .state_ver_key(keys.state_ver_key.clone())
-                .build()
+        .map(|keys| PeerConfig {
+            stake_table_entry: keys
+                .stake_table_key
+                .stake_table_entry(U256::from(keys.stake)),
+            state_ver_key: keys.state_ver_key.clone(),
+            x25519_key: keys.x25519_key,
+            p2p_addr: keys.p2p_addr.clone(),
         })
         .collect();
 
@@ -889,14 +887,13 @@ where
         .public_keys
         .iter()
         .filter(|keys| keys.da)
-        .map(|keys| {
-            PeerConfig::builder()
-                .stake_table_entry(
-                    keys.stake_table_key
-                        .stake_table_entry(U256::from(keys.stake)),
-                )
-                .state_ver_key(keys.state_ver_key.clone())
-                .build()
+        .map(|keys| PeerConfig {
+            stake_table_entry: keys
+                .stake_table_key
+                .stake_table_entry(U256::from(keys.stake)),
+            state_ver_key: keys.state_ver_key.clone(),
+            x25519_key: keys.x25519_key,
+            p2p_addr: keys.p2p_addr.clone(),
         })
         .collect();
 

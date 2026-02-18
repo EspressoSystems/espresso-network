@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
@@ -11,10 +12,17 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NetAddr {
     Inet(IpAddr, u16),
-    Name(String, u16),
+    Name(Cow<'static, str>, u16),
 }
 
 impl NetAddr {
+    pub fn named<S>(name: S, port: u16) -> Self
+    where
+        S: Into<Cow<'static, str>>,
+    {
+        Self::Name(name.into(), port)
+    }
+
     /// Get the port number of an address.
     pub fn port(&self) -> u16 {
         match self {
@@ -63,13 +71,13 @@ impl fmt::Display for NetAddr {
 
 impl From<(&str, u16)> for NetAddr {
     fn from((h, p): (&str, u16)) -> Self {
-        Self::Name(h.to_string(), p)
+        Self::Name(h.to_string().into(), p)
     }
 }
 
 impl From<(String, u16)> for NetAddr {
     fn from((h, p): (String, u16)) -> Self {
-        Self::Name(h, p)
+        Self::Name(h.into(), p)
     }
 }
 
@@ -109,7 +117,7 @@ impl std::str::FromStr for NetAddr {
             };
             IpAddr::from_str(a)
                 .map(|a| Self::Inet(a, p))
-                .or_else(|_| Ok(Self::Name(a.to_string(), p)))
+                .or_else(|_| Ok(Self::Name(a.to_string().into(), p)))
         };
         match s.rsplit_once(':') {
             None => parse(s, None),

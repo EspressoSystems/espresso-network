@@ -67,7 +67,7 @@ where
 
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
-        p2p_bind_address: opt.p2p_bind_address,
+        p2p_address: opt.p2p_address,
         x25519_secret_key: x25519_sk,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,
@@ -192,8 +192,9 @@ mod test {
     use std::time::Duration;
 
     use espresso_types::PubKey;
-    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
+    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
     use surf_disco::{error::ClientError, Client, Url};
+    use tagged_base64::TaggedBase64;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
@@ -211,6 +212,7 @@ mod test {
     async fn test_startup_before_orchestrator() {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
+        let x25519_kp = x25519::Keypair::generate().unwrap();
 
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let tmp = TempDir::new().unwrap();
@@ -249,6 +251,10 @@ mod test {
             &state_key
                 .sign_key_ref()
                 .to_tagged_base64()
+                .expect("valid key")
+                .to_string(),
+            "--private-x25519-key",
+            &TaggedBase64::try_from(x25519_kp.secret_key())
                 .expect("valid key")
                 .to_string(),
             "--genesis-file",

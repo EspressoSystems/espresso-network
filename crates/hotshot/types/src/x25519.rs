@@ -5,6 +5,8 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_bytes::ByteArray;
 use tagged_base64::{TaggedBase64, Tb64Error};
 
+use crate::traits::signature_key::{PrivateSignatureKey, SignatureKey};
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Keypair {
     pair: x25519::KeyPair,
@@ -37,6 +39,14 @@ impl Keypair {
             return Err(InvalidKeypair(()));
         }
         Ok(Self { pair })
+    }
+
+    pub fn derive_from<K: SignatureKey>(k: &K::PrivateKey) -> Self {
+        SecretKey::from(blake3::derive_key(
+            "signing key -> x25519 key",
+            &k.to_bytes(),
+        ))
+        .into()
     }
 
     pub fn public_key(&self) -> PublicKey {
@@ -84,6 +94,12 @@ impl From<SecretKey> for Keypair {
                 pk: p.key,
             },
         }
+    }
+}
+
+impl From<&SecretKey> for Keypair {
+    fn from(k: &SecretKey) -> Self {
+        Self::from(k.clone())
     }
 }
 
@@ -185,6 +201,14 @@ impl TryFrom<TaggedBase64> for SecretKey {
             return Err(Tb64Error::InvalidTag);
         }
         Self::try_from(tb.as_ref()).map_err(|_| Tb64Error::InvalidData)
+    }
+}
+
+impl TryFrom<SecretKey> for TaggedBase64 {
+    type Error = Tb64Error;
+
+    fn try_from(k: SecretKey) -> Result<Self, Self::Error> {
+        TaggedBase64::new(X25519_SECRET_KEY, &k.as_bytes()[..])
     }
 }
 

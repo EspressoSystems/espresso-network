@@ -46,7 +46,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_success_with_one_long_delay_with_epochs,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
+    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

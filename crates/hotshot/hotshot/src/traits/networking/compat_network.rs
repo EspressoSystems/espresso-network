@@ -3,6 +3,7 @@ use std::time::Duration;
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
+use futures::future::join_all;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
@@ -25,21 +26,38 @@ use crate::traits::networking::Cliquenet;
 #[derive(Clone)]
 pub struct CompatNetwork<A, K> {
     cliquenet: Cliquenet<K>,
-    cliquenet_peers: Arc<RwLock<HashSet<K>>>,
+    peers: Arc<RwLock<Peers<K>>>,
     fallback: A,
+}
+
+struct Peers<K> {
+    members: HashSet<K>,
+    others: HashSet<K>,
 }
 
 impl<A, K> CompatNetwork<A, K>
 where
     K: SignatureKey + 'static,
 {
-    pub fn new(cliquenet: Cliquenet<K>, fallback: A) -> Self {
+    pub async fn new(cliquenet: Cliquenet<K>, fallback: A) -> Self {
         let peers = cliquenet.peers();
+        let non_peers = cliquenet.non_peers().await;
         Self {
             cliquenet,
-            cliquenet_peers: Arc::new(RwLock::new(HashSet::from_iter(peers))),
+            peers: Arc::new(RwLock::new(Peers {
+                members: HashSet::from_iter(peers),
+                others: non_peers,
+            })),
             fallback,
         }
+    }
+
+    pub fn cliquenet(&self) -> &Cliquenet<K> {
+        &self.cliquenet
+    }
+
+    pub fn fallback(&self) -> &A {
+        &self.fallback
     }
 }
 
@@ -56,11 +74,29 @@ where
         t: Topic,
         d: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        let (a, b) = join! {
-            self.cliquenet.broadcast_message(v, m.clone(), t, d.clone()),
-            self.fallback.broadcast_message(v, m, t, d)
-        };
-        merge(a, b)
+        let f1 = self.cliquenet.broadcast_message(v, m.clone(), t, d.clone());
+
+        let f2 = join_all(
+            self.peers
+                .read()
+                .others
+                .iter()
+                .map(|k| self.fallback.direct_message(v, m.clone(), k.clone())),
+        );
+
+        let results = join!(f1, f2);
+
+        let mut errors = Vec::new();
+        if let Err(e) = results.0 {
+            errors.push(e);
+        }
+        errors.extend(results.1.into_iter().filter_map(|r| r.err()));
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(NetworkError::Multiple(errors))
+        }
     }
 
     async fn da_broadcast_message(
@@ -71,7 +107,7 @@ where
         d: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         let (c, f): (Vec<_>, Vec<_>) = {
-            let cliquenet_peers = self.cliquenet_peers.read();
+            let cliquenet_peers = &self.peers.read().members;
             recipients
                 .into_iter()
                 .partition(|k| cliquenet_peers.contains(k))
@@ -89,7 +125,7 @@ where
         m: Vec<u8>,
         recipient: K,
     ) -> Result<(), NetworkError> {
-        if self.cliquenet_peers.read().contains(&recipient) {
+        if self.peers.read().members.contains(&recipient) {
             self.cliquenet.direct_message(v, m, recipient).await
         } else {
             self.fallback.direct_message(v, m, recipient).await
@@ -116,9 +152,12 @@ where
             self.fallback.update_view(v, e, m)
         };
 
-        let mut peers = self.cliquenet_peers.write();
-        peers.clear();
-        peers.extend(self.cliquenet.peers());
+        let others = self.cliquenet.non_peers().await;
+
+        let mut peers = self.peers.write();
+        peers.members.clear();
+        peers.members.extend(self.cliquenet.peers());
+        peers.others = others;
     }
 
     async fn wait_for_ready(&self) {
@@ -155,7 +194,7 @@ where
 impl<T, A> TestableNetworkingImplementation<T> for CompatNetwork<A, T::SignatureKey>
 where
     T: NodeType,
-    A: TestableNetworkingImplementation<T> + Clone + 'static,
+    A: TestableNetworkingImplementation<T> + Clone + Send + 'static,
 {
     fn generator(
         nodes: usize,
@@ -191,7 +230,7 @@ where
             let future = async move {
                 let cliquenet = Arc::unwrap_or_clone(cliquenet.await);
                 let fallback = Arc::unwrap_or_clone(fallback.await);
-                Arc::new(Self::new(cliquenet, fallback))
+                Arc::new(Self::new(cliquenet, fallback).await)
             };
 
             Box::pin(future)

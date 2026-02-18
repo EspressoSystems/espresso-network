@@ -378,7 +378,7 @@ impl InnerTestClient {
                 delegators: [(Address::random(), stake)].into_iter().collect(),
                 authenticated: true,
                 x25519_key: None,
-                p2p_addr: None
+                p2p_addr: None,
             }
             .try_into()
             .expect("authenticated validator");
