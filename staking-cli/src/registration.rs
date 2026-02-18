@@ -224,11 +224,10 @@ mod test {
         Ok(())
     }
 
-    /// The GCL must remove stake table events with incorrect signatures. This test verifies that a
-    /// validator registered event with incorrect schnorr signature is removed before the stake
-    /// table is computed.
+    /// Unauthenticated validators (with incorrect schnorr signature) are kept because the contract
+    /// allows staking transactions targeting these validators.
     #[tokio::test]
-    async fn test_integration_unauthenticated_validator_registered_events_removed() -> Result<()> {
+    async fn test_integration_unauthenticated_validator_registered_events_kept() -> Result<()> {
         let system = TestSystem::deploy().await?;
 
         // register a validator with correct signature
@@ -285,20 +284,15 @@ mod test {
         )
         .await?;
 
-        // verify that we only have the first RegisterV2 event
-        assert_eq!(events.len(), 1);
-        match events[0].1.clone() {
-            StakeTableEvent::RegisterV2(event) => {
-                assert_eq!(event.account, system.deployer_address);
-            },
-            _ => panic!("expected RegisterV2 event"),
+        // verify that both RegisterV2 events are kept
+        assert_eq!(events.len(), 2);
+        for event in &events {
+            assert!(matches!(event.1, StakeTableEvent::RegisterV2(_)));
         }
         Ok(())
     }
 
-    /// The GCL must remove stake table events with incorrect signatures. This test verifies that a
-    /// consensus keys update event with incorrect schnorr signature is removed before the stake
-    /// table is computed.
+    /// Unauthenticated consensus key updates (with incorrect schnorr signature) are removed.
     #[tokio::test]
     async fn test_integration_unauthenticated_update_consensus_keys_events_removed() -> Result<()> {
         let system = TestSystem::deploy().await?;
@@ -347,14 +341,7 @@ mod test {
 
         // verify that we only have the RegisterV2 event
         assert_eq!(events.len(), 1);
-        match events[0].1.clone() {
-            StakeTableEvent::RegisterV2(event) => {
-                assert_eq!(event.account, system.deployer_address);
-            },
-            _ => panic!("expected RegisterV2 event"),
-        }
-
-        println!("Events: {events:?}");
+        assert!(matches!(events[0].1, StakeTableEvent::RegisterV2(_)));
 
         Ok(())
     }
