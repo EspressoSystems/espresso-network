@@ -221,6 +221,11 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .metrics
             .number_of_views_per_decide_event
             .add_point(cur_number_of_views_per_decide_event as f64);
+        for leaf in &leaf_views {
+            if let Err(e) = consensus_writer.update_vote_participation(leaf.leaf.justify_qc()) {
+                tracing::warn!("Failed to update vote participation: {e}");
+            }
+        }
 
         // We don't need to hold this while we broadcast
         drop(consensus_writer);
