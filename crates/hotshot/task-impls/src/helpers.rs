@@ -73,7 +73,7 @@ pub async fn wait_for_previous_view<TYPES: NodeType>(
                 },
                 HotShotEvent::ViewValidationCancelled(view) => {
                     if *view == view_number {
-                        tracing::info!("View validation cancelled for view {view_number}");
+                        tracing::warn!("View validation cancelled for view {view_number}");
                         return None;
                     }
                 },
@@ -749,11 +749,13 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     parent_qc: &QuorumCertificate2<TYPES>,
     epoch_height: u64,
 ) -> Result<(Leaf2<TYPES>, Arc<<TYPES as NodeType>::ValidatedState>)> {
-    let mut receiver = event_receiver.clone();
+    let receiver = event_receiver.clone();
     let wait_for_previous = {
         let reader = consensus.read().await;
-        !reader.validated_state_map().contains_key(&parent_qc.view_number())
-            && reader.is_view_validating(parent_qc.view_number())
+        !reader
+            .validated_state_map()
+            .contains_key(&parent_qc.view_number())
+            || reader.is_view_validating(parent_qc.view_number())
     };
     if wait_for_previous {
         if wait_for_previous_view(parent_qc.view_number(), receiver)
