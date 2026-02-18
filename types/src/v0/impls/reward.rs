@@ -27,7 +27,7 @@ use sequencer_utils::{
 use vbs::version::StaticVersionType;
 
 use super::{
-    v0_3::{RewardAmount, Validator, COMMISSION_BASIS_POINTS},
+    v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
         RewardMerkleProofV2, RewardMerkleTreeV2,
@@ -617,14 +617,14 @@ impl ComputedRewards {
 }
 
 pub struct RewardDistributor {
-    validator: Validator<BLSPubKey>,
+    validator: AuthenticatedValidator<BLSPubKey>,
     block_reward: RewardAmount,
     total_distributed: RewardAmount,
 }
 
 impl RewardDistributor {
     pub fn new(
-        validator: Validator<BLSPubKey>,
+        validator: AuthenticatedValidator<BLSPubKey>,
         block_reward: RewardAmount,
         total_distributed: RewardAmount,
     ) -> Self {
@@ -635,7 +635,7 @@ impl RewardDistributor {
         }
     }
 
-    pub fn validator(&self) -> Validator<BLSPubKey> {
+    pub fn validator(&self) -> AuthenticatedValidator<BLSPubKey> {
         self.validator.clone()
     }
 
@@ -899,7 +899,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view: ViewNumber,
-) -> anyhow::Result<Validator<BLSPubKey>> {
+) -> anyhow::Result<AuthenticatedValidator<BLSPubKey>> {
     let parent_height = parent_leaf.height();
     let parent_view = parent_leaf.view_number();
     let new_height = parent_height + 1;
@@ -1012,6 +1012,21 @@ pub mod tests {
 
     use super::*;
 
+    fn make_distributor(commission: u16) -> RewardDistributor {
+        RewardDistributor::new(
+            AuthenticatedValidator::mock_with_commission(commission),
+            RewardAmount(U256::from(1902000000000000000_u128)),
+            U256::ZERO.into(),
+        )
+    }
+
+    fn total_rewards(rewards: ComputedRewards) -> U256 {
+        rewards
+            .all_rewards()
+            .iter()
+            .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
+    }
+
     // TODO: current tests are just sanity checks, we need more.
 
     #[test]
@@ -1020,32 +1035,21 @@ pub mod tests {
         // rounding effects in distribution, the validator may receive a slightly higher amount
         // because the remainder after delegator distribution is sent to the validator.
 
-        let validator = Validator::mock();
-        let mut distributor = RewardDistributor::new(
-            validator,
-            RewardAmount(U256::from(1902000000000000000_u128)),
-            U256::ZERO.into(),
-        );
+        let distributor = make_distributor(500);
         let rewards = distributor.compute_rewards().unwrap();
-        let total = |rewards: ComputedRewards| {
-            rewards
-                .all_rewards()
-                .iter()
-                .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
-        };
-        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
+        assert_eq!(total_rewards(rewards.clone()), distributor.block_reward.0);
 
-        distributor.validator.commission = 0;
+        let distributor = make_distributor(0);
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
+        assert_eq!(total_rewards(rewards.clone()), distributor.block_reward.0);
 
-        distributor.validator.commission = 10000;
+        let distributor = make_distributor(10000);
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
+        assert_eq!(total_rewards(rewards.clone()), distributor.block_reward.0);
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);
 
-        distributor.validator.commission = 10001;
+        let distributor = make_distributor(10001);
         assert!(distributor
             .compute_rewards()
             .err()
@@ -1056,24 +1060,15 @@ pub mod tests {
 
     #[test]
     fn test_compute_rewards_validator_commission() {
-        let validator = Validator::mock();
-        let mut distributor = RewardDistributor::new(
-            validator.clone(),
-            RewardAmount(U256::from(1902000000000000000_u128)),
-            U256::ZERO.into(),
-        );
-        distributor.validator.commission = 0;
-
+        let distributor = make_distributor(0);
         let rewards = distributor.compute_rewards().unwrap();
-
         let leader_commission = rewards.leader_commission();
         let percentage =
             leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.0;
         assert_eq!(percentage, U256::ZERO);
 
         // 3%
-        distributor.validator.commission = 300;
-
+        let distributor = make_distributor(300);
         let rewards = distributor.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
         let percentage =
@@ -1082,8 +1077,7 @@ pub mod tests {
         assert_eq!(percentage, U256::from(300));
 
         //100%
-        distributor.validator.commission = 10000;
-
+        let distributor = make_distributor(10000);
         let rewards = distributor.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);
