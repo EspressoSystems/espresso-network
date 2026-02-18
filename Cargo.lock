@@ -6095,6 +6095,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "blake3",
+ "bon",
  "bs58",
  "clap 4.5.53",
  "committable",

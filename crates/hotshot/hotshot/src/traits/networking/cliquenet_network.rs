@@ -17,16 +17,38 @@ use hotshot_types::{
     traits::{
         metrics::Metrics,
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
-        node_implementation::NodeType,
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
     x25519::{Keypair, PublicKey, SecretKey},
     BoxSyncFuture,
 };
+use tokio::sync::Mutex;
+use tracing::warn;
 
 #[derive(Clone)]
 pub struct Cliquenet<K> {
     net: Retry<K>,
+    epoch: Arc<Mutex<EpochNumber>>,
+}
+
+impl<K: SignatureKey + 'static> Cliquenet<K> {
+    async fn on_epoch_change<U>(&self, epoch: EpochNumber, coord: &EpochMembershipCoordinator<U>)
+    where
+        U: NodeType<SignatureKey = K>,
+    {
+        let ours = self.epoch.lock().await;
+        if epoch <= *ours {
+            return;
+        }
+        let next = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch) + 1);
+        let _prev =
+            <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch).saturating_sub(1));
+        let Ok(_membership) = coord.stake_table_for_epoch(Some(next)).await else {
+            warn!(epoch = %next, "no stake table available");
+            return;
+        };
+    }
 }
 
 impl<K: SignatureKey + 'static> Cliquenet<K> {
@@ -54,7 +76,10 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         let net = Retry::create(cfg)
             .await
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
-        Ok(Self { net })
+        Ok(Self {
+            net,
+            epoch: Arc::new(Mutex::new(EpochNumber::genesis())),
+        })
     }
 }
 
@@ -114,12 +139,16 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
     async fn update_view<U>(
         &self,
         v: ViewNumber,
-        _: Option<EpochNumber>,
-        _: EpochMembershipCoordinator<U>,
+        e: Option<EpochNumber>,
+        m: EpochMembershipCoordinator<U>,
     ) where
         U: NodeType<SignatureKey = K>,
     {
-        self.net.gc(*v)
+        self.net.gc(*v);
+
+        if let Some(e) = e {
+            self.on_epoch_change(e, &m).await
+        }
     }
 
     async fn wait_for_ready(&self) {}

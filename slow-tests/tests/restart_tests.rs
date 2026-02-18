@@ -813,9 +813,13 @@ impl TestNetwork {
 
         let hss_staking: Vec<PeerConfig<SeqTypes>> = staking_keys
             .iter()
-            .map(|(bls, state)| PeerConfig {
-                stake_table_entry: BLSPubKey::from_private(bls).stake_table_entry(U256::from(1)),
-                state_ver_key: state.ver_key(),
+            .map(|(bls, state)| {
+                PeerConfig::builder()
+                    .stake_table_entry(
+                        BLSPubKey::from_private(bls).stake_table_entry(U256::from(1)),
+                    )
+                    .state_ver_key(state.ver_key())
+                    .build()
             })
             .collect();
 

@@ -43,12 +43,14 @@ pub(crate) fn stake_table_for_testing(
         .iter()
         .enumerate()
         .zip(schnorr_keys)
-        .map(|((i, bls_key), (_, schnorr_key))| PeerConfig {
-            stake_table_entry: StakeTableEntry {
-                stake_key: *bls_key,
-                stake_amount: U256::from((i + 1) as u32),
-            },
-            state_ver_key: schnorr_key.clone(),
+        .map(|((i, bls_key), (_, schnorr_key))| {
+            PeerConfig::builder()
+                .stake_table_entry(StakeTableEntry {
+                    stake_key: *bls_key,
+                    stake_amount: U256::from((i + 1) as u32),
+                })
+                .state_ver_key(schnorr_key.clone())
+                .build()
         })
         .collect::<Vec<_>>()
         .into()

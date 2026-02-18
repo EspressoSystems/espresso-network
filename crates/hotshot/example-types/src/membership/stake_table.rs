@@ -40,10 +40,10 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
     fn from(
         test_stake_table_entry: TestStakeTableEntry<TYPES::SignatureKey, TYPES::StateSignatureKey>,
     ) -> Self {
-        PeerConfig {
-            stake_table_entry: test_stake_table_entry.stake_table_entry,
-            state_ver_key: test_stake_table_entry.state_ver_key,
-        }
+        PeerConfig::builder()
+            .stake_table_entry(test_stake_table_entry.stake_table_entry)
+            .state_ver_key(test_stake_table_entry.state_ver_key)
+            .build()
     }
 }
 

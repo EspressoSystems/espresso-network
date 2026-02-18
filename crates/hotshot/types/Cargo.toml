@@ -30,6 +30,7 @@ bincode = { workspace = true }
 bitvec = { workspace = true }
 blake3 = { workspace = true }
 bs58 = { workspace = true }
+bon = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }

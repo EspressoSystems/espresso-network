@@ -874,11 +874,14 @@ where
     network_config.config.known_nodes_with_stake = network_config
         .public_keys
         .iter()
-        .map(|keys| PeerConfig {
-            stake_table_entry: keys
-                .stake_table_key
-                .stake_table_entry(U256::from(keys.stake)),
-            state_ver_key: keys.state_ver_key.clone(),
+        .map(|keys| {
+            PeerConfig::builder()
+                .stake_table_entry(
+                    keys.stake_table_key
+                        .stake_table_entry(U256::from(keys.stake)),
+                )
+                .state_ver_key(keys.state_ver_key.clone())
+                .build()
         })
         .collect();
 
@@ -886,11 +889,14 @@ where
         .public_keys
         .iter()
         .filter(|keys| keys.da)
-        .map(|keys| PeerConfig {
-            stake_table_entry: keys
-                .stake_table_key
-                .stake_table_entry(U256::from(keys.stake)),
-            state_ver_key: keys.state_ver_key.clone(),
+        .map(|keys| {
+            PeerConfig::builder()
+                .stake_table_entry(
+                    keys.stake_table_key
+                        .stake_table_entry(U256::from(keys.stake)),
+                )
+                .state_ver_key(keys.state_ver_key.clone())
+                .build()
         })
         .collect();
 

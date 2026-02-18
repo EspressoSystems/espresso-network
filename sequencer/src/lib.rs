@@ -638,17 +638,6 @@ where
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
     info!("Stake reloaded");
 
-    let cliquenet = {
-        let peers = membership
-            .active_validators(&network_config.config.epoch_height.into())?
-            .into_values()
-            .filter_map(|v| Some((v.stake_table_key, v.x25519_key?, v.p2p_addr?)));
-        let k = network_params.x25519_secret_key.clone();
-        let a = network_params.p2p_bind_address.clone();
-        let m = metrics.clone();
-        Cliquenet::<SeqTypes>::create("sequencer", pub_key, k.into(), a, peers, m).await?
-    };
-
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
@@ -678,6 +667,27 @@ where
             .max_capacity(1)
             .time_to_live(Duration::from_secs(30))
             .build(),
+    };
+
+    let cliquenet = {
+        let peers = coordinator
+            .stake_table_for_epoch(None)
+            .await?
+            .stake_table()
+            .await
+            .0
+            .into_iter()
+            .filter_map(|cfg| {
+                Some((
+                    cfg.stake_table_entry.stake_key,
+                    cfg.x25519_key?,
+                    cfg.p2p_addr?,
+                ))
+            });
+        let k = network_params.x25519_secret_key.clone();
+        let a = network_params.p2p_bind_address.clone();
+        let m = metrics.clone();
+        Cliquenet::<PubKey>::create("sequencer", pub_key, k.into(), a, peers, m).await?
     };
 
     // Initialize the Libp2p network
@@ -1151,9 +1161,11 @@ pub mod testing {
             let known_nodes_with_stake = pub_keys
                 .iter()
                 .zip(&state_key_pairs)
-                .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
-                    stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
-                    state_ver_key: state_key_pair.ver_key(),
+                .map(|(pub_key, state_key_pair)| {
+                    PeerConfig::<SeqTypes>::builder()
+                        .stake_table_entry(pub_key.stake_table_entry(U256::from(1)))
+                        .state_ver_key(state_key_pair.ver_key())
+                        .build()
                 })
                 .collect::<Vec<_>>();
 

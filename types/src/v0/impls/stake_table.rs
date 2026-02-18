@@ -1800,13 +1800,15 @@ impl EpochCommittees {
                 address_mapping.insert(v.stake_table_key, v.account);
                 (
                     v.stake_table_key,
-                    PeerConfig {
-                        stake_table_entry: BLSPubKey::stake_table_entry(
+                    PeerConfig::builder()
+                        .stake_table_entry(BLSPubKey::stake_table_entry(
                             &v.stake_table_key,
                             v.stake,
-                        ),
-                        state_ver_key: v.state_ver_key.clone(),
-                    },
+                        ))
+                        .state_ver_key(v.state_ver_key.clone())
+                        .maybe_x25519_key(v.x25519_key.clone())
+                        .maybe_p2p_addr(v.p2p_addr.clone())
+                        .build(),
                 )
             })
             .collect();

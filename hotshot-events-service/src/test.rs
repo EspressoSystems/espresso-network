@@ -99,10 +99,10 @@ mod tests {
         let pub_key = BLSPubKey::from_private(&private_key);
         let state_key_pair = StateKeyPair::generate();
 
-        let peer_config = PeerConfig::<TestTypes> {
-            stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
-            state_ver_key: state_key_pair.ver_key(),
-        };
+        let peer_config = PeerConfig::<TestTypes>::builder()
+            .stake_table_entry(pub_key.stake_table_entry(U256::from(1)))
+            .state_ver_key(state_key_pair.ver_key())
+            .build();
 
         let known_nodes_with_stake = vec![peer_config];
         let non_staked_node_count = 10;

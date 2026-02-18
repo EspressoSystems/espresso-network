@@ -11,6 +11,7 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 
 use alloy::primitives::U256;
 use bincode::Options;
+use bon::Builder;
 use displaydoc::Display;
 use stake_table::HSStakeTable;
 use tracing::error;
@@ -77,8 +78,8 @@ where
     assert_future::<F::Output, _>(Box::pin(fut))
 }
 
-#[derive(Clone, Debug, Display)]
 /// config for validator, including public key, private key, stake value
+#[derive(Clone, Debug, Display)]
 pub struct ValidatorConfig<TYPES: NodeType> {
     /// The validator's public key and stake value
     pub public_key: TYPES::SignatureKey,
@@ -126,6 +127,8 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
         PeerConfig {
             stake_table_entry: self.public_key.stake_table_entry(self.stake_value),
             state_ver_key: self.state_public_key.clone(),
+            x25519_key: self.x25519_keypair.as_ref().map(|k| k.public_key()),
+            p2p_addr: self.p2p_addr.clone(),
         }
     }
 }
@@ -136,16 +139,21 @@ impl<TYPES: NodeType> Default for ValidatorConfig<TYPES> {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Display, PartialEq, Eq, Hash)]
+/// Structure of peers' config, including public key, stake value, and state key.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Display, PartialEq, Eq, Hash, Builder)]
 #[serde(bound(deserialize = ""))]
-/// structure of peers' config, including public key, stake value, and state key.
+#[non_exhaustive]
 pub struct PeerConfig<TYPES: NodeType> {
-    ////The peer's public key and stake value. The key is the BLS Public Key used to
+    /// The peer's public key and stake value. The key is the BLS Public Key used to
     /// verify Stake Holder in the application layer.
     pub stake_table_entry: <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
-    //// The peer's state public key. This is the Schnorr Public Key used to
+    /// The peer's state public key. This is the Schnorr Public Key used to
     /// verify HotShot state in the state-prover.
     pub state_ver_key: TYPES::StateSignatureKey,
+    /// Public X25519 key for network communication.
+    pub x25519_key: Option<x25519::PublicKey>,
+    /// Network address.
+    pub p2p_addr: Option<NetAddr>,
 }
 
 impl<TYPES: NodeType> PeerConfig<TYPES> {

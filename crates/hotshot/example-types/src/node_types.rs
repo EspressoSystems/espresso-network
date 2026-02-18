@@ -324,7 +324,7 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for CliquenetImpl {
-    type Network = Cliquenet<TYPES>;
+    type Network = Cliquenet<TYPES::SignatureKey>;
     type Storage = TestStorage<TYPES>;
 }
 
