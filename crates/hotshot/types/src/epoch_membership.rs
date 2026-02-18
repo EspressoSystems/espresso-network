@@ -34,7 +34,7 @@ type EpochSender<TYPES> = (EpochNumber, Sender<Result<EpochMembership<TYPES>>>);
 
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
-    /// The underlying membhersip
+    /// The underlying membership
     membership: Arc<RwLock<TYPES::Membership>>,
 
     /// Any in progress attempts at catching up are stored in this map

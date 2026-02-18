@@ -60,7 +60,7 @@ pub async fn init_with_storage<S>(
 where
     S: DataSourceOptions,
 {
-    let (private_staking_key, private_state_key) = opt.private_keys()?;
+    let (private_staking_key, private_state_key, x25519_sk) = opt.private_keys()?;
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: opt.l1_options,
@@ -68,6 +68,8 @@ where
 
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
+        cliquenet_bind_addr: opt.cliquenet_bind_address,
+        x25519_secret_key: x25519_sk,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,
         libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
@@ -151,7 +153,7 @@ where
                         init_node(
                             genesis,
                             network_params,
-                            &*metrics,
+                            metrics,
                             persistence,
                             l1_params,
                             storage,
@@ -170,7 +172,7 @@ where
             init_node(
                 genesis,
                 network_params,
-                &NoMetrics,
+                Box::new(NoMetrics),
                 persistence,
                 l1_params,
                 None,
@@ -191,8 +193,9 @@ mod test {
     use std::time::Duration;
 
     use espresso_types::PubKey;
-    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
+    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
     use surf_disco::{Client, Url, error::ClientError};
+    use tagged_base64::TaggedBase64;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
@@ -210,6 +213,7 @@ mod test {
     async fn test_startup_before_orchestrator() {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
+        let x25519_kp = x25519::Keypair::generate().unwrap();
 
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let tmp = TempDir::new().unwrap();
@@ -248,6 +252,10 @@ mod test {
             &state_key
                 .sign_key_ref()
                 .to_tagged_base64()
+                .expect("valid key")
+                .to_string(),
+            "--private-x25519-key",
+            &TaggedBase64::try_from(x25519_kp.secret_key())
                 .expect("valid key")
                 .to_string(),
             "--genesis-file",

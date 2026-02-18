@@ -104,6 +104,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             .map(|id| PeerConfig {
                 stake_table_entry: pub_keys[id].stake_table_entry(U256::from(stake)),
                 state_ver_key: state_key_pairs[id].ver_key(),
+                connect_info: None,
             })
             .collect::<Vec<_>>();
 
