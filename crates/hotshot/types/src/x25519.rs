@@ -13,14 +13,20 @@ pub struct Keypair {
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PublicKey {
-    #[serde(serialize_with = "serialize", deserialize_with = "deserialize_x25519_pk")]
+    #[serde(
+        serialize_with = "serialize",
+        deserialize_with = "deserialize_x25519_pk"
+    )]
     key: x25519::PublicKey,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SecretKey {
-    #[serde(serialize_with = "serialize", deserialize_with = "deserialize_x25519_sk")]
+    #[serde(
+        serialize_with = "serialize",
+        deserialize_with = "deserialize_x25519_sk"
+    )]
     key: x25519::SecretKey,
 }
 
@@ -243,4 +249,3 @@ where
         x25519::SecretKey::from_slice(&a[..]).map_err(de::Error::custom)
     }
 }
-

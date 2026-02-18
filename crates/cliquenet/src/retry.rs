@@ -22,9 +22,7 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::{
-    Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command,
-};
+use crate::{Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command};
 
 type Result<T> = std::result::Result<T, NetworkError>;
 

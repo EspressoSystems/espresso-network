@@ -12,17 +12,18 @@ pub mod retry;
 
 use std::{fmt, sync::Arc};
 
-use hotshot_types::x25519::{Keypair, PublicKey};
-use hotshot_types::addr::NetAddr;
+use bon::Builder;
+pub use error::NetworkError;
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::Metrics;
-use bon::Builder;
-use tokio::sync::Semaphore;
-
-pub use error::NetworkError;
+use hotshot_types::{
+    addr::NetAddr,
+    x25519::{Keypair, PublicKey},
+};
 pub use id::Id;
 pub use net::Network;
 pub use retry::Retry;
+use tokio::sync::Semaphore;
 
 /// Max. number of bytes for a message (potentially consisting of several frames).
 pub const MAX_MESSAGE_SIZE: usize = 8 * 1024 * 1024;

@@ -34,19 +34,28 @@ pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey, derive_libp2p_multiaddr, derive_libp2p_peer_id
+        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, Cliquenet,
+        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
+        RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
-    ValidatorConfig, addr::NetAddr, data::ViewNumber, epoch_membership::EpochMembershipCoordinator, light_client::{StateKeyPair, StateSignKey}, signature_key::{BLSPrivKey, BLSPubKey}, traits::{
+    addr::NetAddr,
+    data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
+    light_client::{StateKeyPair, StateSignKey},
+    signature_key::{BLSPrivKey, BLSPubKey},
+    traits::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
         storage::Storage,
-    }, utils::BuilderCommitment, x25519
+    },
+    utils::BuilderCommitment,
+    x25519, ValidatorConfig,
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -355,7 +364,7 @@ where
         state_private_key: state_key_pair.sign_key(),
         is_da,
         x25519_keypair: Some(network_params.x25519_secret_key.clone().into()),
-        p2p_addr: Some(network_params.p2p_bind_address.clone())
+        p2p_addr: Some(network_params.p2p_bind_address.clone()),
     };
 
     // Derive our Libp2p public key from our private key
@@ -1343,7 +1352,7 @@ pub mod testing {
                 state_private_key: self.state_key_pairs[i].sign_key(),
                 is_da,
                 x25519_keypair: None,
-                p2p_addr: None
+                p2p_addr: None,
             };
 
             let topics = if is_da {

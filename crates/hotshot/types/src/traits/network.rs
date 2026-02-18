@@ -173,10 +173,10 @@ pub enum ResponseMessage<TYPES: NodeType> {
     Denied,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// When a message should be broadcast to the network.
 ///
 /// Network implementations may or may not respect this, at their discretion.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BroadcastDelay {
     /// Broadcast the message immediately
     None,

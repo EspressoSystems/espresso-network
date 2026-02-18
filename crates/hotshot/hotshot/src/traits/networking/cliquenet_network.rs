@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cliquenet::{NetConf, Retry};
-
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
@@ -26,14 +25,14 @@ use hotshot_types::{
 };
 
 #[derive(Clone)]
-pub struct Cliquenet<T: NodeType> {
-    net: Retry<T::SignatureKey>,
+pub struct Cliquenet<K> {
+    net: Retry<K>,
 }
 
-impl<T: NodeType> Cliquenet<T> {
+impl<K: SignatureKey + 'static> Cliquenet<K> {
     pub async fn create<A, B, P>(
         name: &'static str,
-        key: T::SignatureKey,
+        key: K,
         keypair: Keypair,
         addr: A,
         parties: P,
@@ -42,7 +41,7 @@ impl<T: NodeType> Cliquenet<T> {
     where
         A: Into<NetAddr>,
         B: Into<NetAddr>,
-        P: IntoIterator<Item = (T::SignatureKey, PublicKey, B)>,
+        P: IntoIterator<Item = (K, PublicKey, B)>,
     {
         let cfg = NetConf::builder()
             .name(name)
@@ -64,7 +63,7 @@ pub fn derive_keypair<K: SignatureKey>(k: &K::PrivateKey) -> Keypair {
 }
 
 #[async_trait]
-impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
+impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
     async fn broadcast_message(
         &self,
         v: ViewNumber,
@@ -82,7 +81,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         &self,
         v: ViewNumber,
         m: Vec<u8>,
-        recipients: Vec<T::SignatureKey>,
+        recipients: Vec<K>,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         self.net.multicast(recipients, *v, m).await.map_err(|e| {
@@ -95,7 +94,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         &self,
         v: ViewNumber,
         m: Vec<u8>,
-        recipient: T::SignatureKey,
+        recipient: K,
     ) -> Result<(), NetworkError> {
         self.net
             .unicast(recipient, *v, m)
@@ -118,7 +117,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         _: Option<EpochNumber>,
         _: EpochMembershipCoordinator<U>,
     ) where
-        U: NodeType<SignatureKey = T::SignatureKey>,
+        U: NodeType<SignatureKey = K>,
     {
         self.net.gc(*v)
     }
@@ -139,7 +138,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 }
 
 #[cfg(feature = "hotshot-testing")]
-impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
+impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::SignatureKey> {
     fn generator(
         expected_node_count: usize,
         _num_bootstrap: usize,

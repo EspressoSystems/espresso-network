@@ -2,11 +2,9 @@ use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::Bytes;
 use cliquenet::{NetConf, Retry};
-use hotshot_types::addr::NetAddr;
-use hotshot_types::x25519::Keypair;
-
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;
+use hotshot_types::{addr::NetAddr, x25519::Keypair};
 use rand::Rng;
 
 /// Send and receive messages of various sizes between 1 byte and 5 MiB.

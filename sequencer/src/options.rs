@@ -413,7 +413,7 @@ impl Options {
         } else if let (Some(staking), Some(state), Some(x25519)) = (
             self.private_staking_key.clone(),
             self.private_state_key.clone(),
-            self.private_x25519_key.clone()
+            self.private_x25519_key.clone(),
         ) {
             let staking = bls_over_bn254::SignKey::try_from(staking)?;
             let state = schnorr::SignKey::try_from(state)?;

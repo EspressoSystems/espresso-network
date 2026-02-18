@@ -93,7 +93,7 @@ pub struct ValidatorConfig<TYPES: NodeType> {
     /// Whether or not this validator is DA
     pub is_da: bool,
     pub x25519_keypair: Option<x25519::Keypair>,
-    pub p2p_addr: Option<NetAddr>
+    pub p2p_addr: Option<NetAddr>,
 }
 
 impl<TYPES: NodeType> ValidatorConfig<TYPES> {
@@ -117,7 +117,7 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
             state_private_key,
             is_da,
             p2p_addr: None,
-            x25519_keypair: None
+            x25519_keypair: None,
         }
     }
 
