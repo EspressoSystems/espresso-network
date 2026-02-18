@@ -153,8 +153,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     "Quorum proposal recv for view {}",
                     proposal.data.view_number()
                 );
-                if self.consensus.read().await.cur_view() > proposal.data.view_number()
-                    || self.cur_view > proposal.data.view_number()
+                if self.consensus.read().await.cur_view() > proposal.data.view_number() + 1
+                    || self.cur_view > proposal.data.view_number() + 1
                 {
                     tracing::warn!(
                         "Throwing away old proposal for view {}",
