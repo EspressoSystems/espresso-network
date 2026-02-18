@@ -1298,7 +1298,7 @@ impl SequencerPersistence for Persistence {
         .await?;
         tx.commit().await?;
 
-        tracing::warn!("migrated reward_merkle_tree_v2 to bincode at height {max_height}");
+        tracing::warn!("migrated reward_merkle_tree_v2 at height {max_height}");
 
         Ok(())
     }
