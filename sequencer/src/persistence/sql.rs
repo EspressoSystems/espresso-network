@@ -1125,7 +1125,7 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.read().await?;
             query_as::<(bool, i64)>(
                 "SELECT completed, migrated_rows FROM epoch_migration WHERE table_name = \
-                 'reward_merkle_tree_v2_bincode'",
+                 'reward_merkle_tree_v2_data'",
             )
             .fetch_optional(tx.as_mut())
             .await?
