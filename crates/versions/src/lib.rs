@@ -84,6 +84,12 @@ impl fmt::Display for Upgrade {
     }
 }
 
+impl From<Version> for Upgrade {
+    fn from(v: Version) -> Self {
+        Self::trivial(v)
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct UpgradeHash<'a>(Cow<'a, [u8; 32]>);
