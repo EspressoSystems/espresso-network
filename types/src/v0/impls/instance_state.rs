@@ -28,7 +28,6 @@ use crate::{
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::{RegisteredValidator, RewardAmount},
-    v0_4::{PermittedRewardMerkleTreeV2, RewardMerkleTreeV2},
     AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
 };
 /// Represents the immutable state of a node.
@@ -513,7 +512,10 @@ pub mod mock {
     use crate::{
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-        v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
+        v0_4::{
+            PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
+            RewardMerkleCommitmentV2,
+        },
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
