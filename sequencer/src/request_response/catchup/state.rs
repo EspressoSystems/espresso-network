@@ -9,7 +9,7 @@ use espresso_types::{
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
         forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
-        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        RewardAccountV2, RewardMerkleCommitmentV2,
     },
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,

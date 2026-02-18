@@ -13,8 +13,10 @@ use espresso_types::{
     FeeAccount, FeeMerkleTree, PubKey, Transaction,
 };
 
-use crate::{api::data_source::TokenDataSource, U256};
-use crate::api::RewardAmount;
+use crate::{
+    api::{data_source::TokenDataSource, RewardAmount},
+    U256,
+};
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
 #[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]

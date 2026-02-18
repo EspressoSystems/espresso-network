@@ -28,7 +28,7 @@ use crate::{
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::{RewardAmount, Validator},
-    v0_4::{PermittedRewardMerkleTreeV2, RewardMerkleTreeV2},
+    v0_4::PermittedRewardMerkleTreeV2,
     EpochCommittees, PubKey, ValidatorMap,
 };
 /// Represents the immutable state of a node.

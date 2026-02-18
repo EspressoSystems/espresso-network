@@ -22,7 +22,7 @@ use espresso_types::{
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
+        RewardAccountV2, RewardMerkleTreeV2,
     },
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
@@ -4062,10 +4062,11 @@ mod test {
 
         let node_state = network.server.node_state();
         let membership = node_state.coordinator.membership().read().await;
-        let expected_amount = U256::from(20) *
-                ( membership
-                    .epoch_block_reward(3.into())
-                    .expect("block reward is not None")).0;
+        let expected_amount = U256::from(20)
+            * (membership
+                .epoch_block_reward(3.into())
+                .expect("block reward is not None"))
+            .0;
         drop(membership);
 
         // get the validator address balance at block height 60
