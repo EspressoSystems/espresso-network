@@ -1151,7 +1151,7 @@
 <a href=#1151 id=1151 data-nosnippet>1151</a>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1152 id=1152 data-nosnippet>1152</a>    <span class="kw">let </span>view_number = proposal.data.view_number();
 <a href=#1153 id=1153 data-nosnippet>1153</a>    <span class="macro">ensure!</span>(
-<a href=#1154 id=1154 data-nosnippet>1154</a>        view_number &gt;= validation_info.consensus.read().<span class="kw">await</span>.cur_view(),
+<a href=#1154 id=1154 data-nosnippet>1154</a>        view_number + <span class="number">1 </span>&gt;= validation_info.consensus.read().<span class="kw">await</span>.cur_view(),
 <a href=#1155 id=1155 data-nosnippet>1155</a>        <span class="string">"Proposal is from an older view {:?}"</span>,
 <a href=#1156 id=1156 data-nosnippet>1156</a>        proposal.data
 <a href=#1157 id=1157 data-nosnippet>1157</a>    );
