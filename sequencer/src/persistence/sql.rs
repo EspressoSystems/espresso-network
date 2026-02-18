@@ -1224,7 +1224,7 @@ impl SequencerPersistence for Persistence {
             tx.commit().await?;
 
             tracing::info!(
-                "reward_merkle_tree_v2 bincode progress: rows={} offset={}",
+                "reward_merkle_tree_v2 progress: rows={} offset={}",
                 rows_count,
                 offset
             );
