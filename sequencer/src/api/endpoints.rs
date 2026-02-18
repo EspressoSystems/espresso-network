@@ -14,6 +14,7 @@ use espresso_types::{
 };
 
 use crate::{api::data_source::TokenDataSource, U256};
+use crate::api::RewardAmount;
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
 #[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
@@ -185,7 +186,7 @@ where
                     ),
                     status: StatusCode::NOT_FOUND,
                 })
-                .map(|proof| proof.balance)
+                .map(|proof| Some(RewardAmount(proof.balance)))
         }
         .boxed()
     })?
