@@ -9,7 +9,7 @@ use std::{borrow::Borrow, collections::HashMap, sync::RwLock};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree_compat::{
     prelude::{MerkleNode, MerkleProof},
-    LookupResult, MerkleTreeError, ToTraversalPath,
+    LookupResult, ToTraversalPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,12 +21,6 @@ use crate::{
 };
 
 /// Root node of a 156-bit inner Merkle tree.
-///
-/// Represents the complete state of one of the 16 inner trees. Can be:
-/// - `Empty` - No accounts in this partition
-/// - `Leaf` - Single account (optimization for sparse trees)
-/// - `Branch` - Multiple accounts, tree has children
-/// - `ForgettenSubtree` - Sparse placeholder with just the root hash
 pub type InnerRewardMerkleTreeRoot = MerkleNode<RewardAmount, RewardAccountV2, KeccakNode>;
 
 /// Outer tree index (0-15) derived from account address high nibble.
@@ -38,7 +32,7 @@ pub type InnerRewardMerkleTreeRoot = MerkleNode<RewardAmount, RewardAccountV2, K
 /// Address:     0xABCDEF...
 ///                ^
 ///              High nibble = A (hex) = 10 (decimal)
-/// OuterIndex:  10 >> 4 =
+/// OuterIndex:  10
 /// ```
 ///
 /// This partitions the 160-bit address space into 16 equal-sized buckets
@@ -403,6 +397,7 @@ pub struct CachedInMemoryStorage {
 // Manual Clone implementation
 impl Clone for CachedInMemoryStorage {
     fn clone(&self) -> Self {
+        self.flush_cache(); // Ensure cache is flushed before cloning
         Self {
             roots: RwLock::new(self.roots.read().unwrap().clone()),
             cache: RwLock::new(self.cache.read().unwrap().clone()),
@@ -448,8 +443,8 @@ impl<'de> Deserialize<'de> for CachedInMemoryStorage {
 impl PartialEq for CachedInMemoryStorage {
     fn eq(&self, other: &Self) -> bool {
         // Flush both caches before comparison
-        let _ = self.flush_cache();
-        let _ = other.flush_cache();
+        self.flush_cache();
+        other.flush_cache();
         *self.roots.read().unwrap() == *other.roots.read().unwrap()
     }
 }
@@ -546,7 +541,7 @@ impl CachedInMemoryStorage {
         }
 
         // Flush the current cache if it exists
-        let _ = self.flush_cache();
+        self.flush_cache();
 
         // Load the tree from storage or create a new one
         let tree = self
@@ -564,15 +559,11 @@ impl CachedInMemoryStorage {
     ///
     /// If cache contains a tree, moves it from cache to HashMap. Called automatically
     /// before loading a different partition or when comparing storage instances.
-    ///
-    /// # Returns
-    /// Always `Ok(())` - in-memory operations never fail
-    fn flush_cache(&self) -> Result<(), MerkleTreeError> {
+    fn flush_cache(&self) {
         let mut cache = self.cache.write().unwrap();
         if let Some((index, tree)) = cache.take() {
             self.roots.write().unwrap().insert(index, tree);
         }
-        Ok(())
     }
 }
 
