@@ -341,9 +341,9 @@ mod test {
 
     use espresso_types::{MockSequencerVersions, PubKey};
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
-    use portpicker::pick_unused_port;
     use surf_disco::{error::ClientError, Client, Url};
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -360,7 +360,7 @@ mod test {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let tmp = TempDir::new().unwrap();
 
         let genesis_file = tmp.path().join("genesis.toml");
