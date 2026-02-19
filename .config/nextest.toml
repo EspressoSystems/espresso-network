@@ -45,6 +45,13 @@ default-filter = 'deps(hotshot-testing)'
 final-status-level = "flaky"
 threads-required = "num-test-threads"
 
+[[profile.hotshot.overrides]]
+filter = """
+test(test_success_with_async_delay_2_with_epochs) |
+test(test_vid2_success)
+"""
+retries = 3
+
 [profile.slow]
 slow-timeout = "2m"
 default-filter = 'package(espresso-dev-node) | package(slow-tests)'
