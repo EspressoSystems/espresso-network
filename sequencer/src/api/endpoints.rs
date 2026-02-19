@@ -5,7 +5,7 @@ use std::{
     env,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use committable::Committable;
 use espresso_types::{
     v0_3::RewardAccountV1,
@@ -14,7 +14,7 @@ use espresso_types::{
 };
 
 use crate::{
-    api::{data_source::TokenDataSource, RewardAmount},
+    api::{data_source::TokenDataSource, RewardAmount, RewardMerkleTreeV2Data},
     U256,
 };
 // re-exported here to avoid breaking changes in consumers
@@ -189,6 +189,54 @@ where
                     status: StatusCode::NOT_FOUND,
                 })
                 .map(|proof| Some(RewardAmount(proof.balance)))
+        }
+        .boxed()
+    })?
+    .get("get_reward_amounts", move |req, state| {
+        async move {
+            let height = req.integer_param("height")?;
+            let limit: usize = req.integer_param("limit")?;
+            let offset = req.integer_param("offset")?;
+
+            if limit > 10_000 {
+                return Err(merklized_state::Error::Custom {
+                    message: format!("limit {limit} exceeds maximum allowed 10000"),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
+            let tree_bytes =
+                state
+                    .load_tree(height)
+                    .await
+                    .map_err(|err| merklized_state::Error::Custom {
+                        message: format!(
+                            "failed to load RewardMerkleTreeV2Data from storage at height \
+                             {height}: {err}"
+                        ),
+                        status: StatusCode::NOT_FOUND,
+                    })?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+                .context(
+                    "Failed to deserialize RewardMerkleTreeV2 for height {height} from storage; \
+                     this should never happen.",
+                )
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load RewardMerkleTreeV2Data from storage at height {height}: \
+                         {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })?;
+
+            let result = tree_data.balances[offset..(offset + limit)]
+                .iter()
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>();
+
+            Ok(result)
         }
         .boxed()
     })?
@@ -763,17 +811,10 @@ where
                 .integer_param::<_, u64>("limit")
                 .map_err(Error::from_request_error)?;
 
-            if limit > 10_000 {
-                return Err(Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    format!("limit {limit} exceeds maximum allowed 10000"),
-                ));
-            }
-
-            state
-                .get_all_reward_accounts(height, offset, limit)
-                .await
-                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+            Err::<u64, _>(Error::catch_all(
+                StatusCode::NOT_FOUND,
+                format!("catchup/reward-amounts is deprecated"),
+            ))
         }
         .boxed()
     })?

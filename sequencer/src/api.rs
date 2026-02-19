@@ -6915,7 +6915,7 @@ mod test {
 
         let err = client
             .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
-                "catchup/{height}/reward-amounts/10001/0"
+                "reward-state-v2/reward-amounts/{height}/0/10001"
             ))
             .send()
             .await
@@ -6944,7 +6944,7 @@ mod test {
 
         let res = client
             .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
-                "catchup/{height}/reward-amounts/{limit}/{offset}"
+                "reward-state-v2/reward-amounts/{height}/{offset}/{limit}"
             ))
             .send()
             .await
