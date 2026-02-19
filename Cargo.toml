@@ -40,6 +40,7 @@ members = [
     "sequencer-sqlite",
     "slow-tests",
     "staking-cli",
+    "test-utils",
     "tests",
     "types",
     "utils",
@@ -83,6 +84,7 @@ default-members = [
     "sequencer",
     "slow-tests",
     "staking-cli",
+    "test-utils",
     "tests",
     "types",
     "utils",
@@ -194,6 +196,7 @@ hotshot-utils = { path = "crates/hotshot/utils" }
 
 espresso-types = { path = "types" }
 light-client = { path = "light-client" }
+test-utils = { path = "test-utils" }
 
 # VID import
 vid = { path = "vid", features = ["parallel", "keccak256"] }
@@ -248,7 +251,6 @@ log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"
 num-traits = "0.2"
 paste = "1.0"
-portpicker = "0.1.1"
 pretty_assertions = { version = "1.4", features = ["unstable"] }
 priority-queue = "2"
 rand = "0.8.5"

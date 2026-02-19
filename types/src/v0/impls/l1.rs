@@ -1118,7 +1118,6 @@ mod test {
         providers::layers::AnvilProvider,
     };
     use espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
-    use portpicker::pick_unused_port;
     use time::OffsetDateTime;
 
     use super::*;
@@ -1421,8 +1420,9 @@ mod test {
     }
 
     async fn test_reconnect_update_task_helper(ws: bool) {
-        let port = pick_unused_port().unwrap();
-        let anvil = Arc::new(Anvil::new().block_time(1).port(port).spawn());
+        // Use port 0 to let OS assign a port, avoiding race conditions
+        let anvil = Arc::new(Anvil::new().block_time(1).port(0u16).spawn());
+        let port = anvil.port();
         let client = new_l1_client(&anvil, ws).await;
 
         let initial_state = client.snapshot().await;
@@ -1681,7 +1681,8 @@ mod test {
     // don't require an L1 that is continuously mining blocks.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_update_loop_initializes_l1_state() {
-        let anvil = Arc::new(Anvil::new().port(9988u16).spawn());
+        // Use port 0 to let OS assign a port, avoiding race conditions
+        let anvil = Arc::new(Anvil::new().port(0u16).spawn());
         let l1_client = new_l1_client(&anvil, true).await;
 
         for _try in 0..10 {

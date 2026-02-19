@@ -28,7 +28,6 @@ hotshot-contract-adapter = { path = "../contracts/rust/adapter" }
 hotshot-state-prover = { path = "../hotshot-state-prover" }
 hotshot-types = { path = "../crates/hotshot/types" }
 jf-signature = { workspace = true }
-portpicker = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 sequencer = { path = "../sequencer", default-features = false, features = ["testing"] }
@@ -38,6 +37,7 @@ surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+test-utils = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
