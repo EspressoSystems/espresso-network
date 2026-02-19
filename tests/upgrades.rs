@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, UpgradeMode};
 use futures::{future::join_all, StreamExt};
+use hotshot_types::utils::epoch_from_block_number;
 use sequencer::Genesis;
 use vbs::version::StaticVersionType;
 
@@ -95,19 +96,21 @@ where
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
     let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
+    let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
+    let first_reward_block = (first_epoch + 1) * epoch_length + 1;
+
     // Calculate reward claim deadline if applicable.
-    // Rewards start 2 epochs after epoch_start_block (no stake table for the first two epochs).
+    // Rewards start at first_reward_block (2 epochs after first_epoch).
     // Add one extra epoch for the light client / state prover to catch up.
     let reward_claim_deadline_block_height =
         if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
-            let rewards_start_block = epoch_start_block + epoch_length * 2;
-            Some(rewards_start_block + epoch_length)
+            Some(first_reward_block + epoch_length)
         } else {
             None
         };
 
-    // Run for at least 3 epochs past epoch_start_block plus margin.
-    let min_block_height = epoch_start_block + epoch_length * 3 + 10;
+    // Run for at least 3 epochs past first_epoch plus margin.
+    let min_block_height = (first_epoch + 2) * epoch_length + 10;
     let expected_block_height = if let Some(deadline) = reward_claim_deadline_block_height {
         min_block_height.max(deadline)
     } else {
@@ -117,10 +120,8 @@ where
     println!("Upgrade test config:");
     println!("  epoch_start_block: {epoch_start_block}");
     println!("  epoch_length: {epoch_length}");
-    println!(
-        "  rewards_start_block: {}",
-        epoch_start_block + epoch_length * 2
-    );
+    println!("  first_epoch: {first_epoch}");
+    println!("  first_reward_block: {first_reward_block}");
     println!("  reward_claim_deadline: {reward_claim_deadline_block_height:?}");
     println!("  expected_block_height: {expected_block_height}");
 
