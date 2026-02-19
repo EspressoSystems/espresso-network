@@ -480,7 +480,7 @@ pub async fn run() -> Result<()> {
 
             // Validate metadata URI if present and validation not skipped
             if let Some(url) = metadata_uri.url() {
-                if !config.skip_metadata_validation {
+                if !metadata_uri_args.skip_metadata_validation {
                     validate_metadata_uri(url, &payload.bls_vk)
                         .await
                         .context("use --skip-metadata-validation to skip")?;
@@ -534,7 +534,7 @@ pub async fn run() -> Result<()> {
 
             // Validate metadata URI if present and validation not skipped
             if let Some(url) = metadata_uri.url() {
-                if !config.skip_metadata_validation {
+                if !metadata_uri_args.skip_metadata_validation {
                     let bls_vk = consensus_public_key.ok_or_else(|| {
                         anyhow::anyhow!(
                             "--consensus-public-key is required for metadata validation (use \

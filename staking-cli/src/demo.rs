@@ -21,7 +21,7 @@ use alloy::{
 use anyhow::Result;
 use clap::ValueEnum;
 use espresso_contract_deployer::{build_provider, build_signer, HttpProviderWithWallet};
-use futures_util::future;
+use futures_util::{stream, StreamExt as _, TryStreamExt as _};
 use hotshot_contract_adapter::{
     sol_types::{EspToken, StakeTableV2},
     stake_table::StakeTableContractVersion,
@@ -287,12 +287,11 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
         while let Some(tx) = txs.pop_front() {
             pending.push(self.send_next(tx).await?);
         }
-        future::try_join_all(
-            pending
-                .into_iter()
-                .map(|p| async move { p.assert_success().await }),
-        )
-        .await
+        stream::iter(pending)
+            .map(|pending| async move { pending.assert_success().await })
+            .buffer_unordered(32)
+            .try_collect()
+            .await
     }
 }
 
@@ -750,7 +749,7 @@ pub async fn stake_for_demo(
 #[cfg(test)]
 mod test {
     use alloy::providers::ext::AnvilApi as _;
-    use espresso_types::v0_3::Validator;
+    use espresso_types::v0_3::RegisteredValidator;
     use hotshot_types::signature_key::BLSPubKey;
     use pretty_assertions::assert_matches;
     use rand::rngs::StdRng;
@@ -760,7 +759,10 @@ mod test {
 
     async fn shared_setup(
         config: DelegationConfig,
-    ) -> Result<(Validator<BLSPubKey>, Validator<BLSPubKey>)> {
+    ) -> Result<(
+        RegisteredValidator<BLSPubKey>,
+        RegisteredValidator<BLSPubKey>,
+    )> {
         let system = TestSystem::deploy().await?;
 
         let mut rng = StdRng::from_seed([42u8; 32]);

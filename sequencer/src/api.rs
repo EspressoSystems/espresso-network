@@ -17,12 +17,12 @@ use espresso_types::{
     traits::EventsPersistenceRead,
     v0::traits::{SequencerPersistence, StateCatchup},
     v0_3::{
-        ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
-        StakeTableEvent, Validator,
+        ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
+        RewardMerkleTreeV1, StakeTableEvent,
     },
     v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
-    AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
-    Transaction, ValidatorMap,
+    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
+    NodeState, PubKey, Transaction,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
@@ -246,7 +246,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<ValidatorMap> {
+    ) -> anyhow::Result<AuthenticatedValidatorMap> {
         self.as_ref().get_validators(epoch).await
     }
 
@@ -260,8 +260,17 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().current_proposal_participation().await
     }
+    /// Get all the validator participation for the previous epoch
     async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().previous_proposal_participation().await
+    }
+    /// Get all the vote participation for the current epoch
+    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.as_ref().current_vote_participation().await
+    }
+    /// Get all the vote participation for the previous epoch
+    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.as_ref().previous_vote_participation().await
     }
 
     async fn get_all_validators(
@@ -269,7 +278,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         epoch: <SeqTypes as NodeType>::Epoch,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         self.as_ref().get_all_validators(epoch, offset, limit).await
     }
 
@@ -439,7 +448,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
-    ) -> anyhow::Result<ValidatorMap> {
+    ) -> anyhow::Result<AuthenticatedValidatorMap> {
         let mem = self
             .consensus()
             .await
@@ -450,8 +459,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .await
             .context("membership not found")?;
 
-        let r = mem.coordinator.membership().read().await;
-        r.active_validators(&epoch)
+        let membership = mem.coordinator.membership().read().await;
+        membership.active_validators(&epoch)
     }
 
     /// Get the current proposal participation.
@@ -478,12 +487,36 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .previous_proposal_participation()
     }
 
+    /// Get the current vote participation.
+    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .read()
+            .await
+            .current_vote_participation()
+    }
+
+    /// Get the previous vote participation.
+    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .read()
+            .await
+            .previous_vote_participation()
+    }
+
     async fn get_all_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         let handle = self.consensus().await;
         let handle_read = handle.read().await;
         let storage = handle_read.storage();
@@ -2646,9 +2679,9 @@ mod test {
         },
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
-        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
-        SequencerVersions, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
-        ValidatedState,
+        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof,
+        RegisteredValidatorMap, RewardDistributor, SequencerVersions, StakeTableState,
+        StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
     };
     use futures::{
         future::{self, join_all, try_join_all},
@@ -2893,6 +2926,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![url.clone()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -2938,6 +2972,7 @@ mod test {
                 Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![url],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )),
                 None,
@@ -3195,6 +3230,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -3266,6 +3302,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -3330,6 +3367,7 @@ mod test {
                 StatePeers::<SequencerApiVersion>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -3486,6 +3524,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -3547,6 +3586,7 @@ mod test {
         let peers = StatePeers::<StaticVersion<0, 1>>::from_urls(
             vec!["https://notarealnode.network".parse().unwrap(), url],
             Default::default(),
+            Duration::from_secs(2),
             &NoMetrics,
         );
 
@@ -3741,6 +3781,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -3838,6 +3879,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -3871,7 +3913,7 @@ mod test {
         // Basically epoch 3 and epoch 4 as epoch height is 20
         // get all the validators
         let validators = client
-            .get::<ValidatorMap>("node/validators/3")
+            .get::<AuthenticatedValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("failed to get validator");
@@ -3886,7 +3928,7 @@ mod test {
         }
         // get all the validators
         let validators = client
-            .get::<ValidatorMap>("node/validators/4")
+            .get::<AuthenticatedValidatorMap>("node/validators/4")
             .send()
             .await
             .expect("failed to get validator");
@@ -3960,6 +4002,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4069,6 +4112,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4096,14 +4140,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<ValidatorMap>("node/validators/1")
+                .get::<AuthenticatedValidatorMap>("node/validators/1")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<ValidatorMap>("node/validators/2")
+                .get::<AuthenticatedValidatorMap>("node/validators/2")
                 .send()
                 .await
                 .unwrap()
@@ -4112,7 +4156,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<ValidatorMap>("node/validators/3")
+            .get::<AuthenticatedValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("validators");
@@ -4178,7 +4222,7 @@ mod test {
             drop(membership);
 
             let validators = client
-                .get::<ValidatorMap>(&format!("node/validators/{epoch}"))
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
                 .send()
                 .await
                 .expect("validators");
@@ -4296,6 +4340,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4323,14 +4368,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<ValidatorMap>("node/validators/1")
+                .get::<AuthenticatedValidatorMap>("node/validators/1")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<ValidatorMap>("node/validators/2")
+                .get::<AuthenticatedValidatorMap>("node/validators/2")
                 .send()
                 .await
                 .unwrap()
@@ -4339,7 +4384,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<ValidatorMap>("node/validators/3")
+            .get::<AuthenticatedValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("validators");
@@ -4422,7 +4467,7 @@ mod test {
             drop(membership);
 
             let validators = client
-                .get::<ValidatorMap>(&format!("node/validators/{epoch_number}"))
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch_number}"))
                 .send()
                 .await
                 .expect("validators");
@@ -4558,6 +4603,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4627,6 +4673,7 @@ mod test {
             StatePeers::<StaticVersion<0, 1>>::from_urls(
                 vec![format!("http://localhost:{port}").parse().unwrap()],
                 Default::default(),
+                Duration::from_secs(2),
                 &NoMetrics,
             )
         });
@@ -4686,6 +4733,7 @@ mod test {
                 Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )),
                 None,
@@ -4759,6 +4807,7 @@ mod test {
             StatePeers::<StaticVersion<0, 1>>::from_urls(
                 vec![format!("http://localhost:{port}").parse().unwrap()],
                 Default::default(),
+                Duration::from_secs(2),
                 &NoMetrics,
             )
         });
@@ -4821,6 +4870,7 @@ mod test {
                 Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )),
                 None,
@@ -4922,6 +4972,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -4969,6 +5020,7 @@ mod test {
                             Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                                 vec![format!("http://localhost:{api_port}").parse().unwrap()],
                                 Default::default(),
+                                Duration::from_secs(2),
                                 &NoMetrics,
                             )),
                             storage,
@@ -5008,6 +5060,7 @@ mod test {
                             Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                                 vec![format!("http://localhost:{api_port}").parse().unwrap()],
                                 Default::default(),
+                                Duration::from_secs(2),
                                 &NoMetrics,
                             )),
                             storage,
@@ -5148,6 +5201,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -5191,6 +5245,7 @@ mod test {
                             Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                                 vec![format!("http://localhost:{api_port}").parse().unwrap()],
                                 Default::default(),
+                                Duration::from_secs(2),
                                 &NoMetrics,
                             )),
                             storage,
@@ -5456,6 +5511,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -5524,6 +5580,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -6097,6 +6154,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -6174,6 +6232,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -6302,6 +6361,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -6353,6 +6413,7 @@ mod test {
                             Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                                 vec![format!("http://localhost:{api_port}").parse().unwrap()],
                                 Default::default(),
+                                Duration::from_secs(2),
                                 &NoMetrics,
                             )),
                             storage,
@@ -6425,6 +6486,7 @@ mod test {
                 StatePeers::<SequencerApiVersion>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -6486,7 +6548,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
-            .get::<ValidatorMap>(&format!("node/validators/{}", target_epoch - 1))
+            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{}", target_epoch - 1))
             .send()
             .await
             .expect("validators");
@@ -6499,7 +6561,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
-            .get::<ValidatorMap>(&format!("node/validators/{target_epoch}"))
+            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
             .send()
             .await
             .expect("validators");
@@ -6575,6 +6637,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -6714,6 +6777,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -6727,7 +6791,7 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let err = client
-            .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/1001")
+            .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/1/0/1001")
             .header("Accept", "application/json")
             .send()
             .await
@@ -6745,14 +6809,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<Vec<Validator<PubKey>>>("node/all-validators/1/0/100")
+                .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/1/0/100")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<Vec<Validator<PubKey>>>("node/all-validators/2/0/100")
+                .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/2/0/100")
                 .send()
                 .await
                 .unwrap()
@@ -6761,7 +6825,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<Vec<Validator<PubKey>>>("node/all-validators/3/0/100")
+            .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/3/0/100")
             .send()
             .await
             .expect("validators");
@@ -6802,6 +6866,7 @@ mod test {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -7132,6 +7197,7 @@ mod test {
                 StatePeers::<SequencerApiVersion>::from_urls(
                     vec![url.clone()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -7354,6 +7420,7 @@ mod test {
                 StatePeers::<SequencerApiVersion>::from_urls(
                     vec![url.clone()],
                     Default::default(),
+                    Duration::from_secs(2),
                     &NoMetrics,
                 )
             }))
@@ -7549,7 +7616,7 @@ mod test {
                 .unwrap()
                 .into_iter()
                 .map(|v| (v.account, v))
-                .collect::<ValidatorMap>()
+                .collect::<RegisteredValidatorMap>()
         );
 
         // Querying for a stake table before the first real epoch is an error.
