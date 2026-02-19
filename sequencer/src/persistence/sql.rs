@@ -1119,6 +1119,25 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
 #[async_trait]
 impl SequencerPersistence for Persistence {
     async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
+        let batch_size: i64 = 1000;
+
+        let result = {
+            let mut tx = self.db.read().await?;
+            query_as::<(bool, i64)>(
+                "SELECT completed, migrated_rows FROM epoch_migration WHERE table_name = \
+                 'reward_merkle_tree_v2_data'",
+            )
+            .fetch_optional(tx.as_mut())
+            .await?
+        };
+
+        let (is_completed, mut offset) = result.unwrap_or((false, 0));
+
+        if is_completed {
+            tracing::info!("reward_merkle_tree_v2 migration already done");
+            return Ok(());
+        }
+
         let max_height: Option<i64> = {
             let mut tx = self.db.read().await?;
             query_as::<(Option<i64>,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
@@ -1140,39 +1159,79 @@ impl SequencerPersistence for Persistence {
              {max_height}..."
         );
 
-        let mut tx = self.db.read().await?;
+        let mut balances: Vec<(RewardAccountV2, RewardAmount)> = Vec::new();
 
-        #[cfg(not(feature = "embedded-db"))]
-        let query_str = "SELECT DISTINCT ON (idx) idx, entry
-               FROM reward_merkle_tree_v2
-              WHERE idx IS NOT NULL AND created <= $1
-              ORDER BY idx DESC, created DESC";
+        loop {
+            let mut tx = self.db.read().await?;
 
-        #[cfg(feature = "embedded-db")]
-        let query_str = "SELECT idx, entry FROM (
-                 SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) as \
-                         rn
+            #[cfg(not(feature = "embedded-db"))]
+            let rows = query_as::<(serde_json::Value, serde_json::Value)>(
+                "SELECT DISTINCT ON (idx) idx, entry
                    FROM reward_merkle_tree_v2
-                  WHERE created <= $1 AND idx IS NOT NULL
-             ) sub
-             WHERE rn = 1";
-
-        let rows = query_as::<(serde_json::Value, serde_json::Value)>(query_str)
-            .bind(max_height)
+                  WHERE idx IS NOT NULL AND entry IS NOT NULL
+                  ORDER BY idx, created DESC
+                  LIMIT $1 OFFSET $2",
+            )
+            .bind(batch_size)
+            .bind(offset)
             .fetch_all(tx.as_mut())
             .await
             .context("loading reward accounts from reward_merkle_tree_v2")?;
 
-        drop(tx);
+            #[cfg(feature = "embedded-db")]
+            let rows = query_as::<(serde_json::Value, serde_json::Value)>(
+                "SELECT idx, entry FROM (
+                     SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) \
+                 as rn
+                       FROM reward_merkle_tree_v2
+                      WHERE idx IS NOT NULL AND entry IS NOT NULL
+                 ) sub
+                 WHERE rn = 1 ORDER BY idx
+                 LIMIT $1 OFFSET $2",
+            )
+            .bind(batch_size)
+            .bind(offset)
+            .fetch_all(tx.as_mut())
+            .await
+            .context("loading reward accounts from reward_merkle_tree_v2")?;
 
-        let mut balances = Vec::with_capacity(rows.len());
-        for (idx, entry) in rows {
-            let account: RewardAccountV2 =
-                serde_json::from_value(idx).context("deserializing reward account")?;
-            let balance: RewardAmount = serde_json::from_value(entry).context(format!(
-                "deserializing reward balance for account {account}"
-            ))?;
-            balances.push((account, balance));
+            drop(tx);
+
+            if rows.is_empty() {
+                break;
+            }
+
+            let rows_count = rows.len();
+
+            for (idx, entry) in rows {
+                let account: RewardAccountV2 =
+                    serde_json::from_value(idx).context("deserializing reward account")?;
+                let balance: RewardAmount = serde_json::from_value(entry).context(format!(
+                    "deserializing reward balance for account {account}"
+                ))?;
+                balances.push((account, balance));
+            }
+
+            offset += rows_count as i64;
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_migration",
+                ["table_name", "completed", "migrated_rows"],
+                ["table_name"],
+                [("reward_merkle_tree_v2_data".to_string(), false, offset)],
+            )
+            .await?;
+            tx.commit().await?;
+
+            tracing::info!(
+                "reward_merkle_tree_v2 progress: rows={} offset={}",
+                rows_count,
+                offset
+            );
+
+            if rows_count < batch_size as usize {
+                break;
+            }
         }
 
         if balances.is_empty() {
@@ -1228,9 +1287,18 @@ impl SequencerPersistence for Persistence {
         .await?;
         tx.commit().await?;
 
-        tracing::warn!(
-            "migrated reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height {max_height}"
-        );
+        // Mark migration as complete
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "epoch_migration",
+            ["table_name", "completed", "migrated_rows"],
+            ["table_name"],
+            [("reward_merkle_tree_v2_data".to_string(), true, offset)],
+        )
+        .await?;
+        tx.commit().await?;
+
+        tracing::warn!("migrated reward_merkle_tree_v2 at height {max_height}");
 
         Ok(())
     }

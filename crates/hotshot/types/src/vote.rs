@@ -84,6 +84,12 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> impl std::future::Future<Output = Result<()>>;
+    /// Get the list of signers given a certificate.
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>>;
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
     fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = U256> + Send;

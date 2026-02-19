@@ -4,6 +4,18 @@ METHOD = "GET"
 ":height" = "Integer"
 DOC = "Get the snapshot of this node's RewardMerkleTreeV2 at the given hotshot block height, serialized as a RewardMerkleTreeV2Data."
 
+[route.get_reward_amounts]
+PATH = ["/reward-amounts/:height/:offset/:limit"]
+":height" = "Integer"
+":limit" = "Integer"
+":offset" = "Integer"
+METHOD = "GET"
+DOC = """
+Return all RewardMerkleTreeV2 accounts stored for the requested height, paginated by `:limit` and
+`:offset` (limit must be <= 10000). The response is a list of `(account, balance)`
+"""
+
+
 [route.get_latest_reward_account_proof]
 PATH = ["proof/latest/:address"]
 METHOD = "GET"
