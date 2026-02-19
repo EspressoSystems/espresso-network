@@ -574,7 +574,7 @@ async fn execute_signed_tx_log_inner<P: Provider + Clone + 'static>(
                     drop(concurrency_permit);
 
                     let count = submitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    if count % 100 == 0 || count == total {
+                    if count.is_multiple_of(100) || count == total {
                         tracing::info!("phase {}: submitted {}/{}", phase, count, total);
                     }
 
