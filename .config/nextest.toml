@@ -47,6 +47,7 @@ threads-required = "num-test-threads"
 
 [[profile.hotshot.overrides]]
 filter = """
+test(test_success_with_async_delay_with_epochs) |
 test(test_success_with_async_delay_2_with_epochs) |
 test(test_vid2_success) |
 test(test_combined_network_half_dc)
