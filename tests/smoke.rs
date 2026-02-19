@@ -7,12 +7,12 @@ use futures::StreamExt;
 use crate::common::{NativeDemo, TestRequirements, TestRuntime};
 
 pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<()> {
-    let start = Instant::now();
     dotenvy::dotenv()?;
 
     println!("{:#?}", requirements);
 
     let mut runtime = TestRuntime::from_requirements(requirements.clone()).await?;
+    let start = Instant::now();
 
     let initial = runtime.test_state().await;
     println!("Initial State: {initial}");

@@ -254,7 +254,12 @@ impl TestRuntime {
 
     pub async fn from_requirements(requirements: TestRequirements) -> Result<Self> {
         let config = TestConfig::from_env(requirements)?;
-        Self::initialize(config, Duration::from_secs(30)).await
+        tokio::time::timeout(
+            Duration::from_secs(180),
+            Self::initialize(config, Duration::from_secs(30)),
+        )
+        .await
+        .context("test initialization timed out after 3 minutes")?
     }
 
     /// Update the reward claim address from the contract
