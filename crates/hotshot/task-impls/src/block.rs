@@ -480,16 +480,15 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     );
                     return Ok((block.clone(), metadata.clone()));
                 },
-                _ => continue,
-            }
-            if let HotShotEvent::BlockRecv(block_recv) = event.as_ref() {
-                if block_recv.view_number == parent_view {
+                HotShotEvent::BlockRecv(block_recv) if block_recv.view_number == parent_view => {
+                    tracing::debug!("Received block for parent view {parent_view}, building block");
                     let payload = <TYPES::BlockPayload as BlockPayload<TYPES>>::from_bytes(
                         &block_recv.encoded_transactions,
                         &block_recv.metadata,
                     );
                     return Ok((payload, block_recv.metadata.clone()));
-                }
+                },
+                _ => continue,
             }
         }
         Err(hotshot_utils::anytrace::error!("No block received"))
