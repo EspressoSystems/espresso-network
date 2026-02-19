@@ -114,7 +114,16 @@ where
         min_block_height
     };
 
-    // verify native demo continues to work after upgrade
+    println!("Upgrade test config:");
+    println!("  epoch_start_block: {epoch_start_block}");
+    println!("  epoch_length: {epoch_length}");
+    println!(
+        "  rewards_start_block: {}",
+        epoch_start_block + epoch_length * 2
+    );
+    println!("  reward_claim_deadline: {reward_claim_deadline_block_height:?}");
+    println!("  expected_block_height: {expected_block_height}");
+
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
