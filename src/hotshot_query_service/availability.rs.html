@@ -802,10 +802,10 @@
 <a href=#802 id=802 data-nosnippet>802</a>    <span class="kw">use </span>futures::future::FutureExt;
 <a href=#803 id=803 data-nosnippet>803</a>    <span class="kw">use </span>hotshot_example_types::node_types::EpochsTestVersions;
 <a href=#804 id=804 data-nosnippet>804</a>    <span class="kw">use </span>hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
-<a href=#805 id=805 data-nosnippet>805</a>    <span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#806 id=806 data-nosnippet>806</a>    <span class="kw">use </span>serde::de::DeserializeOwned;
-<a href=#807 id=807 data-nosnippet>807</a>    <span class="kw">use </span>surf_disco::{Client, Error <span class="kw">as _</span>};
-<a href=#808 id=808 data-nosnippet>808</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#805 id=805 data-nosnippet>805</a>    <span class="kw">use </span>serde::de::DeserializeOwned;
+<a href=#806 id=806 data-nosnippet>806</a>    <span class="kw">use </span>surf_disco::{Client, Error <span class="kw">as _</span>};
+<a href=#807 id=807 data-nosnippet>807</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#808 id=808 data-nosnippet>808</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#809 id=809 data-nosnippet>809</a>    <span class="kw">use </span>tide_disco::App;
 <a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">use </span>toml::toml;
 <a href=#811 id=811 data-nosnippet>811</a>
@@ -861,7 +861,7 @@
 <a href=#861 id=861 data-nosnippet>861</a>        <span class="comment">// Check the consistency of every block/leaf pair.
 <a href=#862 id=862 data-nosnippet>862</a>        </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..height {
 <a href=#863 id=863 data-nosnippet>863</a>            <span class="comment">// Limit the number of blocks we validate in order to
-<a href=#864 id=864 data-nosnippet>864</a>            // speeed up the tests.
+<a href=#864 id=864 data-nosnippet>864</a>            // speed up the tests.
 <a href=#865 id=865 data-nosnippet>865</a>            </span><span class="kw">if </span>![<span class="number">0</span>, <span class="number">1</span>, height / <span class="number">2</span>, height - <span class="number">1</span>].contains(<span class="kw-2">&amp;</span>i) {
 <a href=#866 id=866 data-nosnippet>866</a>                <span class="kw">continue</span>;
 <a href=#867 id=867 data-nosnippet>867</a>            }
@@ -1115,7 +1115,7 @@
 <a href=#1115 id=1115 data-nosnippet>1115</a>        network.start().<span class="kw">await</span>;
 <a href=#1116 id=1116 data-nosnippet>1116</a>
 <a href=#1117 id=1117 data-nosnippet>1117</a>        <span class="comment">// Start the web server.
-<a href=#1118 id=1118 data-nosnippet>1118</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1118 id=1118 data-nosnippet>1118</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1119 id=1119 data-nosnippet>1119</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#1120 id=1120 data-nosnippet>1120</a>        <span class="kw">let </span>options = Options {
 <a href=#1121 id=1121 data-nosnippet>1121</a>            small_object_range_limit: <span class="number">500</span>,
@@ -1206,7 +1206,7 @@
 <a href=#1206 id=1206 data-nosnippet>1206</a>        <span class="comment">// Check the consistency of every block/leaf pair.
 <a href=#1207 id=1207 data-nosnippet>1207</a>        </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..height {
 <a href=#1208 id=1208 data-nosnippet>1208</a>            <span class="comment">// Limit the number of blocks we validate in order to
-<a href=#1209 id=1209 data-nosnippet>1209</a>            // speeed up the tests.
+<a href=#1209 id=1209 data-nosnippet>1209</a>            // speed up the tests.
 <a href=#1210 id=1210 data-nosnippet>1210</a>            </span><span class="kw">if </span>![<span class="number">0</span>, <span class="number">1</span>, height / <span class="number">2</span>, height - <span class="number">1</span>].contains(<span class="kw-2">&amp;</span>i) {
 <a href=#1211 id=1211 data-nosnippet>1211</a>                <span class="kw">continue</span>;
 <a href=#1212 id=1212 data-nosnippet>1212</a>            }
@@ -1460,7 +1460,7 @@
 <a href=#1460 id=1460 data-nosnippet>1460</a>        network.start().<span class="kw">await</span>;
 <a href=#1461 id=1461 data-nosnippet>1461</a>
 <a href=#1462 id=1462 data-nosnippet>1462</a>        <span class="comment">// Start the web server.
-<a href=#1463 id=1463 data-nosnippet>1463</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1463 id=1463 data-nosnippet>1463</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1464 id=1464 data-nosnippet>1464</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#1465 id=1465 data-nosnippet>1465</a>        app.register_module(
 <a href=#1466 id=1466 data-nosnippet>1466</a>            <span class="string">"availability"</span>,
@@ -1513,7 +1513,7 @@
 <a href=#1513 id=1513 data-nosnippet>1513</a>        network.start().<span class="kw">await</span>;
 <a href=#1514 id=1514 data-nosnippet>1514</a>
 <a href=#1515 id=1515 data-nosnippet>1515</a>        <span class="comment">// Start the web server.
-<a href=#1516 id=1516 data-nosnippet>1516</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1516 id=1516 data-nosnippet>1516</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1517 id=1517 data-nosnippet>1517</a>
 <a href=#1518 id=1518 data-nosnippet>1518</a>        <span class="kw">let </span>options = Options {
 <a href=#1519 id=1519 data-nosnippet>1519</a>            small_object_range_limit: <span class="number">500</span>,
@@ -1674,7 +1674,7 @@
 <a href=#1674 id=1674 data-nosnippet>1674</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(RwLock::new(data_source));
 <a href=#1675 id=1675 data-nosnippet>1675</a>        app.register_module(<span class="string">"availability"</span>, api).unwrap();
 <a href=#1676 id=1676 data-nosnippet>1676</a>
-<a href=#1677 id=1677 data-nosnippet>1677</a>        <span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1677 id=1677 data-nosnippet>1677</a>        <span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1678 id=1678 data-nosnippet>1678</a>        <span class="kw">let </span>_server = BackgroundTask::spawn(
 <a href=#1679 id=1679 data-nosnippet>1679</a>            <span class="string">"server"</span>,
 <a href=#1680 id=1680 data-nosnippet>1680</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>), MockBase::instance()),
@@ -1713,7 +1713,7 @@
 <a href=#1713 id=1713 data-nosnippet>1713</a>        network.start().<span class="kw">await</span>;
 <a href=#1714 id=1714 data-nosnippet>1714</a>
 <a href=#1715 id=1715 data-nosnippet>1715</a>        <span class="comment">// Start the web server.
-<a href=#1716 id=1716 data-nosnippet>1716</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1716 id=1716 data-nosnippet>1716</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1717 id=1717 data-nosnippet>1717</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#1718 id=1718 data-nosnippet>1718</a>        app.register_module(
 <a href=#1719 id=1719 data-nosnippet>1719</a>            <span class="string">"availability"</span>,
@@ -1803,7 +1803,7 @@
 <a href=#1803 id=1803 data-nosnippet>1803</a>        network.start().<span class="kw">await</span>;
 <a href=#1804 id=1804 data-nosnippet>1804</a>
 <a href=#1805 id=1805 data-nosnippet>1805</a>        <span class="comment">// Start the web server.
-<a href=#1806 id=1806 data-nosnippet>1806</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1806 id=1806 data-nosnippet>1806</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1807 id=1807 data-nosnippet>1807</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#1808 id=1808 data-nosnippet>1808</a>        app.register_module(
 <a href=#1809 id=1809 data-nosnippet>1809</a>            <span class="string">"availability"</span>,
@@ -1843,7 +1843,7 @@
 <a href=#1843 id=1843 data-nosnippet>1843</a>        network.start().<span class="kw">await</span>;
 <a href=#1844 id=1844 data-nosnippet>1844</a>
 <a href=#1845 id=1845 data-nosnippet>1845</a>        <span class="comment">// Start the web server.
-<a href=#1846 id=1846 data-nosnippet>1846</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1846 id=1846 data-nosnippet>1846</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1847 id=1847 data-nosnippet>1847</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#1848 id=1848 data-nosnippet>1848</a>        app.register_module(
 <a href=#1849 id=1849 data-nosnippet>1849</a>            <span class="string">"availability"</span>,

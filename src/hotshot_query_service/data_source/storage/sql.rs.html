@@ -1148,8 +1148,8 @@
 <a href=#1148 id=1148 data-nosnippet>1148</a>        time::Duration,
 <a href=#1149 id=1149 data-nosnippet>1149</a>    };
 <a href=#1150 id=1150 data-nosnippet>1150</a>
-<a href=#1151 id=1151 data-nosnippet>1151</a>    <span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#1152 id=1152 data-nosnippet>1152</a>    <span class="kw">use </span>refinery::Migration;
+<a href=#1151 id=1151 data-nosnippet>1151</a>    <span class="kw">use </span>refinery::Migration;
+<a href=#1152 id=1152 data-nosnippet>1152</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#1153 id=1153 data-nosnippet>1153</a>    <span class="kw">use </span>tokio::{net::TcpStream, time::timeout};
 <a href=#1154 id=1154 data-nosnippet>1154</a>
 <a href=#1155 id=1155 data-nosnippet>1155</a>    <span class="kw">use </span><span class="kw">super</span>::Config;
@@ -1207,7 +1207,7 @@
 <a href=#1207 id=1207 data-nosnippet>1207</a>            // "free" port on that system.
 <a href=#1208 id=1208 data-nosnippet>1208</a>            // We *might* be able to get away with this as any remote docker
 <a href=#1209 id=1209 data-nosnippet>1209</a>            // host should hopefully be pretty open with it's port space.
-<a href=#1210 id=1210 data-nosnippet>1210</a>            </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#1210 id=1210 data-nosnippet>1210</a>            </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#1211 id=1211 data-nosnippet>1211</a>            <span class="kw">let </span>host = docker_hostname.unwrap_or(<span class="string">"localhost"</span>.to_string());
 <a href=#1212 id=1212 data-nosnippet>1212</a>
 <a href=#1213 id=1213 data-nosnippet>1213</a>            <span class="kw">let </span><span class="kw-2">mut </span>cmd = Command::new(<span class="string">"docker"</span>);

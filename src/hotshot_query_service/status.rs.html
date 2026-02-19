@@ -112,10 +112,10 @@
 <a href=#112 id=112 data-nosnippet>112</a>
 <a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">use </span>async_lock::RwLock;
 <a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">use </span>futures::FutureExt;
-<a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">use </span>reqwest::redirect::Policy;
-<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">use </span>surf_disco::Client;
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">use </span>reqwest::redirect::Policy;
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">use </span>surf_disco::Client;
+<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">use </span>tide_disco::{App, Url};
 <a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">use </span>toml::toml;
 <a href=#121 id=121 data-nosnippet>121</a>
@@ -137,7 +137,7 @@
 <a href=#137 id=137 data-nosnippet>137</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockDataSource, MockVersions&gt;::init().<span class="kw">await</span>;
 <a href=#138 id=138 data-nosnippet>138</a>
 <a href=#139 id=139 data-nosnippet>139</a>        <span class="comment">// Start the web server.
-<a href=#140 id=140 data-nosnippet>140</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#140 id=140 data-nosnippet>140</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#141 id=141 data-nosnippet>141</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#142 id=142 data-nosnippet>142</a>        app.register_module(
 <a href=#143 id=143 data-nosnippet>143</a>            <span class="string">"status"</span>,
@@ -251,7 +251,7 @@
 <a href=#251 id=251 data-nosnippet>251</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(RwLock::new(data_source));
 <a href=#252 id=252 data-nosnippet>252</a>        app.register_module(<span class="string">"status"</span>, api).unwrap();
 <a href=#253 id=253 data-nosnippet>253</a>
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>_server = BackgroundTask::spawn(
 <a href=#256 id=256 data-nosnippet>256</a>            <span class="string">"server"</span>,
 <a href=#257 id=257 data-nosnippet>257</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>), MockBase::instance()),

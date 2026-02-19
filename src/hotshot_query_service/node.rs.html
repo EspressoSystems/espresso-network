@@ -230,9 +230,9 @@
 <a href=#230 id=230 data-nosnippet>230</a>            EncodeBytes,
 <a href=#231 id=231 data-nosnippet>231</a>        },
 <a href=#232 id=232 data-nosnippet>232</a>    };
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">use </span>surf_disco::Client;
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">use </span>surf_disco::Client;
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#235 id=235 data-nosnippet>235</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#236 id=236 data-nosnippet>236</a>    <span class="kw">use </span>tide_disco::{App, Error <span class="kw">as _</span>};
 <a href=#237 id=237 data-nosnippet>237</a>    <span class="kw">use </span>tokio::time::sleep;
 <a href=#238 id=238 data-nosnippet>238</a>    <span class="kw">use </span>toml::toml;
@@ -258,7 +258,7 @@
 <a href=#258 id=258 data-nosnippet>258</a>        network.start().<span class="kw">await</span>;
 <a href=#259 id=259 data-nosnippet>259</a>
 <a href=#260 id=260 data-nosnippet>260</a>        <span class="comment">// Start the web server.
-<a href=#261 id=261 data-nosnippet>261</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#261 id=261 data-nosnippet>261</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#263 id=263 data-nosnippet>263</a>        app.register_module(
 <a href=#264 id=264 data-nosnippet>264</a>            <span class="string">"node"</span>,
@@ -436,7 +436,7 @@
 <a href=#436 id=436 data-nosnippet>436</a>        network.start().<span class="kw">await</span>;
 <a href=#437 id=437 data-nosnippet>437</a>
 <a href=#438 id=438 data-nosnippet>438</a>        <span class="comment">// Start the web server.
-<a href=#439 id=439 data-nosnippet>439</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#439 id=439 data-nosnippet>439</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#440 id=440 data-nosnippet>440</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#441 id=441 data-nosnippet>441</a>        app.register_module(
 <a href=#442 id=442 data-nosnippet>442</a>            <span class="string">"node"</span>,
@@ -638,7 +638,7 @@
 <a href=#638 id=638 data-nosnippet>638</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(RwLock::new(data_source));
 <a href=#639 id=639 data-nosnippet>639</a>        app.register_module(<span class="string">"node"</span>, api).unwrap();
 <a href=#640 id=640 data-nosnippet>640</a>
-<a href=#641 id=641 data-nosnippet>641</a>        <span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#641 id=641 data-nosnippet>641</a>        <span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#642 id=642 data-nosnippet>642</a>        <span class="kw">let </span>_server = BackgroundTask::spawn(
 <a href=#643 id=643 data-nosnippet>643</a>            <span class="string">"server"</span>,
 <a href=#644 id=644 data-nosnippet>644</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>), MockBase::instance()),

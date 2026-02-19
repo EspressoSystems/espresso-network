@@ -12,9 +12,9 @@
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>clap::Parser;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>espresso_types::SeqTypes;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>rand::{rngs::StdRng, RngCore, SeedableRng};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>sequencer::network::cdn::{TestingDef, WrappedSignatureKey};
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>rand::{rngs::StdRng, RngCore, SeedableRng};
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>sequencer::network::cdn::{TestingDef, WrappedSignatureKey};
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tokio::spawn;
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a><span class="attr">#[derive(Parser, Debug)]
@@ -55,8 +55,8 @@
 <a href=#55 id=55 data-nosnippet>55</a>        .into_owned();
 <a href=#56 id=56 data-nosnippet>56</a>
 <a href=#57 id=57 data-nosnippet>57</a>    <span class="comment">// Acquire unused ports for the broker to use
-<a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">let </span>broker_public_port = pick_unused_port().expect(<span class="string">"failed to find free port for broker"</span>);
-<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">let </span>broker_private_port = pick_unused_port().expect(<span class="string">"failed to find free port for broker"</span>);
+<a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">let </span>broker_public_port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">let </span>broker_private_port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
 <a href=#60 id=60 data-nosnippet>60</a>
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="comment">// Configure the broker
 <a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">let </span>broker_config: BrokerConfig&lt;TestingDef&lt;SeqTypes&gt;&gt; = BrokerConfig {

@@ -598,9 +598,9 @@
 <a href=#598 id=598 data-nosnippet>598</a>    <span class="kw">use </span>atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
 <a href=#599 id=599 data-nosnippet>599</a>    <span class="kw">use </span>futures::future::FutureExt;
 <a href=#600 id=600 data-nosnippet>600</a>    <span class="kw">use </span>hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
-<a href=#601 id=601 data-nosnippet>601</a>    <span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#602 id=602 data-nosnippet>602</a>    <span class="kw">use </span>surf_disco::Client;
-<a href=#603 id=603 data-nosnippet>603</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#601 id=601 data-nosnippet>601</a>    <span class="kw">use </span>surf_disco::Client;
+<a href=#602 id=602 data-nosnippet>602</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#603 id=603 data-nosnippet>603</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">use </span>testing::mocks::MockBase;
 <a href=#605 id=605 data-nosnippet>605</a>    <span class="kw">use </span>tide_disco::App;
 <a href=#606 id=606 data-nosnippet>606</a>    <span class="kw">use </span>toml::toml;
@@ -936,7 +936,7 @@
 <a href=#936 id=936 data-nosnippet>936</a>        })
 <a href=#937 id=937 data-nosnippet>937</a>        .unwrap();
 <a href=#938 id=938 data-nosnippet>938</a>
-<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#940 id=940 data-nosnippet>940</a>        <span class="kw">let </span>_server = BackgroundTask::spawn(
 <a href=#941 id=941 data-nosnippet>941</a>            <span class="string">"server"</span>,
 <a href=#942 id=942 data-nosnippet>942</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>), MockBase::instance()),

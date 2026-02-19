@@ -398,8 +398,8 @@
 <a href=#398 id=398 data-nosnippet>398</a>    <span class="kw">use </span>std::{cmp::min, time::Duration};
 <a href=#399 id=399 data-nosnippet>399</a>
 <a href=#400 id=400 data-nosnippet>400</a>    <span class="kw">use </span>futures::StreamExt;
-<a href=#401 id=401 data-nosnippet>401</a>    <span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#402 id=402 data-nosnippet>402</a>    <span class="kw">use </span>surf_disco::Client;
+<a href=#401 id=401 data-nosnippet>401</a>    <span class="kw">use </span>surf_disco::Client;
+<a href=#402 id=402 data-nosnippet>402</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#403 id=403 data-nosnippet>403</a>    <span class="kw">use </span>tide_disco::App;
 <a href=#404 id=404 data-nosnippet>404</a>
 <a href=#405 id=405 data-nosnippet>405</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
@@ -867,7 +867,7 @@
 <a href=#867 id=867 data-nosnippet>867</a>        network.start().<span class="kw">await</span>;
 <a href=#868 id=868 data-nosnippet>868</a>
 <a href=#869 id=869 data-nosnippet>869</a>        <span class="comment">// Start the web server.
-<a href=#870 id=870 data-nosnippet>870</a>        </span><span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#870 id=870 data-nosnippet>870</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();
 <a href=#871 id=871 data-nosnippet>871</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(ApiState::from(network.data_source()));
 <a href=#872 id=872 data-nosnippet>872</a>        app.register_module(
 <a href=#873 id=873 data-nosnippet>873</a>            <span class="string">"explorer"</span>,

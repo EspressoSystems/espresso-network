@@ -341,9 +341,9 @@
 <a href=#341 id=341 data-nosnippet>341</a>
 <a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">use </span>espresso_types::{MockSequencerVersions, PubKey};
 <a href=#343 id=343 data-nosnippet>343</a>    <span class="kw">use </span>hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
-<a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">use </span>portpicker::pick_unused_port;
-<a href=#345 id=345 data-nosnippet>345</a>    <span class="kw">use </span>surf_disco::{error::ClientError, Client, Url};
-<a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">use </span>surf_disco::{error::ClientError, Client, Url};
+<a href=#345 id=345 data-nosnippet>345</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
 <a href=#347 id=347 data-nosnippet>347</a>    <span class="kw">use </span>tokio::spawn;
 <a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">use </span>vbs::version::Version;
 <a href=#349 id=349 data-nosnippet>349</a>
@@ -360,7 +360,7 @@
 <a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>(pub_key, priv_key) = PubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">0</span>);
 <a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span>state_key = StateKeyPair::generate_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">0</span>);
 <a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span>port = pick_unused_port().unwrap();
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
 <a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span>tmp = TempDir::new().unwrap();
 <a href=#365 id=365 data-nosnippet>365</a>
 <a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>genesis_file = tmp.path().join(<span class="string">"genesis.toml"</span>);
