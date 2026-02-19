@@ -69,8 +69,8 @@ pub struct TestRequirements {
     /// Panic if no block seen for this interval, we will panic fail relatively quickly.
     pub block_timeout: Duration,
     pub max_consecutive_blocks_without_tx: u64,
-    /// Block height at which to check rewards have been claimed (if Some)
-    pub reward_claim_deadline_block_height: Option<u64>,
+    /// If Some, wait until rewards_claimed > 0 before exiting. Value used for diagnostic logging.
+    pub first_reward_block: Option<u64>,
 }
 
 impl Default for TestRequirements {
@@ -83,7 +83,7 @@ impl Default for TestRequirements {
             // timeouts which lead to occasional drop in block times.
             block_timeout: Duration::from_secs(60),
             max_consecutive_blocks_without_tx: 10,
-            reward_claim_deadline_block_height: None,
+            first_reward_block: None,
         }
     }
 }

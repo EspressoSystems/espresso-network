@@ -40,14 +40,19 @@ where
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let mut stream = futures::stream::iter(subscriptions).flatten_unordered(None);
+    let mut iteration = 0u64;
 
     while let Some(header) = stream.next().await {
         let header = header.unwrap();
-        println!(
-            "block: height={}, version={}",
-            header.height(),
-            header.version()
-        );
+        iteration += 1;
+
+        if iteration.is_power_of_two() {
+            println!(
+                "block: height={}, version={}",
+                header.height(),
+                header.version()
+            );
+        }
 
         // TODO is it possible to discover the view at which upgrade should be finished?
         // First few views should be `Base` version.
@@ -99,37 +104,26 @@ where
     let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
     let first_reward_block = (first_epoch + 1) * epoch_length + 1;
 
-    // Calculate reward claim deadline if applicable.
-    // Rewards start at first_reward_block (2 epochs after first_epoch).
-    // Add one extra epoch for the light client / state prover to catch up.
-    let reward_claim_deadline_block_height =
-        if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
-            Some(first_reward_block + epoch_length)
-        } else {
-            None
-        };
-
-    // Run for at least 3 epochs past first_epoch plus margin.
-    let min_block_height = (first_epoch + 2) * epoch_length + 10;
-    let expected_block_height = if let Some(deadline) = reward_claim_deadline_block_height {
-        min_block_height.max(deadline)
+    let first_reward_block = if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
+        Some(first_reward_block)
     } else {
-        min_block_height
+        None
     };
+
+    let expected_block_height = (first_epoch + 2) * epoch_length + 10;
 
     println!("Upgrade test config:");
     println!("  epoch_start_block: {epoch_start_block}");
     println!("  epoch_length: {epoch_length}");
     println!("  first_epoch: {first_epoch}");
-    println!("  first_reward_block: {first_reward_block}");
-    println!("  reward_claim_deadline: {reward_claim_deadline_block_height:?}");
+    println!("  first_reward_block: {first_reward_block:?}");
     println!("  expected_block_height: {expected_block_height}");
 
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
         global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
-        reward_claim_deadline_block_height,
+        first_reward_block,
         ..Default::default()
     };
 

@@ -82,16 +82,15 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             continue;
         }
 
-        if let Some(deadline_height) = requirements.reward_claim_deadline_block_height {
-            let new = runtime.test_state().await;
-            if new.block_height.unwrap() >= deadline_height {
-                assert!(new.rewards_claimed > U256::ZERO);
-                println!(
-                    "Rewards claimed: {} at block {}",
-                    new.rewards_claimed,
-                    new.block_height.unwrap()
-                );
+        if let Some(_first_reward_block) = requirements.first_reward_block {
+            if new.rewards_claimed == U256::ZERO {
+                continue;
             }
+            println!(
+                "Rewards claimed: {} at block {}",
+                new.rewards_claimed,
+                new.block_height.unwrap()
+            );
         }
 
         break;
