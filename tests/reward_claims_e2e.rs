@@ -4,7 +4,7 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::U256,
-    providers::{layers::AnvilLayer, Provider, ProviderBuilder, WalletProvider},
+    providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
 };
 use espresso_contract_deployer::{build_signer, Contract};
@@ -45,10 +45,9 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
 #[test_log::test(tokio::test)]
 async fn test_reward_claims_e2e() -> anyhow::Result<()> {
-    // Use AnvilLayer to keep Anvil alive and prevent port race conditions.
     // Finalize blocks immediately to ensure we have a finalized stake table on L1 for consensus.
-    let anvil_layer = AnvilLayer::from(Anvil::new().args(["--slots-in-an-epoch", "0"]));
-    let l1_url = anvil_layer.endpoint_url();
+    let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+    let l1_url = anvil.endpoint_url();
 
     let relay_server_port = reserve_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")

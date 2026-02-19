@@ -9,7 +9,7 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::{Address, Bytes, U256},
-    providers::{layers::AnvilLayer, Provider, ProviderBuilder, WalletProvider},
+    providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
     signers::{
         k256::ecdsa::SigningKey,
@@ -283,8 +283,8 @@ async fn main() -> anyhow::Result<()> {
         (url, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
-        let anvil_layer = AnvilLayer::from(
-            Anvil::new().args([
+        let instance = Anvil::new()
+            .args([
                 "--slots-in-an-epoch",
                 "0",
                 "--mnemonic",
@@ -300,11 +300,10 @@ async fn main() -> anyhow::Result<()> {
                     .context("Failed to convert path to string")?,
                 "--state-interval",
                 "1",
-            ]),
-        );
-        let url = anvil_layer.endpoint_url();
+            ])
+            .spawn();
+        let url = instance.endpoint_url();
         tracing::info!("l1 url: {}", url);
-        let instance = anvil_layer.instance().clone();
         (url, Some(instance))
     };
 
