@@ -1326,6 +1326,8 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
                     // tree is dropped here
                 }
+            // we offset the check by the node id, just to mitigate having the entire network 
+            // doing this calculation at the same time.
             } else if (height + node_state.node_id).is_multiple_of(30) {
                 let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
                 else {
