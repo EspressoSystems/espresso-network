@@ -93,31 +93,25 @@ where
     assert_upgrade_happens::<Base, Target>(&genesis).await?;
 
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
-    // Calculate reward claim deadline if applicable
+    // Calculate reward claim deadline if applicable.
+    // Rewards start 2 epochs after epoch_start_block (no stake table for the first two epochs).
+    // Add one extra epoch for the light client / state prover to catch up.
     let reward_claim_deadline_block_height =
         if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
-            // Rewards should be claimable after 2 epochs on the upgrade version (min 200 blocks)
-            let upgrade = genesis
-                .upgrades
-                .get(&Target::version())
-                .expect("target version upgrade should exist in genesis");
-            let start_proposing_view = match &upgrade.mode {
-                UpgradeMode::View(view_upgrade) => view_upgrade.start_proposing_view,
-                UpgradeMode::Time(_) => panic!("time-based upgrades not supported in tests"),
-            };
-            Some(start_proposing_view + (epoch_length * 2).max(300))
+            let rewards_start_block = epoch_start_block + epoch_length * 2;
+            Some(rewards_start_block + epoch_length)
         } else {
             None
         };
 
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
-    // we are using the stake table from the contract.
-    // Ensure we run long enough to check rewards if applicable
+    // Run for at least 3 epochs past epoch_start_block plus margin.
+    let min_block_height = epoch_start_block + epoch_length * 3 + 10;
     let expected_block_height = if let Some(deadline) = reward_claim_deadline_block_height {
-        (epoch_length * 3 + 10).max(deadline)
+        min_block_height.max(deadline)
     } else {
-        epoch_length * 3 + 10
+        min_block_height
     };
 
     // verify native demo continues to work after upgrade
