@@ -29,9 +29,8 @@ use vbs::version::StaticVersionType;
 use super::{
     v0_3::{RewardAmount, Validator, COMMISSION_BASIS_POINTS},
     v0_4::{
-        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
-        RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2,
-        RewardMerkleTreeV2,
+        forgotten_accounts_include, RewardAccountProofV2, RewardAccountQueryDataV2,
+        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2,
     },
     Leaf2, NodeState, ValidatedState,
 };
