@@ -14,7 +14,6 @@ pub(crate) use hotshot_types::{
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUriArgs;
-use parse::Commission;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use signature::OutputArgs;
@@ -29,43 +28,38 @@ pub mod demo;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
-
-// Re-exported for integration tests (test_real_mainnet_node_metadata)
-pub use metadata::fetch_metadata;
 // TODO: Replace with imports from staking-ui-service once version compatibility is resolved
 pub(crate) mod metadata_types;
 // TODO: Replace with imports from staking-ui-service once version compatibility is resolved
 pub(crate) mod openmetrics;
 pub(crate) mod output;
-/// Used by staking-cli tests (Commission).
-pub mod parse;
+pub(crate) mod parse;
 pub(crate) mod receipt;
-/// Used by sequencer tests (fetch_commission, update_commission).
-pub mod registration;
-/// Used by staking-cli integration tests (NodeSignatures).
-pub mod signature;
-/// Used by staking-cli tests (Transaction).
-pub mod transaction;
-/// Used by staking-cli tests.
-pub mod tx_log;
+pub(crate) mod registration;
+pub(crate) mod signature;
+pub(crate) mod transaction;
+pub(crate) mod tx_log;
 
 /// Used by staking-cli integration tests.
 #[cfg(feature = "testing")]
 pub mod deploy;
 
 pub use cli::run;
+// Used by staking-cli integration tests.
+pub use metadata::fetch_metadata;
+// Used by staking-cli integration tests.
+pub use parse::Commission;
+// Used by sequencer tests.
+pub use registration::{fetch_commission, update_commission};
+// Used by staking-cli integration tests.
+pub use signature::NodeSignatures;
+// Used by staking-cli integration tests.
+pub use transaction::Transaction;
+// Used by staking-cli integration tests.
+pub use tx_log::TxLog;
 
-pub fn default_tx_log_path() -> std::path::PathBuf {
-    let project_dir = directories::ProjectDirs::from("", "espresso", "espresso-staking-cli");
-    if let Some(project_dir) = project_dir {
-        project_dir.data_dir().join("tx_log.json")
-    } else {
-        tracing::warn!("Unable to find data directory, using current directory");
-        std::path::PathBuf::from("tx_log.json")
-    }
-}
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum Network {
+pub(crate) enum Network {
     Mainnet,
     Decaf,
     Local,
@@ -83,11 +77,9 @@ pub const DEV_PRIVATE_KEY: &str =
 pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
 
 /// CLI to interact with the Espresso stake table contract.
-///
-/// Used by staking-cli integration tests.
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
 #[command(version, about, long_about = None)]
-pub struct Config {
+pub(crate) struct Config {
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
@@ -145,7 +137,7 @@ pub struct Config {
 }
 
 #[derive(ClapSerde, Parser, Clone, Debug, Deserialize, Serialize)]
-pub struct SignerConfig {
+pub(crate) struct SignerConfig {
     /// The mnemonic to use when deriving the key.
     #[clap(long, env = "MNEMONIC")]
     pub mnemonic: Option<String>,
@@ -168,7 +160,7 @@ pub struct SignerConfig {
 }
 
 #[derive(Clone, Debug)]
-pub enum ValidSignerConfig {
+pub(crate) enum ValidSignerConfig {
     Mnemonic {
         mnemonic: String,
         account_index: u32,
@@ -269,7 +261,7 @@ impl Config {
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum Commands {
+pub(crate) enum Commands {
     /// Display version information of the staking-cli.
     Version,
     /// Display the current configuration

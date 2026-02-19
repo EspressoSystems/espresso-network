@@ -16,8 +16,8 @@ use hotshot_contract_adapter::{sol_types::StakeTableV2, stake_table::StakeTableC
 use rand::{rngs::StdRng, SeedableRng};
 use rstest::rstest;
 use staking_cli::{
-    demo::generate_delegator_signer, deploy::TestSystem, parse::Commission,
-    signature::NodeSignatures, transaction::Transaction, DEMO_VALIDATOR_START_INDEX,
+    demo::generate_delegator_signer, deploy::TestSystem, Commission, NodeSignatures, Transaction,
+    DEMO_VALIDATOR_START_INDEX,
 };
 use tokio::time::sleep;
 use url::Url;
@@ -1046,7 +1046,7 @@ async fn test_demo_delegate_with_slow_blockchain() -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_delegate_tx_log_resume_after_partial() -> Result<()> {
     use alloy::providers::ext::AnvilApi;
-    use staking_cli::tx_log::TxLog;
+    use staking_cli::TxLog;
 
     let system = TestSystem::deploy().await?;
     let validators = system.setup_validators(1).await?;

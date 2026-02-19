@@ -2727,10 +2727,7 @@ mod test {
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
-    use staking_cli::{
-        demo::DelegationConfig,
-        registration::{fetch_commission, update_commission},
-    };
+    use staking_cli::{demo::DelegationConfig, fetch_commission, update_commission};
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,

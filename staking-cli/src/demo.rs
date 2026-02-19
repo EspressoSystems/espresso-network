@@ -125,7 +125,7 @@ pub enum DemoCommands {
         max_amount: U256,
 
         /// Path to transaction log file for recoverable execution
-        #[clap(long, default_value_os_t = crate::default_tx_log_path())]
+        #[clap(long, default_value_os_t = crate::tx_log::default_tx_log_path())]
         log_path: PathBuf,
 
         /// Number of concurrent transaction submissions
@@ -147,7 +147,7 @@ pub enum DemoCommands {
         num_delegators: u64,
 
         /// Path to transaction log file for recoverable execution
-        #[clap(long, default_value_os_t = crate::default_tx_log_path())]
+        #[clap(long, default_value_os_t = crate::tx_log::default_tx_log_path())]
         log_path: PathBuf,
 
         /// Number of concurrent transaction submissions
@@ -1040,7 +1040,7 @@ pub fn generate_delegator_signer(index: u64) -> PrivateKeySigner {
 /// loaded directly from the environment.
 ///
 /// Account indexes 20+ of the dev mnemonic are used for the validator accounts.
-pub async fn stake_for_demo(
+pub(crate) async fn stake_for_demo(
     config: &Config,
     num_validators: u16,
     num_delegators_per_validator: Option<u64>,
@@ -1105,7 +1105,7 @@ pub async fn stake_for_demo(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn delegate_for_demo(
+pub(crate) async fn delegate_for_demo(
     config: &Config,
     validators: Vec<Address>,
     delegator_start_index: u64,
@@ -1345,7 +1345,7 @@ pub async fn delegate_for_demo(
     Ok(())
 }
 
-pub async fn undelegate_for_demo(
+pub(crate) async fn undelegate_for_demo(
     config: &Config,
     validators: Vec<Address>,
     delegator_start_index: u64,
@@ -1499,7 +1499,7 @@ pub struct ChurnParams {
     pub concurrency: usize,
 }
 
-pub async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> {
+pub(crate) async fn churn_for_demo(config: &Config, params: ChurnParams) -> Result<()> {
     let ChurnParams {
         validator_start_index,
         num_validators,

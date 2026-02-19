@@ -23,6 +23,16 @@ use tokio::{
 
 use crate::concurrent::map_concurrent;
 
+pub fn default_tx_log_path() -> std::path::PathBuf {
+    let project_dir = directories::ProjectDirs::from("", "espresso", "espresso-staking-cli");
+    if let Some(project_dir) = project_dir {
+        project_dir.data_dir().join("tx_log.json")
+    } else {
+        tracing::warn!("Unable to find data directory, using current directory");
+        std::path::PathBuf::from("tx_log.json")
+    }
+}
+
 const MAX_RETRIES: u32 = 10;
 pub const DEFAULT_CONCURRENCY: usize = 20;
 const DEFAULT_GAS_LIMIT: u64 = 1_000_000;
