@@ -24,7 +24,6 @@ use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Node},
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
-use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         data_source::testing::TestableSequencerDataSource,
@@ -36,13 +35,14 @@ use sequencer::{
     SequencerApiVersion,
 };
 use surf_disco::Client;
+use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use versions::{Upgrade, EPOCH_VERSION};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
-    let port = pick_unused_port().expect("No ports free");
+    let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     let storage = SqlDataSource::create_storage().await;
 

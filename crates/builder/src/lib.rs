@@ -241,18 +241,6 @@ pub mod testing {
             }
         }
 
-        // url for the hotshot event streaming api
-        pub fn hotshot_event_streaming_api_url() -> Url {
-            // spawn the event streaming api
-            let port = portpicker::pick_unused_port()
-                .expect("Could not find an open port for hotshot event streaming api");
-
-            let hotshot_events_streaming_api_url =
-                Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-            hotshot_events_streaming_api_url
-        }
-
         // start the server for the hotshot event streaming api
         pub fn run_hotshot_event_streaming_api(
             url: Url,
@@ -410,12 +398,9 @@ pub mod testing {
     pub fn hotshot_builder_url() -> Url {
         // spawn the builder api
         let port =
-            portpicker::pick_unused_port().expect("Could not find an open port for builder api");
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let hotshot_builder_api_url =
-            Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-        hotshot_builder_api_url
+        Url::parse(format!("http://localhost:{port}").as_str()).unwrap()
     }
 
     pub async fn test_builder_impl(

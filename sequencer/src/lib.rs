@@ -773,10 +773,10 @@ pub mod testing {
         },
         HotShotConfig, PeerConfig,
     };
-    use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
     use versions::{EPOCH_VERSION, VERSION_0_1};
@@ -824,7 +824,10 @@ pub mod testing {
         max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -853,14 +856,15 @@ pub mod testing {
             .into_app()
             .expect("Failed to create builder tide-disco app");
 
-        spawn(
+        spawn(async move {
             app.serve(
                 format!("http://0.0.0.0:{port}")
                     .parse::<Url>()
                     .expect("Failed to parse builder listener"),
                 EpochVersion::instance(),
-            ),
-        );
+            )
+            .await
+        });
 
         // Pass on the builder task to be injected in the testing harness
         (Box::new(LegacyBuilderImplementation { global_state }), url)
@@ -869,7 +873,10 @@ pub mod testing {
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -877,18 +884,17 @@ pub mod testing {
             .expect("Failed to parse builder URL");
         tracing::info!("Starting test builder on {url}");
 
-        (
-            <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-                NUM_NODES,
-                format!("http://0.0.0.0:{port}")
-                    .parse()
-                    .expect("Failed to parse builder listener"),
-                (),
-                HashMap::new(),
-            )
-            .await,
-            url,
+        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
+            NUM_NODES,
+            format!("http://0.0.0.0:{port}")
+                .parse()
+                .expect("Failed to parse builder listener"),
+            (),
+            HashMap::new(),
         )
+        .await;
+
+        (task, url)
     }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
@@ -1111,6 +1117,8 @@ pub mod testing {
 
             let master_map = MasterMap::new();
 
+            let builder_port = reserve_tcp_port().unwrap();
+
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
@@ -1122,11 +1130,9 @@ pub mod testing {
                 da_staked_committee_size: num_nodes,
                 view_sync_timeout: Duration::from_secs(1),
                 data_request_delay: Duration::from_secs(1),
-                builder_urls: vec1::vec1![Url::parse(&format!(
-                    "http://127.0.0.1:{}",
-                    pick_unused_port().unwrap()
-                ))
-                .unwrap()],
+                builder_urls: vec1::vec1![
+                    Url::parse(&format!("http://127.0.0.1:{builder_port}")).unwrap()
+                ],
                 builder_timeout: Duration::from_secs(1),
                 start_threshold: (
                     known_nodes_with_stake.clone().len() as u64,

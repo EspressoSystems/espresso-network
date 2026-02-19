@@ -1141,7 +1141,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
 ) -> Result<()> {
     let view_number = proposal.data.view_number();
     ensure!(
-        view_number >= validation_info.consensus.read().await.cur_view(),
+        view_number + 1 >= validation_info.consensus.read().await.cur_view(),
         "Proposal is from an older view {:?}",
         proposal.data
     );

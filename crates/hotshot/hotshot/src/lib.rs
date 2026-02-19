@@ -45,6 +45,7 @@ use std::{
     time::Duration,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -64,6 +65,7 @@ use hotshot_types::{
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
         consensus_api::ConsensusApi,
@@ -75,6 +77,7 @@ use hotshot_types::{
     utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     HotShotConfig,
 };
+use hotshot_utils::warn;
 /// Reexport rand crate
 pub use rand;
 use tokio::{spawn, time::sleep};
@@ -372,6 +375,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             );
         }
         let high_qc_block_number = initializer.high_qc.data.block_number;
+        let (stake_table, success_threshold) = if let Ok(epoch_membership) =
+            membership_coordinator.stake_table_for_epoch(epoch).await
+        {
+            (
+                epoch_membership.stake_table().await,
+                epoch_membership.success_threshold().await,
+            )
+        } else {
+            tracing::warn!(
+                "Failed to get stake table for epoch {:?} while creating vote participation",
+                epoch
+            );
+            (HSStakeTable::default(), U256::MAX)
+        };
 
         let consensus = Consensus::new(
             validated_state_map,
@@ -391,6 +408,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             initializer.state_cert,
             config.drb_difficulty,
             config.drb_upgrade_difficulty,
+            stake_table,
+            success_threshold,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));

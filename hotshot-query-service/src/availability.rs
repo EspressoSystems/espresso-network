@@ -802,10 +802,10 @@ mod test {
     use futures::future::FutureExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
-    use portpicker::pick_unused_port;
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use toml::toml;
 
@@ -861,7 +861,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
@@ -1115,7 +1115,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         let options = Options {
             small_object_range_limit: 500,
@@ -1206,7 +1206,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
@@ -1460,7 +1460,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1513,7 +1513,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
 
         let options = Options {
             small_object_range_limit: 500,
@@ -1678,7 +1678,7 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(data_source));
         app.register_module("availability", api).unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
@@ -1717,7 +1717,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1807,7 +1807,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1847,7 +1847,7 @@ mod test {
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",

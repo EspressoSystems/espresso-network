@@ -36,12 +36,12 @@ hotshot-utils = { workspace = true }
 itertools = "0.14.0"
 jf-advz = { workspace = true }
 lru = { workspace = true }
-portpicker = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
 reqwest = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
+test-utils = { workspace = true }
 thiserror = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
