@@ -1,7 +1,8 @@
-use std::{path::PathBuf, time::Duration};
+use std::{io::Write as _, path::PathBuf, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
+    node_bindings::Anvil,
     primitives::{utils::parse_ether, Address, Bytes, B256, U256},
     providers::{
         ext::AnvilApi,
@@ -69,7 +70,6 @@ pub struct DeployedContracts {
 
 impl DeployedContracts {
     pub fn write_env(&self, path: &PathBuf) -> Result<()> {
-        use std::io::Write;
         let mut file = std::fs::File::create(path)?;
         writeln!(file, "# Deployed contract addresses")?;
         writeln!(
@@ -449,8 +449,6 @@ impl TestSystem {
     pub async fn deploy_version(
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
-        use alloy::node_bindings::Anvil;
-
         let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         // Sporadically the provider builder fails with a timeout inside alloy.
         // Retry a few times.

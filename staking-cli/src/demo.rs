@@ -1296,43 +1296,38 @@ pub async fn delegate_for_demo(
                 &wallets,
                 tx_inputs,
                 concurrency,
-                |input| {
-                    use alloy::{network::TransactionBuilder as _, rpc::types::TransactionRequest};
-                    use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
-
-                    match input.phase {
-                        TxPhase::FundEth => TransactionRequest::default()
-                            .with_to(input.to)
-                            .with_value(input.amount),
-                        TxPhase::FundEsp => {
-                            let call = EspToken::transferCall {
-                                to: input.to,
-                                value: input.amount,
-                            };
-                            TransactionRequest::default()
-                                .with_to(token_address)
-                                .with_call(&call)
-                        },
-                        TxPhase::Approve => {
-                            let call = EspToken::approveCall {
-                                spender: stake_table_address,
-                                value: input.amount,
-                            };
-                            TransactionRequest::default()
-                                .with_to(token_address)
-                                .with_call(&call)
-                        },
-                        TxPhase::Delegate => {
-                            let call = StakeTableV2::delegateCall {
-                                validator: input.to,
-                                amount: input.amount,
-                            };
-                            TransactionRequest::default()
-                                .with_to(stake_table_address)
-                                .with_call(&call)
-                        },
-                        TxPhase::Undelegate => unreachable!(),
-                    }
+                |input| match input.phase {
+                    TxPhase::FundEth => TransactionRequest::default()
+                        .with_to(input.to)
+                        .with_value(input.amount),
+                    TxPhase::FundEsp => {
+                        let call = EspToken::transferCall {
+                            to: input.to,
+                            value: input.amount,
+                        };
+                        TransactionRequest::default()
+                            .with_to(token_address)
+                            .with_call(&call)
+                    },
+                    TxPhase::Approve => {
+                        let call = EspToken::approveCall {
+                            spender: stake_table_address,
+                            value: input.amount,
+                        };
+                        TransactionRequest::default()
+                            .with_to(token_address)
+                            .with_call(&call)
+                    },
+                    TxPhase::Delegate => {
+                        let call = StakeTableV2::delegateCall {
+                            validator: input.to,
+                            amount: input.amount,
+                        };
+                        TransactionRequest::default()
+                            .with_to(stake_table_address)
+                            .with_call(&call)
+                    },
+                    TxPhase::Undelegate => unreachable!(),
                 },
             )
             .await?;
@@ -1460,9 +1455,6 @@ pub async fn undelegate_for_demo(
             tracing::info!("signing {} transactions...", tx_inputs.len());
             let signed_txs =
                 sign_all_transactions(&query_provider, &wallets, tx_inputs, concurrency, |input| {
-                    use alloy::{network::TransactionBuilder as _, rpc::types::TransactionRequest};
-                    use hotshot_contract_adapter::sol_types::StakeTableV2;
-
                     let call = StakeTableV2::undelegateCall {
                         validator: input.to,
                         amount: input.amount,
