@@ -955,17 +955,6 @@ impl<
         Ok(tree)
     }
 
-    async fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.inner()
-            .get_all_reward_accounts(height, offset, limit)
-            .await
-    }
-
     #[tracing::instrument(skip(self, instance))]
     async fn get_reward_accounts_v1(
         &self,
@@ -1163,21 +1152,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             ))?;
 
         retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
-    }
-
-    // We can iterate over the in-memory reward merkle tree
-    // however, there is no guarantee that we have all the accounts in
-    // in-memory reward tree
-    // So, we only query the state table in database for the reward accounts
-    // We never hit this because we only query the storage in `StorageState``
-    // trait implementation
-    async fn get_all_reward_accounts(
-        &self,
-        _height: u64,
-        _offset: u64,
-        _limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        bail!("get_all_reward_accounts is not implemented for ApiState")
     }
 
     #[tracing::instrument(skip(self, _instance))]
@@ -2894,7 +2868,6 @@ mod api_tests {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
-        str::FromStr,
         time::Duration,
     };
 
@@ -2922,9 +2895,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{
-            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
-        },
+        v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
@@ -2950,11 +2921,10 @@ mod test {
         },
         data_source::{
             sql::Config,
-            storage::{sql::query, SqlStorage, StorageConnectionType},
-            Transaction as _, VersionedDataSource,
+            storage::{SqlStorage, StorageConnectionType},
+            VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
-        merklized_state::UpdateStateData,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2969,7 +2939,7 @@ mod test {
     };
     use jf_merkle_tree_compat::{
         prelude::{MerkleProof, Sha3Node},
-        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+        MerkleTreeScheme,
     };
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_matches;
@@ -6951,240 +6921,6 @@ mod test {
             .unwrap();
 
         assert_eq!(res, expected);
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_multiple_cases() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis::<
-            SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-        >(&validated_state, &instance_state)
-        .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
-        let account2 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000002")?;
-        let account3 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000003")?;
-        let account4 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000004")?;
-
-        // Insert account1 with balance 1000, account2 with balance 2000
-        let accounts_height_5 = vec![
-            (account1, RewardAmount::from(1000u64)),
-            (account2, RewardAmount::from(2000u64)),
-        ];
-
-        let accounts_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-
-        let accounts_height_15 = vec![
-            (account2, RewardAmount::from(2500u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 16] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        for (height, accounts) in [
-            (5u64, &accounts_height_5),
-            (10, &accounts_height_10),
-            (15, &accounts_height_15),
-        ] {
-            for (account, balance) in accounts {
-                reward_tree.update(*account, *balance)?;
-
-                let (_, proof) = reward_tree.lookup(*account).expect_ok().unwrap();
-
-                let traversal_path = <RewardAccountV2 as ToTraversalPath<
-                    { RewardMerkleTreeV2::ARITY },
-                >>::to_traversal_path(
-                    account, reward_tree.height()
-                );
-
-                UpdateStateData::<
-                    SeqTypes,
-                    RewardMerkleTreeV2,
-                    { RewardMerkleTreeV2::ARITY },
-                >::insert_merkle_nodes(&mut tx, proof, traversal_path, height)
-                .await?;
-            }
-        }
-
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 15)
-        .await?;
-
-        tx.commit().await?;
-
-        let result_height_5 = db.get_all_reward_accounts(5, 0, 100).await?;
-        assert_eq!(result_height_5.len(), 2,);
-        for (account, balance) in &accounts_height_5 {
-            assert!(result_height_5
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_10 = db.get_all_reward_accounts(10, 0, 100).await?;
-        assert_eq!(result_height_10.len(), 3,);
-
-        // Verify account1 has the updated balance from height 10
-        //  not the old balance from height 5
-        let expected_at_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2000u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-        for (account, balance) in &expected_at_height_10 {
-            assert!(result_height_10
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_15 = db.get_all_reward_accounts(15, 0, 100).await?;
-        assert_eq!(result_height_15.len(), 4,);
-
-        // Verify account2 has the updated balance from height 15, and account4 is new
-        let expected_at_height_15 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2500u64)),
-            (account3, RewardAmount::from(3000u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-        for (account, balance) in &expected_at_height_15 {
-            assert!(result_height_15
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        // Test pagination
-        // results are sorted by account address descending
-        let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
-        assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account4, RewardAmount::from(4000u64)));
-        assert_eq!(result_limit_2[1], (account3, RewardAmount::from(3000u64)));
-
-        let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
-        assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account2, RewardAmount::from(2500u64)));
-        assert_eq!(result_offset_2[1], (account1, RewardAmount::from(1500u64)));
-
-        Ok(())
-    }
-
-    ///  ensure get_all_reward_accounts fails when merklized state height
-    /// is behind the requested height
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_check_state_height() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis::<
-            SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-        >(&validated_state, &instance_state)
-        .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 20] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        // Insert merkle data at height 5
-        reward_tree.update(account1, RewardAmount::from(1000u64))?;
-        let (_, proof) = reward_tree.lookup(account1).expect_ok().unwrap();
-        let traversal_path =
-            <RewardAccountV2 as ToTraversalPath<{ RewardMerkleTreeV2::ARITY }>>::to_traversal_path(
-                &account1,
-                reward_tree.height(),
-            );
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::insert_merkle_nodes(&mut tx, proof, traversal_path, 5)
-        .await?;
-
-        // Set the merklized state height to 10
-        // less than max block height of 20
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 10)
-        .await?;
-
-        tx.commit().await?;
-
-        // Query at height 5 should succeed
-        let result = db.get_all_reward_accounts(5, 0, 100).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 1);
-
-        // Query at height 10 should succeed
-        let result = db.get_all_reward_accounts(10, 0, 100).await;
-        assert!(result.is_ok());
-
-        // Query at height 15 should fail
-        // state not yet processed
-        let result = db.get_all_reward_accounts(15, 0, 100).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not yet available"));
 
         Ok(())
     }

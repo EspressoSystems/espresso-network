@@ -799,21 +799,11 @@ where
         }
         .boxed()
     })?
-    .get("reward_amounts", move |req, state| {
+    .get("reward_amounts", move |_req, _state| {
         async move {
-            let height = req
-                .integer_param::<_, u64>("height")
-                .map_err(Error::from_request_error)?;
-            let offset = req
-                .integer_param::<_, u64>("offset")
-                .map_err(Error::from_request_error)?;
-            let limit = req
-                .integer_param::<_, u64>("limit")
-                .map_err(Error::from_request_error)?;
-
             Err::<u64, _>(Error::catch_all(
                 StatusCode::NOT_FOUND,
-                format!("catchup/reward-amounts is deprecated"),
+                "catchup/reward-amounts is deprecated".to_string(),
             ))
         }
         .boxed()
