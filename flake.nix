@@ -261,7 +261,8 @@
             golangci-lint
             # provides abigen
             go-ethereum
-          ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
+          ] ++ lib.optionals stdenv.isDarwin [ darwin.libresolv ]
+          ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ++ pre-commit.enabledPackages;
           shellHook = ''
             ${rustShellHook}
