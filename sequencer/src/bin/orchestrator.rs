@@ -5,7 +5,7 @@ use clap::Parser;
 use derive_more::From;
 use espresso_types::{parse_duration, Ratio, SeqTypes};
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_types::network::{Libp2pConfig, NetworkConfig};
+use hotshot_types::network::{NetworkConfig};
 use sequencer_utils::logging;
 use snafu::Snafu;
 use url::Url;
@@ -123,16 +123,10 @@ async fn main() {
         ..Default::default()
     };
 
-    // The Libp2p configuration
-    let libp2p_config = Libp2pConfig {
-        bootstrap_nodes: Vec::new(),
-    };
-
     config.config.num_nodes_with_stake = args.num_nodes;
     config.config.known_nodes_with_stake = vec![Default::default(); args.num_nodes.get()];
     config.config.known_da_nodes = Vec::new();
     config.config.next_view_timeout = args.next_view_timeout.as_millis() as u64;
-    config.libp2p_config = Some(libp2p_config);
     config.config.start_threshold = args.start_threshold.into();
     config.config.da_staked_committee_size = args.num_nodes.get();
     config.config.builder_urls = Vec1::try_from_vec(args.builder_urls).unwrap();

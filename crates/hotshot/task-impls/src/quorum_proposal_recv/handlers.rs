@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{broadcast, Sender};
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
 use hotshot_types::{
@@ -33,7 +33,7 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
-use tokio::spawn;
+use tokio::{spawn, sync::broadcast as tokio_broadcast};
 use tracing::instrument;
 use vbs::version::StaticVersionType;
 
@@ -47,6 +47,7 @@ use crate::{
         validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc, verify_drb_result,
     },
     quorum_proposal_recv::{UpgradeLock, Versions},
+    reconstruct::ProposalResponse,
 };
 
 /// Spawn a task which will fire a request to get a proposal, and store it.
@@ -54,7 +55,7 @@ use crate::{
 fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
     qc: &QuorumCertificate2<TYPES>,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
-    event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
     membership: EpochMembershipCoordinator<TYPES>,
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
@@ -69,7 +70,7 @@ fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
         let _ = fetch_proposal(
             &qc,
             event_sender,
-            event_receiver,
+            &proposal_response_sender,
             membership,
             consensus,
             sender_public_key,
@@ -259,7 +260,6 @@ pub(crate) async fn handle_quorum_proposal_recv<
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     quorum_proposal_sender_key: &TYPES::SignatureKey,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
     validation_info: ValidationInfo<TYPES, I, V>,
 ) -> Result<()> {
     proposal
@@ -355,7 +355,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
         spawn_fetch_proposal(
             &justify_qc,
             event_sender.clone(),
-            event_receiver.clone(),
+            validation_info.proposal_response_sender.clone(),
             validation_info.membership.coordinator.clone(),
             OuterConsensus::new(Arc::clone(&validation_info.consensus.inner_consensus)),
             // Note that we explicitly use the node key here instead of the provided key in the signature.

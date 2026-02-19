@@ -370,6 +370,7 @@ impl InnerTestClient {
                 stake,
                 commission: 1,
                 delegators: [(Address::random(), stake)].into_iter().collect(),
+                metadata_uri: None,
             };
             self.quorum.push((priv_key, validator));
         }
@@ -882,5 +883,6 @@ pub fn random_validator() -> Validator<PubKey> {
         stake,
         commission: 1,
         delegators: [(Address::random(), stake)].into_iter().collect(),
+        metadata_uri: None,
     }
 }

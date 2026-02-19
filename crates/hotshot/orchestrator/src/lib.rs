@@ -32,11 +32,6 @@ use hotshot_types::{
     },
     PeerConfig,
 };
-use libp2p_identity::{
-    ed25519::{Keypair as EdKeypair, SecretKey},
-    Keypair, PeerId,
-};
-use multiaddr::Multiaddr;
 use surf_disco::Url;
 use tide_disco::{
     api::ApiError,
@@ -61,19 +56,6 @@ pub type OrchestratorVersion =
     StaticVersion<ORCHESTRATOR_MAJOR_VERSION, ORCHESTRATOR_MINOR_VERSION>;
 /// Orchestrator Version as a type-binding instance
 pub const ORCHESTRATOR_VERSION: OrchestratorVersion = StaticVersion {};
-
-/// Generate an keypair based on a `seed` and an `index`
-/// # Panics
-/// This panics if libp2p is unable to generate a secret key from the seed
-#[must_use]
-pub fn libp2p_generate_indexed_identity(seed: [u8; 32], index: u64) -> Keypair {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&seed);
-    hasher.update(&index.to_le_bytes());
-    let new_seed = *hasher.finalize().as_bytes();
-    let sk_bytes = SecretKey::try_from_bytes(new_seed).unwrap();
-    <EdKeypair as From<SecretKey>>::from(sk_bytes).into()
-}
 
 /// The state of the orchestrator
 #[derive(Default, Clone)]
@@ -225,11 +207,7 @@ pub trait OrchestratorApi<TYPES: NodeType> {
     /// arguments so others can identify us on the Libp2p network.
     /// # Errors
     /// If we were unable to serve the request
-    fn post_identity(
-        &mut self,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
-    ) -> Result<u16, ServerError>;
+    fn post_identity(&mut self, cliquenet_advertise_address: String) -> Result<u16, ServerError>;
     /// post endpoint for each node's config
     /// # Errors
     /// if unable to serve
@@ -245,8 +223,7 @@ pub trait OrchestratorApi<TYPES: NodeType> {
         &mut self,
         pubkey: &mut Vec<u8>,
         is_da: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
+        cliquenet_advertise_address: String,
     ) -> Result<(u64, bool), ServerError>;
     /// post endpoint for whether or not all peers public keys are ready
     /// # Errors
@@ -296,8 +273,7 @@ where
         &mut self,
         pubkey: &mut Vec<u8>,
         da_requested: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
+        cliquenet_advertise_address: String,
     ) -> Result<(u64, bool), ServerError> {
         if let Some((node_index, is_da)) = self.pub_posted.get(pubkey) {
             return Ok((*node_index, *is_da));
@@ -343,21 +319,8 @@ where
         self.pub_posted
             .insert(pubkey.clone(), (node_index, added_to_da));
 
-        // If the orchestrator is set up for libp2p and we have supplied the proper
-        // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
-                (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
-        }
+        // Push to our bootstrap nodes
+        self.config.cliquenet_peers.push(cliquenet_advertise_address);
 
         tracing::error!("Posted public key for node_index {node_index}");
 
@@ -375,8 +338,7 @@ where
         &mut self,
         pubkey: &mut Vec<u8>,
         da_requested: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
+        cliquenet_advertise_address: String,
     ) -> Result<(u64, bool), ServerError> {
         // if we've already registered this node before, we just retrieve its info from `pub_posted`
         if let Some((node_index, is_da)) = self.pub_posted.get(pubkey) {
@@ -415,21 +377,8 @@ where
         self.pub_posted
             .insert(pubkey.clone(), (node_index as u64, added_to_da));
 
-        // If the orchestrator is set up for libp2p and we have supplied the proper
-        // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
-                (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
-        }
+        // Push to our bootstrap nodes
+        self.config.cliquenet_peers.push(cliquenet_advertise_address);
 
         tracing::error!("Node {node_index} has registered.");
 
@@ -445,11 +394,7 @@ where
     /// arguments so others can identify us on the Libp2p network.
     /// # Errors
     /// If we were unable to serve the request
-    fn post_identity(
-        &mut self,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
-    ) -> Result<u16, ServerError> {
+    fn post_identity(&mut self, cliquenet_advertise_address: String) -> Result<u16, ServerError> {
         let node_index = self.latest_index;
         self.latest_index += 1;
 
@@ -460,21 +405,8 @@ where
             });
         }
 
-        // If the orchestrator is set up for libp2p and we have supplied the proper
-        // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
-                (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
-        }
+        self.config.cliquenet_peers.push(cliquenet_advertise_address);
+
         Ok(node_index)
     }
 
@@ -504,13 +436,12 @@ where
         &mut self,
         pubkey: &mut Vec<u8>,
         da_requested: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
+        cliquenet_advertise_address: String,
     ) -> Result<(u64, bool), ServerError> {
         if self.fixed_stake_table {
-            self.register_from_list(pubkey, da_requested, libp2p_address, libp2p_public_key)
+            self.register_from_list(pubkey, da_requested, cliquenet_advertise_address)
         } else {
-            self.register_unknown(pubkey, da_requested, libp2p_address, libp2p_public_key)
+            self.register_unknown(pubkey, da_requested, cliquenet_advertise_address)
         }
     }
 
@@ -702,7 +633,7 @@ where
             body_bytes.drain(..12);
 
             // Decode the libp2p data so we can add to our bootstrap nodes (if supplied)
-            let Ok((libp2p_address, libp2p_public_key)) =
+            let Ok(cliquenet_advertise_address) =
                 vbs::Serializer::<OrchestratorVersion>::deserialize(&body_bytes)
             else {
                 return Err(ServerError {
@@ -712,7 +643,7 @@ where
             };
 
             // Call our state function to process the request
-            state.post_identity(libp2p_address, libp2p_public_key)
+            state.post_identity(cliquenet_advertise_address)
         }
         .boxed()
     })?
@@ -734,7 +665,7 @@ where
             body_bytes.drain(..12);
 
             // Decode the libp2p data so we can add to our bootstrap nodes (if supplied)
-            let Ok((mut pubkey, libp2p_address, libp2p_public_key)) =
+            let Ok((mut pubkey, cliquenet_advertise_address)) =
                 vbs::Serializer::<OrchestratorVersion>::deserialize(&body_bytes)
             else {
                 return Err(ServerError {
@@ -743,7 +674,7 @@ where
                 });
             };
 
-            state.register_public_key(&mut pubkey, is_da, libp2p_address, libp2p_public_key)
+            state.register_public_key(&mut pubkey, is_da, cliquenet_advertise_address)
         }
         .boxed()
     })?

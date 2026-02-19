@@ -24,6 +24,7 @@ use hotshot_types::{
 };
 use tokio::{
     spawn,
+    sync::broadcast as tokio_broadcast,
     task::JoinHandle,
     time::{sleep, timeout},
 };
@@ -187,12 +188,14 @@ pub async fn add_network_message_test_task<
     id: u64,
 ) -> JoinHandle<()> {
     let net = Arc::clone(&channel);
+    let (proposal_response_sender, _) = tokio_broadcast::channel(1000);
     let network_state: NetworkMessageTaskState<_, _> = NetworkMessageTaskState {
         internal_event_stream: internal_event_stream.clone(),
         external_event_stream: external_event_stream.clone(),
         public_key,
         upgrade_lock: upgrade_lock.clone(),
         id,
+        proposal_response_sender,
     };
 
     let network = Arc::clone(&net);

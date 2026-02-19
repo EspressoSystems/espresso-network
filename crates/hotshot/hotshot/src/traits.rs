@@ -16,16 +16,15 @@ pub use node_implementation::{NodeImplementation, TestableNodeImplementation};
 /// Module for publicly usable implementations of the traits
 pub mod implementations {
     pub use super::networking::{
-        combined_network::{CombinedNetworks, UnderlyingCombinedNetworks},
-        libp2p_network::{
-            derive_libp2p_keypair, derive_libp2p_multiaddr, derive_libp2p_peer_id, GossipConfig,
-            Libp2pMetricsValue, Libp2pNetwork, PeerInfoVec, RequestResponseConfig,
+        cliquenet_network::{
+            derive_keypair as derive_cliquenet_keypair, Address as CliquenetAddress, Cliquenet,
+            PublicKey as CliquenetPublicKey,
         },
+        combined_network::{CombinedNetworks, UnderlyingCombinedNetworks},
         memory_network::{MasterMap, MemoryNetwork},
         push_cdn_network::{
             CdnMetricsValue, KeyPair, ProductionDef, PushCdnNetwork, TestingDef, Topic as CdnTopic,
             WrappedSignatureKey,
         },
-        Cliquenet,
     };
 }

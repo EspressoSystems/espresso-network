@@ -215,9 +215,8 @@ where
 
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
-        libp2p_advertise_address: opt.libp2p_advertise_address,
-        libp2p_bind_address: opt.libp2p_bind_address,
-        libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
+        cliquenet_advertise_address: opt.cliquenet_advertise_address,
+        cliquenet_bind_address: opt.cliquenet_bind_address,
         orchestrator_url: opt.orchestrator_url,
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,

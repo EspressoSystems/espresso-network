@@ -13,7 +13,7 @@ pub mod state_signature;
 
 mod message_compat_tests;
 
-use std::sync::Arc;
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -26,15 +26,14 @@ use espresso_types::{
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
+use hotshot::traits::implementations::{derive_cliquenet_keypair, Cliquenet};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use libp2p::Multiaddr;
-use network::libp2p::split_off_peer_id;
 use options::Identity;
 use proposal_fetcher::ProposalFetcherConfig;
 use tracing::info;
 use url::Url;
 
-use crate::request_response::data_source::Storage as RequestResponseStorage;
+use crate::{request_response::data_source::Storage as RequestResponseStorage, util::NodeAddress};
 pub mod persistence;
 pub mod state;
 use std::{fmt::Debug, marker::PhantomData, time::Duration};
@@ -42,13 +41,7 @@ use std::{fmt::Debug, marker::PhantomData, time::Duration};
 use derivative::Derivative;
 use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
-use hotshot::{
-    traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, GossipConfig,
-        KeyPair, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
-    },
-    types::SignatureKey,
-};
+use hotshot::{traits::implementations::MemoryNetwork, types::SignatureKey};
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
@@ -120,13 +113,13 @@ pub struct NetworkParams {
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
 
-    /// The address to send to other Libp2p nodes to contact us
-    pub libp2p_advertise_address: String,
-    /// The address to bind to for Libp2p
-    pub libp2p_bind_address: String,
-    /// The (optional) bootstrap node addresses for Libp2p. If supplied, these will
-    /// override the bootstrap nodes specified in the config file.
-    pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
+    /// The address to send to other Cliquenet nodes to contact us
+    pub cliquenet_advertise_address: SocketAddr,
+    /// The address to bind to for Cliquenet
+    pub cliquenet_bind_address: SocketAddr,
+
+    /// The addresses of the Cliquenet peers to connect to
+    // pub cliquenet_peers: Vec<NodeAddress<BLSPubKey>>,
 
     /// The heartbeat interval
     pub libp2p_heartbeat_interval: Duration,
@@ -313,24 +306,22 @@ where
         .text_family("node".into(), vec!["key".into()])
         .create(vec![pub_key.to_string()]);
 
-    // Parse the Libp2p bind and advertise addresses to multiaddresses
-    let libp2p_bind_address = derive_libp2p_multiaddr(&network_params.libp2p_bind_address)
-        .with_context(|| {
-            format!(
-                "Failed to derive Libp2p bind address of {}",
-                &network_params.libp2p_bind_address
-            )
-        })?;
-    let libp2p_advertise_address =
-        derive_libp2p_multiaddr(&network_params.libp2p_advertise_address).with_context(|| {
-            format!(
-                "Failed to derive Libp2p advertise address of {}",
-                &network_params.libp2p_advertise_address
-            )
-        })?;
+    // Derive the Cliquenet keypair we're going to use
+    let cliquenet_keypair = derive_cliquenet_keypair::<<SeqTypes as NodeType>::SignatureKey>(
+        &network_params.private_staking_key,
+    );
 
-    info!("Libp2p bind address: {}", libp2p_bind_address);
-    info!("Libp2p advertise address: {}", libp2p_advertise_address);
+    // Parse the Libp2p bind and advertise addresses to multiaddresses
+    let cliquenet_advertise_address = NodeAddress::new(
+        pub_key,
+        cliquenet_keypair.public_key(),
+        network_params.cliquenet_advertise_address.into(),
+    );
+
+    info!(
+        "Cliquenet advertise address: {}",
+        cliquenet_advertise_address
+    );
 
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url.clone());
@@ -343,15 +334,6 @@ where
         state_private_key: state_key_pair.sign_key(),
         is_da,
     };
-
-    // Derive our Libp2p public key from our private key
-    let libp2p_public_key = derive_libp2p_peer_id::<<SeqTypes as NodeType>::SignatureKey>(
-        &validator_config.private_key,
-    )
-    .with_context(|| "Failed to derive Libp2p peer ID")?;
-
-    // Print the libp2p public key
-    info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
     let loaded_network_config_from_persistence = persistence.load_config().await?;
     let (mut network_config, wait_for_orchestrator) = match (
@@ -389,10 +371,7 @@ where
             let config = get_complete_config(
                 &orchestrator_client,
                 validator_config.clone(),
-                // Register in our Libp2p advertise address and public key so other nodes
-                // can contact us on startup
-                Some(libp2p_advertise_address),
-                Some(libp2p_public_key),
+                cliquenet_advertise_address.to_string(),
             )
             .await?
             .0;
@@ -442,77 +421,7 @@ where
         network_config.config.da_committees = da_committees.clone();
     }
 
-    // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
-    // present in the config file.
-    if let Some(bootstrap_nodes) = network_params.libp2p_bootstrap_nodes {
-        if let Some(libp2p_config) = network_config.libp2p_config.as_mut() {
-            // If the libp2p configuration is present, we can override the bootstrap nodes.
-
-            // Split off the peer ID from the addresses
-            libp2p_config.bootstrap_nodes = bootstrap_nodes
-                .into_iter()
-                .map(split_off_peer_id)
-                .collect::<Result<Vec<_>, _>>()
-                .with_context(|| "Failed to parse peer ID from bootstrap node")?;
-        } else {
-            // If not, don't try launching with them. Eventually we may want to
-            // provide a default configuration here instead.
-            tracing::warn!("No libp2p configuration found, ignoring supplied bootstrap nodes");
-        }
-    }
-
     let node_index = network_config.node_index;
-
-    // If we are a DA node, we need to subscribe to the DA topic
-    let topics = {
-        let mut topics = vec![CdnTopic::Global];
-        if is_da {
-            topics.push(CdnTopic::Da);
-        }
-        topics
-    };
-
-    // Initialize the push CDN network (and perform the initial connection)
-    let cdn_network = PushCdnNetwork::new(
-        network_params.cdn_endpoint,
-        topics,
-        KeyPair {
-            public_key: WrappedSignatureKey(validator_config.public_key),
-            private_key: validator_config.private_key.clone(),
-        },
-        CdnMetricsValue::new(metrics),
-    )
-    .with_context(|| format!("Failed to create CDN network {node_index}"))?;
-
-    // Configure gossipsub based on the command line options
-    let gossip_config = GossipConfig {
-        heartbeat_interval: network_params.libp2p_heartbeat_interval,
-        history_gossip: network_params.libp2p_history_gossip,
-        history_length: network_params.libp2p_history_length,
-        mesh_n: network_params.libp2p_mesh_n,
-        mesh_n_high: network_params.libp2p_mesh_n_high,
-        mesh_n_low: network_params.libp2p_mesh_n_low,
-        mesh_outbound_min: network_params.libp2p_mesh_outbound_min,
-        max_ihave_messages: network_params.libp2p_max_ihave_messages,
-        max_transmit_size: network_params.libp2p_max_gossip_transmit_size,
-        max_ihave_length: network_params.libp2p_max_ihave_length,
-        published_message_ids_cache_time: network_params.libp2p_published_message_ids_cache_time,
-        iwant_followup_time: network_params.libp2p_iwant_followup_time,
-        max_messages_per_rpc: network_params.libp2p_max_messages_per_rpc,
-        gossip_retransmission: network_params.libp2p_gossip_retransmission,
-        flood_publish: network_params.libp2p_flood_publish,
-        duplicate_cache_time: network_params.libp2p_duplicate_cache_time,
-        fanout_ttl: network_params.libp2p_fanout_ttl,
-        heartbeat_initial_delay: network_params.libp2p_heartbeat_initial_delay,
-        gossip_factor: network_params.libp2p_gossip_factor,
-        gossip_lazy: network_params.libp2p_gossip_lazy,
-    };
-
-    // Configure request/response based on the command line options
-    let request_response_config = RequestResponseConfig {
-        request_size_maximum: network_params.libp2p_max_direct_transmit_size,
-        response_size_maximum: network_params.libp2p_max_direct_transmit_size,
-    };
 
     let l1_client = l1_params
         .options
@@ -634,34 +543,37 @@ where
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
     };
 
-    // Initialize the Libp2p network
-    let network = {
-        //     let p2p_network = Libp2pNetwork::from_config(
-        //         network_config.clone(),
-        //         persistence.clone(),
-        //         gossip_config,
-        //         request_response_config,
-        //         libp2p_bind_address,
-        //         &validator_config.public_key,
-        //         // We need the private key so we can derive our Libp2p keypair
-        //         // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
-        //         &validator_config.private_key,
-        //         hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
-        //     )
-        //     .await
-        //     .with_context(|| {
-        //         format!(
-        //             "Failed to create libp2p network on node {node_index}; binding to {:?}",
-        //             network_params.libp2p_bind_address
-        //         )
-        //     })?;
+    // Derive our Cliquenet keypair
+    let cliquenet_keypair = derive_cliquenet_keypair::<<SeqTypes as NodeType>::SignatureKey>(
+        &validator_config.private_key,
+    );
 
-        tracing::warn!("Waiting for the CDN connection to be initialized");
-        cdn_network.wait_for_ready().await;
+    // Convert each Cliquenet peer to a tuple, filtering out invalid addresses
+    let cliquenet_peers = network_config
+        .cliquenet_peers
+        .iter()
+        .filter_map(|peer_str| {
+            NodeAddress::<<SeqTypes as NodeType>::SignatureKey>::from_str(peer_str)
+                .ok()
+                .map(|peer| (peer.consensus_key, peer.cliquenet_public_key, peer.address))
+        })
+        .collect::<Vec<_>>();
 
-        // Combine the CDN and P2P networks
-        Arc::from(cdn_network)
-    };
+    println!("Cliquenet peers: {:?}", cliquenet_peers);
+
+    // Create the network
+    let network = Arc::new(
+        Cliquenet::create(
+            "sequencer",
+            validator_config.public_key,
+            cliquenet_keypair,
+            network_params.cliquenet_bind_address,
+            cliquenet_peers,
+            metrics.subgroup("cliquenet".into()),
+        )
+        .await
+        .with_context(|| "failed to create cliquenet network")?,
+    );
 
     let mut ctx = SequencerContext::init(
         network_config,

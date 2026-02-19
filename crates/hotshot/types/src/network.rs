@@ -137,8 +137,8 @@ pub struct NetworkConfig<TYPES: NodeType> {
     pub transaction_size: usize,
     /// name of the key type (for debugging)
     pub key_type_name: String,
-    /// the libp2p config
-    pub libp2p_config: Option<Libp2pConfig>,
+    /// The Cliquenet peers
+    pub cliquenet_peers: Vec<String>,
     /// the hotshot config
     pub config: HotShotConfig<TYPES>,
     /// The address for the Push CDN's "marshal", A.K.A. load balancer
@@ -282,7 +282,7 @@ impl<TYPES: NodeType> Default for NetworkConfig<TYPES> {
             seed: [0u8; 32],
             transaction_size: ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE,
             manual_start_password: None,
-            libp2p_config: None,
+            cliquenet_peers: Vec::new(),
             config: HotShotConfigFile::hotshot_config_5_nodes_10_da().into(),
             key_type_name: std::any::type_name::<TYPES>().to_string(),
             cdn_marshal_address: None,
@@ -379,9 +379,7 @@ impl<TYPES: NodeType> From<NetworkConfigFile<TYPES>> for NetworkConfig<TYPES> {
                 .unwrap_or(Duration::from_millis(REQUEST_DATA_DELAY)),
             seed: val.seed,
             transaction_size: val.transaction_size,
-            libp2p_config: Some(Libp2pConfig {
-                bootstrap_nodes: Vec::new(),
-            }),
+            cliquenet_peers: Vec::new(),
             config: val.config.into(),
             key_type_name: std::any::type_name::<TYPES>().to_string(),
             cdn_marshal_address: val.cdn_marshal_address,

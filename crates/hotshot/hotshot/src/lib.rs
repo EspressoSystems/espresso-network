@@ -18,12 +18,13 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{
-        block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
+        block_contents::BlockHeader, election::Membership, node_implementation::Versions,
+        signature_key::StateSignatureKey, storage::Storage,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use rand::Rng;
+use tokio::sync::broadcast as tokio_broadcast;
 use vbs::version::StaticVersionType;
 
 /// Contains traits consumed by [`SystemContext`]
@@ -768,6 +769,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let output_event_stream = self.external_event_stream.clone();
         let internal_event_stream = self.internal_event_stream.clone();
 
+        let (block_ready_sender, _) = tokio_broadcast::channel(1000);
+        let (proposal_response_sender, _) = tokio_broadcast::channel(1000);
+
         let mut handle = SystemContextHandle {
             consensus_registry,
             network_registry,
@@ -778,6 +782,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             network: Arc::clone(&self.network),
             membership_coordinator: self.membership_coordinator.clone(),
             epoch_height: self.config.epoch_height,
+            block_ready_sender,
+            proposal_response_sender,
         };
 
         add_network_tasks::<TYPES, I, V>(&mut handle).await;
@@ -955,6 +961,8 @@ where
         );
 
         // create each handle
+        let (left_block_ready_sender, _) = tokio_broadcast::channel(1000);
+        let (left_proposal_response_sender, _) = tokio_broadcast::channel(1000);
         let mut left_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: left_consensus_registry,
             network_registry: left_network_registry,
@@ -965,8 +973,12 @@ where
             network: Arc::clone(&left_system_context.network),
             membership_coordinator: left_system_context.membership_coordinator.clone(),
             epoch_height,
+            block_ready_sender: left_block_ready_sender,
+            proposal_response_sender: left_proposal_response_sender,
         };
 
+        let (right_block_ready_sender, _) = tokio_broadcast::channel(1000);
+        let (right_proposal_response_sender, _) = tokio_broadcast::channel(1000);
         let mut right_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: right_consensus_registry,
             network_registry: right_network_registry,
@@ -977,6 +989,8 @@ where
             network: Arc::clone(&right_system_context.network),
             membership_coordinator: right_system_context.membership_coordinator.clone(),
             epoch_height,
+            block_ready_sender: right_block_ready_sender,
+            proposal_response_sender: right_proposal_response_sender,
         };
 
         // add consensus tasks to each handle, using their individual internal event streams

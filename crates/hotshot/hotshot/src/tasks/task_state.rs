@@ -176,6 +176,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             calc_lock: Arc::new(RwLock::new(HashMap::new())),
             proposals: BTreeMap::new(),
             vid_shares: Arc::new(RwLock::new(BTreeMap::new())),
+            block_ready_sender: handle.block_ready_sender.clone(),
         }
     }
 }
@@ -322,6 +323,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             first_epoch: None,
             stake_table_capacity: handle.hotshot.config.stake_table_capacity,
             da_committees: handle.hotshot.config.da_committees.clone(),
+            block_ready_sender: handle.block_ready_sender.clone(),
+            proposal_response_sender: handle.proposal_response_sender.clone(),
         }
     }
 }
@@ -352,6 +355,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             first_epoch: None,
+            proposal_response_sender: handle.proposal_response_sender.clone(),
         }
     }
 }
@@ -378,6 +382,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             first_epoch: None,
+            proposal_response_sender: handle.proposal_response_sender.clone(),
         }
     }
 }

@@ -6,7 +6,7 @@
 
 use std::{sync::Arc, time::Instant};
 
-use async_broadcast::{InactiveReceiver, Sender};
+use async_broadcast::Sender;
 use chrono::Utc;
 use committable::Committable;
 use hotshot_types::{
@@ -32,6 +32,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
+use tokio::sync::broadcast as tokio_broadcast;
 use tracing::instrument;
 use vbs::version::StaticVersionType;
 
@@ -43,6 +44,7 @@ use crate::{
         fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
     },
     quorum_vote::Versions,
+    reconstruct::ProposalResponse,
 };
 
 /// Store the DRB result for the next epoch if we received it in a decided leaf.
@@ -284,7 +286,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
 pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     consensus: OuterConsensus<TYPES>,
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
-    receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
+    proposal_response_sender: &tokio_broadcast::Sender<ProposalResponse<TYPES>>,
     membership: EpochMembershipCoordinator<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -322,7 +324,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
             match fetch_proposal(
                 justify_qc,
                 sender.clone(),
-                receiver.activate_cloned(),
+                proposal_response_sender,
                 membership.clone(),
                 OuterConsensus::new(Arc::clone(&consensus.inner_consensus)),
                 public_key.clone(),

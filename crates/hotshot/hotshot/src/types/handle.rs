@@ -14,7 +14,11 @@ use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::Stream;
 use hotshot_task::task::{ConsensusTaskRegistry, NetworkTaskRegistry, Task, TaskState};
-use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
+use hotshot_task_impls::{
+    events::HotShotEvent,
+    helpers::broadcast_event,
+    reconstruct::{BlockReady, ProposalResponse},
+};
 use hotshot_types::{
     consensus::Consensus,
     data::{Leaf2, QuorumProposalWrapper},
@@ -31,6 +35,7 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use tokio::sync::broadcast as tokio_broadcast;
 use tracing::instrument;
 
 use crate::{traits::NodeImplementation, types::Event, SystemContext, Versions};
@@ -71,6 +76,12 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Sender for block ready notifications
+    pub block_ready_sender: tokio_broadcast::Sender<BlockReady<TYPES>>,
+
+    /// Sender for proposal response notifications
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
@@ -165,7 +176,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             signed_proposal_request.commit().as_ref(),
         )?;
 
-        let mut receiver = self.internal_event_stream.1.activate_cloned();
+        let mut proposal_rx = self.proposal_response_sender.subscribe();
         let sender = self.internal_event_stream.0.clone();
         Ok(async move {
             // First, broadcast that we need a proposal
@@ -174,15 +185,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                 &sender,
             )
             .await;
-            while let std::result::Result::Ok(event) = receiver.recv_direct().await {
-                if let HotShotEvent::QuorumProposalResponseRecv(quorum_proposal) = event.as_ref() {
-                    let leaf = Leaf2::from_quorum_proposal(&quorum_proposal.data);
-                    if leaf.view_number() == view && leaf.commit() == leaf_commitment {
-                        return Ok(quorum_proposal.clone());
-                    }
+            loop {
+                match proposal_rx.recv().await {
+                    Ok(response) => {
+                        let leaf = Leaf2::from_quorum_proposal(&response.proposal.data);
+                        if leaf.view_number() == view && leaf.commit() == leaf_commitment {
+                            return Ok(response.proposal);
+                        }
+                    },
+                    Err(tokio_broadcast::error::RecvError::Closed) => {
+                        return Err(anyhow!("Proposal response channel closed"));
+                    },
+                    Err(tokio_broadcast::error::RecvError::Lagged(_)) => continue,
                 }
             }
-            Err(anyhow!("No proposal found"))
         })
     }
 

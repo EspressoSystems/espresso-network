@@ -40,6 +40,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
+use tokio::sync::broadcast as tokio_broadcast;
 use tracing::instrument;
 use vbs::version::StaticVersionType;
 
@@ -50,6 +51,7 @@ use crate::{
         validate_light_client_state_update_certificate, validate_qc_and_next_epoch_qc,
     },
     quorum_proposal::{QuorumProposalTaskState, UpgradeLock, Versions},
+    reconstruct::ProposalResponse,
 };
 
 /// Proposal dependency types. These types represent events that precipitate a proposal.
@@ -125,6 +127,9 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Sender for proposal responses
+    pub proposal_response_sender: tokio_broadcast::Sender<ProposalResponse<TYPES>>,
 
     pub cancel_receiver: Receiver<()>,
 }
@@ -457,7 +462,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
     ) -> Result<()> {
         let (parent_leaf, state) = parent_leaf_and_state(
             &self.sender,
-            &self.receiver,
+            &self.proposal_response_sender,
             self.membership.coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),

@@ -15,7 +15,7 @@ use alloy::{
     sol_types::SolValue,
 };
 use ark_ff::PrimeField;
-use async_broadcast::{Receiver, SendError, Sender};
+use async_broadcast::{SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
@@ -52,11 +52,14 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use time::OffsetDateTime;
-use tokio::time::timeout;
+use tokio::{sync::broadcast as tokio_broadcast, time::timeout};
 use tracing::instrument;
 use vbs::version::StaticVersionType;
 
-use crate::{events::HotShotEvent, quorum_proposal_recv::ValidationInfo, request::REQUEST_TIMEOUT};
+use crate::{
+    events::HotShotEvent, quorum_proposal_recv::ValidationInfo, reconstruct::ProposalResponse,
+    request::REQUEST_TIMEOUT,
+};
 
 /// Trigger a request to the network for a proposal for a view and wait for the response or timeout.
 #[instrument(skip_all)]
@@ -64,7 +67,7 @@ use crate::{events::HotShotEvent, quorum_proposal_recv::ValidationInfo, request:
 pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     qc: &QuorumCertificate2<TYPES>,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
-    event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    proposal_response_sender: &tokio_broadcast::Sender<ProposalResponse<TYPES>>,
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
@@ -89,30 +92,31 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     .wrap()
     .context(error!("Failed to sign proposal. This should never happen."))?;
 
+    let mut proposal_rx = proposal_response_sender.subscribe();
+
     tracing::info!("Sending proposal request for view {view_number}");
 
-    // First, broadcast that we need a proposal to the current leader
+    // Subscribe first so we don't miss a fast response.
     broadcast_event(
         HotShotEvent::QuorumProposalRequestSend(signed_proposal_request, signature).into(),
         &event_sender,
     )
     .await;
-
-    let mut rx = event_receiver.clone();
-    // Make a background task to await the arrival of the event data.
     let Ok(Some(proposal)) =
         // We want to explicitly timeout here so we aren't waiting around for the data.
         timeout(REQUEST_TIMEOUT, async move {
-            // We want to iterate until the proposal is not None, or until we reach the timeout.
-            while let Ok(event) = rx.recv_direct().await {
-                if let HotShotEvent::QuorumProposalResponseRecv(quorum_proposal) = event.as_ref() {
-                    let leaf = Leaf2::from_quorum_proposal(&quorum_proposal.data);
-                    if leaf.view_number() == view_number && leaf.commit() == leaf_commit {
-                        return Some(quorum_proposal.clone());
-                    }
+            loop {
+                match proposal_rx.recv().await {
+                    Ok(response) => {
+                        let leaf = Leaf2::from_quorum_proposal(&response.proposal.data);
+                        if leaf.view_number() == view_number && leaf.commit() == leaf_commit {
+                            return Some(response.proposal);
+                        }
+                    },
+                    Err(tokio_broadcast::error::RecvError::Closed) => return None,
+                    Err(tokio_broadcast::error::RecvError::Lagged(_)) => continue,
                 }
             }
-            None
         })
         .await
     else {
@@ -711,7 +715,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
+    proposal_response_sender: &tokio_broadcast::Sender<ProposalResponse<TYPES>>,
     membership: EpochMembershipCoordinator<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -730,7 +734,7 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
         let _ = fetch_proposal(
             parent_qc,
             event_sender.clone(),
-            event_receiver.clone(),
+            proposal_response_sender,
             membership,
             consensus.clone(),
             public_key.clone(),
