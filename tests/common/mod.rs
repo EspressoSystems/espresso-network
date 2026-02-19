@@ -278,12 +278,17 @@ impl TestRuntime {
         let esp_token = EspTokenV2::new(token_address, &provider);
         let reward_claim_addr = esp_token.rewardClaim().call().await?;
 
-        self.reward_claim_address = if reward_claim_addr == Address::ZERO {
+        let new = if reward_claim_addr == Address::ZERO {
             None
         } else {
-            println!("Updated reward claim address: {reward_claim_addr}");
             Some(reward_claim_addr)
         };
+        if new != self.reward_claim_address {
+            if let Some(addr) = &new {
+                println!("Updated reward claim address: {addr}");
+            }
+            self.reward_claim_address = new;
+        }
 
         Ok(())
     }
