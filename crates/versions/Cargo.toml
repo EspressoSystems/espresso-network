@@ -10,5 +10,8 @@ serde = { workspace = true }
 vbs = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+quickcheck = { workspace = true }
+
 [lints]
 workspace = true

@@ -58,7 +58,7 @@ pub struct Upgrade {
 
 impl Upgrade {
     pub const fn new(base: Version, target: Version) -> Self {
-        debug_assert! {
+        assert! {
             base.major < target.major || (base.major == target.major && base.minor <= target.minor)
         }
         Self { base, target }
@@ -208,5 +208,77 @@ impl<'de> Deserialize<'de> for Upgrade {
                 target: us.target,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, fmt::Debug};
+
+    use quickcheck::{Arbitrary, Gen, QuickCheck};
+    use serde::{Deserialize, Serialize, de::DeserializeOwned};
+    use vbs::{
+        BinarySerializer,
+        version::{StaticVersion, StaticVersionType},
+    };
+
+    use super::{decode, encode, version};
+
+    /// Ensure our `encode`/`decode` matches `vbs`'s.
+    fn check_encoding<T, V>(sample: &T)
+    where
+        T: Serialize + DeserializeOwned + Debug + PartialEq,
+        V: StaticVersionType,
+    {
+        let v = version(V::MAJOR, V::MINOR);
+
+        let our_bytes = encode(v, sample).unwrap();
+        let vbs_bytes = vbs::Serializer::<V>::serialize(sample).unwrap();
+
+        assert_eq!(our_bytes, vbs_bytes);
+
+        let (our_version, our_value) = decode::<T>(&vbs_bytes).unwrap();
+        let vbs_value: T = vbs::Serializer::<V>::deserialize(&our_bytes).unwrap();
+
+        assert_eq!(our_version, v);
+        assert_eq!(our_value, *sample);
+        assert_eq!(vbs_value, *sample);
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Sample {
+        a: u64,
+        b: String,
+        c: Vec<Sample>,
+        d: HashMap<String, Sample>,
+    }
+
+    impl Arbitrary for Sample {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let g = &mut Gen::new(g.size().saturating_sub(1));
+            Sample {
+                a: Arbitrary::arbitrary(g),
+                b: Arbitrary::arbitrary(g),
+                c: Arbitrary::arbitrary(g),
+                d: Arbitrary::arbitrary(g),
+            }
+        }
+    }
+
+    #[test]
+    fn check_encodings() {
+        fn prop_identical_encoding(s: Sample) {
+            check_encoding::<_, StaticVersion<0, 0>>(&s);
+            check_encoding::<_, StaticVersion<0, 1>>(&s);
+            check_encoding::<_, StaticVersion<0, 2>>(&s);
+            check_encoding::<_, StaticVersion<0, 3>>(&s);
+            check_encoding::<_, StaticVersion<0, 4>>(&s);
+            check_encoding::<_, StaticVersion<0, 5>>(&s);
+            check_encoding::<_, StaticVersion<0, 6>>(&s);
+        }
+
+        QuickCheck::new()
+            .rng(Gen::new(4))
+            .quickcheck(prop_identical_encoding as fn(_))
     }
 }
