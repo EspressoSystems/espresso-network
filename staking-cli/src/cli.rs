@@ -373,7 +373,7 @@ pub async fn run() -> Result<()> {
                 output.clone(),
             )
             .await
-            .unwrap();
+            .context("failed to deploy contracts")?;
             return Ok(());
         }
     }
@@ -480,7 +480,7 @@ pub async fn run() -> Result<()> {
             concurrency,
         )
         .await
-        .unwrap();
+        .context("failed to stake for demo")?;
         return Ok(());
     }
 
@@ -505,7 +505,7 @@ pub async fn run() -> Result<()> {
                     *concurrency,
                 )
                 .await
-                .unwrap();
+                .context("failed to stake for demo")?;
                 return Ok(());
             },
             DemoCommands::Delegate {
@@ -533,7 +533,7 @@ pub async fn run() -> Result<()> {
                     *concurrency,
                 )
                 .await
-                .unwrap();
+                .context("failed to delegate for demo")?;
                 return Ok(());
             },
             DemoCommands::Undelegate {
@@ -557,7 +557,7 @@ pub async fn run() -> Result<()> {
                     *concurrency,
                 )
                 .await
-                .unwrap();
+                .context("failed to undelegate for demo")?;
                 return Ok(());
             },
             DemoCommands::Churn {
@@ -589,7 +589,7 @@ pub async fn run() -> Result<()> {
                     },
                 )
                 .await
-                .unwrap();
+                .context("failed to churn for demo")?;
                 return Ok(());
             },
             #[cfg(feature = "testing")]
