@@ -808,31 +808,12 @@ where
         }
         .boxed()
     })?
-    .at("reward_accounts_v2", move |req, state| {
+    .at("reward_accounts_v2", move |_req, _state| {
         async move {
-            let (height, view) = parse_height_view(&req)?;
-            let accounts = req
-                .body_auto::<Vec<RewardAccountV2>, ApiVer>(ApiVer::instance())
-                .map_err(Error::from_request_error)?;
-
-            state
-                .read(|state| {
-                    async move {
-                        state
-                            .get_reward_accounts_v2(
-                                &state.node_state().await,
-                                height,
-                                view,
-                                &accounts,
-                            )
-                            .await
-                            .map_err(|err| {
-                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
-                            })
-                    }
-                    .boxed()
-                })
-                .await
+            Err::<u64, _>(Error::catch_all(
+                StatusCode::NOT_FOUND,
+                "catchup/reward-accounts-v2 is deprecated".to_string(),
+            ))
         }
         .boxed()
     })?
