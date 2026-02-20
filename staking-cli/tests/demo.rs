@@ -38,8 +38,7 @@ impl RethContainer {
     async fn start_with_block_time(block_time: &str) -> Result<Self> {
         Self::ensure_image().await?;
 
-        let port =
-            portpicker::pick_unused_port().ok_or_else(|| anyhow::anyhow!("No ports available"))?;
+        let port = test_utils::reserve_tcp_port()?;
 
         tracing::info!(
             "Starting reth with {} block time on port {}...",

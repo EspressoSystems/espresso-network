@@ -48,8 +48,6 @@ use crate::{
 };
 
 /// Spawn a warp server on a random available port and return the port number.
-/// Uses TcpListener::bind with port 0 to atomically acquire a free port,
-/// avoiding race conditions with portpicker.
 pub async fn serve_on_random_port(
     filter: impl Filter<Extract = impl warp::Reply> + Clone + Send + Sync + 'static,
 ) -> u16 {
@@ -454,7 +452,7 @@ impl TestSystem {
         // Retry a few times.
         let mut attempts = 0;
         let (port, anvil_instance) = loop {
-            let port = portpicker::pick_unused_port().unwrap();
+            let port = test_utils::reserve_tcp_port().unwrap();
             match Anvil::new()
                 .port(port)
                 .arg("--accounts")
