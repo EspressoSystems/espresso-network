@@ -1784,15 +1784,35 @@ mod tests {
         storage.store_events(l1_block, events.clone()).await?;
 
         let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
-        assert!(read_offset.is_some(),);
-        assert_eq!(loaded_events.len(), 2,);
+        assert!(read_offset.is_some());
+        assert_eq!(loaded_events.len(), 2);
         assert_eq!(loaded_events, events);
+
+        // Store some validators
+        let v = RegisteredValidator::mock();
+        let mut vmap = IndexMap::new();
+        vmap.insert(v.account, v);
+        storage
+            .store_all_validators(EpochNumber::new(1), vmap.clone())
+            .await?;
+
+        let loaded = storage
+            .load_all_validators(EpochNumber::new(1), 0, 10)
+            .await?;
+        assert_eq!(loaded.len(), 1);
 
         storage.delete_stake_tables().await?;
 
+        // Events cleared
         let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
-        assert!(read_offset.is_none(),);
-        assert!(loaded_events.is_empty(),);
+        assert!(read_offset.is_none());
+        assert!(loaded_events.is_empty());
+
+        // Validators cleared
+        let loaded = storage
+            .load_all_validators(EpochNumber::new(1), 0, 10)
+            .await?;
+        assert!(loaded.is_empty());
 
         let event3 = StakeTableEvent::Delegate(Delegated {
             delegator: Address::ZERO,

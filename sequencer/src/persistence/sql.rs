@@ -2810,9 +2810,12 @@ impl MembershipPersistence for Persistence {
     async fn delete_stake_tables(&self) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
         #[cfg(not(feature = "embedded-db"))]
-        query("TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root")
-            .execute(tx.as_mut())
-            .await?;
+        query(
+            "TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root, \
+             stake_table_validators",
+        )
+        .execute(tx.as_mut())
+        .await?;
         #[cfg(feature = "embedded-db")]
         {
             query("DELETE FROM stake_table_events")
@@ -2822,6 +2825,9 @@ impl MembershipPersistence for Persistence {
                 .execute(tx.as_mut())
                 .await?;
             query("DELETE FROM epoch_drb_and_root")
+                .execute(tx.as_mut())
+                .await?;
+            query("DELETE FROM stake_table_validators")
                 .execute(tx.as_mut())
                 .await?;
         }

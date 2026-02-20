@@ -2123,6 +2123,11 @@ impl MembershipPersistence for Persistence {
             fs::remove_dir_all(&events_dir)
                 .with_context(|| format!("Failed to remove events dir: {events_dir:?}"))?;
         }
+        let validators_dir = inner.stake_table_dir_path().join("validators");
+        if validators_dir.exists() {
+            fs::remove_dir_all(&validators_dir)
+                .with_context(|| format!("Failed to remove validators dir: {validators_dir:?}"))?;
+        }
         let drb_dir = inner.epoch_drb_result_dir_path();
         if drb_dir.exists() {
             fs::remove_dir_all(&drb_dir)
