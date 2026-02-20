@@ -145,6 +145,10 @@ impl RewardMerkleTreeFSStorage {
             .join(format!("tree_{:02x}.bin", index.value()))
     }
 
+    fn temp_write_path(&self) -> PathBuf {
+        self.storage_dir.join("tree_write.bin.tmp")
+    }
+
     /// Load a tree root from disk, or return Empty if file doesn't exist (internal).
     ///
     /// Reads the bincode file for the partition and deserializes it. If the file
@@ -216,10 +220,14 @@ impl RewardMerkleTreeFSStorage {
     fn flush_cache(&self) -> io::Result<()> {
         let mut cache = self.cache.write().unwrap();
         if let Some((index, root)) = cache.as_ref() {
-            let path = self.file_path(index);
+            let temp_path = self.temp_write_path();
             let bytes =
                 bincode::serialize(&root).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
-            fs::write(&path, bytes)?;
+            // Write to temp file first to avoid partial writes
+            fs::write(&temp_path, bytes)?;
+            let path = self.file_path(index);
+            // Rename temp file to final path
+            fs::rename(&temp_path, &path)?;
             cache.take();
         }
         Ok(())
