@@ -22,7 +22,7 @@ use espresso_types::{
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
+        RewardAccountV2, RewardMerkleTreeV2,
     },
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction, ValidatorMap,
@@ -260,8 +260,17 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().current_proposal_participation().await
     }
+    /// Get all the validator participation for the previous epoch
     async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().previous_proposal_participation().await
+    }
+    /// Get all the vote participation for the current epoch
+    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.as_ref().current_vote_participation().await
+    }
+    /// Get all the vote participation for the previous epoch
+    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.as_ref().previous_vote_participation().await
     }
 
     async fn get_all_validators(
@@ -448,6 +457,30 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .read()
             .await
             .previous_proposal_participation()
+    }
+
+    /// Get the current vote participation.
+    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .read()
+            .await
+            .current_vote_participation()
+    }
+
+    /// Get the previous vote participation.
+    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .read()
+            .await
+            .previous_vote_participation()
     }
 
     async fn get_all_validators(
@@ -955,17 +988,6 @@ impl<
         Ok(tree)
     }
 
-    async fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.inner()
-            .get_all_reward_accounts(height, offset, limit)
-            .await
-    }
-
     #[tracing::instrument(skip(self, instance))]
     async fn get_reward_accounts_v1(
         &self,
@@ -1169,21 +1191,6 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         .await?
     }
 
-    // We can iterate over the in-memory reward merkle tree
-    // however, there is no guarantee that we have all the accounts in
-    // in-memory reward tree
-    // So, we only query the state table in database for the reward accounts
-    // We never hit this because we only query the storage in `StorageState``
-    // trait implementation
-    async fn get_all_reward_accounts(
-        &self,
-        _height: u64,
-        _offset: u64,
-        _limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        bail!("get_all_reward_accounts is not implemented for ApiState")
-    }
-
     #[tracing::instrument(skip(self, _instance))]
     async fn get_reward_accounts_v1(
         &self,
@@ -1312,7 +1319,53 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             // it's imperative that we do not block the state update loop from this point on.
             // ultimately, we would retry in the next iteration anyway;
             // all the information already exists.
-            if height.is_multiple_of(30) {
+            //
+            // in tests we run this check every block, while in release builds we do not. however,
+            // in either case the actual work should still not occur every block, since the proofs
+            // are not generated unless they were not already stored for the previous light client
+            // finalized height.
+
+            if cfg!(any(test, feature = "testing")) {
+                let finalized_hotshot_height = height;
+
+                // check to see whether we have proofs at that height already stored
+                if !self.proof_exists(finalized_hotshot_height).await {
+                    let Ok(permitted_tree) = self
+                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
+                        .await
+                    else {
+                        return Ok(());
+                    };
+
+                    let tree = permitted_tree.tree;
+
+                    // we try to be careful to avoid allocating for all the proofs immediately,
+                    // but note that there are no guarantees here (if e.g. the database is slow)
+                    let iter =
+                        tree.iter()
+                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
+                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
+
+                                let proof = RewardAccountQueryDataV2 {
+                                    balance: (*balance).into(),
+                                    proof: proof.0,
+                                };
+
+                                let serialized_account = bincode::serialize(&account).ok()?;
+                                let serialized_proof = bincode::serialize(&proof).ok()?;
+
+                                Some((serialized_account, serialized_proof))
+                            });
+
+                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
+                        return Ok(());
+                    };
+
+                    // tree is dropped here
+                }
+            // we offset the check by the node id, just to mitigate having the entire network
+            // doing this calculation at the same time.
+            } else if (height + node_state.node_id).is_multiple_of(30) {
                 let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
                 else {
                     return Ok(());
@@ -2854,7 +2907,6 @@ mod api_tests {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
-        str::FromStr,
         time::Duration,
     };
 
@@ -2882,9 +2934,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{
-            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
-        },
+        v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
         EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof, RewardDistributor,
@@ -2910,11 +2960,10 @@ mod test {
         },
         data_source::{
             sql::Config,
-            storage::{sql::query, SqlStorage, StorageConnectionType},
-            Transaction as _, VersionedDataSource,
+            storage::{SqlStorage, StorageConnectionType},
+            VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
-        merklized_state::UpdateStateData,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2929,7 +2978,7 @@ mod test {
     };
     use jf_merkle_tree_compat::{
         prelude::{MerkleProof, Sha3Node},
-        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+        MerkleTreeScheme,
     };
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_matches;
@@ -3991,12 +4040,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV3>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook::<PosVersionV4>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersionV3::new()).await;
+        let network = TestNetwork::new(config, PosVersionV4::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -4020,6 +4069,15 @@ mod test {
 
         let block_height = 60;
 
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let expected_amount = U256::from(20)
+            * (membership
+                .epoch_block_reward(3.into())
+                .expect("block reward is not None"))
+            .0;
+        drop(membership);
+
         // get the validator address balance at block height 60
         let amount = client
             .get::<Option<RewardAmount>>(&format!(
@@ -4031,18 +4089,6 @@ mod test {
             .unwrap();
 
         tracing::info!("amount={amount:?}");
-
-        let epoch_start_block = 40;
-
-        let node_state = network.server.node_state();
-        let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership
-            .fixed_block_reward()
-            .expect("block reward is not None");
-        drop(membership);
-
-        // The validator gets all the block reward so we can calculate the expected amount
-        let expected_amount = block_reward.0 * (U256::from(block_height - epoch_start_block));
 
         assert_eq!(amount.0, expected_amount, "reward amount don't match");
 
@@ -4089,18 +4135,13 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV3>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook::<PosVersionV4>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersionV3::new()).await;
+        let network = TestNetwork::new(config, PosVersionV4::new()).await;
         let node_state = network.server.node_state();
-        let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership
-            .fixed_block_reward()
-            .expect("block reward is not None");
-        drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -4144,9 +4185,14 @@ mod test {
         }
 
         let mut prev_cumulative_amount = U256::ZERO;
-        // Check Cumulative rewards for epoch 3
-        // i.e block height 41 to 59
+        // Check Cumulative rewards for epochs 3 (= block height 41 to 59) & 4 (= block height 60 to 67)
         for block in 41..=67 {
+            let membership = node_state.coordinator.membership().read().await;
+            let block_reward = membership
+                .epoch_block_reward(epoch_from_block_number(block, epoch_height).into())
+                .expect("block reward is not None");
+            drop(membership);
+
             let mut cumulative_amount = U256::ZERO;
             for address in addresses.clone() {
                 let amount = client
@@ -4277,228 +4323,6 @@ mod test {
             }
 
             target_bh = header.height();
-        }
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_rewards_v3() -> anyhow::Result<()> {
-        // The test registers multiple delegators for each validator
-        // It verifies that no rewards are distributed in the first two epochs
-        // and that rewards are correctly allocated starting from the third epoch.
-        // also checks that the total stake of delegators matches the stake of the validator
-        // and that the calculated rewards match those obtained via the merklized state api
-        const EPOCH_HEIGHT: u64 = 20;
-
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(EPOCH_HEIGHT)
-            .build();
-
-        let api_port = pick_unused_port().expect("No ports free for query service");
-
-        const NUM_NODES: usize = 7;
-
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
-            .network_config(network_config)
-            .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook::<PosVersionV3>(DelegationConfig::MultipleDelegators, Default::default())
-            .await
-            .unwrap()
-            .build();
-
-        let network = TestNetwork::new(config, PosVersionV3::new()).await;
-        let client: Client<ServerError, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-
-        // Wait for 3 epochs to allow rewards distribution to take effect.
-        let mut events = network.peers[0].event_stream().await;
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {height}");
-                if height > EPOCH_HEIGHT * 3 {
-                    break;
-                }
-            }
-        }
-
-        // Verify that there are no validators for epoch # 1 and epoch # 2
-        {
-            client
-                .get::<ValidatorMap>("node/validators/1")
-                .send()
-                .await
-                .unwrap()
-                .is_empty();
-
-            client
-                .get::<ValidatorMap>("node/validators/2")
-                .send()
-                .await
-                .unwrap()
-                .is_empty();
-        }
-
-        // Get the epoch # 3 validators
-        let validators = client
-            .get::<ValidatorMap>("node/validators/3")
-            .send()
-            .await
-            .expect("validators");
-
-        assert!(!validators.is_empty());
-
-        // Collect addresses to track rewards for all participants.
-        let mut addresses = HashSet::new();
-        for v in validators.values() {
-            addresses.insert(v.account);
-            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
-        }
-
-        // Verify no rewards are distributed in the first two epochs.
-        for block in 0..=EPOCH_HEIGHT * 2 {
-            for address in addresses.clone() {
-                let amount = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{block}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten();
-                assert!(amount.is_none(), "amount is not none for block {block}")
-            }
-        }
-
-        // Collect leaves for epoch 3 to 5 to verify reward calculations.
-        let leaves = client
-            .socket("availability/stream/leaves/41")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take((EPOCH_HEIGHT * 3).try_into().unwrap())
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
-
-        let membership = coordinator.membership().read().await;
-        let block_reward = membership
-            .fixed_block_reward()
-            .expect("block reward is not None");
-
-        drop(membership);
-
-        let mut rewards_map = HashMap::new();
-
-        for leaf in leaves {
-            let block = leaf.height();
-            tracing::info!("verify rewards for block={block:?}");
-            let membership = coordinator.membership().read().await;
-            let epoch = epoch_from_block_number(block, EPOCH_HEIGHT);
-            let epoch_number = EpochNumber::new(epoch);
-            let leader = membership
-                .leader(leaf.leaf().view_number(), Some(epoch_number))
-                .expect("leader");
-            let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
-
-            drop(membership);
-
-            let validators = client
-                .get::<ValidatorMap>(&format!("node/validators/{epoch}"))
-                .send()
-                .await
-                .expect("validators");
-
-            let leader_validator = validators
-                .get(&leader_eth_address)
-                .expect("leader not found");
-
-            let distributor =
-                RewardDistributor::new(leader_validator.clone(), block_reward, U256::ZERO.into());
-            // Verify that the sum of delegator stakes equals the validator's total stake.
-            for validator in validators.values() {
-                let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
-
-                assert_eq!(delegator_stake_sum, validator.stake);
-            }
-
-            let computed_rewards = distributor.compute_rewards().expect("reward computation");
-
-            // Verify that the leader commission amount is within the tolerated range.
-            // Due to potential rounding errors in decimal calculations for delegator rewards,
-            // the actual distributed commission
-            // amount may differ very slightly from the calculated value.
-            // this asserts that it is within 10wei tolerance level.
-            // 10 wei is 10* 10E-18
-            let total_reward = block_reward.0;
-            let leader_commission_basis_points = U256::from(leader_validator.commission);
-            let calculated_leader_commission_reward = leader_commission_basis_points
-                .checked_mul(total_reward)
-                .context("overflow")?
-                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-                .context("overflow")?;
-
-            assert!(
-                computed_rewards.leader_commission().0 - calculated_leader_commission_reward
-                    <= U256::from(10_u64)
-            );
-
-            // Aggregate reward amounts by address in the map.
-            // This is necessary because there can be two entries for a leader address:
-            // - One entry for commission rewards.
-            // - Another for delegator rewards when the leader is delegating.
-            // Also, rewards are accumulated for the same addresses
-            let leader_commission = *computed_rewards.leader_commission();
-            for (address, amount) in computed_rewards.delegators().clone() {
-                rewards_map
-                    .entry(address)
-                    .and_modify(|entry| *entry += amount)
-                    .or_insert(amount);
-            }
-
-            // add leader commission reward
-            rewards_map
-                .entry(leader_eth_address)
-                .and_modify(|entry| *entry += leader_commission)
-                .or_insert(leader_commission);
-
-            // assert that the reward matches to what is in the reward merkle tree
-            for (address, calculated_amount) in rewards_map.iter() {
-                let amount_from_api = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{block}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten()
-                    .expect("amount");
-                assert_eq!(amount_from_api, *calculated_amount)
-            }
         }
 
         Ok(())
@@ -7100,7 +6924,7 @@ mod test {
 
         let err = client
             .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
-                "catchup/{height}/reward-amounts/10001/0"
+                "reward-state-v2/reward-amounts/{height}/0/10001"
             ))
             .send()
             .await
@@ -7129,247 +6953,13 @@ mod test {
 
         let res = client
             .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
-                "catchup/{height}/reward-amounts/{limit}/{offset}"
+                "reward-state-v2/reward-amounts/{height}/{offset}/{limit}"
             ))
             .send()
             .await
             .unwrap();
 
         assert_eq!(res, expected);
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_multiple_cases() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis::<
-            SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-        >(&validated_state, &instance_state)
-        .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
-        let account2 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000002")?;
-        let account3 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000003")?;
-        let account4 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000004")?;
-
-        // Insert account1 with balance 1000, account2 with balance 2000
-        let accounts_height_5 = vec![
-            (account1, RewardAmount::from(1000u64)),
-            (account2, RewardAmount::from(2000u64)),
-        ];
-
-        let accounts_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-
-        let accounts_height_15 = vec![
-            (account2, RewardAmount::from(2500u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 16] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        for (height, accounts) in [
-            (5u64, &accounts_height_5),
-            (10, &accounts_height_10),
-            (15, &accounts_height_15),
-        ] {
-            for (account, balance) in accounts {
-                reward_tree.update(*account, *balance)?;
-
-                let (_, proof) = reward_tree.lookup(*account).expect_ok().unwrap();
-
-                let traversal_path = <RewardAccountV2 as ToTraversalPath<
-                    { RewardMerkleTreeV2::ARITY },
-                >>::to_traversal_path(
-                    account, reward_tree.height()
-                );
-
-                UpdateStateData::<
-                    SeqTypes,
-                    RewardMerkleTreeV2,
-                    { RewardMerkleTreeV2::ARITY },
-                >::insert_merkle_nodes(&mut tx, proof, traversal_path, height)
-                .await?;
-            }
-        }
-
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 15)
-        .await?;
-
-        tx.commit().await?;
-
-        let result_height_5 = db.get_all_reward_accounts(5, 0, 100).await?;
-        assert_eq!(result_height_5.len(), 2,);
-        for (account, balance) in &accounts_height_5 {
-            assert!(result_height_5
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_10 = db.get_all_reward_accounts(10, 0, 100).await?;
-        assert_eq!(result_height_10.len(), 3,);
-
-        // Verify account1 has the updated balance from height 10
-        //  not the old balance from height 5
-        let expected_at_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2000u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-        for (account, balance) in &expected_at_height_10 {
-            assert!(result_height_10
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_15 = db.get_all_reward_accounts(15, 0, 100).await?;
-        assert_eq!(result_height_15.len(), 4,);
-
-        // Verify account2 has the updated balance from height 15, and account4 is new
-        let expected_at_height_15 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2500u64)),
-            (account3, RewardAmount::from(3000u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-        for (account, balance) in &expected_at_height_15 {
-            assert!(result_height_15
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        // Test pagination
-        // results are sorted by account address descending
-        let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
-        assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account4, RewardAmount::from(4000u64)));
-        assert_eq!(result_limit_2[1], (account3, RewardAmount::from(3000u64)));
-
-        let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
-        assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account2, RewardAmount::from(2500u64)));
-        assert_eq!(result_offset_2[1], (account1, RewardAmount::from(1500u64)));
-
-        Ok(())
-    }
-
-    ///  ensure get_all_reward_accounts fails when merklized state height
-    /// is behind the requested height
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_check_state_height() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(DrbAndHeaderUpgradeVersion::version());
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis::<
-            SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-        >(&validated_state, &instance_state)
-        .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 20] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        // Insert merkle data at height 5
-        reward_tree.update(account1, RewardAmount::from(1000u64))?;
-        let (_, proof) = reward_tree.lookup(account1).expect_ok().unwrap();
-        let traversal_path =
-            <RewardAccountV2 as ToTraversalPath<{ RewardMerkleTreeV2::ARITY }>>::to_traversal_path(
-                &account1,
-                reward_tree.height(),
-            );
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::insert_merkle_nodes(&mut tx, proof, traversal_path, 5)
-        .await?;
-
-        // Set the merklized state height to 10
-        // less than max block height of 20
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 10)
-        .await?;
-
-        tx.commit().await?;
-
-        // Query at height 5 should succeed
-        let result = db.get_all_reward_accounts(5, 0, 100).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 1);
-
-        // Query at height 10 should succeed
-        let result = db.get_all_reward_accounts(10, 0, 100).await;
-        assert!(result.is_ok());
-
-        // Query at height 15 should fail
-        // state not yet processed
-        let result = db.get_all_reward_accounts(15, 0, 100).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not yet available"));
 
         Ok(())
     }
