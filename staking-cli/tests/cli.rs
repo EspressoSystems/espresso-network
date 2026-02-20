@@ -13,21 +13,37 @@ use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{rngs::StdRng, SeedableRng as _};
+use serde::Deserialize;
 use staking_cli::{
     demo::DelegationConfig,
-    deploy::{self},
-    fetch_metadata, Config,
+    deploy::{self, TestSystem},
+    fetch_metadata,
 };
 use url::Url;
 use warp::Filter as _;
+
+#[derive(Deserialize)]
+struct TestConfig {
+    rpc_url: Url,
+    stake_table_address: Address,
+    espresso_url: Option<Url>,
+    signer: TestSignerConfig,
+}
+
+#[derive(Deserialize)]
+struct TestSignerConfig {
+    mnemonic: Option<String>,
+    private_key: Option<String>,
+    account_index: Option<u32>,
+    #[serde(default)]
+    ledger: bool,
+}
 
 fn random_mnemonic() -> String {
     Mnemonic::<English>::new(&mut rand::thread_rng())
         .to_phrase()
         .to_string()
 }
-
-use crate::deploy::TestSystem;
 
 mod common;
 
@@ -90,8 +106,8 @@ fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
 
     assert!(config_path.exists());
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
-    assert_eq!(config.signer.mnemonic, Some(mnemonic));
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
     assert_eq!(config.signer.account_index, Some(123));
     assert!(!config.signer.ledger);
 
@@ -127,7 +143,7 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
 
     assert!(config_path.exists());
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert!(config.signer.ledger);
     assert_eq!(config.signer.account_index, Some(42));
 
@@ -734,7 +750,7 @@ async fn test_cli_stake_for_demo_default_num_validators(
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo").assert().success();
+    cmd.arg("demo").arg("stake").assert().success();
     Ok(())
 }
 
@@ -745,7 +761,8 @@ async fn test_cli_stake_for_demo_three_validators(
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo")
+    cmd.arg("demo")
+        .arg("stake")
         .arg("--num-validators")
         .arg("3")
         .assert()
@@ -768,9 +785,38 @@ async fn stake_for_demo_delegation_config_helper(
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo")
+    cmd.arg("demo")
+        .arg("stake")
         .arg("--delegation-config")
         .arg(config.to_string())
+        .assert()
+        .success();
+    Ok(())
+}
+
+// Tests for deprecated `stake-for-demo` command.
+// These can be removed when the deprecated command is removed.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_deprecated_stake_for_demo_default(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("stake-for-demo").assert().success();
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_deprecated_stake_for_demo_three_validators(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("stake-for-demo")
+        .arg("--num-validators")
+        .arg("3")
         .assert()
         .success();
     Ok(())
@@ -1609,11 +1655,8 @@ fn test_cli_create_config_file_private_key() -> anyhow::Result<()> {
 
     assert!(config_path.exists());
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
-    assert_eq!(
-        config.signer.private_key,
-        Some(TEST_PRIVATE_KEY.to_string())
-    );
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(config.signer.private_key.as_deref(), Some(TEST_PRIVATE_KEY));
     assert!(config.signer.mnemonic.is_none());
     assert!(!config.signer.ledger);
 
@@ -2200,7 +2243,7 @@ fn test_cli_init_network_mainnet() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert_eq!(
         config.stake_table_address.to_string().to_lowercase(),
         "0xcef474d372b5b09defe2af187bf17338dc704451"
@@ -2213,7 +2256,7 @@ fn test_cli_init_network_mainnet() -> anyhow::Result<()> {
         config.rpc_url.as_str(),
         "https://ethereum-rpc.publicnode.com/"
     );
-    assert_eq!(config.signer.mnemonic, Some(mnemonic));
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
 
     Ok(())
 }
@@ -2233,7 +2276,7 @@ fn test_cli_init_network_decaf() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert_eq!(
         config.stake_table_address.to_string().to_lowercase(),
         "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
@@ -2246,7 +2289,7 @@ fn test_cli_init_network_decaf() -> anyhow::Result<()> {
         config.rpc_url.as_str(),
         "https://ethereum-sepolia-rpc.publicnode.com/"
     );
-    assert_eq!(config.signer.mnemonic, Some(mnemonic));
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
 
     Ok(())
 }
@@ -2299,13 +2342,13 @@ fn test_cli_init_network_local() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert_eq!(config.rpc_url.as_str(), "http://127.0.0.1:8545/");
     assert_eq!(
         config.espresso_url.as_ref().map(|u| u.as_str()),
         Some("http://localhost:24000/")
     );
-    assert_eq!(config.signer.mnemonic, Some(mnemonic));
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
 
     Ok(())
 }
@@ -2325,12 +2368,12 @@ fn test_cli_init_network_env_var() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert_eq!(
         config.stake_table_address.to_string().to_lowercase(),
         "0xcef474d372b5b09defe2af187bf17338dc704451"
     );
-    assert_eq!(config.signer.mnemonic, Some(mnemonic));
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
 
     Ok(())
 }
