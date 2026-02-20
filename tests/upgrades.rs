@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, UpgradeMode};
 use futures::{future::join_all, StreamExt};
+use hotshot_types::utils::epoch_from_block_number;
 use sequencer::Genesis;
 use vbs::version::StaticVersionType;
 
@@ -39,14 +40,19 @@ where
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let mut stream = futures::stream::iter(subscriptions).flatten_unordered(None);
+    let mut iteration = 0u64;
 
     while let Some(header) = stream.next().await {
         let header = header.unwrap();
-        println!(
-            "block: height={}, version={}",
-            header.height(),
-            header.version()
-        );
+        iteration += 1;
+
+        if iteration.is_power_of_two() {
+            println!(
+                "block: height={}, version={}",
+                header.height(),
+                header.version()
+            );
+        }
 
         // TODO is it possible to discover the view at which upgrade should be finished?
         // First few views should be `Base` version.
@@ -93,39 +99,31 @@ where
     assert_upgrade_happens::<Base, Target>(&genesis).await?;
 
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
-    // Calculate reward claim deadline if applicable
-    let reward_claim_deadline_block_height =
-        if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
-            // Rewards should be claimable after 2 epochs on the upgrade version (min 200 blocks)
-            let upgrade = genesis
-                .upgrades
-                .get(&Target::version())
-                .expect("target version upgrade should exist in genesis");
-            let start_proposing_view = match &upgrade.mode {
-                UpgradeMode::View(view_upgrade) => view_upgrade.start_proposing_view,
-                UpgradeMode::Time(_) => panic!("time-based upgrades not supported in tests"),
-            };
-            Some(start_proposing_view + (epoch_length * 2).max(300))
-        } else {
-            None
-        };
+    let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
+    let first_reward_block = (first_epoch + 1) * epoch_length + 1;
 
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
-    // we are using the stake table from the contract.
-    // Ensure we run long enough to check rewards if applicable
-    let expected_block_height = if let Some(deadline) = reward_claim_deadline_block_height {
-        (epoch_length * 3 + 10).max(deadline)
+    let first_reward_block = if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
+        Some(first_reward_block)
     } else {
-        epoch_length * 3 + 10
+        None
     };
 
-    // verify native demo continues to work after upgrade
+    let expected_block_height = (first_epoch + 2) * epoch_length + 10;
+
+    println!("Upgrade test config:");
+    println!("  epoch_start_block: {epoch_start_block}");
+    println!("  epoch_length: {epoch_length}");
+    println!("  first_epoch: {first_epoch}");
+    println!("  first_reward_block: {first_reward_block:?}");
+    println!("  expected_block_height: {expected_block_height}");
+
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
         global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
-        reward_claim_deadline_block_height,
+        first_reward_block,
         ..Default::default()
     };
 

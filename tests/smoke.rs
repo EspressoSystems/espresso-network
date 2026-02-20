@@ -4,15 +4,15 @@ use alloy::primitives::U256;
 use anyhow::Result;
 use futures::StreamExt;
 
-use crate::common::{NativeDemo, TestRequirements, TestRuntime};
+use crate::common::{NativeDemo, TestRequirements, TestRuntime, TestState};
 
 pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<()> {
-    let start = Instant::now();
     dotenvy::dotenv()?;
 
     println!("{:#?}", requirements);
 
     let mut runtime = TestRuntime::from_requirements(requirements.clone()).await?;
+    let start = Instant::now();
 
     let initial = runtime.test_state().await;
     println!("Initial State: {initial}");
@@ -24,6 +24,8 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
 
     let old = initial.clone();
     let mut blocks_without_tx = 0;
+    let mut iteration = 0u64;
+    let mut prev_printed = None;
 
     loop {
         match tokio::time::timeout(requirements.block_timeout, sub.next()).await {
@@ -33,7 +35,18 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
         };
 
         let new = runtime.test_state().await;
-        println!("New State:{new}");
+        iteration += 1;
+
+        let significant_change = prev_printed.as_ref().is_none_or(|prev: &TestState| {
+            new.light_client_finalized_block_height != prev.light_client_finalized_block_height
+                || new.rewards_claimed != prev.rewards_claimed
+        });
+        let power_of_two = iteration.is_power_of_two();
+
+        if significant_change || power_of_two {
+            println!("State (block {}):{new}", new.block_height.unwrap());
+            prev_printed = Some(new.clone());
+        }
 
         let num_new_tx = new.txn_count - old.txn_count;
         if num_new_tx == 0 {
@@ -62,34 +75,22 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
         }
 
         if new.block_height.unwrap() < runtime.expected_block_height() {
-            println!(
-                "waiting for block height have={} want={}",
-                new.block_height.unwrap(),
-                runtime.expected_block_height()
-            );
             continue;
         }
 
         if new.txn_count < runtime.expected_txn_count() {
-            println!(
-                "waiting for transaction count have={} want={}",
-                new.txn_count,
-                runtime.expected_txn_count()
-            );
             continue;
         }
 
-        if let Some(deadline_height) = requirements.reward_claim_deadline_block_height {
-            println!("Checking reward claims");
-            let new = runtime.test_state().await;
-            if new.block_height.unwrap() >= deadline_height {
-                assert!(new.rewards_claimed > U256::ZERO);
-                println!(
-                    "Rewards claimed: {} at block {}",
-                    new.rewards_claimed,
-                    new.block_height.unwrap()
-                );
+        if let Some(_first_reward_block) = requirements.first_reward_block {
+            if new.rewards_claimed == U256::ZERO {
+                continue;
             }
+            println!(
+                "Rewards claimed: {} at block {}",
+                new.rewards_claimed,
+                new.block_height.unwrap()
+            );
         }
 
         break;
