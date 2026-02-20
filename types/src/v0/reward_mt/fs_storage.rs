@@ -140,9 +140,13 @@ impl RewardMerkleTreeFSStorage {
     /// - `OuterIndex(0)` → `storage_dir/tree_00.bin`
     /// - `OuterIndex(10)` → `storage_dir/tree_0a.bin`
     /// - `OuterIndex(15)` → `storage_dir/tree_0f.bin`
-    fn file_path(&self, index: OuterIndex) -> PathBuf {
+    fn file_path(&self, index: &OuterIndex) -> PathBuf {
         self.storage_dir
             .join(format!("tree_{:02x}.bin", index.value()))
+    }
+
+    fn temp_write_path(&self) -> PathBuf {
+        self.storage_dir.join("tree_write.bin.tmp")
     }
 
     /// Load a tree root from disk, or return Empty if file doesn't exist (internal).
@@ -156,7 +160,7 @@ impl RewardMerkleTreeFSStorage {
     /// # Returns
     /// - `Ok(tree)` - Loaded tree root
     /// - `Err(io::Error)` - Disk I/O failure or deserialization error
-    fn load_from_disk(&self, index: OuterIndex) -> io::Result<InnerRewardMerkleTreeRoot> {
+    fn load_from_disk(&self, index: &OuterIndex) -> io::Result<InnerRewardMerkleTreeRoot> {
         let path = self.file_path(index);
 
         match fs::read(&path) {
@@ -168,26 +172,6 @@ impl RewardMerkleTreeFSStorage {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(InnerRewardMerkleTreeRoot::Empty),
             Err(e) => Err(e),
         }
-    }
-
-    /// Write a tree root to disk as bincode (internal).
-    ///
-    /// Serializes the tree root and writes it to the partition's file, overwriting
-    /// any existing content. Called during cache flush operations.
-    ///
-    /// # Arguments
-    /// * `index` - Partition index to save
-    /// * `root` - Tree root to serialize and write
-    ///
-    /// # Returns
-    /// - `Ok(())` - Successfully written to disk
-    /// - `Err(io::Error)` - Disk I/O failure or serialization error
-    fn save_to_disk(&self, index: OuterIndex, root: &InnerRewardMerkleTreeRoot) -> io::Result<()> {
-        let path = self.file_path(index);
-        let bytes =
-            bincode::serialize(root).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
-        fs::write(&path, bytes)?;
-        Ok(())
     }
 
     /// Load an inner tree into the single-entry cache (internal).
@@ -203,12 +187,12 @@ impl RewardMerkleTreeFSStorage {
     /// # Returns
     /// - `Ok(())` - Tree loaded into cache
     /// - `Err(io::Error)` - Disk I/O failure
-    fn load_into_cache(&self, index: OuterIndex) -> io::Result<()> {
+    fn load_into_cache(&self, index: &OuterIndex) -> io::Result<()> {
         // Check if the requested tree is already cached
         {
             let cache = self.cache.read().unwrap();
             if let Some((cached_index, _)) = &*cache {
-                if *cached_index == index {
+                if cached_index == index {
                     return Ok(()); // Already cached
                 }
             }
@@ -221,7 +205,7 @@ impl RewardMerkleTreeFSStorage {
         let root = self.load_from_disk(index)?;
 
         // Cache the tree
-        *self.cache.write().unwrap() = Some((index, root));
+        *self.cache.write().unwrap() = Some((*index, root));
         Ok(())
     }
 
@@ -235,8 +219,16 @@ impl RewardMerkleTreeFSStorage {
     /// - `Err(io::Error)` - Disk I/O failure
     fn flush_cache(&self) -> io::Result<()> {
         let mut cache = self.cache.write().unwrap();
-        if let Some((index, root)) = cache.take() {
-            self.save_to_disk(index, &root)?;
+        if let Some((index, root)) = cache.as_ref() {
+            let temp_path = self.temp_write_path();
+            let bytes =
+                bincode::serialize(&root).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+            // Write to temp file first to avoid partial writes
+            fs::write(&temp_path, bytes)?;
+            let path = self.file_path(index);
+            // Rename temp file to final path
+            fs::rename(&temp_path, &path)?;
+            cache.take();
         }
         Ok(())
     }
@@ -259,38 +251,10 @@ impl Drop for RewardMerkleTreeFSStorage {
     }
 }
 
-/// Creates a clone that shares the same storage directory but has an empty cache.
-///
-/// Flushes the current cache to disk before cloning to ensure the clone sees
-/// the latest state. The clone will read from the same disk files but maintains
-/// its own independent cache.
-///
-/// # Use Cases
-///
-/// - Creating multiple readers of the same storage
-/// - Forking state for parallel processing
-/// - Snapshotting current state
-///
-/// # Note
-///
-/// Both instances write to the same files. Concurrent writes from multiple instances
-/// can cause data corruption. Use external synchronization if cloning for concurrent access.
-impl Clone for RewardMerkleTreeFSStorage {
-    fn clone(&self) -> Self {
-        // Flush cache before cloning to ensure clone sees latest state
-        let _ = self.flush_cache();
-
-        Self {
-            storage_dir: self.storage_dir.clone(),
-            cache: RwLock::new(None),
-        }
-    }
-}
-
 impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
     type Error = io::Error;
 
-    fn with_tree<F, R>(&self, index: OuterIndex, f: F) -> Result<R, Self::Error>
+    fn with_tree<F, R>(&self, index: &OuterIndex, f: F) -> Result<R, Self::Error>
     where
         F: FnOnce(&InnerRewardMerkleTreeRoot) -> R,
     {
@@ -303,7 +267,7 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
         Ok(f(tree))
     }
 
-    fn with_tree_mut<F, R>(&self, index: OuterIndex, f: F) -> Result<R, Self::Error>
+    fn with_tree_mut<F, R>(&self, index: &OuterIndex, f: F) -> Result<R, Self::Error>
     where
         F: FnOnce(&mut InnerRewardMerkleTreeRoot) -> R,
     {
@@ -316,12 +280,12 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
         Ok(f(tree))
     }
 
-    fn exists(&self, index: OuterIndex) -> bool {
+    fn exists(&self, index: &OuterIndex) -> bool {
         // Check if it's in the cache first
         {
             let cache = self.cache.read().unwrap();
             if let Some((cached_index, _)) = &*cache {
-                if *cached_index == index {
+                if cached_index == index {
                     return true;
                 }
             }
@@ -353,7 +317,7 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
         // Include cached index if it's not on disk yet
         let cache = self.cache.read().unwrap();
         if let Some((cached_index, _)) = &*cache {
-            if !self.file_path(*cached_index).exists() {
+            if !self.file_path(cached_index).exists() {
                 indices.push(*cached_index);
             }
         }

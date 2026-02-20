@@ -142,7 +142,7 @@ pub trait RewardMerkleTreeStorage {
     /// ```rust,ignore
     /// storage.with_tree(outer_index, |tree| tree.num_leaves())?
     /// ```
-    fn with_tree<F, R>(&self, index: OuterIndex, f: F) -> Result<R, Self::Error>
+    fn with_tree<F, R>(&self, index: &OuterIndex, f: F) -> Result<R, Self::Error>
     where
         F: FnOnce(&InnerRewardMerkleTreeRoot) -> R;
 
@@ -166,7 +166,7 @@ pub trait RewardMerkleTreeStorage {
     ///     tree.update(account, amount)
     /// })?
     /// ```
-    fn with_tree_mut<F, R>(&self, index: OuterIndex, f: F) -> Result<R, Self::Error>
+    fn with_tree_mut<F, R>(&self, index: &OuterIndex, f: F) -> Result<R, Self::Error>
     where
         F: FnOnce(&mut InnerRewardMerkleTreeRoot) -> R;
 
@@ -180,7 +180,7 @@ pub trait RewardMerkleTreeStorage {
     ///
     /// # Returns
     /// Whether the partition contains data
-    fn exists(&self, index: OuterIndex) -> bool;
+    fn exists(&self, index: &OuterIndex) -> bool;
 
     /// Get all partition indices that contain data.
     ///
@@ -223,7 +223,7 @@ pub trait RewardMerkleTreeStorage {
             );
         let inner_path = &path[..REWARD_MERKLE_TREE_V2_INNER_HEIGHT];
         self.with_tree(
-            outer_index,
+            &outer_index,
             |tree| -> LookupResult<RewardAmount, RewardMerkleProof, RewardMerkleProof> {
                 match tree.lookup_internal(REWARD_MERKLE_TREE_V2_INNER_HEIGHT, inner_path) {
                     LookupResult::Ok(value, proof) => {
@@ -288,7 +288,7 @@ pub trait RewardMerkleTreeStorage {
             );
         let inner_path = &path[..REWARD_MERKLE_TREE_V2_INNER_HEIGHT];
         self.with_tree_mut(
-            outer_index,
+            &outer_index,
             |tree| -> anyhow::Result<(LookupResult<RewardAmount, (), ()>, i64, KeccakNode)> {
                 let (new_root, delta, result) = tree
                     .update_with_internal::<Keccak256Hasher, REWARD_MERKLE_TREE_V2_ARITY, _>(
@@ -334,7 +334,7 @@ pub trait RewardMerkleTreeStorage {
             );
         let inner_path = &path[..REWARD_MERKLE_TREE_V2_INNER_HEIGHT];
         self.with_tree_mut(
-            outer_index,
+            &outer_index,
             |tree| -> LookupResult<RewardAmount, RewardMerkleProof, ()> {
                 let (root, result) =
                     tree.forget_internal(REWARD_MERKLE_TREE_V2_INNER_HEIGHT, inner_path);
@@ -529,12 +529,12 @@ impl CachedInMemoryStorage {
     ///
     /// # Arguments
     /// * `index` - Partition index to load
-    fn load_into_cache(&self, index: OuterIndex) {
+    fn load_into_cache(&self, index: &OuterIndex) {
         // Check if the requested tree is already cached
         {
             let cache = self.cache.read().unwrap();
             if let Some((cached_index, _)) = &*cache {
-                if *cached_index == index {
+                if cached_index == index {
                     return; // Already cached
                 }
             }
@@ -548,11 +548,11 @@ impl CachedInMemoryStorage {
             .roots
             .write()
             .unwrap()
-            .remove(&index)
+            .remove(index)
             .unwrap_or(InnerRewardMerkleTreeRoot::Empty);
 
         // Cache the tree
-        *self.cache.write().unwrap() = Some((index, tree));
+        *self.cache.write().unwrap() = Some((*index, tree));
     }
 
     /// Write cached tree back to HashMap (internal).
@@ -576,7 +576,7 @@ impl Default for CachedInMemoryStorage {
 impl RewardMerkleTreeStorage for CachedInMemoryStorage {
     type Error = std::convert::Infallible;
 
-    fn with_tree<F, R>(&self, index: OuterIndex, f: F) -> Result<R, Self::Error>
+    fn with_tree<F, R>(&self, index: &OuterIndex, f: F) -> Result<R, Self::Error>
     where
         F: FnOnce(&InnerRewardMerkleTreeRoot) -> R,
     {
@@ -589,7 +589,7 @@ impl RewardMerkleTreeStorage for CachedInMemoryStorage {
         Ok(f(root))
     }
 
-    fn with_tree_mut<F, R>(&self, index: OuterIndex, f: F) -> Result<R, Self::Error>
+    fn with_tree_mut<F, R>(&self, index: &OuterIndex, f: F) -> Result<R, Self::Error>
     where
         F: FnOnce(&mut InnerRewardMerkleTreeRoot) -> R,
     {
@@ -602,18 +602,18 @@ impl RewardMerkleTreeStorage for CachedInMemoryStorage {
         Ok(f(root))
     }
 
-    fn exists(&self, index: OuterIndex) -> bool {
+    fn exists(&self, index: &OuterIndex) -> bool {
         // Check if it's in the cache first
         {
             let cache = self.cache.read().unwrap();
             if let Some((cached_index, _)) = &*cache {
-                if *cached_index == index {
+                if cached_index == index {
                     return true;
                 }
             }
         }
         // Otherwise check persistent storage
-        self.roots.read().unwrap().contains_key(&index)
+        self.roots.read().unwrap().contains_key(index)
     }
 
     fn indices(&self) -> Vec<OuterIndex> {

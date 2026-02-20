@@ -639,7 +639,7 @@ impl<S: RewardMerkleTreeStorage> IntoIterator for StorageBackedRewardMerkleTreeV
 
         for outer_idx in indices {
             self.storage
-                .with_tree(outer_idx, |root| {
+                .with_tree(&outer_idx, |root| {
                     // Traverse the MerkleNode tree to collect all leaf entries
                     collect_merkle_leaves(root, &mut all_entries);
                 })
