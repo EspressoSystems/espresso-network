@@ -1758,7 +1758,7 @@ mod tests {
     }
 
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_clear_events<P: TestablePersistence>(
+    pub async fn test_delete_stake_tables<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
         let tmp = P::tmp_storage().await;
@@ -1787,7 +1787,7 @@ mod tests {
         assert_eq!(loaded_events.len(), 2,);
         assert_eq!(loaded_events, events);
 
-        storage.clear_events().await?;
+        storage.delete_stake_tables().await?;
 
         let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
         assert!(read_offset.is_none(),);

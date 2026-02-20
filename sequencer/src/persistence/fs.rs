@@ -2019,12 +2019,17 @@ impl MembershipPersistence for Persistence {
         }
     }
 
-    async fn clear_events(&self) -> anyhow::Result<()> {
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
         let inner = self.inner.write().await;
         let events_dir = inner.stake_table_dir_path().join("events");
         if events_dir.exists() {
             fs::remove_dir_all(&events_dir)
                 .with_context(|| format!("Failed to remove events dir: {events_dir:?}"))?;
+        }
+        let drb_dir = inner.epoch_drb_result_dir_path();
+        if drb_dir.exists() {
+            fs::remove_dir_all(&drb_dir)
+                .with_context(|| format!("Failed to remove epoch DRB result dir: {drb_dir:?}"))?;
         }
         Ok(())
     }

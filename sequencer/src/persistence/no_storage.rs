@@ -341,7 +341,7 @@ impl MembershipPersistence for NoStorage {
         Ok((None, Vec::new()))
     }
 
-    async fn clear_events(&self) -> anyhow::Result<()> {
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
         Ok(())
     }
 

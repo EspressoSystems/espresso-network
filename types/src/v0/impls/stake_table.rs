@@ -1353,21 +1353,8 @@ impl Fetcher {
             .with_context(|| "failed to fetch stake table events")?;
 
         let (all_validators, stake_table_hash) =
-            match validators_from_l1_events(events.into_iter().map(|(_, e)| e)) {
-                Ok(res) => res,
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to apply stake table events: {e:?}. Clearing stored events"
-                    );
-
-                    let persistence_lock = self.persistence.lock().await;
-                    persistence_lock.clear_events().await.inspect_err(|err| {
-                        tracing::error!("Failed to clear stored events: {err}");
-                    })?;
-
-                    bail!("failed to apply stake table events: {e:?}");
-                },
-            };
+            validators_from_l1_events(events.into_iter().map(|(_, e)| e))
+                .with_context(|| "failed to apply stake table events")?;
 
         let active_validators = select_active_validator_set(&all_validators)?;
 

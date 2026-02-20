@@ -546,9 +546,8 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         Vec<(EventKey, StakeTableEvent)>,
     )>;
 
-    /// Clear all stored stake table events and reset the L1 block tracker.
-    /// Used for recovery when stored events are incomplete
-    async fn clear_events(&self) -> anyhow::Result<()>;
+    /// Delete all stake table events, the L1 block tracker, and the epoch DRB and root data.
+    async fn delete_stake_tables(&self) -> anyhow::Result<()>;
 
     async fn store_all_validators(
         &self,

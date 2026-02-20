@@ -123,7 +123,7 @@ impl MembershipPersistence for NoStorage {
         bail!("unimplemented")
     }
 
-    async fn clear_events(&self) -> anyhow::Result<()> {
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
         Ok(())
     }
 
