@@ -31,7 +31,7 @@ pub struct EventServiceStream<Types: NodeType, V: StaticVersionType> {
 
 impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Types, ApiVer> {
     /// Maximum period between events, once it elapsed we assume
-    /// udnerlying connection silently went down and attempt to reconnect
+    /// underlying connection silently went down and attempt to reconnect
     const MAX_WAIT_PERIOD: Duration = Duration::from_secs(10);
     const RETRY_PERIOD: Duration = Duration::from_secs(1);
     const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -251,12 +251,8 @@ mod tests {
     async fn test_event_stream_wrapper() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let url: Url = format!(
-            "http://localhost:{}",
-            portpicker::pick_unused_port().unwrap()
-        )
-        .parse()
-        .unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());
 
@@ -296,12 +292,8 @@ mod tests {
     async fn test_event_stream_wrapper_with_idle_timeout() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let url: Url = format!(
-            "http://localhost:{}",
-            portpicker::pick_unused_port().unwrap()
-        )
-        .parse()
-        .unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());
 

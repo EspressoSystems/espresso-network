@@ -69,8 +69,8 @@ pub struct TestRequirements {
     /// Panic if no block seen for this interval, we will panic fail relatively quickly.
     pub block_timeout: Duration,
     pub max_consecutive_blocks_without_tx: u64,
-    /// Block height at which to check rewards have been claimed (if Some)
-    pub reward_claim_deadline_block_height: Option<u64>,
+    /// If Some, wait until rewards_claimed > 0 before exiting. Value used for diagnostic logging.
+    pub first_reward_block: Option<u64>,
 }
 
 impl Default for TestRequirements {
@@ -83,7 +83,7 @@ impl Default for TestRequirements {
             // timeouts which lead to occasional drop in block times.
             block_timeout: Duration::from_secs(60),
             max_consecutive_blocks_without_tx: 10,
-            reward_claim_deadline_block_height: None,
+            first_reward_block: None,
         }
     }
 }
@@ -187,11 +187,11 @@ impl TestConfig {
 }
 
 impl TestRuntime {
-    pub async fn initialize(config: TestConfig, timeout_duration: Duration) -> Result<Self> {
+    pub async fn initialize(config: TestConfig) -> Result<Self> {
         let builder_url = {
             let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
             let url = Url::from_str(&url)?;
-            wait_for_service(url.clone(), 1000, 200).await?;
+            wait_for_service(url.clone(), Duration::from_secs(1), Duration::from_secs(90)).await?;
             url.join("block_info/builderaddress")?
         };
 
@@ -199,7 +199,7 @@ impl TestRuntime {
 
         let client = SequencerClient::new(config.sequencer_api_url.clone());
 
-        let (initial_height, initial_txns) = timeout(timeout_duration, async {
+        let (initial_height, initial_txns) = timeout(Duration::from_secs(30), async {
             loop {
                 match (
                     client.get_height().await,
@@ -231,11 +231,22 @@ impl TestRuntime {
         }
         .await;
 
-        let mut futures: Vec<BoxFuture<Result<String>>> =
-            vec![wait_for_service(Url::from_str(&config.load_generator_url)?, 1000, 600).boxed()];
+        let mut futures: Vec<BoxFuture<Result<String>>> = vec![wait_for_service(
+            Url::from_str(&config.load_generator_url)?,
+            Duration::from_secs(1),
+            Duration::from_secs(90),
+        )
+        .boxed()];
 
         for client in &config.sequencer_clients {
-            futures.push(wait_for_sequencer_client(client.clone(), 500, 30).boxed());
+            futures.push(
+                wait_for_sequencer_client(
+                    client.clone(),
+                    Duration::from_millis(500),
+                    Duration::from_secs(30),
+                )
+                .boxed(),
+            );
         }
 
         join_all(futures)
@@ -254,7 +265,7 @@ impl TestRuntime {
 
     pub async fn from_requirements(requirements: TestRequirements) -> Result<Self> {
         let config = TestConfig::from_env(requirements)?;
-        Self::initialize(config, Duration::from_secs(30)).await
+        Self::initialize(config).await
     }
 
     /// Update the reward claim address from the contract
@@ -267,12 +278,17 @@ impl TestRuntime {
         let esp_token = EspTokenV2::new(token_address, &provider);
         let reward_claim_addr = esp_token.rewardClaim().call().await?;
 
-        self.reward_claim_address = if reward_claim_addr == Address::ZERO {
+        let new = if reward_claim_addr == Address::ZERO {
             None
         } else {
-            println!("Updated reward claim address: {reward_claim_addr}");
             Some(reward_claim_addr)
         };
+        if new != self.reward_claim_address {
+            if let Some(addr) = &new {
+                println!("Updated reward claim address: {addr}");
+            }
+            self.reward_claim_address = new;
+        }
 
         Ok(())
     }
@@ -364,24 +380,28 @@ pub async fn get_builder_address(url: Url) -> Address {
 ///
 /// > Note: This function only waits for a single health check pass before
 /// > returning an [Ok] result.
-async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Result<String> {
+async fn wait_for_service(
+    url: Url,
+    interval: Duration,
+    timeout_duration: Duration,
+) -> Result<String> {
     // utilize the correct path for the health check
     let Ok(url) = url.join("/healthcheck") else {
         return Err(anyhow!("Wait for service, could not join url: {}", url));
     };
 
-    timeout(Duration::from_secs(timeout_duration), async {
+    timeout(timeout_duration, async {
         loop {
             // Ensure that we get a response from the server
             let Ok(response) = reqwest::get(url.clone()).await else {
-                sleep(Duration::from_millis(interval)).await;
+                sleep(interval).await;
                 continue;
             };
 
             // Check the status code of the response
             if !response.status().is_success() {
                 // The server did not return a success
-                sleep(Duration::from_millis(interval)).await;
+                sleep(interval).await;
                 continue;
             }
 
@@ -400,15 +420,15 @@ async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Res
 
 async fn wait_for_sequencer_client(
     client: SequencerClient,
-    interval: u64,
-    timeout_duration: u64,
+    interval: Duration,
+    timeout_duration: Duration,
 ) -> Result<String> {
-    timeout(Duration::from_secs(timeout_duration), async {
+    timeout(timeout_duration, async {
         loop {
             if client.get_height().await.is_ok() {
                 return Ok("sequencer ready".to_string());
             }
-            sleep(Duration::from_millis(interval)).await;
+            sleep(interval).await;
         }
     })
     .await

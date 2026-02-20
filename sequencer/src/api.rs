@@ -1396,10 +1396,10 @@ pub mod test_helpers {
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
-    use portpicker::pick_unused_port;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
@@ -1828,7 +1828,7 @@ pub mod test_helpers {
     /// to test a different initialization path) but should not remove or modify the existing
     /// functionality (e.g. removing the status module or changing the port).
     pub async fn status_test_helper(opt: impl FnOnce(Options) -> Options) {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
@@ -1875,7 +1875,7 @@ pub mod test_helpers {
     pub async fn submit_test_helper(opt: impl FnOnce(Options) -> Options) {
         let txn = Transaction::new(NamespaceId::from(1_u32), vec![1, 2, 3, 4]);
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
@@ -1906,7 +1906,7 @@ pub mod test_helpers {
 
     /// Test the state signature API.
     pub async fn state_signature_test_helper(opt: impl FnOnce(Options) -> Options) {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
 
@@ -1946,7 +1946,7 @@ pub mod test_helpers {
     /// to test a different initialization path) but should not remove or modify the existing
     /// functionality (e.g. removing the catchup module or changing the port).
     pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
@@ -2080,7 +2080,7 @@ pub mod test_helpers {
 
         app.register_module::<_, _>("catchup", api).unwrap();
 
-        let port = pick_unused_port().expect("no free port");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = Url::parse(&format!("http://localhost:{port}")).unwrap();
 
         let handle = spawn({
@@ -2121,12 +2121,12 @@ mod api_tests {
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
     };
-    use portpicker::pick_unused_port;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
         TestNetwork, TestNetworkConfigBuilder,
     };
+    use test_utils::reserve_tcp_port;
     use tide_disco::error::ServerError;
     use vbs::version::StaticVersion;
 
@@ -2178,7 +2178,7 @@ mod api_tests {
         let txn = Transaction::new(ns_id, vec![1, 2, 3, 4]);
 
         // Start query service.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let storage = D::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
@@ -2723,19 +2723,16 @@ mod test {
         prelude::{MerkleProof, Sha3Node},
         MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
-    use portpicker::pick_unused_port;
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
-    use staking_cli::{
-        demo::DelegationConfig,
-        registration::{fetch_commission, update_commission},
-    };
+    use staking_cli::{demo::DelegationConfig, fetch_commission, update_commission};
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
         TestNetwork, TestNetworkConfigBuilder,
     };
+    use test_utils::reserve_tcp_port;
     use tide_disco::{
         app::AppHealth, error::ServerError, healthcheck::HealthStatus, Error, StatusCode, Url,
     };
@@ -2787,7 +2784,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_healthcheck() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
@@ -2825,7 +2822,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_data_source() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let storage = SqlDataSource::create_storage().await;
         let options =
@@ -2912,7 +2909,7 @@ mod test {
 
     async fn run_catchup_test(url_suffix: &str) {
         // Start a sequencer network, using the query service for catchup.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
 
         let url: url::Url = format!("http://localhost:{port}{url_suffix}")
@@ -3030,7 +3027,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_no_state_peers() {
         // Start a sequencer network, using the query service for catchup.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
@@ -3116,7 +3113,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_epochs_no_state_peers() {
         // Start a sequencer network, using the query service for catchup.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const EPOCH_HEIGHT: u64 = 5;
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -3212,7 +3209,7 @@ mod test {
         // Both chain config commitments will match, so the ValidatedState should have the
         // full chain config after a non-genesis block is decided.
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let chain_config: ChainConfig = ChainConfig::default();
 
@@ -3266,7 +3263,7 @@ mod test {
         // However, for this test to work, at least one node should have a full chain config
         // to allow other nodes to catch up.
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let cf = ChainConfig {
             max_block_size: 300.into(),
@@ -3344,7 +3341,7 @@ mod test {
         // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
         let upgrade_version = <V as Versions>::Upgrade::VERSION;
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(200)
@@ -3449,7 +3446,7 @@ mod test {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
                 &storage[0],
@@ -3509,7 +3506,7 @@ mod test {
         drop(network);
 
         // Start up again, resuming from the last decided leaf.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -3568,7 +3565,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_config() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
 
@@ -3610,7 +3607,8 @@ mod test {
     }
 
     async fn run_hotshot_event_streaming_test(url_suffix: &str) {
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_service_port =
+            reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{query_service_port}{url_suffix}")
             .parse()
@@ -3674,7 +3672,8 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_service_port =
+            reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let hotshot_url = format!("http://localhost:{query_service_port}")
             .parse()
@@ -3756,7 +3755,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
@@ -3854,7 +3853,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
@@ -3976,7 +3975,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
@@ -4087,7 +4086,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 7;
 
@@ -4315,7 +4314,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
 
@@ -4578,7 +4577,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 2;
         // Initialize nodes.
@@ -4650,7 +4649,7 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -4784,7 +4783,7 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -4946,7 +4945,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -4992,7 +4991,7 @@ mod test {
         network.peers.remove(0);
         let node_0_storage = &storage[1];
         let node_0_persistence = persistence[1].clone();
-        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         tracing::info!("node_0_port {node_0_port}");
         // enable query module with api peers
         let opt = Options::with_port(node_0_port).query_sql(
@@ -5175,7 +5174,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -5220,7 +5219,7 @@ mod test {
 
         let node_0_storage = &storage[1];
         let node_0_persistence = persistence[1].clone();
-        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         tracing::info!("node_0_port {node_0_port}");
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
@@ -5486,7 +5485,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
@@ -5555,7 +5554,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
@@ -5735,7 +5734,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_tx_metadata() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
@@ -5817,7 +5816,7 @@ mod test {
     async fn test_aggregator_namespace_endpoints() {
         let mut rng = thread_rng();
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
@@ -5996,7 +5995,7 @@ mod test {
 
         let mut rng = thread_rng();
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
@@ -6128,7 +6127,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -6206,7 +6205,7 @@ mod test {
             .epoch_height(TEST_EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 2;
@@ -6335,7 +6334,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -6388,7 +6387,7 @@ mod test {
         let new_persistence: persistence::sql::Options =
             <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
 
-        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         tracing::info!("node_0_port {node_0_port}");
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
@@ -6456,7 +6455,7 @@ mod test {
         // Use version that supports epochs (V3 or V4)
         let versions = PosVersionV4::new();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Initialize storage for nodes
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -6613,7 +6612,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -6752,7 +6751,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
 
@@ -6842,7 +6841,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -7182,7 +7181,7 @@ mod test {
         // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -7390,7 +7389,7 @@ mod test {
         const EPOCH_HEIGHT: u64 = 200;
 
         let upgrade_version = EpochVersion::version();
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default()
