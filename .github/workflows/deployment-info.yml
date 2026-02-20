@@ -32,7 +32,7 @@ jobs:
       - name: Check for changes
         id: changes
         run: |
-          DIFF=$(git diff contracts/rust/deployment-info/deployments/)
+          DIFF=$(git diff contracts/rust/deployment-info/deployments/ contracts/rust/deployment-info/README.md)
           if [ -z "$DIFF" ]; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else
@@ -47,6 +47,7 @@ jobs:
         if: github.event_name == 'pull_request' && steps.changes.outputs.changed == 'true'
         run: |
           echo "::error::Deployment info is out of date. Run 'cargo run -p deployment-info' and commit the changes."
+          git diff contracts/rust/deployment-info/deployments/ contracts/rust/deployment-info/README.md
           exit 1
 
       - name: Create PR with updated deployment info

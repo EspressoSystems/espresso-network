@@ -2,10 +2,11 @@ use std::{
     collections::{BTreeMap, HashMap},
     fmt,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
 
 use alloy::{
+    eips::BlockId,
     primitives::{Address, FixedBytes},
     providers::{Provider, ProviderBuilder},
     sol,
@@ -80,6 +81,22 @@ impl Network {
         .parse()
         .expect("hardcoded URL is valid")
     }
+
+    fn etherscan_base_url(&self) -> &'static str {
+        match self {
+            Network::Decaf => "https://sepolia.etherscan.io",
+            Network::Hoodi => "https://hoodi.etherscan.io",
+            Network::Mainnet => "https://etherscan.io",
+        }
+    }
+
+    fn display_order(&self) -> u8 {
+        match self {
+            Network::Mainnet => 0,
+            Network::Decaf => 1,
+            Network::Hoodi => 2,
+        }
+    }
 }
 
 impl fmt::Display for Network {
@@ -119,6 +136,9 @@ struct Args {
         help = "Print to stdout instead of writing to a file. Only valid with --network."
     )]
     stdout: bool,
+
+    #[clap(long, help = "Write files even if deployment info is unchanged.")]
+    force: bool,
 }
 
 /// Contract and governance addresses read from a per-network .env file.
@@ -324,11 +344,16 @@ fn load_addresses_from_env_file(path: &Path) -> Result<DeploymentAddresses> {
 struct DeploymentQuerier<P: Provider> {
     provider: P,
     known: KnownAddresses,
+    block_id: BlockId,
 }
 
 impl<P: Provider> DeploymentQuerier<P> {
-    fn new(provider: P, known: KnownAddresses) -> Self {
-        Self { provider, known }
+    fn new(provider: P, known: KnownAddresses, block_number: u64) -> Self {
+        Self {
+            provider,
+            known,
+            block_id: BlockId::number(block_number),
+        }
     }
 
     async fn get_owner(&self, addr: Address, contract_type: ContractType) -> Result<Address> {
@@ -339,7 +364,7 @@ impl<P: Provider> DeploymentQuerier<P> {
                 .context(format!("owner of {contract_type}")),
             _ => {
                 let contract = IOwnable::new(addr, &self.provider);
-                Ok(contract.owner().call().await?)
+                Ok(contract.owner().block(self.block_id).call().await?)
             },
         }
     }
@@ -355,7 +380,11 @@ impl<P: Provider> DeploymentQuerier<P> {
         let role_hash = role.hash();
         let mut holders = Vec::new();
         for addr in self.known.keys() {
-            let has_role = contract.hasRole(role_hash, *addr).call().await?;
+            let has_role = contract
+                .hasRole(role_hash, *addr)
+                .block(self.block_id)
+                .call()
+                .await?;
             if has_role {
                 holders.push(*addr);
             }
@@ -426,6 +455,7 @@ impl<P: Provider> DeploymentQuerier<P> {
         tracing::debug!("  fetching version");
         let v = IVersioned::new(addr, &self.provider)
             .getVersion()
+            .block(self.block_id)
             .call()
             .await?;
         let version = format!("{}.{}.{}", v._0, v._1, v._2);
@@ -469,9 +499,14 @@ impl<P: Provider> DeploymentQuerier<P> {
     }
 }
 
-async fn get_timelock_info<P: Provider>(provider: &P, addr: Address) -> Result<TimelockDeployment> {
+async fn get_timelock_info<P: Provider>(
+    provider: &P,
+    addr: Address,
+    block_id: BlockId,
+) -> Result<TimelockDeployment> {
     let min_delay_secs: u64 = ITimelock::new(addr, provider)
         .getMinDelay()
+        .block(block_id)
         .call()
         .await?
         .try_into()
@@ -484,29 +519,52 @@ async fn get_timelock_info<P: Provider>(provider: &P, addr: Address) -> Result<T
     })
 }
 
+struct CollectedDeployment {
+    info: DeploymentInfo,
+    block_number: u64,
+    block_timestamp: u64,
+}
+
 async fn collect_deployment_info(
     rpc_url: Url,
     network: Network,
     addresses: DeploymentAddresses,
-) -> Result<DeploymentInfo> {
+) -> Result<CollectedDeployment> {
     let provider = ProviderBuilder::new().connect_http(rpc_url);
+
+    let block_number = provider
+        .get_block_number()
+        .await
+        .context("Failed to get block number")?;
+    let block = provider
+        .get_block_by_number(block_number.into())
+        .await
+        .context("Failed to get block")?
+        .context("Block not found")?;
+    let block_timestamp = block.header.timestamp;
+
+    let block_id = BlockId::number(block_number);
     let known = KnownAddresses::from_deployment(&addresses);
-    let querier = DeploymentQuerier::new(provider.clone(), known);
+    let querier = DeploymentQuerier::new(provider.clone(), known, block_number);
 
     let mut multisigs = BTreeMap::new();
     for (name, addr) in &addresses.multisigs {
         let contract = ISafe::new(*addr, &provider);
-        let version =
-            contract.VERSION().call().await.with_context(|| {
-                format!("Failed to get VERSION for multisig '{name}' at {addr}")
-            })?;
+        let version = contract
+            .VERSION()
+            .block(block_id)
+            .call()
+            .await
+            .with_context(|| format!("Failed to get VERSION for multisig '{name}' at {addr}"))?;
         let owners = contract
             .getOwners()
+            .block(block_id)
             .call()
             .await
             .with_context(|| format!("Failed to get owners for multisig '{name}' at {addr}"))?;
         let threshold: u64 = contract
             .getThreshold()
+            .block(block_id)
             .call()
             .await
             .with_context(|| format!("Failed to get threshold for multisig '{name}' at {addr}"))?
@@ -524,14 +582,14 @@ async fn collect_deployment_info(
     }
 
     let ops_timelock = match addresses.ops_timelock {
-        Some(addr) => get_timelock_info(&provider, addr)
+        Some(addr) => get_timelock_info(&provider, addr, block_id)
             .await
             .with_context(|| format!("Failed to query OpsTimelock at {addr}"))?,
         None => TimelockDeployment::NotYetDeployed,
     };
 
     let safe_exit_timelock = match addresses.safe_exit_timelock {
-        Some(addr) => get_timelock_info(&provider, addr)
+        Some(addr) => get_timelock_info(&provider, addr, block_id)
             .await
             .with_context(|| format!("Failed to query SafeExitTimelock at {addr}"))?,
         None => TimelockDeployment::NotYetDeployed,
@@ -553,26 +611,59 @@ async fn collect_deployment_info(
         .query_optional(addresses.reward_claim, ContractType::RewardClaim)
         .await?;
 
-    Ok(DeploymentInfo {
-        network,
-        multisigs,
-        ops_timelock,
-        safe_exit_timelock,
-        stake_table,
-        esp_token,
-        light_client,
-        fee_contract,
-        reward_claim,
+    Ok(CollectedDeployment {
+        info: DeploymentInfo {
+            network,
+            multisigs,
+            ops_timelock,
+            safe_exit_timelock,
+            stake_table,
+            esp_token,
+            light_client,
+            fee_contract,
+            reward_claim,
+        },
+        block_number,
+        block_timestamp,
     })
 }
 
-fn write_deployment_info(info: &DeploymentInfo, output_path: &Path) -> Result<()> {
+fn format_header_comment(block_number: u64, block_timestamp: u64) -> String {
+    let system_time = UNIX_EPOCH + Duration::from_secs(block_timestamp);
+    let formatted = humantime::format_rfc3339_seconds(system_time);
+    format!("# fetched at block {block_number} ({formatted})\n")
+}
+
+fn write_deployment_info(
+    info: &DeploymentInfo,
+    block_number: u64,
+    block_timestamp: u64,
+    output_path: &Path,
+    force: bool,
+) -> Result<()> {
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create output directory")?;
     }
 
-    let toml_output = toml::to_string_pretty(info)?;
-    std::fs::write(output_path, toml_output).context("Failed to write deployment info")?;
+    if !force && output_path.exists() {
+        let existing =
+            std::fs::read_to_string(output_path).context("Failed to read existing file")?;
+        let existing_info: DeploymentInfo =
+            toml::from_str(&existing).context("Failed to parse existing deployment file")?;
+        if existing_info == *info {
+            tracing::info!(
+                "{:?}: deployment info unchanged, skipping write",
+                output_path.file_name().unwrap_or_default()
+            );
+            return Ok(());
+        }
+    }
+
+    let header = format_header_comment(block_number, block_timestamp);
+    let toml_data = toml::to_string_pretty(info)?;
+    let output = format!("{header}{toml_data}");
+    std::fs::write(output_path, output).context("Failed to write deployment info")?;
+    tracing::info!("Wrote: {:?}", output_path);
 
     Ok(())
 }
@@ -583,6 +674,7 @@ async fn process_network(
     env_file: Option<&Path>,
     output: Option<&Path>,
     stdout: bool,
+    force: bool,
 ) -> Result<()> {
     let crate_dir = get_crate_dir();
 
@@ -601,23 +693,179 @@ async fn process_network(
 
     tracing::info!("Collecting deployment info for network: {network}");
 
-    let info = collect_deployment_info(rpc_url, network, addresses)
+    let collected = collect_deployment_info(rpc_url, network, addresses)
         .await
         .context("Failed to collect deployment info")?;
 
     if stdout {
-        let toml_output = toml::to_string_pretty(&info)?;
-        println!("{}", toml_output);
+        let header = format_header_comment(collected.block_number, collected.block_timestamp);
+        let toml_output = toml::to_string_pretty(&collected.info)?;
+        print!("{header}{toml_output}");
     } else {
         let output_path = match output {
             Some(path) => path.to_path_buf(),
             None => crate_dir.join(format!("deployments/{}.toml", network)),
         };
 
-        write_deployment_info(&info, &output_path)
-            .context("Failed to write deployment info to file")?;
-        tracing::info!("Wrote: {:?}", output_path);
+        write_deployment_info(
+            &collected.info,
+            collected.block_number,
+            collected.block_timestamp,
+            &output_path,
+            force,
+        )
+        .context("Failed to write deployment info to file")?;
     }
+
+    Ok(())
+}
+
+fn address_link(addr: Address, etherscan_url: &str) -> String {
+    format!("[`{addr}`]({etherscan_url}/address/{addr})")
+}
+
+fn generate_deployment_table(info: &DeploymentInfo) -> String {
+    let etherscan = info.network.etherscan_base_url();
+    let mut out = format!("### {}\n\n", info.network);
+
+    out.push_str("| Contract | Address | Version | Owner | Pauser |\n");
+    out.push_str("|----------|---------|---------|-------|--------|\n");
+
+    let contracts: &[(&str, &ContractDeployment)] = &[
+        ("StakeTable", &info.stake_table),
+        ("EspToken", &info.esp_token),
+        ("LightClient", &info.light_client),
+        ("FeeContract", &info.fee_contract),
+        ("RewardClaim", &info.reward_claim),
+    ];
+
+    for (name, deployment) in contracts {
+        match deployment {
+            ContractDeployment::Deployed {
+                address,
+                owner_name,
+                version,
+                pauser_name,
+                ..
+            } => {
+                let pauser = pauser_name.as_deref().unwrap_or("-");
+                out.push_str(&format!(
+                    "| {name} | {} | {version} | {owner_name} | {pauser} |\n",
+                    address_link(*address, etherscan),
+                ));
+            },
+            ContractDeployment::NotYetDeployed => {
+                out.push_str(&format!("| {name} | Not deployed | | | |\n"));
+            },
+        }
+    }
+
+    if !info.multisigs.is_empty() {
+        out.push('\n');
+        out.push_str("| Multisig | Address | Version | Threshold |\n");
+        out.push_str("|----------|---------|---------|----------|\n");
+        for (name, ms) in &info.multisigs {
+            out.push_str(&format!(
+                "| {name} | {} | {} | {} |\n",
+                address_link(ms.address, etherscan),
+                ms.version,
+                ms.threshold,
+            ));
+        }
+    }
+
+    let timelocks: &[(&str, &TimelockDeployment)] = &[
+        ("ops_timelock", &info.ops_timelock),
+        ("safe_exit_timelock", &info.safe_exit_timelock),
+    ];
+
+    let has_timelocks = timelocks
+        .iter()
+        .any(|(_, tl)| matches!(tl, TimelockDeployment::Deployed { .. }));
+
+    if has_timelocks {
+        out.push('\n');
+        out.push_str("| Timelock | Address | Min Delay |\n");
+        out.push_str("|---------|---------|----------|\n");
+        for (name, tl) in timelocks {
+            match tl {
+                TimelockDeployment::Deployed {
+                    address, min_delay, ..
+                } => {
+                    out.push_str(&format!(
+                        "| {name} | {} | {} |\n",
+                        address_link(*address, etherscan),
+                        humantime::format_duration(*min_delay),
+                    ));
+                },
+                TimelockDeployment::NotYetDeployed => {
+                    out.push_str(&format!("| {name} | Not deployed | |\n"));
+                },
+            }
+        }
+    }
+
+    out
+}
+
+fn replace_between_markers(
+    content: &str,
+    start_marker: &str,
+    end_marker: &str,
+    replacement: &str,
+) -> Result<String> {
+    let start = content.find(start_marker).context("Missing start marker")?;
+    let end = content.find(end_marker).context("Missing end marker")?;
+    if end < start + start_marker.len() {
+        bail!("End marker appears before start marker");
+    }
+    Ok(format!(
+        "{}{start_marker}\n<!-- prettier-ignore-start -->\n{replacement}<!-- prettier-ignore-end \
+         -->\n{end_marker}{}",
+        &content[..start],
+        &content[end + end_marker.len()..],
+    ))
+}
+
+fn update_readme_from_deployment_files() -> Result<()> {
+    let crate_dir = get_crate_dir();
+    let deployments_dir = crate_dir.join("deployments");
+    let readme_path = crate_dir.join("README.md");
+
+    let mut deployments = Vec::new();
+    for entry in std::fs::read_dir(&deployments_dir)
+        .context("Failed to read deployments directory")?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
+    {
+        let path = entry.path();
+        let content =
+            std::fs::read_to_string(&path).with_context(|| format!("Failed to read {:?}", path))?;
+        let info: DeploymentInfo =
+            toml::from_str(&content).with_context(|| format!("Failed to parse {:?}", path))?;
+        deployments.push(info);
+    }
+    deployments.sort_by_key(|info| info.network.display_order());
+
+    let sections: Vec<_> = deployments.iter().map(generate_deployment_table).collect();
+    let combined = sections.join("\n");
+
+    let readme = std::fs::read_to_string(&readme_path).context("Failed to read README.md")?;
+    let new_readme = replace_between_markers(
+        &readme,
+        "<!-- DEPLOYMENT_TABLE_START -->",
+        "<!-- DEPLOYMENT_TABLE_END -->",
+        &combined,
+    )
+    .context("README.md marker error")?;
+
+    if readme == new_readme {
+        tracing::info!("README.md unchanged, skipping write");
+        return Ok(());
+    }
+
+    std::fs::write(&readme_path, new_readme).context("Failed to write README.md")?;
+    tracing::info!("Updated README.md with deployment tables");
 
     Ok(())
 }
@@ -631,23 +879,40 @@ pub async fn run() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    if let Some(network) = args.network {
+    let update_readme = if let Some(network) = args.network {
         process_network(
             network,
             args.rpc_url.as_ref(),
             args.env_file.as_deref(),
             args.output.as_deref(),
             args.stdout,
+            args.force,
         )
         .await?;
+        !args.stdout && args.output.is_none()
     } else {
         if args.env_file.is_some() || args.output.is_some() || args.stdout {
             bail!("--env-file, --output, and --stdout are only valid with --network");
         }
 
         for network in Network::value_variants() {
-            process_network(*network, args.rpc_url.as_ref(), None, None, false).await?;
+            process_network(
+                *network,
+                args.rpc_url.as_ref(),
+                None,
+                None,
+                false,
+                args.force,
+            )
+            .await?;
         }
+        true
+    };
+
+    if update_readme {
+        update_readme_from_deployment_files()?;
+    } else {
+        tracing::info!("Skipping README update");
     }
 
     Ok(())
@@ -793,7 +1058,9 @@ mod tests {
             (ops_timelock_addr, "ops_timelock".to_string()),
             (safe_exit_timelock_addr, "safe_exit_timelock".to_string()),
         ]));
-        let querier = DeploymentQuerier::new(provider.clone(), known.clone());
+        let block_number = provider.get_block_number().await?;
+        let block_id = BlockId::number(block_number);
+        let querier = DeploymentQuerier::new(provider.clone(), known.clone(), block_number);
 
         // Test each contract individually
         let stake_table_info = querier
@@ -872,7 +1139,7 @@ mod tests {
         );
 
         // Test timelocks
-        let ops_tl = get_timelock_info(&provider, ops_timelock_addr).await?;
+        let ops_tl = get_timelock_info(&provider, ops_timelock_addr, block_id).await?;
         assert_eq!(
             ops_tl,
             TimelockDeployment::Deployed {
@@ -881,7 +1148,7 @@ mod tests {
             }
         );
 
-        let safe_tl = get_timelock_info(&provider, safe_exit_timelock_addr).await?;
+        let safe_tl = get_timelock_info(&provider, safe_exit_timelock_addr, block_id).await?;
         assert_eq!(
             safe_tl,
             TimelockDeployment::Deployed {
@@ -891,5 +1158,206 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_format_header_comment() {
+        let comment = format_header_comment(12345678, 1705312235);
+        assert!(comment.starts_with("# fetched at block 12345678 ("));
+        assert!(comment.ends_with(")\n"));
+        assert!(comment.contains("2024-01-15"));
+    }
+
+    #[test]
+    fn test_address_link() {
+        let addr: Address = "0x1111111111111111111111111111111111111111"
+            .parse()
+            .unwrap();
+        let link = address_link(addr, "https://etherscan.io");
+        assert_eq!(
+            link,
+            "[`0x1111111111111111111111111111111111111111`](https://etherscan.io/address/0x1111111111111111111111111111111111111111)"
+        );
+    }
+
+    #[test]
+    fn test_replace_between_markers() {
+        let content = "before\n<!-- START -->\nold content\n<!-- END -->\nafter\n";
+        let result =
+            replace_between_markers(content, "<!-- START -->", "<!-- END -->", "new\n").unwrap();
+        assert_eq!(
+            result,
+            "before\n<!-- START -->\n<!-- prettier-ignore-start -->\nnew\n<!-- \
+             prettier-ignore-end -->\n<!-- END -->\nafter\n"
+        );
+    }
+
+    #[test]
+    fn test_replace_between_markers_missing_start() {
+        let content = "no markers here";
+        let result = replace_between_markers(content, "<!-- START -->", "<!-- END -->", "x");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_replace_between_markers_reversed() {
+        let content = "<!-- END -->\n<!-- START -->";
+        let result = replace_between_markers(content, "<!-- START -->", "<!-- END -->", "x");
+        assert!(result.is_err());
+    }
+
+    impl DeploymentInfo {
+        fn for_test() -> Self {
+            let addr1: Address = "0x1111111111111111111111111111111111111111"
+                .parse()
+                .unwrap();
+            let addr2: Address = "0x2222222222222222222222222222222222222222"
+                .parse()
+                .unwrap();
+            let addr3: Address = "0x3333333333333333333333333333333333333333"
+                .parse()
+                .unwrap();
+
+            DeploymentInfo {
+                network: Network::Mainnet,
+                multisigs: BTreeMap::from([(
+                    "espresso_labs".to_string(),
+                    MultisigDeployment {
+                        address: addr2,
+                        version: "1.4.1".to_string(),
+                        owners: vec![addr1],
+                        threshold: 3,
+                    },
+                )]),
+                ops_timelock: TimelockDeployment::Deployed {
+                    address: addr3,
+                    min_delay: Duration::from_secs(172800),
+                },
+                safe_exit_timelock: TimelockDeployment::NotYetDeployed,
+                stake_table: ContractDeployment::Deployed {
+                    address: addr1,
+                    owner_address: addr3,
+                    owner_name: "ops_timelock".to_string(),
+                    version: "2.0.0".to_string(),
+                    pauser_address: Some(addr2),
+                    pauser_name: Some("espresso_labs".to_string()),
+                },
+                esp_token: ContractDeployment::NotYetDeployed,
+                light_client: ContractDeployment::Deployed {
+                    address: addr2,
+                    owner_address: addr1,
+                    owner_name: "espresso_labs".to_string(),
+                    version: "1.0.0".to_string(),
+                    pauser_address: None,
+                    pauser_name: None,
+                },
+                fee_contract: ContractDeployment::NotYetDeployed,
+                reward_claim: ContractDeployment::NotYetDeployed,
+            }
+        }
+    }
+
+    #[test]
+    fn test_generate_deployment_table_contracts() {
+        let info = DeploymentInfo::for_test();
+        let table = generate_deployment_table(&info);
+
+        assert!(table.starts_with("### mainnet\n"));
+        assert!(table.contains("| Contract | Address | Version | Owner | Pauser |"));
+        assert!(table.contains("| StakeTable |"));
+        assert!(table.contains("| 2.0.0 | ops_timelock | espresso_labs |"));
+        assert!(table.contains("| EspToken | Not deployed |"));
+        assert!(table.contains("| LightClient |"));
+        assert!(table.contains("| 1.0.0 | espresso_labs | - |"));
+        assert!(table.contains("etherscan.io/address/0x"));
+    }
+
+    #[test]
+    fn test_generate_deployment_table_multisigs() {
+        let info = DeploymentInfo::for_test();
+        let table = generate_deployment_table(&info);
+
+        assert!(table.contains("| Multisig | Address | Version | Threshold |"));
+        assert!(table.contains("| espresso_labs |"));
+        assert!(table.contains("| 1.4.1 | 3 |"));
+    }
+
+    #[test]
+    fn test_generate_deployment_table_timelocks() {
+        let info = DeploymentInfo::for_test();
+        let table = generate_deployment_table(&info);
+
+        assert!(table.contains("| Timelock | Address | Min Delay |"));
+        assert!(table.contains("| ops_timelock |"));
+        assert!(table.contains("| safe_exit_timelock | Not deployed |"));
+    }
+
+    #[test]
+    fn test_generate_deployment_table_full_addresses() {
+        let info = DeploymentInfo::for_test();
+        let table = generate_deployment_table(&info);
+
+        assert!(table.contains("0x1111111111111111111111111111111111111111"));
+        assert!(!table.contains("..."));
+    }
+
+    #[test]
+    fn test_write_deployment_info_unchanged() {
+        let info = DeploymentInfo::for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-unchanged.toml");
+
+        write_deployment_info(&info, 100, 1000, &path, false).unwrap();
+        let first_content = std::fs::read_to_string(&path).unwrap();
+        assert!(first_content.starts_with("# fetched at block 100"));
+
+        write_deployment_info(&info, 200, 2000, &path, false).unwrap();
+        let second_content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(first_content, second_content);
+    }
+
+    #[test]
+    fn test_write_deployment_info_force() {
+        let info = DeploymentInfo::for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-force.toml");
+
+        write_deployment_info(&info, 100, 1000, &path, false).unwrap();
+        let first_content = std::fs::read_to_string(&path).unwrap();
+
+        write_deployment_info(&info, 200, 2000, &path, true).unwrap();
+        let second_content = std::fs::read_to_string(&path).unwrap();
+        assert_ne!(first_content, second_content);
+        assert!(second_content.starts_with("# fetched at block 200"));
+    }
+
+    #[test]
+    fn test_write_deployment_info_changed() {
+        let mut info = DeploymentInfo::for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-changed.toml");
+
+        write_deployment_info(&info, 100, 1000, &path, false).unwrap();
+        let first_content = std::fs::read_to_string(&path).unwrap();
+
+        info.esp_token = ContractDeployment::Deployed {
+            address: Address::repeat_byte(0x44),
+            owner_address: Address::repeat_byte(0x55),
+            owner_name: "new_owner".to_string(),
+            version: "1.0.0".to_string(),
+            pauser_address: None,
+            pauser_name: None,
+        };
+
+        write_deployment_info(&info, 200, 2000, &path, false).unwrap();
+        let second_content = std::fs::read_to_string(&path).unwrap();
+        assert_ne!(first_content, second_content);
+        assert!(second_content.starts_with("# fetched at block 200"));
+    }
+
+    #[test]
+    fn test_network_display_order() {
+        assert!(Network::Mainnet.display_order() < Network::Decaf.display_order());
+        assert!(Network::Decaf.display_order() < Network::Hoodi.display_order());
     }
 }
