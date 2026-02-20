@@ -1281,7 +1281,9 @@ impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
             tracing::error!(
                 "Attempted to serialize an incomplete RewardMerkleTreeV2. This is not a fatal \
                  error, but it should never happen and indicates that something may be seriously \
-                 wrong."
+                 wrong. Balances length: {}, num_leaves: {}.",
+                balances.len(),
+                num_leaves
             );
             bail!(
                 "Failed to convert RewardMerkleTreeV2 into key-value pairs. Some accounts are \
