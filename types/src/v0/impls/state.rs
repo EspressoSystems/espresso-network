@@ -1263,7 +1263,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
             block_merkle_tree: self.block_merkle_tree.clone(),
             reward_merkle_tree_v2: reduced_reward_merkle_tree_v2,
             reward_merkle_tree_v1: self.reward_merkle_tree_v1.clone(),
-            chain_config: self.chain_config.clone(),
+            chain_config: self.chain_config,
         }
     }
 }
