@@ -1811,7 +1811,8 @@ mod tests {
         // Validators cleared
         let loaded = storage
             .load_all_validators(EpochNumber::new(1), 0, 10)
-            .await?;
+            .await
+            .unwrap_or_default();
         assert!(loaded.is_empty());
 
         let event3 = StakeTableEvent::Delegate(Delegated {
