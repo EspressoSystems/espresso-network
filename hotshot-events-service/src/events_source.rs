@@ -146,7 +146,7 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
                 .filter(move |event| {
                     futures::future::ready(filter.should_broadcast(&event.as_ref().event))
                 })
-                .map(|event| Event::reduce_reward_tree(event))
+                .map(Event::reduce_reward_tree)
                 .boxed()
         } else {
             receiver.boxed()

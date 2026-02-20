@@ -60,7 +60,7 @@ impl<TYPES: NodeType> Event<TYPES> {
                         leaf_chain: reduced_leaf_chain,
                         committing_qc: committing_qc.clone(),
                         deciding_qc: deciding_qc.clone(),
-                        block_size: block_size.clone(),
+                        block_size: *block_size,
                     },
                 })
             },
