@@ -132,7 +132,7 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
     }
 
     fn reduce_reward_tree(&self) -> Self {
-      self.clone()
+        self.clone()
     }
 }
 
