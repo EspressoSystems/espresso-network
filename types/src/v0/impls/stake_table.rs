@@ -730,7 +730,6 @@ pub struct ValidatorSet {
 }
 
 /// Extract the active validator set from the L1 stake table events.
-#[cfg(test)]
 pub(crate) fn validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> Result<ValidatorSet, StakeTableError> {
@@ -1365,17 +1364,8 @@ impl Fetcher {
             .map_err(GetStakeTablesError::L1ClientFetchError)
             .with_context(|| "failed to fetch stake table events")?;
 
-        let (all_validators, stake_table_hash) =
-            validators_from_l1_events(events.into_iter().map(|(_, e)| e))
-                .with_context(|| "failed to apply stake table events")?;
-
-        let active_validators = select_active_validator_set(&all_validators)?;
-
-        Ok(ValidatorSet {
-            all_validators,
-            active_validators,
-            stake_table_hash: Some(stake_table_hash),
-        })
+        validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+            .with_context(|| "failed to apply stake table events")
     }
 
     /// Retrieve and verify `ChainConfig`

@@ -25,7 +25,7 @@ pub use impls::mock;
 pub use impls::reward::{ComputedRewards, RewardDistributor};
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;
-#[cfg(test)]
+#[allow(unused_imports)]
 pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
     get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
