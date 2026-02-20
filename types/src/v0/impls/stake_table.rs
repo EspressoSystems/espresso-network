@@ -1356,16 +1356,23 @@ impl Fetcher {
             );
         };
 
-        let l1_block = l1_finalized_block_info.number();
-
-        let events = self
-            .fetch_and_store_stake_table_events(address, l1_block)
+        let events = match self
+            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
-            .with_context(|| "failed to fetch stake table events")?;
+        {
+            Ok(events) => events,
+            Err(e) => {
+                bail!("failed to fetch stake table events {e:?}");
+            },
+        };
 
-        validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
-            .with_context(|| "failed to apply stake table events")
+        match validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                bail!("failed to construct stake table {e:?}");
+            },
+        }
     }
 
     /// Retrieve and verify `ChainConfig`
