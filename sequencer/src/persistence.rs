@@ -118,7 +118,7 @@ mod tests {
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
         },
-        v0_3::{EventKey, Fetcher, StakeTableEvent, Validator},
+        v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
         Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
         SequencerVersions, ValidatedState,
     };
@@ -156,9 +156,9 @@ mod tests {
         vote::HasViewNumber,
     };
     use indexmap::IndexMap;
-    use portpicker::pick_unused_port;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
+    use test_utils::reserve_tcp_port;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
     use vbs::version::{StaticVersion, StaticVersionType, Version};
@@ -1397,7 +1397,8 @@ mod tests {
 
         let anvil_provider = network_config.anvil().unwrap();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_service_port =
+            reserve_tcp_port().expect("OS should have ephemeral ports available");
         let query_api_options = Options::with_port(query_service_port);
 
         const NODE_COUNT: usize = 2;
@@ -1697,7 +1698,7 @@ mod tests {
 
         let storage = opt.create().await.unwrap();
 
-        let validator = Validator::mock();
+        let validator = AuthenticatedValidator::mock();
         let mut st = IndexMap::new();
         st.insert(validator.account, validator);
 
@@ -1708,7 +1709,7 @@ mod tests {
         let (table, ..) = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
         assert_eq!(st, table);
 
-        let val2 = Validator::mock();
+        let val2 = AuthenticatedValidator::mock();
         let mut st2 = IndexMap::new();
         st2.insert(val2.account, val2);
         storage
@@ -1819,7 +1820,7 @@ mod tests {
 
         let mut vmap1 = IndexMap::new();
         for _i in 0..25 {
-            let v = Validator::mock();
+            let v = RegisteredValidator::mock();
             vmap1.insert(v.account, v);
         }
         storage
@@ -1864,7 +1865,7 @@ mod tests {
         assert!(loaded_empty.is_empty());
 
         // epoch 11
-        let validator2 = Validator::mock();
+        let validator2 = RegisteredValidator::mock();
         let mut vmap2 = IndexMap::new();
         vmap2.insert(validator2.account, validator2.clone());
 
