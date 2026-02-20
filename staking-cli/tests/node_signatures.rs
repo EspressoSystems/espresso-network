@@ -6,7 +6,7 @@ use common::{base_cmd, Signer, TestSystemExt};
 use hotshot_contract_adapter::{stake_table, stake_table::StakeTableContractVersion};
 use predicates::str;
 use rand::SeedableRng;
-use staking_cli::{deploy::TestSystem, signature::NodeSignatures};
+use staking_cli::{deploy::TestSystem, NodeSignatures};
 
 #[rstest_reuse::template]
 #[rstest::rstest]
