@@ -113,9 +113,14 @@ impl<V: Versions> ExternalEventHandler<V> {
                         };
 
                     // Send the message to the recipient
-                    if let Err(err) = network.direct_message(view, message_bytes, recipient).await {
-                        tracing::warn!("Failed to send message: {:?}", err);
-                    };
+                    let network = Arc::clone(&network);
+                    tokio::spawn(async move {
+                        if let Err(err) =
+                            network.direct_message(view, message_bytes, recipient).await
+                        {
+                            tracing::warn!("Failed to send message: {:?}", err);
+                        }
+                    });
                 },
 
                 OutboundMessage::Broadcast(message) => {
