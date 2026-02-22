@@ -10,10 +10,8 @@
 [![Build without lockfile](https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml)
 [![Coverage Status](https://coveralls.io/repos/github/EspressoSystems/espresso-network/badge.svg?branch=main)](https://coveralls.io/github/EspressoSystems/espresso-network?branch=main)
 
-The Espresso Network is the global confirmation layer for rollups in the Ethereum ecosystem. Espresso's
-[global confirmation layer(GCL)](https://docs.espressosys.com/network) provides agreement on inputs to a collection of
-composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
-confirmations in return.
+The Espresso Network is a permissionless, high-performance base layer for rollups, providing fast transaction
+confirmations for integrated chains.
 
 - [Official Documentation](https://docs.espressosys.com/network/)
 - [Rust Documentation](https://sequencer.docs.espressosys.com/sequencer/)
@@ -33,14 +31,15 @@ circuit that encodes the state update logic. See [zk-rollups integration](doc/zk
 
 # Running the demo
 
-Refer to [sequencer-example-l2](https://github.com/EspressoSystems/sequencer-example-l2) for instructions on how to run
-a dockerized Espresso Sequencer network with an example Layer 2 rollup application.
+Refer to [espresso-example-l2](https://github.com/EspressoSystems/espresso-example-l2) for instructions on how to run a
+dockerized Espresso Network with an example Layer 2 rollup application.
 
 # Development
 
 - Obtain code: `git clone git@github.com:EspressoSystems/espresso-network`.
 - Make sure [nix](https://nixos.org/download.html) is installed.
-- Activate the environment with `nix-shell`, or `nix develop`. If using [direnv](https://direnv.net/), copy `.envrc.example` to `.envrc.local` (or create your own `.envrc.local` file) and run `direnv allow`.
+- Activate the environment with `nix-shell`, or `nix develop`. If using [direnv](https://direnv.net/), copy
+  `.envrc.example` to `.envrc.local` (or create your own `.envrc.local` file) and run `direnv allow`.
 - For installation without nix please see [ubuntu.md](./doc/ubuntu.md).
 
 ## Documentation

@@ -1,5 +1,5 @@
 @startuml
-component "Espresso Confirmation Layer" as Esp
+component "Espresso Network" as Esp
 package "Layer 2s" as L2 {
     component "Rollup 1" as L2_1 {
         component "API (e.g. JSON-RPC)" as L2_1_RPC
