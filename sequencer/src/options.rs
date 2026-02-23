@@ -44,6 +44,7 @@ use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
 // default value, even if it is a bit arbitrary.
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug(bound = ""))]
+#[command(version = build_version())]
 pub struct Options {
     /// URL of the HotShot orchestrator.
     #[clap(
@@ -448,6 +449,28 @@ fn get_default_node_type() -> String {
     format!("espresso-sequencer {}", env!("CARGO_PKG_VERSION"))
 }
 
+fn build_version() -> String {
+    let testing = if cfg!(feature = "testing") {
+        "yes"
+    } else {
+        "no"
+    };
+    format!(
+        "\ndescribe: {}\nrev: {}\ndirty: {}\nbranch: {}\ncommit-timestamp: {}\nbuild-timestamp: \
+         {}\ndebug: {}\nfeatures: {}\ntarget: {}\ntesting: {}",
+        env!("VERGEN_GIT_DESCRIBE"),
+        env!("VERGEN_GIT_SHA"),
+        env!("VERGEN_GIT_DIRTY"),
+        env!("VERGEN_GIT_BRANCH"),
+        env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
+        env!("VERGEN_BUILD_TIMESTAMP"),
+        env!("VERGEN_CARGO_DEBUG"),
+        env!("VERGEN_CARGO_FEATURES"),
+        env!("VERGEN_CARGO_TARGET_TRIPLE"),
+        testing,
+    )
+}
+
 // The Debug implementation for Url is noisy, we just want to see the URL
 fn fmt_urls(v: &[Url], fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
     write!(
@@ -689,4 +712,36 @@ pub struct Modules {
     pub hotshot_events: Option<api::options::HotshotEvents>,
     pub explorer: Option<api::options::Explorer>,
     pub light_client: Option<api::options::LightClient>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_version() {
+        let version = build_version();
+        for field in [
+            "describe:",
+            "rev:",
+            "dirty:",
+            "branch:",
+            "commit-timestamp:",
+            "build-timestamp:",
+            "debug:",
+            "features:",
+            "target:",
+            "testing:",
+        ] {
+            assert!(version.contains(field), "missing {field}: {version}");
+        }
+        assert!(
+            version.contains("debug: true"),
+            "expected debug build in test: {version}"
+        );
+        assert!(
+            version.contains("testing: yes"),
+            "expected testing enabled in test builds: {version}"
+        );
+    }
 }

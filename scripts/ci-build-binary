@@ -9,7 +9,7 @@ set -euo pipefail
 
 case "$1" in
     "sequencer")
-        cargo build --locked --release --bin sequencer
+        cargo build --locked --release -p sequencer --bin sequencer
         ;;
     "sequencer-sqlite")
         cargo build --locked --release -p sequencer-sqlite
