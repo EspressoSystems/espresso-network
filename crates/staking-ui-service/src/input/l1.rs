@@ -923,6 +923,7 @@ impl Snapshot {
                 // important events, and if new event types are added, the compiler will force us to
                 // handle them explicitly.
                 StakeTableV2Events::MaxCommissionIncreaseUpdated(_)
+                | StakeTableV2Events::MinDelegateAmountUpdated(_)
                 | StakeTableV2Events::MinCommissionUpdateIntervalUpdated(_)
                 | StakeTableV2Events::OwnershipTransferred(_)
                 | StakeTableV2Events::Paused(_)
@@ -931,8 +932,7 @@ impl Snapshot {
                 | StakeTableV2Events::RoleAdminChanged(_)
                 | StakeTableV2Events::RoleGranted(_)
                 | StakeTableV2Events::RoleRevoked(_)
-                | StakeTableV2Events::Upgraded(_)
-                | StakeTableV2Events::MinDelegateAmountUpdated(_) => {
+                | StakeTableV2Events::Upgraded(_) => {
                     tracing::debug!("skipping irrelevant event");
                     (vec![], vec![])
                 }

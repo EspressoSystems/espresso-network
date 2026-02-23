@@ -95,3 +95,13 @@ test-log = { version = "0.2", features = [
     "trace",
 ], default-features = false }
 warp = { version = "0.4", features = ["server"] }
+
+[patch."https://github.com/EspressoSystems/espresso-network.git"]
+espresso-types = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
+hotshot-contract-adapter = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
+hotshot-query-service = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
+hotshot-types = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
+espresso-contract-deployer = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
+hotshot-state-prover = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
+sequencer = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
+staking-cli = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
