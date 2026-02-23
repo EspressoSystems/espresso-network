@@ -42,12 +42,12 @@ use super::{
 use crate::{
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
-        Validator,
+        ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
+        RewardMerkleCommitmentV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    PubKey, SeqTypes, ValidatorMap,
+    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
 
 #[async_trait]
@@ -495,14 +495,18 @@ pub enum EventsPersistenceRead {
     UntilL1Block(u64),
 }
 
+/// Tuple type for stake table data: (validators, block_reward, stake_table_hash)
+pub type StakeTuple = (
+    AuthenticatedValidatorMap,
+    Option<RewardAmount>,
+    Option<StakeTableHash>,
+);
+
 #[async_trait]
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -511,7 +515,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorMap,
+        stake: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()>;
@@ -533,7 +537,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
-        all_validators: IndexMap<Address, Validator<PubKey>>,
+        all_validators: IndexMap<Address, RegisteredValidator<PubKey>>,
     ) -> anyhow::Result<()>;
 
     async fn load_all_validators(
@@ -541,7 +545,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>>;
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
 #[async_trait]
@@ -897,11 +901,14 @@ pub trait SequencerPersistence:
         self.migrate_reward_merkle_tree_v2()
             .await
             .context("failed to migrate reward merkle tree v2")?;
+        self.migrate_validator_authenticated().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");
 
         Ok(())
     }
+
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()>;
 
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
     async fn migrate_da_proposals(&self) -> anyhow::Result<()>;
