@@ -290,13 +290,13 @@ jobs:
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
-      - name: Download espresso-dev-node binary
+        # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
+        # downloads always fail if I try to select a subset.
+      - name: Download artifacts
         uses: actions/download-artifact@v4
-        with:
-          name: test-binaries-dev-node
 
       - name: Make binary executable
-        run: chmod +x espresso-dev-node
+        run: chmod +x test-binaries-dev-node/espresso-dev-node
 
       - name: Build verification module
         run: |
@@ -306,7 +306,7 @@ jobs:
         run: |
           nix develop --accept-flake-config -c just test-go
         env:
-          ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/espresso-dev-node
+          ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
     needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
