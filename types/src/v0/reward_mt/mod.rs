@@ -269,8 +269,16 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
             REWARD_MERKLE_TREE_V2_HEIGHT
         );
         let mut mt = Self::new_with_storage(storage);
-        for tuple in data.into_iter() {
-            let (key, value) = tuple.borrow();
+        // Sort the data by account for cache efficiency
+        let mut collected: Vec<_> = data
+            .into_iter()
+            .map(|tuple| {
+                let (account, amount) = tuple.borrow();
+                (*account.borrow(), *amount.borrow())
+            })
+            .collect();
+        collected.sort();
+        for (key, value) in collected {
             Self::update(&mut mt, key.borrow(), value.borrow())?;
         }
         Ok(mt)
