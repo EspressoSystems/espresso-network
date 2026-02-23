@@ -441,23 +441,28 @@ mod test {
             lines.contains(&format!("consensus_node{{key=\"{pub_key}\"}} 1").as_str()),
             "{lines:#?}"
         );
-        let version_line = lines.iter().find(|l| l.starts_with("consensus_version{"));
         assert!(
-            version_line.is_some(),
-            "missing consensus_version metric: {lines:#?}"
+            lines.contains(
+                &format!(
+                    "consensus_version{{desc=\"{}\",rev=\"{}\",timestamp=\"{}\"}} 1",
+                    env!("VERGEN_GIT_DESCRIBE"),
+                    env!("VERGEN_GIT_SHA"),
+                    env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
+                )
+                .as_str()
+            ),
+            "{lines:#?}"
         );
-        let version_line = version_line.unwrap();
+        let build_info_line = lines
+            .iter()
+            .find(|l| l.starts_with("consensus_build_info{"));
         assert!(
-            version_line.contains(&format!("rev=\"{}\"", env!("VERGEN_GIT_SHA"))),
-            "missing rev: {version_line}"
+            build_info_line.is_some(),
+            "missing consensus_build_info metric: {lines:#?}"
         );
         assert!(
-            version_line.contains(&format!("desc=\"{}\"", env!("VERGEN_GIT_DESCRIBE"))),
-            "missing desc: {version_line}"
-        );
-        assert!(
-            version_line.contains("testing=\"yes\""),
-            "expected testing=yes in test builds: {version_line}"
+            build_info_line.unwrap().contains("testing=\"yes\""),
+            "expected testing=yes in test builds: {lines:#?}"
         );
 
         task.abort();

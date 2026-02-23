@@ -9,7 +9,7 @@ pub fn main() -> anyhow::Result<()> {
         .target_triple(true)
         .build()?;
     let git = GitclBuilder::default()
-        .sha(true)
+        .sha(false)
         .describe(true, true, None)
         .dirty(true)
         .branch(true)

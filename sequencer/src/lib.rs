@@ -221,10 +221,18 @@ where
     metrics
         .text_family(
             "version".into(),
+            vec!["rev".into(), "desc".into(), "timestamp".into()],
+        )
+        .create(vec![
+            env!("VERGEN_GIT_SHA").into(),
+            env!("VERGEN_GIT_DESCRIBE").into(),
+            env!("VERGEN_GIT_COMMIT_TIMESTAMP").into(),
+        ]);
+
+    metrics
+        .text_family(
+            "build_info".into(),
             vec![
-                "rev".into(),
-                "desc".into(),
-                "commit_timestamp".into(),
                 "build_timestamp".into(),
                 "dirty".into(),
                 "branch".into(),
@@ -235,9 +243,6 @@ where
             ],
         )
         .create(vec![
-            env!("VERGEN_GIT_SHA").into(),
-            env!("VERGEN_GIT_DESCRIBE").into(),
-            env!("VERGEN_GIT_COMMIT_TIMESTAMP").into(),
             env!("VERGEN_BUILD_TIMESTAMP").into(),
             env!("VERGEN_GIT_DIRTY").into(),
             env!("VERGEN_GIT_BRANCH").into(),
