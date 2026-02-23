@@ -550,6 +550,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         Vec<(EventKey, StakeTableEvent)>,
     )>;
 
+    /// Delete all stake table events, the L1 block tracker, and the epoch DRB and root data.
+    async fn delete_stake_tables(&self) -> anyhow::Result<()>;
+
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
