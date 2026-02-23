@@ -221,12 +221,35 @@ where
     metrics
         .text_family(
             "version".into(),
-            vec!["rev".into(), "desc".into(), "timestamp".into()],
+            vec![
+                "rev".into(),
+                "desc".into(),
+                "commit_timestamp".into(),
+                "build_timestamp".into(),
+                "dirty".into(),
+                "branch".into(),
+                "debug".into(),
+                "features".into(),
+                "target".into(),
+                "testing".into(),
+            ],
         )
         .create(vec![
             env!("VERGEN_GIT_SHA").into(),
             env!("VERGEN_GIT_DESCRIBE").into(),
             env!("VERGEN_GIT_COMMIT_TIMESTAMP").into(),
+            env!("VERGEN_BUILD_TIMESTAMP").into(),
+            env!("VERGEN_GIT_DIRTY").into(),
+            env!("VERGEN_GIT_BRANCH").into(),
+            env!("VERGEN_CARGO_DEBUG").into(),
+            env!("VERGEN_CARGO_FEATURES").into(),
+            env!("VERGEN_CARGO_TARGET_TRIPLE").into(),
+            if cfg!(feature = "testing") {
+                "yes"
+            } else {
+                "no"
+            }
+            .into(),
         ]);
 
     // Expose Node Entity Information via the status/metrics API
