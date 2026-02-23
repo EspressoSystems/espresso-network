@@ -670,7 +670,7 @@ fn collect_merkle_leaves(
     node: &storage::InnerRewardMerkleTreeRoot,
     entries: &mut Vec<(RewardAccountV2, RewardAmount)>,
 ) {
-    match node {
+    match node.as_ref() {
         MerkleNode::Leaf { pos, elem, .. } => {
             entries.push((*pos, *elem));
         },

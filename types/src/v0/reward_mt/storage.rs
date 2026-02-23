@@ -4,7 +4,11 @@
 //! (memory, disk, database). [`CachedInMemoryStorage`] provides fast in-memory
 //! storage with single-entry caching.
 
-use std::{borrow::Borrow, collections::HashMap, sync::RwLock};
+use std::{
+    borrow::Borrow,
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree_compat::{
@@ -20,8 +24,9 @@ use crate::{
     v0_4::{RewardAccountV2, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
 };
 
-/// Root node of a 156-bit inner Merkle tree.
-pub type InnerRewardMerkleTreeRoot = MerkleNode<RewardAmount, RewardAccountV2, KeccakNode>;
+/// Root node of a 156-bit inner Merkle tree, wrapped in `Arc` to avoid deep
+/// clones when the jellyfish internals return a new root after an update.
+pub type InnerRewardMerkleTreeRoot = Arc<MerkleNode<RewardAmount, RewardAccountV2, KeccakNode>>;
 
 /// Outer tree index (0-15) derived from account address high nibble.
 ///
@@ -297,7 +302,7 @@ pub trait RewardMerkleTreeStorage {
                         inner_path,
                         f,
                     )?;
-                *tree = (*new_root).clone();
+                *tree = new_root;
                 Ok((result, delta, tree.value()))
             },
         )?
@@ -340,7 +345,7 @@ pub trait RewardMerkleTreeStorage {
                     tree.forget_internal(REWARD_MERKLE_TREE_V2_INNER_HEIGHT, inner_path);
                 match result {
                     LookupResult::Ok(value, proof) => {
-                        *tree = (*root).clone();
+                        *tree = root;
                         LookupResult::Ok(value, MerkleProof::new(*pos, proof))
                     },
                     LookupResult::NotInMemory => LookupResult::NotInMemory,
@@ -549,7 +554,7 @@ impl CachedInMemoryStorage {
             .write()
             .unwrap()
             .remove(index)
-            .unwrap_or(InnerRewardMerkleTreeRoot::Empty);
+            .unwrap_or_else(|| Arc::new(MerkleNode::Empty));
 
         // Cache the tree
         *self.cache.write().unwrap() = Some((*index, tree));

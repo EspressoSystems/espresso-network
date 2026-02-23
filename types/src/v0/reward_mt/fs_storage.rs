@@ -7,10 +7,18 @@ use std::{
     fs,
     io::{self, ErrorKind},
     path::{Path, PathBuf},
-    sync::RwLock,
+    sync::{Arc, RwLock},
 };
 
+use jf_merkle_tree_compat::{prelude::MerkleNode, ToTraversalPath};
+
 use super::storage::{InnerRewardMerkleTreeRoot, OuterIndex, RewardMerkleTreeStorage};
+use crate::{
+    reward_mt::{collect_merkle_leaves, REWARD_MERKLE_TREE_V2_INNER_HEIGHT},
+    sparse_mt::Keccak256Hasher,
+    v0_3::RewardAmount,
+    v0_4::{RewardAccountV2, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
+};
 
 /// File system backed persistent storage for reward Merkle trees.
 ///
@@ -168,11 +176,30 @@ impl RewardMerkleTreeFSStorage {
 
         match fs::read(&path) {
             Ok(bytes) => {
-                let root: InnerRewardMerkleTreeRoot = bincode::deserialize(&bytes)
+                let entries: Vec<(RewardAccountV2, RewardAmount)> = bincode::deserialize(&bytes)
                     .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+                // Reconstruct the tree from the entries.
+                let mut root = Arc::new(MerkleNode::Empty);
+                for (account, amount) in entries {
+                    let path =
+            <RewardAccountV2 as ToTraversalPath<REWARD_MERKLE_TREE_V2_ARITY>>::to_traversal_path(
+                &account,
+                REWARD_MERKLE_TREE_V2_HEIGHT,
+            );
+                    let inner_path = &path[..REWARD_MERKLE_TREE_V2_INNER_HEIGHT];
+                    let (new_root, ..) = root
+                        .update_with_internal::<Keccak256Hasher, REWARD_MERKLE_TREE_V2_ARITY, _>(
+                            REWARD_MERKLE_TREE_V2_INNER_HEIGHT,
+                            account,
+                            inner_path,
+                            |_| Some(amount),
+                        )
+                        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+                    root = new_root;
+                }
                 Ok(root)
             },
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(InnerRewardMerkleTreeRoot::Empty),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Arc::new(MerkleNode::Empty)),
             Err(e) => Err(e),
         }
     }
@@ -225,7 +252,10 @@ impl RewardMerkleTreeFSStorage {
         if let Some((index, root, dirty)) = cache.as_ref() {
             if *dirty {
                 let temp_path = self.temp_write_path();
-                let bytes = bincode::serialize(&root)
+                // Serialize the tree leaves
+                let mut entries = Vec::new();
+                collect_merkle_leaves(root, &mut entries);
+                let bytes = bincode::serialize(&entries)
                     .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
                 // Write to temp file first to avoid partial writes
                 fs::write(&temp_path, bytes)?;
