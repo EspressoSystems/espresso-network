@@ -6,9 +6,9 @@ use async_lock::{RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
 use derivative::Derivative;
 use espresso_types::{
-    Leaf2, PubKey, ValidatorMap,
+    AuthenticatedValidatorMap, Leaf2, PubKey,
     v0::RewardDistributor,
-    v0_3::{RewardAmount, Validator},
+    v0_3::{AuthenticatedValidator, RewardAmount},
 };
 use futures::{Stream, StreamExt};
 use hotshot_types::{
@@ -509,14 +509,14 @@ struct EpochState {
     node_index: HashMap<PubKey, usize>,
 
     /// The full validator information for each active node
-    validators: Vec<Validator<PubKey>>,
+    validators: Vec<AuthenticatedValidator<PubKey>>,
 }
 
 impl EpochState {
     /// Construct the epoch state from a stake table and DRB result.
     fn new(
         number: u64,
-        nodes: ValidatorMap,
+        nodes: AuthenticatedValidatorMap,
         drb_result: DrbResult,
         block_reward: ESPTokenAmount,
         apr: Ratio,
@@ -814,7 +814,7 @@ pub trait EspressoClient: Clone + Send + Sync {
     fn stake_table_for_epoch(
         &self,
         epoch: u64,
-    ) -> impl Send + Future<Output = Result<ValidatorMap>>;
+    ) -> impl Send + Future<Output = Result<AuthenticatedValidatorMap>>;
 
     /// Fetch or calculate the rewards APR for the requested epoch.
     fn apr_for_epoch(
@@ -1763,7 +1763,7 @@ mod test {
             self.inner.leaf(height).await
         }
 
-        async fn stake_table_for_epoch(&self, epoch: u64) -> Result<ValidatorMap> {
+        async fn stake_table_for_epoch(&self, epoch: u64) -> Result<AuthenticatedValidatorMap> {
             self.inner.stake_table_for_epoch(epoch).await
         }
 

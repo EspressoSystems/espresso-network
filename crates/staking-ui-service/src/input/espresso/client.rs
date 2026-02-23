@@ -4,7 +4,7 @@ use bigdecimal::{BigDecimal, ToPrimitive};
 use bitvec::vec::BitVec;
 use clap::Parser;
 use espresso_types::{
-    Leaf2, SeqTypes, ValidatorMap, calculate_proportion_staked_and_reward_rate,
+    AuthenticatedValidatorMap, Leaf2, SeqTypes, calculate_proportion_staked_and_reward_rate,
     config::PublicNetworkConfig, parse_duration, v0_3::RewardAmount, v0_4::RewardAccountV2,
 };
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt, stream};
@@ -197,8 +197,8 @@ impl EspressoClient for QueryServiceClient {
         Ok(leaf.leaf().clone())
     }
 
-    async fn stake_table_for_epoch(&self, epoch: u64) -> Result<ValidatorMap> {
-        let nodes: ValidatorMap = self
+    async fn stake_table_for_epoch(&self, epoch: u64) -> Result<AuthenticatedValidatorMap> {
+        let nodes: AuthenticatedValidatorMap = self
             .inner
             .get(&format!("node/validators/{epoch}"))
             .send()
@@ -643,7 +643,7 @@ mod test {
     async fn get_stake_table<P: PersistenceOptions, const NUM_NODES: usize>(
         network: &TestNetwork<P, NUM_NODES, impl Versions>,
         epoch: EpochNumber,
-    ) -> ValidatorMap {
+    ) -> AuthenticatedValidatorMap {
         network
             .server
             .consensus()

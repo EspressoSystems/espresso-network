@@ -923,7 +923,7 @@ mod tests {
 
         let background_task = deployment.spawn_task();
 
-        let mut stake_table_state_from_stream = StakeTableState::new();
+        let mut stake_table_state_from_stream = StakeTableState::default();
         let start_block = 1u64;
         let mut end_block = start_block;
 
@@ -1013,7 +1013,7 @@ mod tests {
         println!("Reset stream to genesis, now processing all blocks");
 
         // Process all blocks from genesis through the stream
-        let mut stake_table_state_from_stream = StakeTableState::new();
+        let mut stake_table_state_from_stream = StakeTableState::default();
         let start_block = genesis.number() + 1;
         let mut end_block = start_block;
 
@@ -1095,7 +1095,7 @@ mod tests {
         .unwrap();
 
         // Apply events from range query to a fresh state
-        let mut state = StakeTableState::new();
+        let mut state = StakeTableState::default();
 
         for (_, events) in events.into_values() {
             for event in events {

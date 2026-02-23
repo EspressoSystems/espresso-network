@@ -17,8 +17,9 @@ use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use espresso_contract_deployer::build_signer;
 use espresso_types::{
-    ChainConfig, DrbAndHeaderUpgradeVersion, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
-    ValidatedState, ValidatorMap, traits::PersistenceOptions, v0_3::Validator,
+    AuthenticatedValidatorMap, ChainConfig, DrbAndHeaderUpgradeVersion, Leaf2, NodeState, PubKey,
+    SeqTypes, SequencerVersions, ValidatedState, traits::PersistenceOptions,
+    v0_3::RegisteredValidator,
 };
 use futures::{Stream, StreamExt, stream};
 use hotshot_query_service::data_source::{SqlDataSource, sql::testing::TmpDb};
@@ -86,7 +87,7 @@ impl EspressoClient for MockEspressoClient {
         Ok(self.epoch_height)
     }
 
-    async fn stake_table_for_epoch(&self, epoch: u64) -> Result<ValidatorMap> {
+    async fn stake_table_for_epoch(&self, epoch: u64) -> Result<AuthenticatedValidatorMap> {
         ensure!(
             !self.unavailable_stake_tables.contains(&epoch),
             Error::not_found().context(format!("mock error: stake table {epoch} is deleted"))
@@ -95,7 +96,7 @@ impl EspressoClient for MockEspressoClient {
         let mut rng = StdRng::seed_from_u64(epoch);
         let mut seed = [0; 32];
         rng.fill_bytes(&mut seed);
-        let nodes: ValidatorMap = (0..self.num_nodes)
+        let nodes: AuthenticatedValidatorMap = (0..self.num_nodes)
             .map(|i| {
                 let mut address_bytes = FixedBytes::<32>::default();
                 rng.fill_bytes(address_bytes.as_mut_slice());
@@ -105,7 +106,7 @@ impl EspressoClient for MockEspressoClient {
                 let state_ver_key = VerKey::generated_from_seed_indexed(seed, i).0;
 
                 let stake = ESPTokenAmount::from(1);
-                let node = Validator {
+                let node = RegisteredValidator {
                     account,
                     stake_table_key,
                     state_ver_key,
@@ -113,7 +114,10 @@ impl EspressoClient for MockEspressoClient {
                     commission: 0,
                     // Self-delegate.
                     delegators: [(account, stake)].into_iter().collect(),
-                };
+                    authenticated: true,
+                }
+                .try_into()
+                .unwrap();
                 (account, node)
             })
             .collect();

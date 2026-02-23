@@ -3,7 +3,7 @@
 use std::future::pending;
 
 use bitvec::vec::BitVec;
-use espresso_types::{Leaf2, ValidatorMap};
+use espresso_types::{AuthenticatedValidatorMap, Leaf2};
 use futures::{Stream, stream};
 
 use crate::{
@@ -30,7 +30,7 @@ impl EspressoClient for NullEspressoClient {
         Ok(0)
     }
 
-    async fn stake_table_for_epoch(&self, _epoch: u64) -> Result<ValidatorMap> {
+    async fn stake_table_for_epoch(&self, _epoch: u64) -> Result<AuthenticatedValidatorMap> {
         Err(Error::not_initialized()
             .context("Espresso data source is disabled (running in L1-only mode)"))
     }
