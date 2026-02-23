@@ -230,7 +230,15 @@ where
                     status: StatusCode::NOT_FOUND,
                 })?;
 
-            let result = tree_data.balances[offset..(offset + limit)]
+            let end = std::cmp::max(offset + limit, tree_data.balances.len());
+
+            let result = tree_data
+                .balances
+                .get(offset..end)
+                .ok_or(merklized_state::Error::Custom {
+                    message: "Range out of bounds for balances".to_string(),
+                    status: StatusCode::NOT_FOUND,
+                })?
                 .iter()
                 .rev()
                 .cloned()
