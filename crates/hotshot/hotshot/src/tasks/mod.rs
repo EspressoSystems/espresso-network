@@ -36,7 +36,7 @@ use hotshot_task_impls::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
-    constants::EVENT_CHANNEL_SIZE,
+    constants::{BROADCAST_CHANNEL_CAPACITY, EVENT_CHANNEL_SIZE},
     message::{
         GeneralConsensusMessage, Message, MessageKind, SequencingMessage, UpgradeLock,
         EXTERNAL_MESSAGE_VERSION,
@@ -402,8 +402,8 @@ where
         let output_event_stream = hotshot.external_event_stream.clone();
         let internal_event_stream = hotshot.internal_event_stream.clone();
 
-        let (block_ready_sender, _) = tokio_broadcast::channel(1000);
-        let (proposal_response_sender, _) = tokio_broadcast::channel(1000);
+        let (block_ready_sender, _) = tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+        let (proposal_response_sender, _) = tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         let mut handle = SystemContextHandle {
             consensus_registry,

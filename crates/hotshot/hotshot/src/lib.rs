@@ -59,7 +59,7 @@ use hotshot_types::{
         Consensus, ConsensusMetricsValue, OuterConsensus, PayloadWithMetadata, VidShares, View,
         ViewInner,
     },
-    constants::{EVENT_CHANNEL_SIZE, EXTERNAL_EVENT_CHANNEL_SIZE},
+    constants::{BROADCAST_CHANNEL_CAPACITY, EVENT_CHANNEL_SIZE, EXTERNAL_EVENT_CHANNEL_SIZE},
     data::Leaf2,
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
@@ -769,8 +769,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let output_event_stream = self.external_event_stream.clone();
         let internal_event_stream = self.internal_event_stream.clone();
 
-        let (block_ready_sender, _) = tokio_broadcast::channel(1000);
-        let (proposal_response_sender, _) = tokio_broadcast::channel(1000);
+        let (block_ready_sender, _) = tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+        let (proposal_response_sender, _) = tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         let mut handle = SystemContextHandle {
             consensus_registry,
@@ -961,8 +961,9 @@ where
         );
 
         // create each handle
-        let (left_block_ready_sender, _) = tokio_broadcast::channel(1000);
-        let (left_proposal_response_sender, _) = tokio_broadcast::channel(1000);
+        let (left_block_ready_sender, _) = tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+        let (left_proposal_response_sender, _) =
+            tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         let mut left_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: left_consensus_registry,
             network_registry: left_network_registry,
@@ -977,8 +978,9 @@ where
             proposal_response_sender: left_proposal_response_sender,
         };
 
-        let (right_block_ready_sender, _) = tokio_broadcast::channel(1000);
-        let (right_proposal_response_sender, _) = tokio_broadcast::channel(1000);
+        let (right_block_ready_sender, _) = tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+        let (right_proposal_response_sender, _) =
+            tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         let mut right_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: right_consensus_registry,
             network_registry: right_network_registry,

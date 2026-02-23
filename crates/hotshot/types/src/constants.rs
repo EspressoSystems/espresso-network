@@ -43,6 +43,9 @@ pub const EVENT_CHANNEL_SIZE: usize = 1_000;
 /// Default channel size for HotShot -> application communication
 pub const EXTERNAL_EVENT_CHANNEL_SIZE: usize = 1_000;
 
+/// Default capacity for tokio broadcast channels in HotShot
+pub const BROADCAST_CHANNEL_CAPACITY: usize = 1_000;
+
 /// Default values for the upgrade constants
 pub const DEFAULT_UPGRADE_CONSTANTS: UpgradeConstants = UpgradeConstants {
     propose_offset: 5,

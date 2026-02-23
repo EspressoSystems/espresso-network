@@ -16,6 +16,7 @@ use hotshot::{
 };
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkMessageTaskState};
 use hotshot_types::{
+    constants::BROADCAST_CHANNEL_CAPACITY,
     message::UpgradeLock,
     traits::{
         network::ConnectedNetwork,
@@ -188,7 +189,7 @@ pub async fn add_network_message_test_task<
     id: u64,
 ) -> JoinHandle<()> {
     let net = Arc::clone(&channel);
-    let (proposal_response_sender, _) = tokio_broadcast::channel(1000);
+    let (proposal_response_sender, _) = tokio_broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
     let network_state: NetworkMessageTaskState<_, _> = NetworkMessageTaskState {
         internal_event_stream: internal_event_stream.clone(),
         external_event_stream: external_event_stream.clone(),
