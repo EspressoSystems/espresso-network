@@ -26,12 +26,6 @@ flag `--all-features` when building the sequencer binary target.
 "#
 );
 
-#[cfg(all(feature = "testing", not(debug_assertions), not(clippy)))]
-compile_error!(
-    "testing feature must not be enabled in release builds. \
-     If this is intentional, comment out this check."
-);
-
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
     // If we compiled with the embedded-db feature **and** are running it now
