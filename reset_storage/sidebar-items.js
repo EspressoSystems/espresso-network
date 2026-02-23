@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Command"],"fn":["main","reset_storage"],"struct":["Options"]};
+window.SIDEBAR_ITEMS = {"enum":["Command"],"fn":["clear_stake_table_events","main","reset_storage"],"struct":["Options"]};
